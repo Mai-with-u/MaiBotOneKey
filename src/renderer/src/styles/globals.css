@@ -1,0 +1,187 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-panel: var(--panel);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --font-sans:
+    "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", "PingFang SC",
+    "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", "Cascadia Mono", "Menlo", Consolas,
+    "Liberation Mono", ui-monospace, monospace;
+}
+
+:root {
+  --background: oklch(0.978 0.008 128);
+  --foreground: oklch(0.2 0.018 140);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.018 140);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.018 140);
+  --primary: oklch(0.34 0.075 148);
+  --primary-foreground: oklch(0.985 0.012 128);
+  --secondary: oklch(0.93 0.02 118);
+  --secondary-foreground: oklch(0.24 0.025 140);
+  --muted: oklch(0.948 0.012 128);
+  --muted-foreground: oklch(0.48 0.022 140);
+  --accent: oklch(0.93 0.04 168);
+  --accent-foreground: oklch(0.22 0.04 168);
+  --destructive: oklch(0.55 0.2 26);
+  --destructive-foreground: oklch(0.99 0.005 26);
+  --border: oklch(0.89 0.012 130);
+  --input: oklch(0.89 0.012 130);
+  --ring: oklch(0.55 0.085 148);
+  --sidebar: oklch(0.965 0.014 130);
+  --panel: oklch(0.99 0.006 128);
+  --surface: oklch(0.97 0.01 128);
+  --elevated: oklch(1 0 0);
+  --radius: 0.625rem;
+  --scrollbar-thumb: oklch(0.82 0.012 130);
+  --scrollbar-thumb-hover: oklch(0.72 0.018 140);
+  --bg-blob-a: oklch(0.94 0.04 148 / 0.55);
+  --bg-blob-b: oklch(0.94 0.04 188 / 0.4);
+}
+
+.dark {
+  --background: oklch(0.155 0.018 150);
+  --foreground: oklch(0.94 0.012 128);
+  --card: oklch(0.215 0.022 148);
+  --card-foreground: oklch(0.94 0.012 128);
+  --popover: oklch(0.215 0.022 148);
+  --popover-foreground: oklch(0.94 0.012 128);
+  --primary: oklch(0.78 0.12 148);
+  --primary-foreground: oklch(0.16 0.04 148);
+  --secondary: oklch(0.27 0.02 145);
+  --secondary-foreground: oklch(0.92 0.012 128);
+  --muted: oklch(0.235 0.018 148);
+  --muted-foreground: oklch(0.7 0.018 140);
+  --accent: oklch(0.32 0.05 168);
+  --accent-foreground: oklch(0.94 0.02 168);
+  --destructive: oklch(0.66 0.2 26);
+  --destructive-foreground: oklch(0.16 0.04 26);
+  --border: oklch(0.3 0.018 148 / 0.7);
+  --input: oklch(0.3 0.018 148 / 0.7);
+  --ring: oklch(0.7 0.12 148);
+  --sidebar: oklch(0.18 0.02 148);
+  --panel: oklch(0.2 0.02 148);
+  --surface: oklch(0.17 0.018 148);
+  --elevated: oklch(0.235 0.022 148);
+  --scrollbar-thumb: oklch(0.34 0.02 148);
+  --scrollbar-thumb-hover: oklch(0.46 0.025 148);
+  --bg-blob-a: oklch(0.32 0.08 148 / 0.5);
+  --bg-blob-b: oklch(0.3 0.08 188 / 0.35);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--background);
+  background-image:
+    radial-gradient(circle at 0% 0%, var(--bg-blob-a) 0, transparent 45%),
+    radial-gradient(circle at 100% 100%, var(--bg-blob-b) 0, transparent 50%);
+  background-attachment: fixed;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+webview {
+  display: inline-flex;
+}
+
+/* Custom titlebar drag regions (Electron + Chromium) */
+[data-app-region="drag"],
+.app-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
+}
+[data-app-region="no-drag"],
+.app-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+button,
+a,
+input,
+textarea,
+select,
+[role="button"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+kbd {
+  font-family: var(--font-mono);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}

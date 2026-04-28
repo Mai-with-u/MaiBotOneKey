@@ -1,0 +1,131 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload_url:
+        description: Zip URL containing runtime/ and modules/.
+        required: false
+        type: string
+      payload_sha256:
+        description: Optional SHA-256 for the payload zip.
+        required: false
+        type: string
+      tag_name:
+        description: Optional tag to publish as a draft GitHub release, for example v0.1.0.
+        required: false
+        type: string
+      create_github_release:
+        description: Create a draft GitHub release from the generated installer.
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the GitHub release as prerelease.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Build Windows x64 installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate GitHub release input
+        if: ${{ inputs.create_github_release && inputs.tag_name == '' }}
+        shell: pwsh
+        run: throw "tag_name is required when create_github_release is true."
+
+      - name: Download release payload
+        if: ${{ inputs.payload_url != '' }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ inputs.payload_url }}" -OutFile payload.zip
+
+          if ("${{ inputs.payload_sha256 }}" -ne "") {
+            $actual = (Get-FileHash payload.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            $expected = "${{ inputs.payload_sha256 }}".ToLowerInvariant()
+            if ($actual -ne $expected) {
+              throw "Payload SHA-256 mismatch. Expected $expected, got $actual."
+            }
+          }
+
+          New-Item -ItemType Directory -Force -Path .payload | Out-Null
+          Expand-Archive payload.zip -DestinationPath .payload -Force
+
+          $payloadRoot = Resolve-Path .payload
+          if (!(Test-Path (Join-Path $payloadRoot "runtime")) -or !(Test-Path (Join-Path $payloadRoot "modules"))) {
+            $candidate = Get-ChildItem .payload -Directory | Where-Object {
+              (Test-Path (Join-Path $_.FullName "runtime")) -and (Test-Path (Join-Path $_.FullName "modules"))
+            } | Select-Object -First 1
+
+            if ($null -eq $candidate) {
+              throw "Payload zip must contain runtime/ and modules/ at its root or one directory below the root."
+            }
+
+            $payloadRoot = $candidate.FullName
+          }
+
+          if (Test-Path runtime) {
+            Remove-Item runtime -Recurse -Force
+          }
+          if (Test-Path modules) {
+            Remove-Item modules -Recurse -Force
+          }
+
+          Move-Item (Join-Path $payloadRoot "runtime") runtime
+          Move-Item (Join-Path $payloadRoot "modules") modules
+
+      - name: Check release payload
+        run: bun run release:check
+
+      - name: Build installer
+        run: bun run release:win
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maibot-onekey-windows-x64
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+          if-no-files-found: error
+
+      - name: Create draft GitHub release
+        if: ${{ inputs.create_github_release && inputs.tag_name != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem release -File | Where-Object {
+            $_.Name -match '\.(exe|blockmap|yml)$'
+          } | Select-Object -ExpandProperty FullName
+
+          if ($assets.Count -eq 0) {
+            throw "No release assets found."
+          }
+
+          $args = @("release", "create", $env:TAG_NAME)
+          $args += $assets
+          $args += @("--title", $env:TAG_NAME, "--generate-notes", "--draft")
+
+          if ("${{ inputs.prerelease }}" -eq "true") {
+            $args += "--prerelease"
+          }
+
+          gh @args

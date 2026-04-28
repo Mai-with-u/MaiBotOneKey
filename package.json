@@ -1,0 +1,102 @@
+{
+  "name": "maibot-onekey-desktop",
+  "version": "0.1.0",
+  "description": "Electron desktop shell for MaiBot OneKey.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
+    "check": "bun run typecheck && bun run build",
+    "preview": "electron-vite preview",
+    "release:check": "bun run scripts/release/check-windows-payload.ts",
+    "release:win": "bun run release:check && bun run build && electron-builder --win nsis --x64",
+    "pack:win": "bun run release:win"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "iconv-lite": "^0.7.2",
+    "lucide-react": "^0.468.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "tailwind-merge": "^3.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/bun": "^1.2.23",
+    "@types/node": "^22.15.34",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.3",
+    "electron": "^38.1.2",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "tailwindcss": "^4.1.13",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.7"
+  },
+  "build": {
+    "appId": "org.maibot.onekey.desktop",
+    "productName": "MaiBot OneKey",
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "files": [
+      "out/**",
+      "package.json",
+      "node_modules/node-pty/**",
+      "node_modules/node-addon-api/**"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "modules",
+        "to": "modules",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "MaiBot OneKey"
+    }
+  }
+}
