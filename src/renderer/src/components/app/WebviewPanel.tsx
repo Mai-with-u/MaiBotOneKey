@@ -76,7 +76,9 @@ export function WebviewPanel({
   const webviewRef = useRef<WebviewElement | null>(null);
   const domReadyRef = useRef(false);
   const failedRef = useRef(false);
+  const hasRenderedPageRef = useRef(false);
   const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [hasRenderedPage, setHasRenderedPage] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [retryIn, setRetryIn] = useState<number | null>(null);
@@ -116,6 +118,8 @@ export function WebviewPanel({
   useEffect(() => {
     domReadyRef.current = false;
     failedRef.current = false;
+    hasRenderedPageRef.current = false;
+    setHasRenderedPage(false);
     setLoadState("loading");
     setErrorMessage(null);
     setRetryIn(null);
@@ -129,10 +133,10 @@ export function WebviewPanel({
     }
 
     const handleStart = (): void => {
-      // A new navigation starts — clear any previous failure flag so a
-      // successful retry can flip the state back to ready.
+      // A new navigation starts. Before the first successful page load, show
+      // the connection fallback; after that, keep WebUI route changes visible.
       failedRef.current = false;
-      setLoadState("loading");
+      setLoadState(hasRenderedPageRef.current ? "ready" : "loading");
       setErrorMessage(null);
     };
     const handleReady = (): void => {
@@ -142,6 +146,8 @@ export function WebviewPanel({
         return;
       }
       domReadyRef.current = true;
+      hasRenderedPageRef.current = true;
+      setHasRenderedPage(true);
       setLoadState("ready");
       setErrorMessage(null);
       setRetryIn(null);
@@ -149,6 +155,11 @@ export function WebviewPanel({
     const handleFail = (event: Event): void => {
       const failEvent = event as DidFailLoadEvent;
       if (failEvent.errorCode === -3 || failEvent.isMainFrame === false) {
+        return;
+      }
+      if (hasRenderedPageRef.current) {
+        setLoadState("ready");
+        setErrorMessage(null);
         return;
       }
 
@@ -210,13 +221,14 @@ export function WebviewPanel({
   }, []);
 
   const friendlyError = describeError(errorMessage);
-  const showOverlay = loadState !== "ready";
+  const showOverlay = !hasRenderedPage && loadState !== "ready";
+  const showWebview = hasRenderedPage || loadState === "ready";
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-border bg-panel/85 px-4 backdrop-blur-sm">
-        <div className="flex min-w-0 items-center gap-3">
-          <h2 className="shrink-0 text-sm font-semibold tracking-tight">{title}</h2>
+      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-panel/85 px-3 backdrop-blur-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="shrink-0 text-[12px] font-semibold tracking-tight">{title}</h2>
           <Badge
             dot
             variant={
@@ -237,24 +249,34 @@ export function WebviewPanel({
                   ? "载入中"
                   : "待载入"}
           </Badge>
-          <span className="hidden h-4 w-px bg-border sm:block" />
+          <span className="hidden h-3 w-px bg-border sm:block" />
           <code
-            className="min-w-0 truncate rounded bg-muted/70 px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+            className="hidden min-w-0 max-w-[420px] truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block"
             title={url}
           >
             {url}
           </code>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button onClick={refresh} size="sm" variant="outline">
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            aria-label="刷新"
+            className="h-7 px-2 text-[11px]"
+            onClick={refresh}
+            size="sm"
+            title="刷新 (Mod+R)"
+            variant="ghost"
+          >
             {loadState === "loading" ? <Loader2 className="animate-spin" /> : <RotateCw />}
-            刷新
-            <Kbd className="ml-1" keys="Mod+R" size="xs" tone="muted" />
           </Button>
-          <Button onClick={openExternal} size="sm" variant="outline">
+          <Button
+            aria-label="外部打开"
+            className="h-7 px-2 text-[11px]"
+            onClick={openExternal}
+            size="sm"
+            title="外部浏览器打开 (Mod+Shift+O)"
+            variant="ghost"
+          >
             <ExternalLink />
-            外部打开
-            <Kbd className="ml-1" keys="Mod+Shift+O" size="xs" tone="muted" />
           </Button>
         </div>
       </div>
@@ -264,7 +286,7 @@ export function WebviewPanel({
           // Keep webview in DOM but invisible until ready, so the default panel
           // covers the white page instead of flashing it through.
           className={`absolute inset-0 size-full bg-white transition-opacity duration-200 ${
-            loadState === "ready" ? "opacity-100" : "opacity-0"
+            showWebview ? "opacity-100" : "opacity-0"
           }`}
           key={`${url}:${reloadKey}`}
           partition="persist:maibot-webui"

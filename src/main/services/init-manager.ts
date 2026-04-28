@@ -1,16 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { InitCheck, InitRepairResult, InitState, RuntimePaths } from "../../shared/contracts";
-
-interface ConfigTemplate {
-  id: string;
-  label: string;
-  target: string;
-  templates: string[];
-}
 
 const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
 const DEPENDENCY_CACHE_MS = 15_000;
@@ -81,16 +74,6 @@ export class InitManager {
       checkFile(this.getPythonPath(), "内置 Python", "python"),
       checkDir(join(this.paths.modulesRoot, "MaiBot"), "MaiBot 主模块", "maibot-module"),
       checkFile(join(this.paths.modulesRoot, "MaiBot", "bot.py"), "MaiBot 启动文件", "maibot-entry"),
-      checkDir(
-        join(this.paths.modulesRoot, "MaiBot-Napcat-Adapter"),
-        "NapCat Adapter 模块",
-        "adapter-module",
-      ),
-      checkFile(
-        join(this.paths.modulesRoot, "MaiBot-Napcat-Adapter", "main.py"),
-        "Adapter 启动文件",
-        "adapter-entry",
-      ),
       checkDir(join(this.paths.modulesRoot, "napcat"), "NapCat 模块", "napcat-module"),
       checkFile(
         join(this.paths.modulesRoot, "napcat", "NapCatWinBootMain.exe"),
@@ -99,26 +82,6 @@ export class InitManager {
       ),
       napCatWebUiCheck,
       ...dependencyChecks,
-      ...this.configTemplates().map((template) => {
-        if (existsSync(template.target)) {
-          return {
-            id: template.id,
-            label: template.label,
-            status: "ok" as const,
-            detail: "配置已存在",
-            path: template.target,
-          };
-        }
-
-        const hasTemplate = template.templates.some((path) => existsSync(path));
-        return {
-          id: template.id,
-          label: template.label,
-          status: hasTemplate ? ("warning" as const) : ("error" as const),
-          detail: hasTemplate ? "配置缺失，可从模板创建" : "配置和模板都缺失",
-          path: template.target,
-        };
-      }),
       {
         id: "qq-account",
         label: "机器人 QQ 号",
@@ -135,20 +98,6 @@ export class InitManager {
     const changedFiles: string[] = [];
 
     await mkdir(this.paths.logsRoot, { recursive: true });
-    for (const template of this.configTemplates()) {
-      if (existsSync(template.target)) {
-        continue;
-      }
-
-      const source = template.templates.find((path) => existsSync(path));
-      if (!source) {
-        continue;
-      }
-
-      await mkdir(dirname(template.target), { recursive: true });
-      await copyFile(source, template.target);
-      changedFiles.push(template.target);
-    }
 
     const state = {
       ...(await this.getState()),
@@ -162,7 +111,6 @@ export class InitManager {
       throw new Error("QQ 号必须是纯数字");
     }
 
-    await this.repair();
     const botConfigPath = this.botConfigPath();
     let content = existsSync(botConfigPath)
       ? await readFile(botConfigPath, "utf8")
@@ -366,38 +314,6 @@ export class InitManager {
       status: "warning",
       detail: "尚未创建，保存 QQ 或启动 NapCat 前会自动生成",
     };
-  }
-
-  private configTemplates(): ConfigTemplate[] {
-    return [
-      {
-        id: "bot-config",
-        label: "MaiBot 主配置",
-        target: this.botConfigPath(),
-        templates: [join(this.paths.modulesRoot, "MaiBot", "template", "bot_config_template.toml")],
-      },
-      {
-        id: "model-config",
-        label: "MaiBot 模型配置",
-        target: join(this.paths.modulesRoot, "MaiBot", "config", "model_config.toml"),
-        templates: [join(this.paths.modulesRoot, "MaiBot", "template", "model_config_template.toml")],
-      },
-      {
-        id: "maibot-env",
-        label: "MaiBot 环境文件",
-        target: join(this.paths.modulesRoot, "MaiBot", ".env"),
-        templates: [join(this.paths.modulesRoot, "MaiBot", "template", "template.env")],
-      },
-      {
-        id: "adapter-config",
-        label: "NapCat Adapter 配置",
-        target: join(this.paths.modulesRoot, "MaiBot-Napcat-Adapter", "config.toml"),
-        templates: [
-          join(this.paths.modulesRoot, "MaiBot-Napcat-Adapter", "template", "template_config.toml"),
-          join(this.paths.modulesRoot, "MaiBot-Napcat-Adapter", "template.toml"),
-        ],
-      },
-    ];
   }
 
   private async createNapCatConfigs(qqAccount: string): Promise<void> {

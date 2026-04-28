@@ -14,6 +14,9 @@ import type {
   PtySessionSnapshot,
   PtyStartRequest,
   PtyStopRequest,
+  RuntimePathConfig,
+  RuntimePathKey,
+  RuntimePathUpdate,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -74,6 +77,10 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("services:saveCommandConfig", config) as Promise<ServiceCommandConfig[]>,
     resetCommandConfig: (serviceId: ServiceId) =>
       ipcRenderer.invoke("services:resetCommandConfig", serviceId) as Promise<ServiceCommandConfig[]>,
+    saveRuntimePathConfig: (config: RuntimePathUpdate) =>
+      ipcRenderer.invoke("services:saveRuntimePathConfig", config) as Promise<RuntimePathConfig[]>,
+    resetRuntimePathConfig: (key: RuntimePathKey) =>
+      ipcRenderer.invoke("services:resetRuntimePathConfig", key) as Promise<RuntimePathConfig[]>,
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) =>
       onIpc("services:snapshot", callback),
   },

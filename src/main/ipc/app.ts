@@ -7,6 +7,9 @@ import type {
   InitState,
   LogEntry,
   RuntimePaths,
+  RuntimePathConfig,
+  RuntimePathKey,
+  RuntimePathUpdate,
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
@@ -51,6 +54,7 @@ export function registerAppIpc({
     paths,
     services: serviceManager.snapshot(),
     serviceCommands: await serviceManager.getCommandConfigs(),
+    runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
     appVersion: app.getVersion(),
     platform: process.platform,
     windowState: readWindowState(getMainWindow()),
@@ -95,7 +99,7 @@ export function registerAppIpc({
 
   ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
     const result = await initManager.repair();
-    logStore.append("desktop", "system", `初始化修复完成，变更 ${result.changedFiles.length} 个文件`);
+    logStore.append("desktop", "system", `初始化准备完成，变更 ${result.changedFiles.length} 个文件`);
     await broadcastSnapshot();
     return result;
   });
@@ -151,6 +155,18 @@ export function registerAppIpc({
 
   ipcMain.handle("services:resetCommandConfig", async (_event, serviceId: ServiceId): Promise<DesktopSnapshot["serviceCommands"]> => {
     const configs = await serviceManager.resetCommandConfig(serviceId);
+    await broadcastSnapshot();
+    return configs;
+  });
+
+  ipcMain.handle("services:saveRuntimePathConfig", async (_event, config: RuntimePathUpdate): Promise<RuntimePathConfig[]> => {
+    const configs = await serviceManager.saveRuntimePathConfig(config);
+    await broadcastSnapshot();
+    return configs;
+  });
+
+  ipcMain.handle("services:resetRuntimePathConfig", async (_event, key: RuntimePathKey): Promise<RuntimePathConfig[]> => {
+    const configs = await serviceManager.resetRuntimePathConfig(key);
     await broadcastSnapshot();
     return configs;
   });

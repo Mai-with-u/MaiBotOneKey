@@ -23,7 +23,7 @@ const MIN_ROWS = 5;
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 32;
 const DEFAULT_FORCE_AFTER_MS = 10_000;
-const BUFFER_LIMIT = 120_000;
+const BUFFER_LIMIT = 5_000_000;
 const require = createRequire(import.meta.url);
 
 type PtySessionEventMap = {

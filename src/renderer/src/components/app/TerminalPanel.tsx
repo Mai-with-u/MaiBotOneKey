@@ -1,13 +1,13 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
-import { Loader2, RotateCcw, TerminalSquare } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DesktopBridge, PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { ArrowDownToLine, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { CSSProperties } from "react";
+import type { PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { ptyLogStore } from "@/lib/pty-log-store";
 import { useShortcut } from "@/lib/use-shortcut";
-import "@xterm/xterm/css/xterm.css";
 
 const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: string }> = [
   { serviceId: "maibot", sessionId: "service:maibot", title: "MaiBot Core" },
@@ -22,46 +22,37 @@ const statusText: Record<PtySessionSnapshot["status"], string> = {
   error: "异常",
 };
 
-const terminalTheme = {
-  background: "#0c100e",
-  foreground: "#dfe8d1",
-  cursor: "#9bd56c",
-  cursorAccent: "#0c100e",
-  selectionBackground: "#9bd56c44",
-  black: "#0c100e",
-  red: "#e26d5a",
-  green: "#9bd56c",
-  yellow: "#d5ba65",
-  blue: "#7bb5e8",
-  magenta: "#c98ee8",
-  cyan: "#70d5c1",
-  white: "#dfe8d1",
-  brightBlack: "#596151",
-  brightRed: "#f28c78",
-  brightGreen: "#b8ed88",
-  brightYellow: "#ecd37d",
-  brightBlue: "#9fd1ff",
-  brightMagenta: "#dfadff",
-  brightCyan: "#96ead9",
-  brightWhite: "#f2f8e8",
-};
+const ansi16Colors = [
+  "#11150f",
+  "#e26d5a",
+  "#9bd56c",
+  "#d5ba65",
+  "#7bb5e8",
+  "#c98ee8",
+  "#70d5c1",
+  "#dfe8d1",
+  "#596151",
+  "#f28c78",
+  "#b8ed88",
+  "#ecd37d",
+  "#9fd1ff",
+  "#dfadff",
+  "#96ead9",
+  "#f2f8e8",
+];
 
-async function waitForDesktopBridge(timeoutMs = 2_500): Promise<DesktopBridge | null> {
-  const startedAt = performance.now();
-
-  while (performance.now() - startedAt < timeoutMs) {
-    if (window.maibotDesktop?.pty) {
-      return window.maibotDesktop;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-
-  return window.maibotDesktop?.pty ? window.maibotDesktop : null;
+interface AnsiStyle {
+  color?: string;
+  backgroundColor?: string;
+  fontWeight?: CSSProperties["fontWeight"];
+  fontStyle?: CSSProperties["fontStyle"];
+  textDecoration?: CSSProperties["textDecoration"];
+  opacity?: number;
 }
 
-function isLiveStatus(status?: PtySessionSnapshot["status"]): boolean {
-  return status === "starting" || status === "running" || status === "stopping";
+interface AnsiSegment {
+  text: string;
+  style: AnsiStyle;
 }
 
 function serviceBadgeVariant(service?: ServiceDescriptor): "success" | "warning" | "danger" | "outline" {
@@ -80,6 +71,146 @@ function serviceBadgeVariant(service?: ServiceDescriptor): "success" | "warning"
   return "outline";
 }
 
+function ansi256ToColor(code: number): string | undefined {
+  if (code >= 0 && code <= 15) {
+    return ansi16Colors[code];
+  }
+
+  if (code >= 16 && code <= 231) {
+    const value = code - 16;
+    const r = Math.floor(value / 36);
+    const g = Math.floor((value % 36) / 6);
+    const b = value % 6;
+    const toChannel = (item: number): number => (item === 0 ? 0 : 55 + item * 40);
+    return `rgb(${toChannel(r)}, ${toChannel(g)}, ${toChannel(b)})`;
+  }
+
+  if (code >= 232 && code <= 255) {
+    const gray = 8 + (code - 232) * 10;
+    return `rgb(${gray}, ${gray}, ${gray})`;
+  }
+
+  return undefined;
+}
+
+function stripNonSgrControls(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\x1b[@-Z\\-_]/gu, "");
+}
+
+function cloneStyle(style: AnsiStyle): AnsiStyle {
+  return { ...style };
+}
+
+function applySgr(style: AnsiStyle, params: number[]): AnsiStyle {
+  const next = cloneStyle(style);
+  const values = params.length > 0 ? params : [0];
+
+  for (let index = 0; index < values.length; index += 1) {
+    const code = values[index];
+
+    if (code === 0) {
+      Object.keys(next).forEach((key) => {
+        delete next[key as keyof AnsiStyle];
+      });
+    } else if (code === 1) {
+      next.fontWeight = 700;
+    } else if (code === 2) {
+      next.opacity = 0.72;
+    } else if (code === 3) {
+      next.fontStyle = "italic";
+    } else if (code === 4) {
+      next.textDecoration = "underline";
+    } else if (code === 22) {
+      delete next.fontWeight;
+      delete next.opacity;
+    } else if (code === 23) {
+      delete next.fontStyle;
+    } else if (code === 24) {
+      delete next.textDecoration;
+    } else if (code === 39) {
+      delete next.color;
+    } else if (code === 49) {
+      delete next.backgroundColor;
+    } else if (code >= 30 && code <= 37) {
+      next.color = ansi16Colors[code - 30];
+    } else if (code >= 90 && code <= 97) {
+      next.color = ansi16Colors[8 + code - 90];
+    } else if (code >= 40 && code <= 47) {
+      next.backgroundColor = ansi16Colors[code - 40];
+    } else if (code >= 100 && code <= 107) {
+      next.backgroundColor = ansi16Colors[8 + code - 100];
+    } else if ((code === 38 || code === 48) && values[index + 1] === 2) {
+      const [r, g, b] = [values[index + 2], values[index + 3], values[index + 4]];
+      if ([r, g, b].every((value) => Number.isFinite(value))) {
+        const color = `rgb(${r}, ${g}, ${b})`;
+        if (code === 38) {
+          next.color = color;
+        } else {
+          next.backgroundColor = color;
+        }
+      }
+      index += 4;
+    } else if ((code === 38 || code === 48) && values[index + 1] === 5) {
+      const color = ansi256ToColor(values[index + 2]);
+      if (color) {
+        if (code === 38) {
+          next.color = color;
+        } else {
+          next.backgroundColor = color;
+        }
+      }
+      index += 2;
+    }
+  }
+
+  return next;
+}
+
+function parseAnsiLine(raw: string): AnsiSegment[] {
+  const segments: AnsiSegment[] = [];
+  const sgrPattern = /\x1b\[([0-9;]*)m/gu;
+  let style: AnsiStyle = {};
+  let lastIndex = 0;
+
+  for (const match of raw.matchAll(sgrPattern)) {
+    const index = match.index ?? 0;
+    const text = stripNonSgrControls(raw.slice(lastIndex, index));
+    if (text.length > 0) {
+      segments.push({ text, style: cloneStyle(style) });
+    }
+
+    const params = match[1]
+      .split(";")
+      .filter((part) => part.length > 0)
+      .map((part) => Number(part));
+    style = applySgr(style, params);
+    lastIndex = index + match[0].length;
+  }
+
+  const tail = stripNonSgrControls(raw.slice(lastIndex));
+  if (tail.length > 0 || segments.length === 0) {
+    segments.push({ text: tail.length > 0 ? tail : " ", style: cloneStyle(style) });
+  }
+
+  return segments;
+}
+
+function AnsiLine({ raw }: { raw: string }): React.JSX.Element {
+  const segments = useMemo(() => parseAnsiLine(raw), [raw]);
+  return (
+    <>
+      {segments.map((segment, index) => (
+        <span key={`${index}-${segment.text.slice(0, 8)}`} style={segment.style}>
+          {segment.text}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function TerminalPanel({
   active = true,
   services = [],
@@ -88,15 +219,15 @@ export function TerminalPanel({
   services?: ServiceDescriptor[];
 }): React.JSX.Element {
   const [activeServiceId, setActiveServiceId] = useState<ServiceId>("maibot");
-  const [sessions, setSessions] = useState<Record<string, PtySessionSnapshot | undefined>>({});
-  const [message, setMessage] = useState("正在准备后台 PTY 视图...");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const bridgeRef = useRef<DesktopBridge | null>(null);
-  const activeServiceIdRef = useRef<ServiceId>("maibot");
-  const sessionsRef = useRef<Record<string, PtySessionSnapshot | undefined>>({});
+  const [isFollowing, setIsFollowing] = useState(true);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
+  const version = useSyncExternalStore(
+    (listener) => ptyLogStore.subscribe(listener),
+    () => ptyLogStore.getVersion(),
+    () => ptyLogStore.getVersion(),
+  );
 
   const servicesById = useMemo(
     () => new Map<ServiceId, ServiceDescriptor>(services.map((service) => [service.id, service])),
@@ -104,222 +235,57 @@ export function TerminalPanel({
   );
 
   const activeTerminal = serviceTerminals.find((terminal) => terminal.serviceId === activeServiceId) ?? serviceTerminals[0];
-  const activeSession = sessions[activeTerminal.sessionId];
+  const activeSession = ptyLogStore.getSession(activeTerminal.sessionId);
   const activeService = servicesById.get(activeServiceId);
+  const lineCount = ptyLogStore.getLineCount(activeTerminal.sessionId);
 
-  const writeSystemLine = useCallback((line: string) => {
-    terminalRef.current?.writeln(`\x1b[38;2;155;213;108m[desktop]\x1b[0m ${line}`);
-  }, []);
+  const virtualizer = useVirtualizer({
+    count: lineCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 18,
+    overscan: 80,
+  });
+
+  const scrollToTail = useCallback(() => {
+    if (lineCount > 0) {
+      virtualizer.scrollToIndex(lineCount - 1, { align: "end" });
+    }
+  }, [lineCount, virtualizer]);
 
   useEffect(() => {
-    sessionsRef.current = sessions;
-  }, [sessions]);
-
-  const fitAndResize = useCallback(() => {
-    const terminal = terminalRef.current;
-    const fitAddon = fitAddonRef.current;
-    if (!terminal || !fitAddon) {
+    if (!followRef.current) {
       return;
     }
 
-    fitAddon.fit();
-
-    const bridge = bridgeRef.current;
-    const target = serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current) ?? serviceTerminals[0];
-    const session = sessionsRef.current[target.sessionId];
-    if (!bridge || !session || !isLiveStatus(session.status)) {
-      return;
-    }
-
-    bridge.pty.resize({
-      sessionId: session.id,
-      cols: terminal.cols,
-      rows: terminal.rows,
-    });
-  }, []);
-
-  const renderServiceBuffer = useCallback(
-    async (serviceId: ServiceId) => {
-      const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-      const terminal = terminalRef.current;
-      if (!bridge || !terminal) {
-        return;
-      }
-
-      const target = serviceTerminals.find((item) => item.serviceId === serviceId) ?? serviceTerminals[0];
-      terminal.reset();
-
-      try {
-        const sessionList = await bridge.pty.list();
-        const nextSessions = Object.fromEntries(sessionList.map((session) => [session.id, session]));
-        sessionsRef.current = nextSessions;
-        setSessions(nextSessions);
-        const session = sessionList.find((item) => item.id === target.sessionId);
-
-        if (!session) {
-          writeSystemLine(`${target.title} 尚未启动。请在左侧服务栏启动模块。`);
-          setMessage(`${target.title} 未启动，等待后台 PTY 会话`);
-          return;
-        }
-
-        const buffer = await bridge.pty.getBuffer(session.id);
-        if (buffer.length > 0) {
-          terminal.write(buffer);
-        } else {
-          writeSystemLine(`已附加到 ${target.title}，暂无输出。`);
-        }
-        setMessage(`已附加到 ${target.title}${session.pid ? `，PID ${session.pid}` : ""}`);
-        fitAndResize();
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        writeSystemLine(`附加失败: ${errorMessage}`);
-        setMessage(errorMessage);
-      }
-    },
-    [fitAndResize, writeSystemLine],
-  );
+    requestAnimationFrame(scrollToTail);
+  }, [scrollToTail, version, activeServiceId]);
 
   const refreshSessions = useCallback(async () => {
-    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-    if (!bridge) {
-      setMessage("Electron preload bridge 不可用");
-      return;
-    }
-
     setIsRefreshing(true);
     try {
-      await renderServiceBuffer(activeServiceIdRef.current);
+      await ptyLogStore.connect();
+      requestAnimationFrame(scrollToTail);
     } finally {
       setIsRefreshing(false);
     }
-  }, [renderServiceBuffer]);
+  }, [scrollToTail]);
 
-  useEffect(() => {
-    activeServiceIdRef.current = activeServiceId;
-    void renderServiceBuffer(activeServiceId);
-  }, [activeServiceId, renderServiceBuffer]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
+  const handleScroll = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
       return;
     }
 
-    const terminal = new Terminal({
-      allowProposedApi: false,
-      convertEol: true,
-      cursorBlink: false,
-      disableStdin: true,
-      fontFamily: "JetBrains Mono, SF Mono, Cascadia Mono, Menlo, Consolas, monospace",
-      fontSize: 12.5,
-      fontWeight: "400",
-      lineHeight: 1.2,
-      scrollback: 12000,
-      tabStopWidth: 4,
-      theme: terminalTheme,
-      windowsPty: { backend: "conpty" },
-    });
-    const fitAddon = new FitAddon();
+    const nextFollowing = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    followRef.current = nextFollowing;
+    setIsFollowing(nextFollowing);
+  }, []);
 
-    terminal.loadAddon(fitAddon);
-    terminal.open(container);
-    terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
-    fitAddon.fit();
-    writeSystemLine("后台 PTY 视图 ready");
-
-    const resizeObserver = new ResizeObserver(() => {
-      fitAndResize();
-    });
-    resizeObserver.observe(container);
-
-    let cancelled = false;
-    let unsubscribeData = (): void => undefined;
-    let unsubscribeExit = (): void => undefined;
-    let unsubscribeError = (): void => undefined;
-    let unsubscribeSnapshot = (): void => undefined;
-
-    const bindBridge = async (): Promise<void> => {
-      setMessage("正在等待 Electron preload bridge...");
-      const bridge = await waitForDesktopBridge();
-
-      if (cancelled) {
-        return;
-      }
-
-      if (!bridge) {
-        terminal.writeln("\x1b[31m[desktop]\x1b[0m Electron preload bridge 不可用");
-        setMessage("Electron preload bridge 不可用");
-        return;
-      }
-
-      bridgeRef.current = bridge;
-      writeSystemLine("Electron preload bridge connected");
-
-      unsubscribeData = bridge.pty.onData((event) => {
-        const target = serviceTerminals.find((item) => item.sessionId === event.sessionId);
-        if (!target || target.serviceId !== activeServiceIdRef.current) {
-          return;
-        }
-
-        terminal.write(event.data);
-      });
-      unsubscribeExit = bridge.pty.onExit((event) => {
-        setSessions((current) => {
-          const existing = current[event.sessionId];
-          const next = existing
-            ? {
-                ...current,
-                [event.sessionId]: {
-                  ...existing,
-                  status: "exited" as const,
-                  exitCode: event.exitCode,
-                  signal: event.signal,
-                  endedAt: Date.now(),
-                },
-              }
-            : current;
-          sessionsRef.current = next;
-          return next;
-        });
-
-        if (event.sessionId === serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current)?.sessionId) {
-          terminal.writeln("");
-          writeSystemLine(`process exited with code ${event.exitCode}`);
-        }
-      });
-      unsubscribeError = bridge.pty.onError((event) => {
-        if (event.sessionId === serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current)?.sessionId) {
-          writeSystemLine(`error: ${event.message}`);
-          setMessage(event.message);
-        }
-      });
-      unsubscribeSnapshot = bridge.pty.onSnapshot((snapshot) => {
-        setSessions((current) => {
-          const next = { ...current, [snapshot.id]: snapshot };
-          sessionsRef.current = next;
-          return next;
-        });
-      });
-
-      await renderServiceBuffer(activeServiceIdRef.current);
-    };
-
-    void bindBridge();
-
-    return () => {
-      cancelled = true;
-      bridgeRef.current = null;
-      unsubscribeData();
-      unsubscribeExit();
-      unsubscribeError();
-      unsubscribeSnapshot();
-      resizeObserver.disconnect();
-      terminal.dispose();
-      terminalRef.current = null;
-      fitAddonRef.current = null;
-    };
-  }, [fitAndResize, renderServiceBuffer, writeSystemLine]);
+  const selectService = useCallback((serviceId: ServiceId) => {
+    followRef.current = true;
+    setIsFollowing(true);
+    setActiveServiceId(serviceId);
+  }, []);
 
   useShortcut("Mod+Shift+R", refreshSessions, { enabled: active });
 
@@ -332,10 +298,18 @@ export function TerminalPanel({
             <h2 className="truncate text-sm font-semibold tracking-tight text-[#e9f0db]">
               后台 PTY 终端
             </h2>
-            <p className="truncate text-[11px] text-[#8f9a84]">{message}</p>
+            <p className="truncate text-[11px] text-[#8f9a84]">
+              全局订阅已开启，当前缓存 {lineCount.toLocaleString("zh-CN")} 行
+            </p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {!isFollowing ? (
+            <Button onClick={scrollToTail} size="sm" variant="outline">
+              <ArrowDownToLine />
+              跟随底部
+            </Button>
+          ) : null}
           <Button disabled={isRefreshing} onClick={refreshSessions} size="sm" variant="outline">
             {isRefreshing ? <Loader2 className="animate-spin" /> : <RotateCcw />}
             刷新附加
@@ -346,19 +320,19 @@ export function TerminalPanel({
 
       <div className="flex shrink-0 items-center gap-2 border-b border-[#1f2620] bg-[#0f1411] px-3 py-2">
         {serviceTerminals.map((item) => {
-          const session = sessions[item.sessionId];
+          const session = ptyLogStore.getSession(item.sessionId);
           const service = servicesById.get(item.serviceId);
           const selected = activeServiceId === item.serviceId;
           return (
             <button
               className={[
-                "flex h-9 min-w-[160px] items-center justify-between gap-3 rounded-md border px-3 text-left transition-colors",
+                "flex h-9 min-w-[174px] items-center justify-between gap-3 rounded-md border px-3 text-left transition-colors",
                 selected
                   ? "border-[#5c7d45] bg-[#182217] text-[#eff8df]"
                   : "border-[#263027] bg-[#111711] text-[#aebaa6] hover:border-[#3b4939] hover:bg-[#151d15]",
               ].join(" ")}
               key={item.serviceId}
-              onClick={() => setActiveServiceId(item.serviceId)}
+              onClick={() => selectService(item.serviceId)}
               type="button"
             >
               <span className="min-w-0 truncate text-xs font-semibold">{item.title}</span>
@@ -376,13 +350,38 @@ export function TerminalPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="size-full overflow-hidden rounded-md border border-[#20281f] bg-[#0c100e] p-2 shadow-inner">
-          <div className="size-full" ref={containerRef} />
+        <div
+          className="size-full overflow-auto rounded-md border border-[#20281f] bg-[#0c100e] shadow-inner"
+          onScroll={handleScroll}
+          ref={scrollRef}
+        >
+          <div
+            className="relative w-full font-mono text-[12px] leading-[18px] text-[#dfe8d1]"
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              fontVariantLigatures: "none",
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const line = ptyLogStore.getLine(activeTerminal.sessionId, virtualRow.index);
+              return (
+                <div
+                  className="absolute left-0 top-0 min-h-[18px] w-full whitespace-pre-wrap break-all px-3"
+                  data-index={virtualRow.index}
+                  key={line?.id === -1 ? `partial-${activeTerminal.sessionId}` : line?.id ?? virtualRow.key}
+                  ref={virtualizer.measureElement}
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  {line ? <AnsiLine raw={line.raw} /> : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
       <div className="flex h-8 shrink-0 items-center justify-between border-t border-[#1f2620] bg-[#101611] px-4 font-mono text-[11px] text-[#8f9a84]">
         <span>{activeSession?.pid ? `pid ${activeSession.pid}` : "等待后台服务启动"}</span>
-        <span>{activeService?.command?.[0] ?? "启动命令会在服务启动后显示"}</span>
+        <span className="min-w-0 truncate pl-4 text-right">{activeService?.command?.[0] ?? "启动命令会在服务启动后显示"}</span>
       </div>
     </section>
   );

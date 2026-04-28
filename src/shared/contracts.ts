@@ -18,6 +18,10 @@ export type LogSource = ServiceId | "desktop";
 
 export type LogStream = "stdout" | "stderr" | "system";
 
+export type RuntimePathKey = "python" | "git" | "maibot" | "napcat";
+
+export type RuntimePathKind = "file" | "dir";
+
 export type InitCheckStatus = "ok" | "warning" | "error";
 
 export type CloseAction = "minimize" | "quit";
@@ -76,6 +80,20 @@ export interface ServiceCommandUpdate {
   commandLine: string;
 }
 
+export interface RuntimePathConfig {
+  key: RuntimePathKey;
+  label: string;
+  kind: RuntimePathKind;
+  value: string;
+  defaultValue: string;
+  customized: boolean;
+}
+
+export interface RuntimePathUpdate {
+  key: RuntimePathKey;
+  value: string;
+}
+
 export interface RuntimePaths {
   installRoot: string;
   userDataRoot: string;
@@ -88,6 +106,7 @@ export interface DesktopSnapshot {
   paths: RuntimePaths;
   services: ServiceDescriptor[];
   serviceCommands: ServiceCommandConfig[];
+  runtimePathConfigs: RuntimePathConfig[];
   appVersion: string;
   platform: NodeJS.Platform;
   windowState: WindowState;
@@ -220,6 +239,8 @@ export interface DesktopBridge {
     refresh: () => Promise<ServiceDescriptor[]>;
     saveCommandConfig: (config: ServiceCommandUpdate) => Promise<ServiceCommandConfig[]>;
     resetCommandConfig: (serviceId: ServiceId) => Promise<ServiceCommandConfig[]>;
+    saveRuntimePathConfig: (config: RuntimePathUpdate) => Promise<RuntimePathConfig[]>;
+    resetRuntimePathConfig: (key: RuntimePathKey) => Promise<RuntimePathConfig[]>;
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;
   };
   logs: {

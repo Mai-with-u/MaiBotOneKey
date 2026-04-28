@@ -52,39 +52,6 @@ const requirements: Requirement[] = [
     candidates: [file("modules/MaiBot/bot.py")],
   },
   {
-    label: "MaiBot bot config template",
-    required: true,
-    candidates: [file("modules/MaiBot/template/bot_config_template.toml")],
-  },
-  {
-    label: "MaiBot model config template",
-    required: true,
-    candidates: [file("modules/MaiBot/template/model_config_template.toml")],
-  },
-  {
-    label: "MaiBot env template",
-    required: true,
-    candidates: [file("modules/MaiBot/template/template.env")],
-  },
-  {
-    label: "NapCat Adapter module",
-    required: true,
-    candidates: [dir("modules/MaiBot-Napcat-Adapter")],
-  },
-  {
-    label: "NapCat Adapter entry",
-    required: true,
-    candidates: [file("modules/MaiBot-Napcat-Adapter/main.py")],
-  },
-  {
-    label: "NapCat Adapter config template",
-    required: true,
-    candidates: [
-      file("modules/MaiBot-Napcat-Adapter/template/template_config.toml"),
-      file("modules/MaiBot-Napcat-Adapter/template.toml"),
-    ],
-  },
-  {
     label: "NapCat module",
     required: true,
     candidates: [dir("modules/napcat")],

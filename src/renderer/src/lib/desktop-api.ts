@@ -62,6 +62,40 @@ const fallbackSnapshot: DesktopSnapshot = {
       customized: false,
     },
   ],
+  runtimePathConfigs: [
+    {
+      key: "python",
+      label: "Python",
+      kind: "file",
+      value: "开发预览/runtime/python31211/bin/python.exe",
+      defaultValue: "开发预览/runtime/python31211/bin/python.exe",
+      customized: false,
+    },
+    {
+      key: "git",
+      label: "Git",
+      kind: "file",
+      value: "开发预览/runtime/PortableGit/bin/git.exe",
+      defaultValue: "开发预览/runtime/PortableGit/bin/git.exe",
+      customized: false,
+    },
+    {
+      key: "maibot",
+      label: "麦麦 MaiBot",
+      kind: "dir",
+      value: "开发预览/modules/MaiBot",
+      defaultValue: "开发预览/modules/MaiBot",
+      customized: false,
+    },
+    {
+      key: "napcat",
+      label: "NapCat",
+      kind: "dir",
+      value: "开发预览/modules/napcat",
+      defaultValue: "开发预览/modules/napcat",
+      customized: false,
+    },
+  ],
   initState: {
     isReady: false,
     checks: [
@@ -76,16 +110,40 @@ const fallbackSnapshot: DesktopSnapshot = {
   recentLogs: [],
 };
 
+export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): DesktopSnapshot {
+  return {
+    ...fallbackSnapshot,
+    ...snapshot,
+    paths: {
+      ...fallbackSnapshot.paths,
+      ...snapshot.paths,
+    },
+    windowState: {
+      ...fallbackSnapshot.windowState,
+      ...snapshot.windowState,
+    },
+    initState: {
+      ...fallbackSnapshot.initState,
+      ...snapshot.initState,
+      checks: snapshot.initState?.checks ?? fallbackSnapshot.initState.checks,
+    },
+    services: snapshot.services ?? fallbackSnapshot.services,
+    serviceCommands: snapshot.serviceCommands ?? fallbackSnapshot.serviceCommands,
+    runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
+    recentLogs: snapshot.recentLogs ?? fallbackSnapshot.recentLogs,
+  };
+}
+
 export async function getDesktopSnapshot(): Promise<DesktopSnapshot> {
   if (!window.maibotDesktop) {
     return fallbackSnapshot;
   }
 
   try {
-    return await window.maibotDesktop.getSnapshot();
+    return normalizeDesktopSnapshot(await window.maibotDesktop.getSnapshot());
   } catch (error) {
     console.error("[desktop] failed to read snapshot", error);
-    return {
+    return normalizeDesktopSnapshot({
       ...fallbackSnapshot,
       services: fallbackSnapshot.services.map((service) => ({
         ...service,
@@ -104,6 +162,6 @@ export async function getDesktopSnapshot(): Promise<DesktopSnapshot> {
           },
         ],
       },
-    };
+    });
   }
 }

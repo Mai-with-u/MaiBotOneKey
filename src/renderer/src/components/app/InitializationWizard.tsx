@@ -121,7 +121,7 @@ export function InitializationWizard({
       size="lg"
     >
       <DialogHeader
-        description="先确认内置 runtime、模块、基础配置和依赖完整性；依赖损坏只提示错误，不自动修复。"
+        description="先确认内置 runtime、模块入口和依赖完整性；MaiBot 配置由主程序首次启动时自动生成。"
         icon={<AlertTriangle className="size-4" />}
         title="首次初始化检查"
         titleId="init-wizard-title"
@@ -206,7 +206,7 @@ export function InitializationWizard({
           >
             <span className="flex items-center gap-2">
               {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
-              从模板修复配置
+              准备基础目录
             </span>
             <Kbd keys="Mod+Shift+R" size="xs" tone="muted" />
           </Button>

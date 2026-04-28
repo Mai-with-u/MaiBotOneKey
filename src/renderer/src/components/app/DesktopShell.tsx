@@ -13,7 +13,8 @@ import {
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DesktopSnapshot, ServiceDescriptor, ServiceId, ServiceStatus } from "@shared/contracts";
-import { getDesktopSnapshot } from "@/lib/desktop-api";
+import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
+import { initializePtyLogStore } from "@/lib/pty-log-store";
 import { useShortcut } from "@/lib/use-shortcut";
 import { useSidebar } from "@/lib/use-sidebar";
 import { useTheme } from "@/lib/use-theme";
@@ -161,6 +162,8 @@ export function DesktopShell(): React.JSX.Element {
   useEffect(() => {
     let mounted = true;
 
+    initializePtyLogStore();
+
     refreshSnapshot().then((nextSnapshot) => {
       if (mounted) {
         setSnapshot(nextSnapshot);
@@ -168,7 +171,7 @@ export function DesktopShell(): React.JSX.Element {
     });
 
     const removeSnapshotListener = window.maibotDesktop?.onSnapshot((nextSnapshot) => {
-      setSnapshot(nextSnapshot);
+      setSnapshot(normalizeDesktopSnapshot(nextSnapshot));
     });
     const removeServiceListener = window.maibotDesktop?.services.onSnapshot((services) => {
       setSnapshot((current) => (current ? { ...current, services } : current));
@@ -177,8 +180,8 @@ export function DesktopShell(): React.JSX.Element {
       setSnapshot((current) =>
         current
           ? {
-              ...current,
-              recentLogs: [...current.recentLogs, entry].slice(-1000),
+            ...current,
+            recentLogs: [...(current.recentLogs ?? []), entry].slice(-1000),
             }
           : current,
       );
@@ -214,11 +217,12 @@ export function DesktopShell(): React.JSX.Element {
             return current;
           }
 
-          const byId = new Map(current.services.map((service) => [service.id, service]));
+          const currentServices = current.services ?? [];
+          const byId = new Map(currentServices.map((service) => [service.id, service]));
           for (const service of nextServices) {
             byId.set(service.id, service);
           }
-          return { ...current, services: current.services.map((service) => byId.get(service.id) ?? service) };
+          return { ...current, services: currentServices.map((service) => byId.get(service.id) ?? service) };
         });
         await refreshSnapshot();
       } catch (error) {
@@ -386,49 +390,55 @@ export function DesktopShell(): React.JSX.Element {
       )}
 
       <main className="flex min-w-0 flex-1 flex-col bg-panel/70">
-        <header className="flex h-16 shrink-0 items-center justify-between gap-6 border-b border-border bg-panel/85 px-6 backdrop-blur-sm">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              当前工作区
-            </p>
-            <p className="mt-1 truncate font-mono text-xs text-foreground/80" title={snapshot?.paths.installRoot}>
-              {snapshot?.paths.installRoot ?? "正在读取运行目录..."}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Badge variant="secondary">v{snapshot?.appVersion ?? "0.1.0"}</Badge>
-            <Button onClick={openLogs} size="sm" variant="outline">
-              <FolderOpen />
-              日志目录
-              <Kbd className="ml-1" keys="Mod+L" size="xs" tone="muted" />
-            </Button>
-          </div>
-        </header>
-
         <Tabs className="flex min-h-0 flex-1 flex-col" onValueChange={setActiveTab} value={activeTab}>
-          <div className="shrink-0 border-b border-border bg-panel/70 px-6 py-3">
-            <TabsList className="flex h-10 w-full max-w-[760px]">
-              <TabsTrigger value="maibot">
+          <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-panel/85 px-3 backdrop-blur-sm">
+            <TabsList className="h-7 rounded-md border border-border/70 bg-muted/45 p-0.5">
+              <TabsTrigger className="h-6 px-2 text-[11px]" value="maibot">
                 <Radar />
-                MaiBot WebUI
+                MaiBot
                 <Kbd className="ml-1" keys="Mod+1" size="xs" tone="muted" />
               </TabsTrigger>
-              <TabsTrigger value="napcat">
+              <TabsTrigger className="h-6 px-2 text-[11px]" value="napcat">
                 <Bot />
-                NapCat WebUI
+                NapCat
                 <Kbd className="ml-1" keys="Mod+2" size="xs" tone="muted" />
               </TabsTrigger>
-              <TabsTrigger value="terminal">
+              <TabsTrigger className="h-6 px-2 text-[11px]" value="terminal">
                 <TerminalSquare />
-                PTY 终端
+                终端
                 <Kbd className="ml-1" keys="Mod+3" size="xs" tone="muted" />
               </TabsTrigger>
-              <TabsTrigger value="settings">
+              <TabsTrigger className="h-6 px-2 text-[11px]" value="settings">
                 <Settings />
-                设置状态
+                设置
                 <Kbd className="ml-1" keys="Mod+4" size="xs" tone="muted" />
               </TabsTrigger>
             </TabsList>
+
+            <div className="hidden h-4 w-px shrink-0 bg-border md:block" />
+
+            <div className="hidden min-w-0 flex-1 items-center gap-2 md:flex">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                工作区
+              </span>
+              <code
+                className="min-w-0 truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80"
+                title={snapshot?.paths.installRoot}
+              >
+                {snapshot?.paths.installRoot ?? "读取中…"}
+              </code>
+            </div>
+
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <Badge className="hidden lg:inline-flex" variant="secondary">
+                v{snapshot?.appVersion ?? "0.1.0"}
+              </Badge>
+              <Button className="h-7 px-2 text-[11px]" onClick={openLogs} size="sm" variant="outline">
+                <FolderOpen />
+                日志
+                <Kbd className="ml-1" keys="Mod+L" size="xs" tone="muted" />
+              </Button>
+            </div>
           </div>
 
           <TabsContent className="min-h-0 flex-1" value="maibot">

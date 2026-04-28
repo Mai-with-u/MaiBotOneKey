@@ -15,11 +15,6 @@
    ```text
    runtime/python31211/bin/python.exe
    modules/MaiBot/bot.py
-   modules/MaiBot/template/bot_config_template.toml
-   modules/MaiBot/template/model_config_template.toml
-   modules/MaiBot/template/template.env
-   modules/MaiBot-Napcat-Adapter/main.py
-   modules/MaiBot-Napcat-Adapter/template/template_config.toml
    modules/napcat/NapCatWinBootMain.exe
    ```
 
@@ -75,7 +70,7 @@ payload.zip
 - 安装器可正常安装到默认目录和自定义目录。
 - 同一安装目录重复启动只保留一个实例。
 - 复制两份安装目录后可以分别启动。
-- MaiBot Core（含随主程序启动的 NapCat Adapter）和 NapCat 能被 Electron 启停。
+- MaiBot Core 和 NapCat 能被 Electron 启停。
 - 端口冲突时明确报错，不复用外部进程。
 - 关闭窗口时能选择最小化或全部退出。
 - 强杀服务后再次启动不会残留 PTY session。

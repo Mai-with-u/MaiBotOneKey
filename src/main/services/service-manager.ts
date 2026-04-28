@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { basename, dirname, join } from "node:path";
@@ -9,6 +9,10 @@ import type {
   PtyExitEvent,
   PtySessionSnapshot,
   RuntimePaths,
+  RuntimePathConfig,
+  RuntimePathKey,
+  RuntimePathKind,
+  RuntimePathUpdate,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -32,6 +36,13 @@ interface ServiceDefinition {
   readyPorts: number[];
   buildDefaultCommandLine: () => Promise<string>;
   displayDefaultCommandLine?: () => Promise<string>;
+}
+
+interface RuntimePathDefinition {
+  key: RuntimePathKey;
+  label: string;
+  kind: RuntimePathKind;
+  defaultValue: string;
 }
 
 interface ResolvedServiceCommand {
@@ -71,6 +82,11 @@ interface StoredCommandFile {
   services: Partial<Record<ServiceId, StoredServiceCommand>>;
 }
 
+interface StoredRuntimePathFile {
+  version: 1;
+  paths: Partial<Record<RuntimePathKey, string>>;
+}
+
 const STOP_FORCE_AFTER_MS = 10_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_RESTART_ATTEMPTS = 3;
@@ -78,6 +94,7 @@ const RESTART_DELAY_MS = 2_500;
 const SERVICE_TERMINAL_COLS = 120;
 const SERVICE_TERMINAL_ROWS = 36;
 const COMMAND_CONFIG_FILE = "service-commands.json";
+const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
 
 function quoteCommandPart(value: string): string {
@@ -187,11 +204,53 @@ class ServiceCommandStore {
   }
 }
 
+class RuntimePathStore {
+  private readonly path: string;
+  private cache: StoredRuntimePathFile;
+
+  constructor(paths: RuntimePaths) {
+    this.path = join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE);
+    this.cache = this.read();
+  }
+
+  get(key: RuntimePathKey): string | undefined {
+    return this.cache.paths[key]?.trim() || undefined;
+  }
+
+  async set(key: RuntimePathKey, value: string): Promise<void> {
+    this.cache.paths[key] = value.trim() || undefined;
+    await this.write();
+  }
+
+  async reset(key: RuntimePathKey): Promise<void> {
+    delete this.cache.paths[key];
+    await this.write();
+  }
+
+  private read(): StoredRuntimePathFile {
+    try {
+      const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredRuntimePathFile;
+      return {
+        version: 1,
+        paths: raw.paths ?? {},
+      };
+    } catch {
+      return { version: 1, paths: {} };
+    }
+  }
+
+  private async write(): Promise<void> {
+    await mkdir(dirname(this.path), { recursive: true });
+    await writeFile(this.path, `${JSON.stringify(this.cache, null, 2)}\n`, "utf8");
+  }
+}
+
 export class ServiceManager extends EventEmitter {
   private readonly states = new Map<ServiceId, ServiceState>();
-  private readonly definitions: ServiceDefinition[];
+  private definitions: ServiceDefinition[];
   private readonly watchdogTimer: NodeJS.Timeout;
   private readonly commandStore: ServiceCommandStore;
+  private readonly runtimePathStore: RuntimePathStore;
   private readonly logLineBuffers = new Map<ServiceId, string>();
 
   constructor(
@@ -202,6 +261,7 @@ export class ServiceManager extends EventEmitter {
   ) {
     super();
     this.commandStore = new ServiceCommandStore(paths);
+    this.runtimePathStore = new RuntimePathStore(paths);
     this.definitions = this.createDefinitions();
     for (const definition of this.definitions) {
       this.states.set(definition.id, {
@@ -499,6 +559,26 @@ export class ServiceManager extends EventEmitter {
     return this.getCommandConfigs();
   }
 
+  getRuntimePathConfigs(): RuntimePathConfig[] {
+    return this.getRuntimePathDefinitions().map((definition) => this.toRuntimePathConfig(definition));
+  }
+
+  async saveRuntimePathConfig(update: RuntimePathUpdate): Promise<RuntimePathConfig[]> {
+    this.getRuntimePathDefinition(update.key);
+    await this.runtimePathStore.set(update.key, update.value);
+    this.definitions = this.createDefinitions();
+    this.emit("snapshot", this.snapshot());
+    return this.getRuntimePathConfigs();
+  }
+
+  async resetRuntimePathConfig(key: RuntimePathKey): Promise<RuntimePathConfig[]> {
+    this.getRuntimePathDefinition(key);
+    await this.runtimePathStore.reset(key);
+    this.definitions = this.createDefinitions();
+    this.emit("snapshot", this.snapshot());
+    return this.getRuntimePathConfigs();
+  }
+
   dispose(): void {
     clearInterval(this.watchdogTimer);
     for (const serviceId of SERVICE_IDS) {
@@ -511,9 +591,9 @@ export class ServiceManager extends EventEmitter {
   }
 
   private createDefinitions(): ServiceDefinition[] {
-    const python = this.initManager.getPythonPath();
-    const maibotRoot = join(this.paths.modulesRoot, "MaiBot");
-    const napcatRoot = join(this.paths.modulesRoot, "napcat");
+    const python = this.getRuntimePath("python");
+    const maibotRoot = this.getRuntimePath("maibot");
+    const napcatRoot = this.getRuntimePath("napcat");
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
 
     return [
@@ -540,16 +620,12 @@ export class ServiceManager extends EventEmitter {
         conflictPorts: [6099],
         readyPorts: [6099],
         displayDefaultCommandLine: async () => {
-          const qq = await this.initManager.readQqAccount();
-          return `${quoteCommandPart(napcatExe)} ${qq ? quoteCommandPart(qq) : "<QQ>"}`;
+          return `${quoteCommandPart(napcatExe)} <QQ>`;
         },
         buildDefaultCommandLine: async () => {
           const qq = await this.initManager.readQqAccount();
-          if (!qq) {
-            throw new Error("请先在初始化向导中配置机器人 QQ 号");
-          }
           await this.initManager.ensureNapCatWebUiConfig();
-          return `${quoteCommandPart(napcatExe)} ${quoteCommandPart(qq)}`;
+          return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatExe)} <QQ>`);
         },
       },
     ];
@@ -624,7 +700,7 @@ export class ServiceManager extends EventEmitter {
     if (commandLine) {
       return {
         cwd,
-        commandLine,
+        commandLine: await this.applyServicePlaceholders(definition.id, commandLine),
         requiredPaths: [cwd],
         customized: true,
       };
@@ -655,6 +731,73 @@ export class ServiceManager extends EventEmitter {
     };
   }
 
+  private getRuntimePathDefinitions(): RuntimePathDefinition[] {
+    return [
+      {
+        key: "python",
+        label: "Python",
+        kind: "file",
+        defaultValue: this.initManager.getPythonPath(),
+      },
+      {
+        key: "git",
+        label: "Git",
+        kind: "file",
+        defaultValue: join(this.paths.runtimeRoot, "PortableGit", "bin", "git.exe"),
+      },
+      {
+        key: "maibot",
+        label: "麦麦 MaiBot",
+        kind: "dir",
+        defaultValue: join(this.paths.modulesRoot, "MaiBot"),
+      },
+      {
+        key: "napcat",
+        label: "NapCat",
+        kind: "dir",
+        defaultValue: join(this.paths.modulesRoot, "napcat"),
+      },
+    ];
+  }
+
+  private getRuntimePathDefinition(key: RuntimePathKey): RuntimePathDefinition {
+    const definition = this.getRuntimePathDefinitions().find((item) => item.key === key);
+    if (!definition) {
+      throw new Error(`未知路径配置: ${key}`);
+    }
+    return definition;
+  }
+
+  private getRuntimePath(key: RuntimePathKey): string {
+    const definition = this.getRuntimePathDefinition(key);
+    return this.runtimePathStore.get(key) ?? definition.defaultValue;
+  }
+
+  private toRuntimePathConfig(definition: RuntimePathDefinition): RuntimePathConfig {
+    const customValue = this.runtimePathStore.get(definition.key);
+    return {
+      key: definition.key,
+      label: definition.label,
+      kind: definition.kind,
+      value: customValue ?? definition.defaultValue,
+      defaultValue: definition.defaultValue,
+      customized: Boolean(customValue),
+    };
+  }
+
+  private async applyServicePlaceholders(serviceId: ServiceId, commandLine: string): Promise<string> {
+    if (serviceId !== "napcat" || !commandLine.includes("<QQ>")) {
+      return commandLine;
+    }
+
+    const qq = await this.initManager.readQqAccount();
+    return commandLine
+      .replace(/(["'])<QQ>\1/gu, qq ? quoteCommandPart(qq) : "")
+      .replace(/<QQ>/gu, qq ? quoteCommandPart(qq) : "")
+      .replace(/\s+/gu, " ")
+      .trim();
+  }
+
   private async resolveNapCatUrl(fallback: string): Promise<string> {
     const { token } = await this.initManager.readNapCatWebUiToken();
     return token ? `http://127.0.0.1:6099/webui/web_login?token=${encodeURIComponent(token)}` : fallback;
@@ -681,8 +824,8 @@ export class ServiceManager extends EventEmitter {
         desired: state.desired ?? true,
         pid: session.pid,
         ptySessionId: session.id,
-      command: session.command,
-      cwd: session.cwd,
+        command: session.command,
+        cwd: session.cwd,
         detail: `已附加到后台 PTY，PID ${session.pid ?? "未知"}`,
         startedAt: state.startedAt ?? session.startedAt,
       });

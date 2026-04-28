@@ -10,6 +10,7 @@ import {
   Save,
   ShieldCheck,
   Trash2,
+  UserRound,
   Wrench,
 } from "lucide-react";
 import type { ComponentProps } from "react";
@@ -18,6 +19,9 @@ import type {
   DesktopSnapshot,
   InitCheckStatus,
   LogEntry,
+  RuntimePathConfig,
+  RuntimePathKey,
+  RuntimePathUpdate,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -29,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useShortcut } from "@/lib/use-shortcut";
 
 interface SettingsStatusPanelProps {
@@ -114,6 +119,80 @@ function PathField({
             <FolderOpen />
           </Button>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function RuntimePathEditor({
+  config,
+  busy,
+  onOpenPath,
+  onReset,
+  onSave,
+}: {
+  config: RuntimePathConfig;
+  busy: boolean;
+  onOpenPath: (path: string) => void;
+  onReset: (key: RuntimePathKey) => void;
+  onSave: (config: RuntimePathUpdate) => void;
+}): React.JSX.Element {
+  const [value, setValue] = useState(config.value);
+
+  useEffect(() => {
+    setValue(config.value);
+  }, [config.value]);
+
+  const dirty = value.trim() !== config.value;
+
+  return (
+    <div className="rounded-lg border border-border/70 bg-elevated/75 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{config.label}</span>
+            <Badge variant={config.kind === "file" ? "secondary" : "outline"}>
+              {config.kind === "file" ? "文件" : "目录"}
+            </Badge>
+          </div>
+          <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={config.defaultValue}>
+            默认: {config.defaultValue}
+          </p>
+        </div>
+        <Badge variant={config.customized ? "warning" : "secondary"}>
+          {config.customized ? "自定义" : "默认"}
+        </Badge>
+      </div>
+      <div className="flex min-w-0 gap-2">
+        <Input
+          aria-label={`${config.label} 路径`}
+          monospace
+          onChange={(event) => setValue(event.target.value)}
+          placeholder={config.defaultValue}
+          value={value}
+        />
+        <Button aria-label={`打开 ${config.label}`} onClick={() => onOpenPath(value)} size="icon" variant="ghost">
+          <FolderOpen />
+        </Button>
+      </div>
+      <div className="mt-2 flex justify-end gap-2">
+        <Button
+          disabled={busy || (!config.customized && !dirty)}
+          onClick={() => onReset(config.key)}
+          size="sm"
+          variant="ghost"
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+          恢复默认
+        </Button>
+        <Button
+          disabled={busy || !dirty || value.trim().length === 0}
+          onClick={() => onSave({ key: config.key, value: value.trim() })}
+          size="sm"
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <Save />}
+          保存路径
+        </Button>
       </div>
     </div>
   );
@@ -287,16 +366,21 @@ export function SettingsStatusPanel({
   const [qqAccount, setQqAccount] = useState(snapshot.initState.qqAccount ?? "");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const initState = snapshot.initState ?? { isReady: false, checks: [] };
+  const services = snapshot.services ?? [];
+  const serviceCommands = snapshot.serviceCommands ?? [];
+  const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
+  const recentLogEntries = snapshot.recentLogs ?? [];
 
   useEffect(() => {
-    setQqAccount(snapshot.initState.qqAccount ?? "");
-  }, [snapshot.initState.qqAccount]);
+    setQqAccount(initState.qqAccount ?? "");
+  }, [initState.qqAccount]);
 
   const attentionChecks = useMemo(
-    () => snapshot.initState.checks.filter((check) => check.status !== "ok"),
-    [snapshot.initState.checks],
+    () => initState.checks.filter((check) => check.status !== "ok"),
+    [initState.checks],
   );
-  const recentLogs = useMemo(() => snapshot.recentLogs.slice(-80).reverse(), [snapshot.recentLogs]);
+  const recentLogs = useMemo(() => recentLogEntries.slice(-80).reverse(), [recentLogEntries]);
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();
@@ -390,171 +474,230 @@ export function SettingsStatusPanel({
     [onSnapshot, refreshSnapshot, snapshot],
   );
 
+  const saveRuntimePathConfig = useCallback(
+    async (config: RuntimePathUpdate) => {
+      setBusy(`path:${config.key}`);
+      setError(null);
+      try {
+        const runtimePathConfigs = await window.maibotDesktop?.services.saveRuntimePathConfig(config);
+        if (runtimePathConfigs) {
+          onSnapshot({ ...snapshot, runtimePathConfigs });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const resetRuntimePathConfig = useCallback(
+    async (key: RuntimePathKey) => {
+      setBusy(`path:${key}`);
+      setError(null);
+      try {
+        const runtimePathConfigs = await window.maibotDesktop?.services.resetRuntimePathConfig(key);
+        if (runtimePathConfigs) {
+          onSnapshot({ ...snapshot, runtimePathConfigs });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
   const canSaveQq = busy === null && qqAccount.trim().length > 0;
   useShortcut("Mod+Enter", saveQqAccount, { enabled: canSaveQq, allowInEditable: true });
   useShortcut("Mod+Shift+R", repair, { enabled: busy === null });
 
   return (
     <section className="h-full overflow-auto bg-surface/60 px-6 py-6">
-      <div className="mx-auto grid w-full max-w-[1240px] gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,380px)]">
-        <div className="min-w-0 space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <span className="grid size-6 place-items-center rounded-md bg-primary/10 text-primary">
-                  <ClipboardCheck className="size-3.5" />
-                </span>
-                初始化检查
-              </CardTitle>
-              <CardDescription>
-                基础向导会检查运行目录、入口文件、配置、QQ 号和依赖完整性；依赖损坏只报错，不自动修复。
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge dot variant={snapshot.initState.isReady ? "success" : "danger"}>
-                  {snapshot.initState.isReady ? "环境可启动" : "环境不完整"}
+      <div className="mx-auto w-full max-w-[1180px]">
+        <Card className="border-border/80 bg-panel/70 backdrop-blur-sm">
+          <CardHeader className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
+                    <ClipboardCheck className="size-4" />
+                  </span>
+                  设置中心
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  使用迷你标签页快速切换配置分区，避免信息拥挤与错位。
+                </CardDescription>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <Badge dot variant={initState.isReady ? "success" : "danger"}>
+                  {initState.isReady ? "环境可启动" : "环境不完整"}
                 </Badge>
                 <Badge variant={attentionChecks.length > 0 ? "warning" : "secondary"}>
                   {attentionChecks.length} 项待处理
                 </Badge>
+                <Badge variant="secondary">服务 {services.length} 个</Badge>
               </div>
+            </div>
+            {error ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
+                {error}
+              </div>
+            ) : null}
+          </CardHeader>
 
-              <div className="grid gap-2 md:grid-cols-2">
-                {snapshot.initState.checks.map((check) => (
-                  <div
-                    className="flex min-w-0 items-start gap-2 rounded-lg border border-border/70 bg-elevated/75 px-3 py-2.5"
-                    key={check.id}
-                  >
-                    {check.status === "ok" ? (
-                      <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
-                    ) : (
-                      <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium">{check.label}</span>
-                        <Badge variant={initVariant[check.status]}>
-                          {check.status === "ok" ? "正常" : check.status === "warning" ? "确认" : "错误"}
-                        </Badge>
+          <CardContent>
+            <Tabs className="space-y-4" defaultValue="checks">
+              <TabsList className="h-8 rounded-md border border-border/80 bg-muted/45 p-1">
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="checks">
+                  <ClipboardCheck className="size-3" />
+                  环境检查
+                </TabsTrigger>
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="account">
+                  <UserRound className="size-3" />
+                  账号配置
+                </TabsTrigger>
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="services">
+                  <Network className="size-3" />
+                  服务状态
+                </TabsTrigger>
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="paths">
+                  <ShieldCheck className="size-3" />
+                  实例路径
+                </TabsTrigger>
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="logs">
+                  <HardDrive className="size-3" />
+                  运行日志
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent className="space-y-4" value="checks">
+                <div className="grid gap-2 md:grid-cols-2">
+                  {initState.checks.map((check) => (
+                    <div
+                      className="flex min-w-0 items-start gap-2 rounded-lg border border-border/70 bg-elevated/75 px-3 py-2.5"
+                      key={check.id}
+                    >
+                      {check.status === "ok" ? (
+                        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
+                      ) : (
+                        <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium">{check.label}</span>
+                          <Badge variant={initVariant[check.status]}>
+                            {check.status === "ok" ? "正常" : check.status === "warning" ? "确认" : "错误"}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 truncate text-[11px] text-muted-foreground" title={check.path}>
+                          {check.detail}
+                        </p>
                       </div>
-                      <p className="mt-1 truncate text-[11px] text-muted-foreground" title={check.path}>
-                        {check.detail}
-                      </p>
                     </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="grid gap-3 rounded-lg border border-border/70 bg-muted/35 p-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                <Input
-                  inputMode="numeric"
-                  monospace
-                  onChange={(event) => setQqAccount(event.target.value)}
-                  placeholder="机器人 QQ 号"
-                  value={qqAccount}
-                />
-                <Button disabled={!canSaveQq} onClick={saveQqAccount}>
-                  {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
-                  保存 QQ
-                  <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
-                </Button>
-                <Button disabled={busy !== null} onClick={repair} variant="outline">
-                  {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
-                  修复配置
-                  <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
-                </Button>
-              </div>
-
-              {error ? (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
-                  {error}
+                  ))}
                 </div>
-              ) : null}
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <span className="grid size-6 place-items-center rounded-md bg-accent/60 text-accent-foreground">
-                  <Network className="size-3.5" />
-                </span>
-                服务状态
-              </CardTitle>
-              <CardDescription>固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              {snapshot.services.map((service) => (
-                <ServiceDetail
-                  commandBusy={busy === `command:${service.id}`}
-                  commandConfig={snapshot.serviceCommands.find((config) => config.serviceId === service.id)}
-                  key={service.id}
-                  onOpenPath={openPath}
-                  onResetCommand={resetCommandConfig}
-                  onSaveCommand={saveCommandConfig}
-                  service={service}
-                />
-              ))}
-            </CardContent>
-          </Card>
-        </div>
+                <div className="flex justify-end rounded-lg border border-border/70 bg-muted/35 p-3">
+                  <Button disabled={busy !== null} onClick={repair} variant="outline">
+                    {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
+                    准备基础目录
+                    <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
+                  </Button>
+                </div>
+              </TabsContent>
 
-        <div className="min-w-0 space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <span className="grid size-6 place-items-center rounded-md bg-primary/10 text-primary">
-                  <ShieldCheck className="size-3.5" />
-                </span>
-                实例与路径
-              </CardTitle>
-              <CardDescription>每个安装目录使用独立 userData 与安装目录级实例锁。</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <PathField label="安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
-              <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
+              <TabsContent className="space-y-4" value="account">
+                <p className="text-xs text-muted-foreground">
+                  机器人 QQ 号配置将用于 NapCat 登录与联动，请确保填写的是目标机器人账号。
+                </p>
+                <div className="grid gap-3 rounded-lg border border-border/70 bg-muted/35 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                  <Input
+                    inputMode="numeric"
+                    monospace
+                    onChange={(event) => setQqAccount(event.target.value)}
+                    placeholder="机器人 QQ 号"
+                    value={qqAccount}
+                  />
+                  <Button disabled={!canSaveQq} onClick={saveQqAccount}>
+                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
+                    保存 QQ
+                    <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
+                  </Button>
+                </div>
+              </TabsContent>
+
+              <TabsContent className="space-y-3" value="services">
+                <p className="text-xs text-muted-foreground">
+                  固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
+                </p>
+                {services.map((service) => (
+                  <ServiceDetail
+                    commandBusy={busy === `command:${service.id}`}
+                    commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
+                    key={service.id}
+                    onOpenPath={openPath}
+                    onResetCommand={resetCommandConfig}
+                    onSaveCommand={saveCommandConfig}
+                    service={service}
+                  />
+                ))}
+              </TabsContent>
+
+              <TabsContent className="space-y-3" value="paths">
+                <p className="text-xs text-muted-foreground">
+                  每个安装目录使用独立 userData 与安装目录级实例锁。
+                </p>
+                <PathField label="安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
+                <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
               <PathField label="runtime" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
               <PathField label="modules" onOpen={openPath} value={snapshot.paths.modulesRoot} />
-              <Button
-                className="mt-1 w-full justify-center"
-                onClick={() => window.maibotDesktop?.openLogsDirectory()}
-                variant="outline"
-              >
-                <FolderOpen />
-                打开日志目录
-                <Kbd className="ml-1" keys="Mod+L" size="xs" tone="muted" />
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <span className="grid size-6 place-items-center rounded-md bg-amber-500/15 text-amber-700">
-                  <HardDrive className="size-3.5" />
-                </span>
-                最近日志
-              </CardTitle>
-              <CardDescription>服务 stdout、stderr 和桌面壳系统事件会写入日志目录。</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border/70 bg-elevated/80">
-                {recentLogs.length > 0 ? (
-                  recentLogs.map((entry) => <LogLine entry={entry} key={entry.id} />)
-                ) : (
-                  <div className="px-3 py-8 text-center text-xs text-muted-foreground">
-                    暂无日志
-                  </div>
-                )}
+              <div className="grid gap-2 pt-2">
+                {runtimePathConfigs.map((config) => (
+                  <RuntimePathEditor
+                    busy={busy === `path:${config.key}`}
+                    config={config}
+                    key={config.key}
+                    onOpenPath={openPath}
+                    onReset={resetRuntimePathConfig}
+                    onSave={saveRuntimePathConfig}
+                  />
+                ))}
               </div>
-              <Button disabled={busy !== null} onClick={clearLogs} size="sm" variant="outline">
-                {busy === "logs" ? <Loader2 className="animate-spin" /> : <Trash2 />}
-                清空面板日志
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+              <Button
+                  className="mt-1 w-full justify-center"
+                  onClick={() => window.maibotDesktop?.openLogsDirectory()}
+                  variant="outline"
+                >
+                  <FolderOpen />
+                  打开日志目录
+                  <Kbd className="ml-1" keys="Mod+L" size="xs" tone="muted" />
+                </Button>
+              </TabsContent>
+
+              <TabsContent className="space-y-3" value="logs">
+                <p className="text-xs text-muted-foreground">
+                  服务 stdout、stderr 和桌面壳系统事件会写入日志目录。
+                </p>
+                <div className="max-h-[420px] overflow-y-auto rounded-lg border border-border/70 bg-elevated/80">
+                  {recentLogs.length > 0 ? (
+                    recentLogs.map((entry) => <LogLine entry={entry} key={entry.id} />)
+                  ) : (
+                    <div className="px-3 py-8 text-center text-xs text-muted-foreground">暂无日志</div>
+                  )}
+                </div>
+                <Button disabled={busy !== null} onClick={clearLogs} size="sm" variant="outline">
+                  {busy === "logs" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                  清空面板日志
+                </Button>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
       </div>
     </section>
   );
