@@ -20,13 +20,15 @@ export function configureRuntimePaths(): RuntimePaths {
   const payloadRoot = resolvePayloadRoot(installRoot);
   const installScope = createInstallScope(installRoot);
   const userDataRoot = join(app.getPath("appData"), "MaiBotOneKeyDesktop", installScope);
+  const bundledModulesRoot = join(payloadRoot, "modules");
 
   app.setPath("userData", userDataRoot);
 
   return {
     installRoot,
     userDataRoot,
-    modulesRoot: join(payloadRoot, "modules"),
+    modulesRoot: app.isPackaged ? join(userDataRoot, "modules") : bundledModulesRoot,
+    bundledModulesRoot,
     runtimeRoot: join(payloadRoot, "runtime"),
     logsRoot: join(userDataRoot, "logs"),
   };

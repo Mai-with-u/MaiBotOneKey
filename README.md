@@ -24,7 +24,13 @@ bun run build
 
 ```text
 runtime/
-  python31211/
+  python/
+    python.exe
+    DLLs/
+    Lib/
+    Scripts/pip.exe
+  git/
+    bin/git.exe
 modules/
   MaiBot/
   MaiBot-Napcat-Adapter/

@@ -654,21 +654,22 @@ export function SettingsStatusPanel({
                 </p>
                 <PathField label="安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
                 <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
-              <PathField label="runtime" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
-              <PathField label="modules" onOpen={openPath} value={snapshot.paths.modulesRoot} />
-              <div className="grid gap-2 pt-2">
-                {runtimePathConfigs.map((config) => (
-                  <RuntimePathEditor
-                    busy={busy === `path:${config.key}`}
-                    config={config}
-                    key={config.key}
-                    onOpenPath={openPath}
-                    onReset={resetRuntimePathConfig}
-                    onSave={saveRuntimePathConfig}
-                  />
-                ))}
-              </div>
-              <Button
+                <PathField label="runtime" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
+                <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
+                <PathField label="可写 modules" onOpen={openPath} value={snapshot.paths.modulesRoot} />
+                <div className="grid gap-2 pt-2">
+                  {runtimePathConfigs.map((config) => (
+                    <RuntimePathEditor
+                      busy={busy === `path:${config.key}`}
+                      config={config}
+                      key={config.key}
+                      onOpenPath={openPath}
+                      onReset={resetRuntimePathConfig}
+                      onSave={saveRuntimePathConfig}
+                    />
+                  ))}
+                </div>
+                <Button
                   className="mt-1 w-full justify-center"
                   onClick={() => window.maibotDesktop?.openLogsDirectory()}
                   variant="outline"

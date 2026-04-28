@@ -98,6 +98,7 @@ export interface RuntimePaths {
   installRoot: string;
   userDataRoot: string;
   modulesRoot: string;
+  bundledModulesRoot: string;
   runtimeRoot: string;
   logsRoot: string;
 }

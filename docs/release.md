@@ -13,7 +13,11 @@
 2. 准备 release payload。仓库根目录必须存在：
 
    ```text
-   runtime/python31211/bin/python.exe
+   runtime/python/python.exe
+   runtime/python/DLLs/
+   runtime/python/Lib/
+   runtime/python/Scripts/pip.exe
+   runtime/git/bin/git.exe
    modules/MaiBot/bot.py
    modules/napcat/NapCatWinBootMain.exe
    ```

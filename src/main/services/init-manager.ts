@@ -1,12 +1,15 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { InitCheck, InitRepairResult, InitState, RuntimePaths } from "../../shared/contracts";
+import type { InitCheck, InitRepairResult, InitState, RuntimePaths, ServiceId } from "../../shared/contracts";
 
 const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
 const DEPENDENCY_CACHE_MS = 15_000;
+const PYTHON_RUNTIME_DIR = "python";
+const GIT_RUNTIME_DIR = "git";
+const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 
 function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
@@ -60,6 +63,18 @@ function toDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function runWithoutAsar<T>(operation: () => Promise<T>): Promise<T> {
+  const electronProcess = process as NodeJS.Process & { noAsar?: boolean };
+  const previousNoAsar = electronProcess.noAsar;
+  electronProcess.noAsar = true;
+
+  try {
+    return await operation();
+  } finally {
+    electronProcess.noAsar = previousNoAsar;
+  }
+}
+
 export class InitManager {
   private dependencyCache?: { expiresAt: number; checks: InitCheck[] };
 
@@ -71,7 +86,14 @@ export class InitManager {
     const napCatWebUiCheck = await this.checkNapCatWebUi();
     const checks: InitCheck[] = [
       checkDir(this.paths.runtimeRoot, "内置 runtime", "runtime"),
-      checkFile(this.getPythonPath(), "内置 Python", "python"),
+      checkDir(this.paths.bundledModulesRoot, "内置 modules 模板", "bundled-modules"),
+      checkDir(this.getPythonRoot(), "内置 Python 目录", "python-runtime"),
+      checkFile(this.getPythonPath(), "内置 Python 可执行文件", "python-exe"),
+      checkDir(this.getPythonLibPath(), "Python 标准库目录", "python-lib"),
+      checkDir(this.getPythonDllsPath(), "Python DLLs 目录", "python-dlls"),
+      checkFile(this.getPipPath(), "Python pip 命令", "python-pip-exe"),
+      checkDir(this.getPipPackagePath(), "Python pip 包", "python-pip-package"),
+      checkDir(this.getGitRoot(), "内置 Git", "git-runtime"),
       checkDir(join(this.paths.modulesRoot, "MaiBot"), "MaiBot 主模块", "maibot-module"),
       checkFile(join(this.paths.modulesRoot, "MaiBot", "bot.py"), "MaiBot 启动文件", "maibot-entry"),
       checkDir(join(this.paths.modulesRoot, "napcat"), "NapCat 模块", "napcat-module"),
@@ -95,9 +117,7 @@ export class InitManager {
   }
 
   async repair(): Promise<InitRepairResult> {
-    const changedFiles: string[] = [];
-
-    await mkdir(this.paths.logsRoot, { recursive: true });
+    const changedFiles = await this.ensureModulesReady();
 
     const state = {
       ...(await this.getState()),
@@ -110,6 +130,8 @@ export class InitManager {
     if (!isDigits(qqAccount)) {
       throw new Error("QQ 号必须是纯数字");
     }
+
+    await this.ensureServiceReady("maibot");
 
     const botConfigPath = this.botConfigPath();
     let content = existsSync(botConfigPath)
@@ -131,6 +153,37 @@ export class InitManager {
     return this.getState();
   }
 
+  async ensureModulesReady(): Promise<string[]> {
+    return [
+      ...(await this.ensureServiceReady("maibot")),
+      ...(await this.ensureServiceReady("napcat")),
+    ];
+  }
+
+  async ensureServiceReady(serviceId: ServiceId): Promise<string[]> {
+    await mkdir(this.paths.logsRoot, { recursive: true });
+
+    if (this.paths.modulesRoot === this.paths.bundledModulesRoot) {
+      return [];
+    }
+
+    if (!existsSync(this.paths.bundledModulesRoot)) {
+      throw new Error(`内置 modules 模板缺失: ${this.paths.bundledModulesRoot}`);
+    }
+
+    if (serviceId === "maibot") {
+      return this.ensureBundledModuleSubtree("MaiBot", ["bot.py"]);
+    }
+
+    return [
+      ...(await this.ensureBundledModuleSubtree("napcat", [
+        "NapCatWinBootMain.exe",
+        join("Files", "versions", "config.json"),
+      ])),
+      ...(await this.ensureBundledModuleSubtree("napcatframework", ["versions"], true)),
+    ];
+  }
+
   async readQqAccount(): Promise<string | undefined> {
     const botConfigPath = this.botConfigPath();
     if (!existsSync(botConfigPath)) {
@@ -143,12 +196,93 @@ export class InitManager {
   }
 
   getPythonPath(): string {
+    const root = this.getPythonRoot();
     const candidates = [
-      join(this.paths.runtimeRoot, "python31211", "bin", "python.exe"),
-      join(this.paths.runtimeRoot, "python31211", "python.exe"),
+      join(root, "python.exe"),
+      join(root, "bin", "python.exe"),
+      join(root, "python"),
+      join(root, "bin", "python3"),
+      join(root, "bin", "python"),
     ];
 
     return candidates.find((path) => existsSync(path)) ?? candidates[0];
+  }
+
+  getPipPath(): string {
+    const root = this.getPythonRoot();
+    const candidates = [
+      join(root, "Scripts", "pip.exe"),
+      join(root, "Scripts", "pip3.exe"),
+      join(root, "bin", "pip3"),
+      join(root, "bin", "pip"),
+    ];
+
+    return candidates.find((path) => existsSync(path)) ?? candidates[0];
+  }
+
+  getGitPath(): string {
+    const root = this.getGitRoot();
+    const candidates = [
+      join(root, "bin", "git.exe"),
+      join(root, "cmd", "git.exe"),
+      join(root, "git.exe"),
+      join(root, "bin", "git"),
+    ];
+
+    return candidates.find((path) => existsSync(path)) ?? candidates[0];
+  }
+
+  private getPythonRoot(): string {
+    return join(this.paths.runtimeRoot, PYTHON_RUNTIME_DIR);
+  }
+
+  private getPythonLibPath(): string {
+    return join(this.getPythonRoot(), "Lib");
+  }
+
+  private getPythonDllsPath(): string {
+    return join(this.getPythonRoot(), "DLLs");
+  }
+
+  private getPipPackagePath(): string {
+    return join(this.getPythonRoot(), "Lib", "site-packages", "pip");
+  }
+
+  private getGitRoot(): string {
+    return join(this.paths.runtimeRoot, GIT_RUNTIME_DIR);
+  }
+
+  private async ensureBundledModuleSubtree(
+    moduleName: string,
+    requiredRelativePaths: string[],
+    optional = false,
+  ): Promise<string[]> {
+    const source = join(this.paths.bundledModulesRoot, moduleName);
+    const target = join(this.paths.modulesRoot, moduleName);
+
+    if (!existsSync(source)) {
+      if (optional) {
+        return [];
+      }
+
+      throw new Error(`内置 ${moduleName} 模板缺失: ${source}`);
+    }
+
+    const isReady = requiredRelativePaths.every((relativePath) => existsSync(join(target, relativePath)));
+    if (isReady) {
+      return [];
+    }
+
+    await mkdir(dirname(target), { recursive: true });
+    await runWithoutAsar(() =>
+      cp(source, target, {
+        recursive: true,
+        force: false,
+        errorOnExist: false,
+      }),
+    );
+
+    return [target];
   }
 
   async ensureNapCatWebUiConfig(): Promise<string | undefined> {
@@ -226,62 +360,88 @@ export class InitManager {
       return cached.checks;
     }
 
+    const checks: InitCheck[] = [];
     const python = this.getPythonPath();
     if (!existsSync(python)) {
-      const checks = [
-        {
-          id: "python-dependencies",
-          label: "Python 依赖完整性",
-          status: "error" as const,
-          detail: "内置 Python 缺失，无法检查依赖",
+      checks.push({
+        id: "python-dependencies",
+        label: "Python 依赖完整性",
+        status: "error",
+        detail: "内置 Python 缺失，无法检查依赖",
+        path: python,
+      });
+    } else {
+      try {
+        await runProcess(
+          python,
+          ["-c", "import sys, ssl, sqlite3, tomllib; print(sys.version)"],
+          this.paths.installRoot,
+        );
+        checks.push({
+          id: "python-runtime-smoke",
+          label: "Python 标准库",
+          status: "ok",
+          detail: "可启动，ssl/sqlite3/tomllib 可导入",
           path: python,
-        },
-      ];
-      this.dependencyCache = { expiresAt: Date.now() + DEPENDENCY_CACHE_MS, checks };
-      return checks;
+        });
+      } catch (error) {
+        checks.push({
+          id: "python-runtime-smoke",
+          label: "Python 标准库",
+          status: "error",
+          detail: `依赖损坏: ${toDetail(error)}`,
+          path: python,
+        });
+      }
+
+      try {
+        const output = await runProcess(python, ["-m", "pip", "check"], this.paths.installRoot, 15_000);
+        checks.push({
+          id: "python-pip-check",
+          label: "Python 包依赖",
+          status: "ok",
+          detail: output || "pip check 未发现损坏依赖",
+          path: python,
+        });
+      } catch (error) {
+        checks.push({
+          id: "python-pip-check",
+          label: "Python 包依赖",
+          status: "error",
+          detail: `依赖损坏: ${toDetail(error)}`,
+          path: python,
+        });
+      }
     }
 
-    const checks: InitCheck[] = [];
-    try {
-      await runProcess(
-        python,
-        ["-c", "import sys, ssl, sqlite3, tomllib; print(sys.version)"],
-        this.paths.installRoot,
-      );
+    const git = this.getGitPath();
+    if (!existsSync(git)) {
       checks.push({
-        id: "python-runtime-smoke",
-        label: "Python 标准库",
-        status: "ok",
-        detail: "可启动，ssl/sqlite3/tomllib 可导入",
-        path: python,
-      });
-    } catch (error) {
-      checks.push({
-        id: "python-runtime-smoke",
-        label: "Python 标准库",
+        id: "git-runtime-smoke",
+        label: "Git 可执行文件",
         status: "error",
-        detail: `依赖损坏: ${toDetail(error)}`,
-        path: python,
+        detail: "内置 Git 缺失，无法检查 Git",
+        path: git,
       });
-    }
-
-    try {
-      const output = await runProcess(python, ["-m", "pip", "check"], this.paths.installRoot, 15_000);
-      checks.push({
-        id: "python-pip-check",
-        label: "Python 包依赖",
-        status: "ok",
-        detail: output || "pip check 未发现损坏依赖",
-        path: python,
-      });
-    } catch (error) {
-      checks.push({
-        id: "python-pip-check",
-        label: "Python 包依赖",
-        status: "error",
-        detail: `依赖损坏: ${toDetail(error)}`,
-        path: python,
-      });
+    } else {
+      try {
+        const output = await runProcess(git, ["--version"], this.paths.installRoot);
+        checks.push({
+          id: "git-runtime-smoke",
+          label: "Git 可执行文件",
+          status: "ok",
+          detail: output || "Git 可启动",
+          path: git,
+        });
+      } catch (error) {
+        checks.push({
+          id: "git-runtime-smoke",
+          label: "Git 可执行文件",
+          status: "error",
+          detail: `依赖损坏: ${toDetail(error)}`,
+          path: git,
+        });
+      }
     }
 
     this.dependencyCache = { expiresAt: Date.now() + DEPENDENCY_CACHE_MS, checks };
@@ -392,55 +552,21 @@ export class InitManager {
   }
 
   private async findNapCatWebUiConfigDirs(): Promise<string[]> {
-    const versionRoots = [
-      join(this.paths.modulesRoot, "napcat", "versions"),
-      join(this.paths.modulesRoot, "napcatframework", "versions"),
-    ];
-    const versionDirs: string[] = [];
-
-    for (const root of versionRoots) {
-      if (!existsSync(root)) {
-        continue;
-      }
-
-      const entries = await readdir(root, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          versionDirs.push(join(root, entry.name));
-        }
-      }
-    }
-
-    if (versionDirs.length === 0) {
-      return [
-        join(
-          this.paths.modulesRoot,
-          "napcat",
-          "versions",
-          "9.9.21-39038",
-          "resources",
-          "app",
-          "napcat",
-          "config",
-        ),
-        join(
-          this.paths.modulesRoot,
-          "napcatframework",
-          "versions",
-          "9.9.21-39038",
-          "resources",
-          "app",
-          "LiteLoader",
-          "plugins",
-          "NapCat",
-          "config",
-        ),
-      ];
-    }
-
-    return versionDirs.flatMap((versionDir) => [
-      join(versionDir, "resources", "app", "napcat", "config"),
-      join(versionDir, "resources", "app", "LiteLoader", "plugins", "NapCat", "config"),
+    const versions = await this.findNapCatVersions();
+    return versions.flatMap((version) => [
+      join(this.paths.modulesRoot, "napcat", "versions", version, "resources", "app", "napcat", "config"),
+      join(
+        this.paths.modulesRoot,
+        "napcatframework",
+        "versions",
+        version,
+        "resources",
+        "app",
+        "LiteLoader",
+        "plugins",
+        "NapCat",
+        "config",
+      ),
     ]);
   }
 
@@ -448,6 +574,8 @@ export class InitManager {
     const roots = [
       join(this.paths.modulesRoot, "napcat", "versions"),
       join(this.paths.modulesRoot, "napcatframework", "versions"),
+      join(this.paths.bundledModulesRoot, "napcat", "versions"),
+      join(this.paths.bundledModulesRoot, "napcatframework", "versions"),
     ];
     const versions = new Set<string>();
 
@@ -464,6 +592,6 @@ export class InitManager {
       }
     }
 
-    return versions.size > 0 ? [...versions] : ["9.9.21-39038"];
+    return versions.size > 0 ? [...versions] : [NAPCAT_FALLBACK_VERSION];
   }
 }

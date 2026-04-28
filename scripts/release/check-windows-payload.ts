@@ -32,9 +32,44 @@ const requirements: Requirement[] = [
     candidates: [dir("runtime")],
   },
   {
-    label: "embedded Python",
+    label: "portable Python directory",
     required: true,
-    candidates: [file("runtime/python31211/bin/python.exe"), file("runtime/python31211/python.exe")],
+    candidates: [dir("runtime/python")],
+  },
+  {
+    label: "portable Python executable",
+    required: true,
+    candidates: [file("runtime/python/python.exe"), file("runtime/python/bin/python.exe")],
+  },
+  {
+    label: "portable Python standard library",
+    required: true,
+    candidates: [dir("runtime/python/Lib"), dir("runtime/python/lib")],
+  },
+  {
+    label: "portable Python extension modules",
+    required: true,
+    candidates: [dir("runtime/python/DLLs")],
+  },
+  {
+    label: "portable Python pip command",
+    required: true,
+    candidates: [file("runtime/python/Scripts/pip.exe"), file("runtime/python/bin/pip")],
+  },
+  {
+    label: "portable Python pip package",
+    required: true,
+    candidates: [dir("runtime/python/Lib/site-packages/pip"), dir("runtime/python/lib/site-packages/pip")],
+  },
+  {
+    label: "embedded Git directory",
+    required: true,
+    candidates: [dir("runtime/git")],
+  },
+  {
+    label: "embedded Git executable",
+    required: true,
+    candidates: [file("runtime/git/bin/git.exe"), file("runtime/git/cmd/git.exe"), file("runtime/git/git.exe")],
   },
   {
     label: "modules directory",

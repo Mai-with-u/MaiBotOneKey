@@ -66,14 +66,6 @@ function resolveDefaultCwd(cwd: string | undefined): string {
   }
 }
 
-function quoteForCmd(value: string): string {
-  if (!/[ \t&()^|<>"]/.test(value)) {
-    return value;
-  }
-
-  return `"${value.replace(/"/g, '\\"')}"`;
-}
-
 interface ResolvedCommand {
   file: string;
   args: string[];
@@ -133,10 +125,9 @@ function resolveCommand(request: PtyStartRequest, encoding: PtyEncoding): Resolv
 
   if (requestedCommand && requestedCommand.length > 0) {
     if (process.platform === "win32") {
-      const commandLine = requestedCommand.map(quoteForCmd).join(" ");
       return {
-        file: process.env.ComSpec ?? "cmd.exe",
-        args: ["/D", "/S", "/C", `chcp ${codePage} > nul & ${commandLine}`],
+        file: requestedCommand[0],
+        args: requestedCommand.slice(1),
         displayCommand: requestedCommand,
         title: request.title ?? basename(requestedCommand[0]),
       };

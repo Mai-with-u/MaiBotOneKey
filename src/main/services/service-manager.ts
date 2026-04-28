@@ -34,6 +34,7 @@ interface ServiceDefinition {
   defaultRequiredPaths: string[];
   conflictPorts: number[];
   readyPorts: number[];
+  buildDefaultCommand?: () => Promise<string[]>;
   buildDefaultCommandLine: () => Promise<string>;
   displayDefaultCommandLine?: () => Promise<string>;
 }
@@ -47,6 +48,7 @@ interface RuntimePathDefinition {
 
 interface ResolvedServiceCommand {
   cwd: string;
+  command?: string[];
   commandLine: string;
   requiredPaths: string[];
   customized: boolean;
@@ -98,11 +100,110 @@ const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
 
 function quoteCommandPart(value: string): string {
-  if (!/[ \t&()^|<>"]/u.test(value)) {
-    return value;
+  const normalized = normalizePathLikeValue(value);
+  if (!/[ \t&()^|<>"]/u.test(normalized)) {
+    return normalized;
   }
 
-  return `"${value.replace(/"/g, '\\"')}"`;
+  return `"${normalized.replace(/"/g, '\\"')}"`;
+}
+
+function normalizePathLikeValue(value: string): string {
+  let normalized = value.trim();
+  normalized = normalized.replace(/^\\(["'])/u, "$1").replace(/\\(["'])$/u, "$1");
+
+  const first = normalized[0];
+  const last = normalized[normalized.length - 1];
+  if ((first === `"` && last === `"`) || (first === `'` && last === `'`)) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  return normalized;
+}
+
+function normalizeCommandLine(value: string): string {
+  return value
+    .trim()
+    .replace(/(^|\s)\\(["'])/gu, "$1$2")
+    .replace(/\\(["'])(?=\s|$)/gu, "$1");
+}
+
+function normalizePathSeparators(value: string): string {
+  return normalizePathLikeValue(value)
+    .replace(/\\/gu, "/")
+    .replace(/\/+/gu, "/")
+    .replace(/\/$/u, "");
+}
+
+function normalizePathForMatch(value: string): string {
+  const normalized = normalizePathSeparators(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function replaceAllPathVariants(value: string, search: string, replacement: string): string {
+  const flags = process.platform === "win32" ? "giu" : "gu";
+  const variants = new Set([
+    search,
+    search.replace(/\\/gu, "/"),
+    search.replace(/\//gu, "\\"),
+  ]);
+
+  let nextValue = value;
+  for (const variant of variants) {
+    if (!variant) {
+      continue;
+    }
+
+    nextValue = nextValue.replace(new RegExp(escapeRegExp(variant), flags), replacement);
+  }
+
+  return nextValue;
+}
+
+function relocateBundledModulePath(value: string, paths: RuntimePaths): string {
+  const normalized = normalizePathLikeValue(value);
+  const normalizedWithSlashes = normalizePathSeparators(normalized);
+  const bundledWithSlashes = normalizePathSeparators(paths.bundledModulesRoot);
+  const valueForMatch = normalizePathForMatch(normalized);
+  const bundledForMatch = normalizePathForMatch(paths.bundledModulesRoot);
+  const isBundledRoot = valueForMatch === bundledForMatch;
+  const isBundledChild = valueForMatch.startsWith(`${bundledForMatch}/`);
+
+  if (!isBundledRoot && !isBundledChild) {
+    return normalized;
+  }
+
+  const suffix = normalizedWithSlashes.slice(bundledWithSlashes.length);
+  const suffixParts = suffix.split("/").filter(Boolean);
+  return join(paths.modulesRoot, ...suffixParts);
+}
+
+function relocateBundledModuleReferences(value: string, paths: RuntimePaths): string {
+  return replaceAllPathVariants(value, paths.bundledModulesRoot, paths.modulesRoot);
+}
+
+function extractLeadingExecutablePath(commandLine: string): string | undefined {
+  const trimmed = commandLine.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const quoted = trimmed.match(/^"([^"]+)"/u) ?? trimmed.match(/^'([^']+)'/u);
+  const candidate = quoted?.[1] ?? trimmed.split(/\s+/u)[0];
+  if (!candidate) {
+    return undefined;
+  }
+
+  const looksLikePath =
+    /^[a-zA-Z]:[\\/]/u.test(candidate) ||
+    /^\\\\/u.test(candidate) ||
+    candidate.includes("/") ||
+    candidate.includes("\\");
+  return looksLikePath ? candidate : undefined;
 }
 
 function serviceSessionId(serviceId: ServiceId): string {
@@ -156,19 +257,31 @@ class ServiceCommandStore {
   private readonly path: string;
   private cache: StoredCommandFile | null = null;
 
-  constructor(paths: RuntimePaths) {
+  constructor(private readonly paths: RuntimePaths) {
     this.path = join(paths.userDataRoot, COMMAND_CONFIG_FILE);
   }
 
   async get(serviceId: ServiceId): Promise<StoredServiceCommand | undefined> {
-    return (await this.read()).services[serviceId];
+    const command = (await this.read()).services[serviceId];
+    if (!command) {
+      return undefined;
+    }
+
+    return {
+      cwd: command.cwd ? relocateBundledModulePath(command.cwd, this.paths) : undefined,
+      commandLine: command.commandLine
+        ? relocateBundledModuleReferences(normalizeCommandLine(command.commandLine), this.paths)
+        : undefined,
+    };
   }
 
   async set(serviceId: ServiceId, command: StoredServiceCommand): Promise<void> {
     const file = await this.read();
     file.services[serviceId] = {
-      cwd: command.cwd?.trim() || undefined,
-      commandLine: command.commandLine?.trim() || undefined,
+      cwd: command.cwd ? relocateBundledModulePath(command.cwd, this.paths) || undefined : undefined,
+      commandLine: command.commandLine
+        ? relocateBundledModuleReferences(normalizeCommandLine(command.commandLine), this.paths) || undefined
+        : undefined,
     };
     await this.write(file);
   }
@@ -208,17 +321,18 @@ class RuntimePathStore {
   private readonly path: string;
   private cache: StoredRuntimePathFile;
 
-  constructor(paths: RuntimePaths) {
+  constructor(private readonly paths: RuntimePaths) {
     this.path = join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE);
     this.cache = this.read();
   }
 
   get(key: RuntimePathKey): string | undefined {
-    return this.cache.paths[key]?.trim() || undefined;
+    const value = this.cache.paths[key];
+    return value ? relocateBundledModulePath(value, this.paths) || undefined : undefined;
   }
 
   async set(key: RuntimePathKey, value: string): Promise<void> {
-    this.cache.paths[key] = value.trim() || undefined;
+    this.cache.paths[key] = relocateBundledModulePath(value, this.paths) || undefined;
     await this.write();
   }
 
@@ -347,6 +461,10 @@ export class ServiceManager extends EventEmitter {
 
     let resolved: ResolvedServiceCommand;
     try {
+      const changedFiles = await this.initManager.ensureServiceReady(serviceId);
+      if (changedFiles.length > 0) {
+        this.logs.append(serviceId, "system", `prepared writable modules: ${changedFiles.join(", ")}`);
+      }
       resolved = await this.resolveStartCommand(definition);
       this.assertRequiredPaths(definition, resolved.requiredPaths);
     } catch (error) {
@@ -366,6 +484,8 @@ export class ServiceManager extends EventEmitter {
 
     await this.assertPortsFree(definition);
 
+    const displayCommand = resolved.command ?? [resolved.commandLine];
+
     this.setState(serviceId, {
       ...state,
       status: "starting",
@@ -377,7 +497,7 @@ export class ServiceManager extends EventEmitter {
       detail: `正在启动 ${definition.name} PTY`,
       stoppedAt: undefined,
       ptySessionId: sessionId,
-      command: [resolved.commandLine],
+      command: displayCommand,
       cwd: resolved.cwd,
     });
 
@@ -392,7 +512,8 @@ export class ServiceManager extends EventEmitter {
         id: sessionId,
         title: definition.name,
         cwd: resolved.cwd,
-        commandLine: resolved.commandLine,
+        command: resolved.command,
+        commandLine: resolved.command ? undefined : resolved.commandLine,
         cols: SERVICE_TERMINAL_COLS,
         rows: SERVICE_TERMINAL_ROWS,
         encoding: "auto",
@@ -406,7 +527,7 @@ export class ServiceManager extends EventEmitter {
         desired: true,
         pid: session.pid,
         ptySessionId: session.id,
-        command: [resolved.commandLine],
+        command: displayCommand,
         cwd: resolved.cwd,
         detail: "PTY 已启动，正在检测服务端口",
         startedAt: Date.now(),
@@ -607,6 +728,7 @@ export class ServiceManager extends EventEmitter {
         defaultRequiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
         conflictPorts: [8001],
         readyPorts: [8001],
+        buildDefaultCommand: async () => [python, "bot.py"],
         buildDefaultCommandLine: async () => `${quoteCommandPart(python)} bot.py`,
       },
       {
@@ -622,8 +744,12 @@ export class ServiceManager extends EventEmitter {
         displayDefaultCommandLine: async () => {
           return `${quoteCommandPart(napcatExe)} <QQ>`;
         },
-        buildDefaultCommandLine: async () => {
+        buildDefaultCommand: async () => {
           const qq = await this.initManager.readQqAccount();
+          await this.initManager.ensureNapCatWebUiConfig();
+          return qq ? [napcatExe, qq] : [napcatExe];
+        },
+        buildDefaultCommandLine: async () => {
           await this.initManager.ensureNapCatWebUiConfig();
           return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatExe)} <QQ>`);
         },
@@ -695,20 +821,23 @@ export class ServiceManager extends EventEmitter {
 
   private async resolveStartCommand(definition: ServiceDefinition): Promise<ResolvedServiceCommand> {
     const override = await this.commandStore.get(definition.id);
-    const cwd = override?.cwd?.trim() || definition.cwd;
-    const commandLine = override?.commandLine?.trim();
+    const cwd = override?.cwd ? normalizePathLikeValue(override.cwd) || definition.cwd : definition.cwd;
+    const commandLine = override?.commandLine ? normalizeCommandLine(override.commandLine) : undefined;
     if (commandLine) {
+      const executablePath = extractLeadingExecutablePath(commandLine);
       return {
         cwd,
         commandLine: await this.applyServicePlaceholders(definition.id, commandLine),
-        requiredPaths: [cwd],
+        requiredPaths: executablePath ? [cwd, executablePath] : [cwd],
         customized: true,
       };
     }
 
+    const command = definition.buildDefaultCommand ? await definition.buildDefaultCommand() : undefined;
     return {
       cwd,
-      commandLine: await definition.buildDefaultCommandLine(),
+      command,
+      commandLine: command ? command.map(quoteCommandPart).join(" ") : await definition.buildDefaultCommandLine(),
       requiredPaths: [...definition.defaultRequiredPaths, cwd],
       customized: false,
     };
@@ -743,7 +872,7 @@ export class ServiceManager extends EventEmitter {
         key: "git",
         label: "Git",
         kind: "file",
-        defaultValue: join(this.paths.runtimeRoot, "PortableGit", "bin", "git.exe"),
+        defaultValue: this.initManager.getGitPath(),
       },
       {
         key: "maibot",
