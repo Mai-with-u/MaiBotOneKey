@@ -14,6 +14,8 @@ import type {
   PtySessionSnapshot,
   PtyStartRequest,
   PtyStopRequest,
+  ServiceCommandConfig,
+  ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
   WindowState,
@@ -68,6 +70,10 @@ const desktopBridge: DesktopBridge = {
     startAll: () => ipcRenderer.invoke("services:startAll") as Promise<ServiceDescriptor[]>,
     stopAll: () => ipcRenderer.invoke("services:stopAll") as Promise<ServiceDescriptor[]>,
     refresh: () => ipcRenderer.invoke("services:refresh") as Promise<ServiceDescriptor[]>,
+    saveCommandConfig: (config: ServiceCommandUpdate) =>
+      ipcRenderer.invoke("services:saveCommandConfig", config) as Promise<ServiceCommandConfig[]>,
+    resetCommandConfig: (serviceId: ServiceId) =>
+      ipcRenderer.invoke("services:resetCommandConfig", serviceId) as Promise<ServiceCommandConfig[]>,
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) =>
       onIpc("services:snapshot", callback),
   },

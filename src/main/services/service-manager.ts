@@ -1,15 +1,22 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type {
+  PtyDataEvent,
+  PtyErrorEvent,
+  PtyExitEvent,
+  PtySessionSnapshot,
   RuntimePaths,
+  ServiceCommandConfig,
+  ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceHealth,
   ServiceId,
   ServiceStatus,
 } from "../../shared/contracts";
+import type { PtySessionManager } from "../pty/pty-session-manager";
 import { InitManager } from "./init-manager";
 import { LogStore } from "./log-store";
 
@@ -20,10 +27,18 @@ interface ServiceDefinition {
   ports: number[];
   url: string;
   cwd: string;
-  buildCommand: () => Promise<string[]>;
-  requiredPaths: string[];
+  defaultRequiredPaths: string[];
   conflictPorts: number[];
   readyPorts: number[];
+  buildDefaultCommandLine: () => Promise<string>;
+  displayDefaultCommandLine?: () => Promise<string>;
+}
+
+interface ResolvedServiceCommand {
+  cwd: string;
+  commandLine: string;
+  requiredPaths: string[];
+  customized: boolean;
 }
 
 interface ServiceState {
@@ -36,26 +51,54 @@ interface ServiceState {
   desired?: boolean;
   restartAttempts?: number;
   command?: string[];
+  cwd?: string;
   dynamicUrl?: string;
   startedAt?: number;
   stoppedAt?: number;
-  child?: ChildProcessWithoutNullStreams;
+  ptySessionId?: string;
   stopTimer?: NodeJS.Timeout;
   restartTimer?: NodeJS.Timeout;
   healthFailures?: number;
+}
+
+interface StoredServiceCommand {
+  cwd?: string;
+  commandLine?: string;
+}
+
+interface StoredCommandFile {
+  version: 1;
+  services: Partial<Record<ServiceId, StoredServiceCommand>>;
 }
 
 const STOP_FORCE_AFTER_MS = 10_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_RESTART_ATTEMPTS = 3;
 const RESTART_DELAY_MS = 2_500;
+const SERVICE_TERMINAL_COLS = 120;
+const SERVICE_TERMINAL_ROWS = 36;
+const COMMAND_CONFIG_FILE = "service-commands.json";
+const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
 
-function isWindows(): boolean {
-  return process.platform === "win32";
+function quoteCommandPart(value: string): string {
+  if (!/[ \t&()^|<>"]/u.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-function splitLines(chunk: Buffer): string[] {
-  return chunk.toString("utf8").split(/\r?\n/).filter((line) => line.length > 0);
+function serviceSessionId(serviceId: ServiceId): string {
+  return `service:${serviceId}`;
+}
+
+function serviceIdFromSession(sessionId: string): ServiceId | undefined {
+  const id = sessionId.replace(/^service:/u, "");
+  return SERVICE_IDS.includes(id as ServiceId) ? (id as ServiceId) : undefined;
+}
+
+function isLivePtyStatus(status: PtySessionSnapshot["status"]): boolean {
+  return status === "starting" || status === "running" || status === "stopping";
 }
 
 function probePort(port: number, host = "127.0.0.1", timeoutMs = 450): Promise<boolean> {
@@ -92,17 +135,73 @@ async function waitForPort(port: number, timeoutMs = 18_000): Promise<boolean> {
   return false;
 }
 
+class ServiceCommandStore {
+  private readonly path: string;
+  private cache: StoredCommandFile | null = null;
+
+  constructor(paths: RuntimePaths) {
+    this.path = join(paths.userDataRoot, COMMAND_CONFIG_FILE);
+  }
+
+  async get(serviceId: ServiceId): Promise<StoredServiceCommand | undefined> {
+    return (await this.read()).services[serviceId];
+  }
+
+  async set(serviceId: ServiceId, command: StoredServiceCommand): Promise<void> {
+    const file = await this.read();
+    file.services[serviceId] = {
+      cwd: command.cwd?.trim() || undefined,
+      commandLine: command.commandLine?.trim() || undefined,
+    };
+    await this.write(file);
+  }
+
+  async reset(serviceId: ServiceId): Promise<void> {
+    const file = await this.read();
+    delete file.services[serviceId];
+    await this.write(file);
+  }
+
+  private async read(): Promise<StoredCommandFile> {
+    if (this.cache) {
+      return this.cache;
+    }
+
+    try {
+      const raw = JSON.parse(await readFile(this.path, "utf8")) as StoredCommandFile;
+      this.cache = {
+        version: 1,
+        services: raw.services ?? {},
+      };
+    } catch {
+      this.cache = { version: 1, services: {} };
+    }
+
+    return this.cache;
+  }
+
+  private async write(file: StoredCommandFile): Promise<void> {
+    this.cache = file;
+    await mkdir(dirname(this.path), { recursive: true });
+    await writeFile(this.path, `${JSON.stringify(file, null, 2)}\n`, "utf8");
+  }
+}
+
 export class ServiceManager extends EventEmitter {
   private readonly states = new Map<ServiceId, ServiceState>();
   private readonly definitions: ServiceDefinition[];
   private readonly watchdogTimer: NodeJS.Timeout;
+  private readonly commandStore: ServiceCommandStore;
+  private readonly logLineBuffers = new Map<ServiceId, string>();
 
   constructor(
     private readonly paths: RuntimePaths,
     private readonly initManager: InitManager,
     private readonly logs: LogStore,
+    private readonly pty: PtySessionManager,
   ) {
     super();
+    this.commandStore = new ServiceCommandStore(paths);
     this.definitions = this.createDefinitions();
     for (const definition of this.definitions) {
       this.states.set(definition.id, {
@@ -115,6 +214,12 @@ export class ServiceManager extends EventEmitter {
         detail: "等待启动",
       });
     }
+
+    this.pty.on("data", (event) => this.handlePtyData(event));
+    this.pty.on("exit", (event) => this.handlePtyExit(event));
+    this.pty.on("error", (event) => this.handlePtyError(event));
+    this.pty.on("snapshot", (snapshot) => this.handlePtySnapshot(snapshot));
+
     this.watchdogTimer = setInterval(() => {
       void this.refresh().catch((error: unknown) => {
         this.logs.append("desktop", "system", `service watchdog failed: ${String(error)}`);
@@ -123,14 +228,14 @@ export class ServiceManager extends EventEmitter {
   }
 
   async startAll(): Promise<ServiceDescriptor[]> {
-    for (const serviceId of ["napcat", "adapter", "maibot"] as ServiceId[]) {
+    for (const serviceId of ["napcat", "maibot"] as ServiceId[]) {
       await this.start(serviceId);
     }
     return this.refresh();
   }
 
   async stopAll(): Promise<ServiceDescriptor[]> {
-    for (const serviceId of ["adapter", "maibot", "napcat"] as ServiceId[]) {
+    for (const serviceId of ["maibot", "napcat"] as ServiceId[]) {
       await this.stop(serviceId);
     }
     return this.snapshot();
@@ -141,7 +246,7 @@ export class ServiceManager extends EventEmitter {
 
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      const running = [...this.states.values()].some((state) => state.child);
+      const running = [...this.states.values()].some((state) => state.ptySessionId && state.status !== "stopped");
       if (!running) {
         return this.snapshot();
       }
@@ -149,7 +254,7 @@ export class ServiceManager extends EventEmitter {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    for (const serviceId of ["adapter", "maibot", "napcat"] as ServiceId[]) {
+    for (const serviceId of ["maibot", "napcat"] as ServiceId[]) {
       await this.kill(serviceId);
     }
     return this.snapshot();
@@ -163,21 +268,27 @@ export class ServiceManager extends EventEmitter {
   async start(serviceId: ServiceId, resetRestartAttempts = true): Promise<ServiceDescriptor> {
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
+    const sessionId = serviceSessionId(serviceId);
+    const existingSession = this.pty.list().find((session) => session.id === sessionId);
 
-    if ((state.status === "running" || state.status === "starting") && state.child) {
+    if (existingSession && isLivePtyStatus(existingSession.status)) {
       this.setState(serviceId, {
         ...state,
+        status: "running",
+        health: definition.readyPorts.length > 0 ? "checking" : "ready",
+        managed: true,
         desired: true,
+        pid: existingSession.pid,
+        ptySessionId: existingSession.id,
+        detail: `已附加到后台 PTY，PID ${existingSession.pid ?? "未知"}`,
       });
-      return this.toDescriptor(definition, state);
+      return this.toDescriptor(definition, this.getState(serviceId));
     }
 
-    this.assertRequiredPaths(definition);
-    await this.assertPortsFree(definition);
-
-    let command: string[];
+    let resolved: ResolvedServiceCommand;
     try {
-      command = await definition.buildCommand();
+      resolved = await this.resolveStartCommand(definition);
+      this.assertRequiredPaths(definition, resolved.requiredPaths);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logs.append(serviceId, "system", `start failed: ${message}`);
@@ -193,7 +304,8 @@ export class ServiceManager extends EventEmitter {
       throw error;
     }
 
-    const [file, ...args] = command;
+    await this.assertPortsFree(definition);
+
     this.setState(serviceId, {
       ...state,
       status: "starting",
@@ -202,101 +314,68 @@ export class ServiceManager extends EventEmitter {
       restartAttempts: resetRestartAttempts ? 0 : (state.restartAttempts ?? 0),
       healthFailures: 0,
       error: undefined,
-      detail: `正在启动 ${basename(file)}`,
+      detail: `正在启动 ${definition.name} PTY`,
       stoppedAt: undefined,
-      command,
+      ptySessionId: sessionId,
+      command: [resolved.commandLine],
+      cwd: resolved.cwd,
     });
 
-    this.logs.append(serviceId, "system", `start: ${command.join(" ")} cwd=${definition.cwd}`);
+    this.logs.append(
+      serviceId,
+      "system",
+      `start: ${resolved.commandLine} cwd=${resolved.cwd}${resolved.customized ? " customized=true" : ""}`,
+    );
 
-    const child = spawn(file, args, {
-      cwd: definition.cwd,
-      env: {
-        ...process.env,
-        PYTHONIOENCODING: "utf-8",
-        PYTHONUTF8: "1",
-      },
-      windowsHide: true,
-      stdio: "pipe",
-      detached: !isWindows(),
-    });
+    try {
+      const session = this.pty.start({
+        id: sessionId,
+        title: definition.name,
+        cwd: resolved.cwd,
+        commandLine: resolved.commandLine,
+        cols: SERVICE_TERMINAL_COLS,
+        rows: SERVICE_TERMINAL_ROWS,
+        encoding: "auto",
+      });
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      for (const line of splitLines(chunk)) {
-        this.logs.append(serviceId, "stdout", line);
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      for (const line of splitLines(chunk)) {
-        this.logs.append(serviceId, "stderr", line);
-      }
-    });
-    child.once("error", (error) => {
-      this.logs.append(serviceId, "system", `process error: ${error.message}`);
+      this.setState(serviceId, {
+        ...this.getState(serviceId),
+        status: "running",
+        health: definition.readyPorts.length > 0 ? "checking" : "ready",
+        managed: true,
+        desired: true,
+        pid: session.pid,
+        ptySessionId: session.id,
+        command: [resolved.commandLine],
+        cwd: resolved.cwd,
+        detail: "PTY 已启动，正在检测服务端口",
+        startedAt: Date.now(),
+      });
+
+      void this.waitUntilReady(definition);
+      return this.toDescriptor(definition, this.getState(serviceId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logs.append(serviceId, "system", `pty start failed: ${message}`);
       this.setState(serviceId, {
         ...this.getState(serviceId),
         status: "error",
         health: "unreachable",
         managed: false,
-        error: error.message,
-        detail: error.message,
-        child: undefined,
+        desired: false,
+        error: message,
+        detail: message,
         pid: undefined,
         stoppedAt: Date.now(),
       });
-    });
-    child.once("exit", (code, signal) => {
-      const current = this.getState(serviceId);
-      this.clearStopTimer(current);
-      const shouldRestart = Boolean(current.desired && current.status !== "stopping");
-      this.logs.append(serviceId, "system", `exit: code=${code ?? "null"} signal=${signal ?? "null"}`);
-      this.setState(serviceId, {
-        ...current,
-        status: code === 0 && !shouldRestart ? "stopped" : "error",
-        health: "unknown",
-        managed: false,
-        child: undefined,
-        pid: undefined,
-        detail:
-          code === 0 && !shouldRestart
-            ? "已停止"
-            : shouldRestart
-              ? `进程退出，准备自动重启: ${code ?? "null"}`
-              : `进程异常退出: ${code}`,
-        error:
-          code === 0 && !shouldRestart
-            ? undefined
-            : shouldRestart
-              ? undefined
-              : `进程异常退出: ${code}`,
-        stoppedAt: Date.now(),
-      });
-      if (shouldRestart) {
-        this.scheduleRestart(serviceId);
-      }
-    });
-
-    this.setState(serviceId, {
-      ...this.getState(serviceId),
-      status: "running",
-      health: definition.readyPorts.length > 0 ? "checking" : "ready",
-      managed: true,
-      desired: true,
-      pid: child.pid,
-      child,
-      command,
-      detail: "进程已启动，正在检测服务端口",
-      startedAt: Date.now(),
-    });
-
-    void this.waitUntilReady(definition);
-    return this.toDescriptor(definition, this.getState(serviceId));
+      throw error;
+    }
   }
 
   async stop(serviceId: ServiceId): Promise<ServiceDescriptor> {
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
-    if (!state.child || state.status === "stopped") {
+    if (!state.ptySessionId || state.status === "stopped") {
       return this.toDescriptor(definition, state);
     }
 
@@ -304,22 +383,32 @@ export class ServiceManager extends EventEmitter {
       ...state,
       status: "stopping",
       desired: false,
-      detail: "正在温和停止，超时后会强制结束",
+      detail: "正在温和停止后台 PTY，超时后会强制结束",
     });
     this.logs.append(serviceId, "system", "stop requested");
     this.clearRestartTimer(state);
 
     try {
-      this.softTerminate(state);
+      this.pty.stop({ sessionId: state.ptySessionId, forceAfterMs: STOP_FORCE_AFTER_MS });
     } catch (error) {
       this.logs.append(serviceId, "system", `soft stop failed: ${String(error)}`);
+      this.setState(serviceId, {
+        ...this.getState(serviceId),
+        status: "stopped",
+        health: "unknown",
+        managed: false,
+        desired: false,
+        pid: undefined,
+        detail: "PTY 会话不存在，已标记为停止",
+        stoppedAt: Date.now(),
+      });
     }
 
     const nextState = this.getState(serviceId);
     this.clearStopTimer(nextState);
     nextState.stopTimer = setTimeout(() => {
       void this.kill(serviceId);
-    }, STOP_FORCE_AFTER_MS);
+    }, STOP_FORCE_AFTER_MS + 500);
     this.states.set(serviceId, nextState);
     return this.toDescriptor(definition, nextState);
   }
@@ -327,7 +416,7 @@ export class ServiceManager extends EventEmitter {
   async kill(serviceId: ServiceId): Promise<ServiceDescriptor> {
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
-    if (!state.child || !state.pid) {
+    if (!state.ptySessionId) {
       return this.toDescriptor(definition, state);
     }
 
@@ -336,14 +425,30 @@ export class ServiceManager extends EventEmitter {
     this.setState(serviceId, {
       ...state,
       desired: false,
-      detail: "正在强制结束进程树",
+      detail: "正在强制结束后台 PTY 进程树",
     });
-    this.forceKill(state);
 
-    return this.toDescriptor(definition, state);
+    try {
+      this.pty.kill(state.ptySessionId);
+    } catch (error) {
+      this.logs.append(serviceId, "system", `force kill failed: ${String(error)}`);
+      this.setState(serviceId, {
+        ...this.getState(serviceId),
+        status: "stopped",
+        health: "unknown",
+        managed: false,
+        pid: undefined,
+        detail: "PTY 会话不存在，已标记为停止",
+        stoppedAt: Date.now(),
+      });
+    }
+
+    return this.toDescriptor(definition, this.getState(serviceId));
   }
 
   async refresh(): Promise<ServiceDescriptor[]> {
+    this.attachLivePtySessions();
+
     for (const definition of this.definitions) {
       const state = this.getState(definition.id);
       if (state.managed && state.status === "running") {
@@ -373,9 +478,30 @@ export class ServiceManager extends EventEmitter {
     return this.definitions.map((definition) => this.toDescriptor(definition, this.getState(definition.id)));
   }
 
+  async getCommandConfigs(): Promise<ServiceCommandConfig[]> {
+    return Promise.all(this.definitions.map((definition) => this.getCommandConfig(definition)));
+  }
+
+  async saveCommandConfig(update: ServiceCommandUpdate): Promise<ServiceCommandConfig[]> {
+    this.getDefinition(update.serviceId);
+    await this.commandStore.set(update.serviceId, {
+      cwd: update.cwd,
+      commandLine: update.commandLine,
+    });
+    this.emit("snapshot", this.snapshot());
+    return this.getCommandConfigs();
+  }
+
+  async resetCommandConfig(serviceId: ServiceId): Promise<ServiceCommandConfig[]> {
+    this.getDefinition(serviceId);
+    await this.commandStore.reset(serviceId);
+    this.emit("snapshot", this.snapshot());
+    return this.getCommandConfigs();
+  }
+
   dispose(): void {
     clearInterval(this.watchdogTimer);
-    for (const serviceId of ["adapter", "maibot", "napcat"] as ServiceId[]) {
+    for (const serviceId of SERVICE_IDS) {
       const state = this.getState(serviceId);
       this.clearStopTimer(state);
       this.clearRestartTimer(state);
@@ -387,8 +513,8 @@ export class ServiceManager extends EventEmitter {
   private createDefinitions(): ServiceDefinition[] {
     const python = this.initManager.getPythonPath();
     const maibotRoot = join(this.paths.modulesRoot, "MaiBot");
-    const adapterRoot = join(this.paths.modulesRoot, "MaiBot-Napcat-Adapter");
     const napcatRoot = join(this.paths.modulesRoot, "napcat");
+    const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
 
     return [
       {
@@ -398,22 +524,10 @@ export class ServiceManager extends EventEmitter {
         ports: [8001],
         url: "http://127.0.0.1:8001",
         cwd: maibotRoot,
-        requiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
+        defaultRequiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
         conflictPorts: [8001],
         readyPorts: [8001],
-        buildCommand: async () => [python, "bot.py"],
-      },
-      {
-        id: "adapter",
-        name: "NapCat Adapter",
-        port: 8095,
-        ports: [8095],
-        url: "ws://127.0.0.1:8095",
-        cwd: adapterRoot,
-        requiredPaths: [python, adapterRoot, join(adapterRoot, "main.py")],
-        conflictPorts: [8095],
-        readyPorts: [],
-        buildCommand: async () => [python, "main.py"],
+        buildDefaultCommandLine: async () => `${quoteCommandPart(python)} bot.py`,
       },
       {
         id: "napcat",
@@ -422,16 +536,20 @@ export class ServiceManager extends EventEmitter {
         ports: [6099],
         url: "http://127.0.0.1:6099/webui",
         cwd: napcatRoot,
-        requiredPaths: [napcatRoot, join(napcatRoot, "NapCatWinBootMain.exe")],
+        defaultRequiredPaths: [napcatRoot, napcatExe],
         conflictPorts: [6099],
         readyPorts: [6099],
-        buildCommand: async () => {
+        displayDefaultCommandLine: async () => {
+          const qq = await this.initManager.readQqAccount();
+          return `${quoteCommandPart(napcatExe)} ${qq ? quoteCommandPart(qq) : "<QQ>"}`;
+        },
+        buildDefaultCommandLine: async () => {
           const qq = await this.initManager.readQqAccount();
           if (!qq) {
             throw new Error("请先在初始化向导中配置机器人 QQ 号");
           }
           await this.initManager.ensureNapCatWebUiConfig();
-          return [join(napcatRoot, "NapCatWinBootMain.exe"), qq];
+          return `${quoteCommandPart(napcatExe)} ${quoteCommandPart(qq)}`;
         },
       },
     ];
@@ -452,7 +570,7 @@ export class ServiceManager extends EventEmitter {
       ...state,
       health: ready ? "ready" : "unreachable",
       healthFailures: ready ? 0 : (state.healthFailures ?? 0) + 1,
-      detail: ready ? "服务端口可访问" : "进程已启动，但端口暂不可访问",
+      detail: ready ? "服务端口可访问" : "PTY 已启动，但端口暂不可访问",
       dynamicUrl: definition.id === "napcat" ? await this.resolveNapCatUrl(definition.url) : definition.url,
     });
   }
@@ -483,8 +601,8 @@ export class ServiceManager extends EventEmitter {
     }
   }
 
-  private assertRequiredPaths(definition: ServiceDefinition): void {
-    const missing = definition.requiredPaths.find((path) => !existsSync(path));
+  private assertRequiredPaths(definition: ServiceDefinition, paths: string[]): void {
+    const missing = paths.find((path) => !existsSync(path));
     if (!missing) {
       return;
     }
@@ -499,9 +617,175 @@ export class ServiceManager extends EventEmitter {
     throw new Error(`缺失路径: ${missing}`);
   }
 
+  private async resolveStartCommand(definition: ServiceDefinition): Promise<ResolvedServiceCommand> {
+    const override = await this.commandStore.get(definition.id);
+    const cwd = override?.cwd?.trim() || definition.cwd;
+    const commandLine = override?.commandLine?.trim();
+    if (commandLine) {
+      return {
+        cwd,
+        commandLine,
+        requiredPaths: [cwd],
+        customized: true,
+      };
+    }
+
+    return {
+      cwd,
+      commandLine: await definition.buildDefaultCommandLine(),
+      requiredPaths: [...definition.defaultRequiredPaths, cwd],
+      customized: false,
+    };
+  }
+
+  private async getCommandConfig(definition: ServiceDefinition): Promise<ServiceCommandConfig> {
+    const override = await this.commandStore.get(definition.id);
+    const defaultCommandLine = definition.displayDefaultCommandLine
+      ? await definition.displayDefaultCommandLine()
+      : await definition.buildDefaultCommandLine();
+
+    return {
+      serviceId: definition.id,
+      serviceName: definition.name,
+      cwd: override?.cwd?.trim() || definition.cwd,
+      commandLine: override?.commandLine?.trim() || defaultCommandLine,
+      defaultCwd: definition.cwd,
+      defaultCommandLine,
+      customized: Boolean(override?.cwd?.trim() || override?.commandLine?.trim()),
+    };
+  }
+
   private async resolveNapCatUrl(fallback: string): Promise<string> {
     const { token } = await this.initManager.readNapCatWebUiToken();
     return token ? `http://127.0.0.1:6099/webui/web_login?token=${encodeURIComponent(token)}` : fallback;
+  }
+
+  private attachLivePtySessions(): void {
+    for (const session of this.pty.list()) {
+      const serviceId = serviceIdFromSession(session.id);
+      if (!serviceId || !isLivePtyStatus(session.status)) {
+        continue;
+      }
+
+      const definition = this.getDefinition(serviceId);
+      const state = this.getState(serviceId);
+      if (state.managed && state.ptySessionId === session.id) {
+        continue;
+      }
+
+      this.setState(serviceId, {
+        ...state,
+        status: "running",
+        health: definition.readyPorts.length > 0 ? "checking" : "ready",
+        managed: true,
+        desired: state.desired ?? true,
+        pid: session.pid,
+        ptySessionId: session.id,
+      command: session.command,
+      cwd: session.cwd,
+        detail: `已附加到后台 PTY，PID ${session.pid ?? "未知"}`,
+        startedAt: state.startedAt ?? session.startedAt,
+      });
+    }
+  }
+
+  private handlePtyData(event: PtyDataEvent): void {
+    const serviceId = serviceIdFromSession(event.sessionId);
+    if (!serviceId) {
+      return;
+    }
+
+    let buffered = `${this.logLineBuffers.get(serviceId) ?? ""}${event.data}`;
+    buffered = buffered.replace(/\r(?!\n)/gu, "\n");
+    const lines = buffered.split(/\n/u);
+    this.logLineBuffers.set(serviceId, lines.pop() ?? "");
+
+    for (const line of lines) {
+      if (line.length > 0) {
+        this.logs.append(serviceId, "stdout", line);
+      }
+    }
+  }
+
+  private handlePtyExit(event: PtyExitEvent): void {
+    const serviceId = serviceIdFromSession(event.sessionId);
+    if (!serviceId) {
+      return;
+    }
+
+    const remaining = this.logLineBuffers.get(serviceId);
+    if (remaining) {
+      this.logs.append(serviceId, "stdout", remaining);
+      this.logLineBuffers.delete(serviceId);
+    }
+
+    const current = this.getState(serviceId);
+    if (current.ptySessionId !== event.sessionId) {
+      return;
+    }
+
+    this.clearStopTimer(current);
+    const shouldRestart = Boolean(current.desired && current.status !== "stopping");
+    const stoppedByRequest = current.status === "stopping" || !current.desired;
+    this.logs.append(serviceId, "system", `exit: code=${event.exitCode} signal=${event.signal ?? "null"}`);
+    this.setState(serviceId, {
+      ...current,
+      status: stoppedByRequest ? "stopped" : "error",
+      health: "unknown",
+      managed: false,
+      pid: undefined,
+      detail: stoppedByRequest
+        ? "已停止"
+        : shouldRestart
+          ? `进程退出，准备自动重启: ${event.exitCode}`
+          : `进程异常退出: ${event.exitCode}`,
+      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `进程异常退出: ${event.exitCode}`,
+      stoppedAt: Date.now(),
+    });
+
+    if (shouldRestart) {
+      this.scheduleRestart(serviceId);
+    }
+  }
+
+  private handlePtyError(event: PtyErrorEvent): void {
+    const serviceId = serviceIdFromSession(event.sessionId);
+    if (!serviceId) {
+      return;
+    }
+
+    this.logs.append(serviceId, "system", `pty error: ${event.message}`);
+    this.setState(serviceId, {
+      ...this.getState(serviceId),
+      status: "error",
+      health: "unreachable",
+      managed: false,
+      desired: false,
+      pid: undefined,
+      error: event.message,
+      detail: event.message,
+      stoppedAt: Date.now(),
+    });
+  }
+
+  private handlePtySnapshot(snapshot: PtySessionSnapshot): void {
+    const serviceId = serviceIdFromSession(snapshot.id);
+    if (!serviceId) {
+      return;
+    }
+
+    const state = this.getState(serviceId);
+    if (state.ptySessionId !== snapshot.id) {
+      return;
+    }
+
+    this.setState(serviceId, {
+      ...state,
+      pid: snapshot.pid,
+      command: snapshot.command,
+      managed: isLivePtyStatus(snapshot.status),
+      status: snapshot.status === "starting" ? "starting" : snapshot.status === "running" ? "running" : state.status,
+    });
   }
 
   private setState(serviceId: ServiceId, state: ServiceState): void {
@@ -526,43 +810,6 @@ export class ServiceManager extends EventEmitter {
 
     clearTimeout(state.restartTimer);
     state.restartTimer = undefined;
-  }
-
-  private softTerminate(state: ServiceState): void {
-    if (!state.child || !state.pid) {
-      return;
-    }
-
-    if (isWindows()) {
-      state.child.kill();
-      return;
-    }
-
-    try {
-      process.kill(-state.pid, "SIGTERM");
-    } catch {
-      state.child.kill("SIGTERM");
-    }
-  }
-
-  private forceKill(state: ServiceState): void {
-    if (!state.child || !state.pid) {
-      return;
-    }
-
-    if (isWindows()) {
-      spawn("taskkill", ["/F", "/T", "/PID", String(state.pid)], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      return;
-    }
-
-    try {
-      process.kill(-state.pid, "SIGKILL");
-    } catch {
-      state.child.kill("SIGKILL");
-    }
   }
 
   private scheduleRestart(serviceId: ServiceId): void {
@@ -605,6 +852,8 @@ export class ServiceManager extends EventEmitter {
       restartTimer,
       status: "stopped",
       health: "checking",
+      managed: false,
+      pid: undefined,
       detail: `${definition.name} 异常退出，${Math.round(RESTART_DELAY_MS / 1000)} 秒后自动重启 (${restartAttempts}/${MAX_RESTART_ATTEMPTS})`,
     });
   }
@@ -639,7 +888,7 @@ export class ServiceManager extends EventEmitter {
       restartAttempts: state.restartAttempts,
       pid: state.pid,
       detail: state.detail,
-      cwd: definition.cwd,
+      cwd: state.cwd ?? definition.cwd,
       command: state.command,
       logPath: this.logs.getServiceLogPath(definition.id),
       startedAt: state.startedAt,

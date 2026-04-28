@@ -116,7 +116,7 @@ function resolveCommand(request: PtyStartRequest, encoding: PtyEncoding): Resolv
     if (process.platform === "win32") {
       return {
         file: resolveWindowsShell(request.shell),
-        args: ["/D", "/S", "/K", `chcp ${codePage} > nul & ${request.commandLine}`],
+        args: ["/D", "/S", "/C", `chcp ${codePage} > nul & ${request.commandLine}`],
         displayCommand: [request.commandLine],
         title: request.title ?? request.commandLine,
       };
@@ -136,7 +136,7 @@ function resolveCommand(request: PtyStartRequest, encoding: PtyEncoding): Resolv
       const commandLine = requestedCommand.map(quoteForCmd).join(" ");
       return {
         file: process.env.ComSpec ?? "cmd.exe",
-        args: ["/D", "/S", "/K", `chcp ${codePage} > nul & ${commandLine}`],
+        args: ["/D", "/S", "/C", `chcp ${codePage} > nul & ${commandLine}`],
         displayCommand: requestedCommand,
         title: request.title ?? basename(requestedCommand[0]),
       };
@@ -466,13 +466,6 @@ export class PtySessionManager extends EventEmitter {
       },
       (event, ...args) => {
         this.emit(event, ...args);
-        if (event === "exit") {
-          const [exitEvent] = args as PtySessionEventMap["exit"];
-          const current = this.sessions.get(exitEvent.sessionId);
-          if (current?.status === "exited") {
-            this.sessions.delete(exitEvent.sessionId);
-          }
-        }
       },
     );
 

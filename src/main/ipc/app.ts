@@ -7,6 +7,7 @@ import type {
   InitState,
   LogEntry,
   RuntimePaths,
+  ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
   WindowState,
@@ -49,6 +50,7 @@ export function registerAppIpc({
   const buildSnapshot = async (): Promise<DesktopSnapshot> => ({
     paths,
     services: serviceManager.snapshot(),
+    serviceCommands: await serviceManager.getCommandConfigs(),
     appVersion: app.getVersion(),
     platform: process.platform,
     windowState: readWindowState(getMainWindow()),
@@ -139,6 +141,18 @@ export function registerAppIpc({
     const services = await serviceManager.refresh();
     await broadcastSnapshot();
     return services;
+  });
+
+  ipcMain.handle("services:saveCommandConfig", async (_event, config: ServiceCommandUpdate): Promise<DesktopSnapshot["serviceCommands"]> => {
+    const configs = await serviceManager.saveCommandConfig(config);
+    await broadcastSnapshot();
+    return configs;
+  });
+
+  ipcMain.handle("services:resetCommandConfig", async (_event, serviceId: ServiceId): Promise<DesktopSnapshot["serviceCommands"]> => {
+    const configs = await serviceManager.resetCommandConfig(serviceId);
+    await broadcastSnapshot();
+    return configs;
   });
 
   ipcMain.handle("logs:list", (): LogEntry[] => logStore.list());

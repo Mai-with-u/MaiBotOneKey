@@ -450,7 +450,7 @@ export function DesktopShell(): React.JSX.Element {
           </TabsContent>
 
           <TabsContent className="min-h-0 flex-1" value="terminal">
-            <TerminalPanel active={activeTab === "terminal"} />
+            <TerminalPanel active={activeTab === "terminal"} services={services} />
           </TabsContent>
 
           <TabsContent className="min-h-0 flex-1 overflow-hidden" value="settings">

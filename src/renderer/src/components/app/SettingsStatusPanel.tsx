@@ -6,6 +6,7 @@ import {
   HardDrive,
   Loader2,
   Network,
+  RotateCcw,
   Save,
   ShieldCheck,
   Trash2,
@@ -17,6 +18,8 @@ import type {
   DesktopSnapshot,
   InitCheckStatus,
   LogEntry,
+  ServiceCommandConfig,
+  ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceHealth,
   ServiceStatus,
@@ -118,11 +121,31 @@ function PathField({
 
 function ServiceDetail({
   service,
+  commandConfig,
+  commandBusy,
   onOpenPath,
+  onResetCommand,
+  onSaveCommand,
 }: {
   service: ServiceDescriptor;
+  commandConfig?: ServiceCommandConfig;
+  commandBusy: boolean;
   onOpenPath: (path: string) => void;
+  onResetCommand: (serviceId: ServiceDescriptor["id"]) => void;
+  onSaveCommand: (config: ServiceCommandUpdate) => void;
 }): React.JSX.Element {
+  const [cwd, setCwd] = useState(commandConfig?.cwd ?? service.cwd ?? "");
+  const [commandLine, setCommandLine] = useState(commandConfig?.commandLine ?? service.command?.[0] ?? "");
+
+  useEffect(() => {
+    setCwd(commandConfig?.cwd ?? service.cwd ?? "");
+    setCommandLine(commandConfig?.commandLine ?? service.command?.[0] ?? "");
+  }, [commandConfig?.commandLine, commandConfig?.cwd, service.command, service.cwd]);
+
+  const configDirty = Boolean(
+    commandConfig && (cwd.trim() !== commandConfig.cwd || commandLine.trim() !== commandConfig.commandLine),
+  );
+
   return (
     <div className="rounded-lg border border-border/70 bg-elevated/80 p-3">
       <div className="flex items-start justify-between gap-3">
@@ -158,6 +181,65 @@ function ServiceDetail({
         <code className="mt-3 block overflow-hidden text-ellipsis whitespace-nowrap rounded-md bg-muted/65 px-2 py-1.5 font-mono text-[11px] text-foreground/75">
           {service.command.join(" ")}
         </code>
+      ) : null}
+      {commandConfig ? (
+        <div className="mt-3 grid gap-2 rounded-md border border-border/70 bg-muted/35 p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-foreground">启动命令</p>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {commandConfig.customized ? "正在使用自定义命令，下次启动生效" : "当前使用默认命令"}
+              </p>
+            </div>
+            <Badge variant={commandConfig.customized ? "warning" : "secondary"}>
+              {commandConfig.customized ? "自定义" : "默认"}
+            </Badge>
+          </div>
+          <Input
+            aria-label={`${service.name} 工作目录`}
+            monospace
+            onChange={(event) => setCwd(event.target.value)}
+            placeholder={commandConfig.defaultCwd}
+            value={cwd}
+          />
+          <Input
+            aria-label={`${service.name} 启动命令`}
+            monospace
+            onChange={(event) => setCommandLine(event.target.value)}
+            placeholder={commandConfig.defaultCommandLine}
+            value={commandLine}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground" title={commandConfig.defaultCommandLine}>
+              默认: {commandConfig.defaultCommandLine}
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                disabled={commandBusy || (!commandConfig.customized && !configDirty)}
+                onClick={() => onResetCommand(service.id)}
+                size="sm"
+                variant="ghost"
+              >
+                {commandBusy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                恢复默认
+              </Button>
+              <Button
+                disabled={commandBusy || !configDirty || commandLine.trim().length === 0 || cwd.trim().length === 0}
+                onClick={() =>
+                  onSaveCommand({
+                    serviceId: service.id,
+                    cwd: cwd.trim(),
+                    commandLine: commandLine.trim(),
+                  })
+                }
+                size="sm"
+              >
+                {commandBusy ? <Loader2 className="animate-spin" /> : <Save />}
+                保存命令
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {service.logPath ? (
@@ -203,7 +285,7 @@ export function SettingsStatusPanel({
   onSnapshot,
 }: SettingsStatusPanelProps): React.JSX.Element {
   const [qqAccount, setQqAccount] = useState(snapshot.initState.qqAccount ?? "");
-  const [busy, setBusy] = useState<"repair" | "qq" | "logs" | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -269,6 +351,44 @@ export function SettingsStatusPanel({
       setBusy(null);
     }
   }, [refreshSnapshot]);
+
+  const saveCommandConfig = useCallback(
+    async (config: ServiceCommandUpdate) => {
+      setBusy(`command:${config.serviceId}`);
+      setError(null);
+      try {
+        const serviceCommands = await window.maibotDesktop?.services.saveCommandConfig(config);
+        if (serviceCommands) {
+          onSnapshot({ ...snapshot, serviceCommands });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const resetCommandConfig = useCallback(
+    async (serviceId: ServiceDescriptor["id"]) => {
+      setBusy(`command:${serviceId}`);
+      setError(null);
+      try {
+        const serviceCommands = await window.maibotDesktop?.services.resetCommandConfig(serviceId);
+        if (serviceCommands) {
+          onSnapshot({ ...snapshot, serviceCommands });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
 
   const canSaveQq = busy === null && qqAccount.trim().length > 0;
   useShortcut("Mod+Enter", saveQqAccount, { enabled: canSaveQq, allowInEditable: true });
@@ -366,7 +486,15 @@ export function SettingsStatusPanel({
             </CardHeader>
             <CardContent className="grid gap-3">
               {snapshot.services.map((service) => (
-                <ServiceDetail key={service.id} onOpenPath={openPath} service={service} />
+                <ServiceDetail
+                  commandBusy={busy === `command:${service.id}`}
+                  commandConfig={snapshot.serviceCommands.find((config) => config.serviceId === service.id)}
+                  key={service.id}
+                  onOpenPath={openPath}
+                  onResetCommand={resetCommandConfig}
+                  onSaveCommand={saveCommandConfig}
+                  service={service}
+                />
               ))}
             </CardContent>
           </Card>

@@ -14,18 +14,6 @@ const defaultServices: ServiceDescriptor[] = [
     detail: "等待初始化向导接入启动流程",
   },
   {
-    id: "adapter",
-    name: "NapCat Adapter",
-    port: 8095,
-    ports: [8095],
-    url: "ws://127.0.0.1:8095",
-    status: "stopped",
-    health: "unknown",
-    managed: false,
-    desired: false,
-    detail: "等待 Electron 进程管理器接入",
-  },
-  {
     id: "napcat",
     name: "NapCat",
     port: 6099,

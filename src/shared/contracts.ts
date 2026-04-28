@@ -1,4 +1,4 @@
-export type ServiceId = "maibot" | "adapter" | "napcat";
+export type ServiceId = "maibot" | "napcat";
 
 export type ServiceStatus =
   | "stopped"
@@ -60,6 +60,22 @@ export interface ServiceDescriptor {
   error?: string;
 }
 
+export interface ServiceCommandConfig {
+  serviceId: ServiceId;
+  serviceName: string;
+  cwd: string;
+  commandLine: string;
+  defaultCwd: string;
+  defaultCommandLine: string;
+  customized: boolean;
+}
+
+export interface ServiceCommandUpdate {
+  serviceId: ServiceId;
+  cwd: string;
+  commandLine: string;
+}
+
 export interface RuntimePaths {
   installRoot: string;
   userDataRoot: string;
@@ -71,6 +87,7 @@ export interface RuntimePaths {
 export interface DesktopSnapshot {
   paths: RuntimePaths;
   services: ServiceDescriptor[];
+  serviceCommands: ServiceCommandConfig[];
   appVersion: string;
   platform: NodeJS.Platform;
   windowState: WindowState;
@@ -201,6 +218,8 @@ export interface DesktopBridge {
     startAll: () => Promise<ServiceDescriptor[]>;
     stopAll: () => Promise<ServiceDescriptor[]>;
     refresh: () => Promise<ServiceDescriptor[]>;
+    saveCommandConfig: (config: ServiceCommandUpdate) => Promise<ServiceCommandConfig[]>;
+    resetCommandConfig: (serviceId: ServiceId) => Promise<ServiceCommandConfig[]>;
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;
   };
   logs: {

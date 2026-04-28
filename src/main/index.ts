@@ -13,8 +13,8 @@ const runtimePaths = configureRuntimePaths();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
-const serviceManager = new ServiceManager(runtimePaths, initManager, logStore);
 const ptySessionManager = new PtySessionManager();
+const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, ptySessionManager);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;

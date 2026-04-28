@@ -1,17 +1,18 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { Ban, Eraser, Play, RotateCcw, Square, TerminalSquare } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { DesktopBridge, PtySessionSnapshot } from "@shared/contracts";
+import { Loader2, RotateCcw, TerminalSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DesktopBridge, PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { useShortcut } from "@/lib/use-shortcut";
 import "@xterm/xterm/css/xterm.css";
 
-const TERMINAL_SESSION_ID = "maibot-desktop-shell";
-const DEFAULT_COLS = 100;
-const DEFAULT_ROWS = 32;
+const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: string }> = [
+  { serviceId: "maibot", sessionId: "service:maibot", title: "MaiBot Core" },
+  { serviceId: "napcat", sessionId: "service:napcat", title: "NapCat" },
+];
 
 const statusText: Record<PtySessionSnapshot["status"], string> = {
   starting: "启动中",
@@ -22,12 +23,12 @@ const statusText: Record<PtySessionSnapshot["status"], string> = {
 };
 
 const terminalTheme = {
-  background: "#0f1411",
+  background: "#0c100e",
   foreground: "#dfe8d1",
   cursor: "#9bd56c",
-  cursorAccent: "#0f1411",
+  cursorAccent: "#0c100e",
   selectionBackground: "#9bd56c44",
-  black: "#11150f",
+  black: "#0c100e",
   red: "#e26d5a",
   green: "#9bd56c",
   yellow: "#d5ba65",
@@ -59,122 +60,144 @@ async function waitForDesktopBridge(timeoutMs = 2_500): Promise<DesktopBridge | 
   return window.maibotDesktop?.pty ? window.maibotDesktop : null;
 }
 
-export function TerminalPanel({ active = true }: { active?: boolean }): React.JSX.Element {
+function isLiveStatus(status?: PtySessionSnapshot["status"]): boolean {
+  return status === "starting" || status === "running" || status === "stopping";
+}
+
+function serviceBadgeVariant(service?: ServiceDescriptor): "success" | "warning" | "danger" | "outline" {
+  if (!service) {
+    return "outline";
+  }
+  if (service.status === "running") {
+    return "success";
+  }
+  if (service.status === "starting" || service.status === "stopping") {
+    return "warning";
+  }
+  if (service.status === "error") {
+    return "danger";
+  }
+  return "outline";
+}
+
+export function TerminalPanel({
+  active = true,
+  services = [],
+}: {
+  active?: boolean;
+  services?: ServiceDescriptor[];
+}): React.JSX.Element {
+  const [activeServiceId, setActiveServiceId] = useState<ServiceId>("maibot");
+  const [sessions, setSessions] = useState<Record<string, PtySessionSnapshot | undefined>>({});
+  const [message, setMessage] = useState("正在准备后台 PTY 视图...");
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
   const bridgeRef = useRef<DesktopBridge | null>(null);
-  const isStartingRef = useRef(false);
-  const [snapshot, setSnapshot] = useState<PtySessionSnapshot | null>(null);
-  const [message, setMessage] = useState("正在准备 PTY bridge...");
-  const [isStarting, setIsStarting] = useState(false);
+  const activeServiceIdRef = useRef<ServiceId>("maibot");
+  const sessionsRef = useRef<Record<string, PtySessionSnapshot | undefined>>({});
+
+  const servicesById = useMemo(
+    () => new Map<ServiceId, ServiceDescriptor>(services.map((service) => [service.id, service])),
+    [services],
+  );
+
+  const activeTerminal = serviceTerminals.find((terminal) => terminal.serviceId === activeServiceId) ?? serviceTerminals[0];
+  const activeSession = sessions[activeTerminal.sessionId];
+  const activeService = servicesById.get(activeServiceId);
 
   const writeSystemLine = useCallback((line: string) => {
     terminalRef.current?.writeln(`\x1b[38;2;155;213;108m[desktop]\x1b[0m ${line}`);
   }, []);
 
-  const resizeCurrentSession = useCallback(() => {
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  const fitAndResize = useCallback(() => {
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
-    const sessionId = sessionIdRef.current;
-
     if (!terminal || !fitAddon) {
       return;
     }
 
     fitAddon.fit();
 
-    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-    if (!sessionId || !bridge) {
+    const bridge = bridgeRef.current;
+    const target = serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current) ?? serviceTerminals[0];
+    const session = sessionsRef.current[target.sessionId];
+    if (!bridge || !session || !isLiveStatus(session.status)) {
       return;
     }
 
     bridge.pty.resize({
-      sessionId,
+      sessionId: session.id,
       cols: terminal.cols,
       rows: terminal.rows,
     });
   }, []);
 
-  const startSession = useCallback(async () => {
-    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-    if (!bridge || isStartingRef.current) {
-      if (!bridge) {
-        setMessage("Electron preload bridge 不可用");
-        writeSystemLine("Electron preload bridge is not available");
+  const renderServiceBuffer = useCallback(
+    async (serviceId: ServiceId) => {
+      const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
+      const terminal = terminalRef.current;
+      if (!bridge || !terminal) {
+        return;
       }
-      return;
-    }
 
-    isStartingRef.current = true;
-    setIsStarting(true);
-    setMessage("正在启动 PTY 会话...");
+      const target = serviceTerminals.find((item) => item.serviceId === serviceId) ?? serviceTerminals[0];
+      terminal.reset();
 
-    try {
-      const dimensions = fitAddonRef.current?.proposeDimensions();
-      const desktopSnapshot = await bridge.getSnapshot();
-      const nextSnapshot = await bridge.pty.start({
-        id: TERMINAL_SESSION_ID,
-        title: "MaiBot 管理终端",
-        cwd: desktopSnapshot.paths.installRoot,
-        cols: dimensions?.cols ?? terminalRef.current?.cols ?? DEFAULT_COLS,
-        rows: dimensions?.rows ?? terminalRef.current?.rows ?? DEFAULT_ROWS,
-        encoding: "auto",
-      });
-
-      sessionIdRef.current = nextSnapshot.id;
-      setSnapshot(nextSnapshot);
-      setMessage(`PTY 已启动，PID ${nextSnapshot.pid ?? "未知"}`);
-      writeSystemLine(`PTY started, pid=${nextSnapshot.pid ?? "unknown"}`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setMessage(errorMessage);
-      writeSystemLine(`start failed: ${errorMessage}`);
-    } finally {
-      isStartingRef.current = false;
-      setIsStarting(false);
-    }
-  }, [writeSystemLine]);
-
-  const stopSession = useCallback(async () => {
-    const sessionId = sessionIdRef.current;
-    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-    if (!sessionId || !bridge) {
-      return;
-    }
-
-    setMessage("正在温和停止 PTY，会在 10 秒后强制结束...");
-    await bridge.pty.stop({
-      sessionId,
-      forceAfterMs: 10_000,
-    });
-  }, []);
-
-  const killSession = useCallback(async () => {
-    const sessionId = sessionIdRef.current;
-    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-    if (!sessionId || !bridge) {
-      return;
-    }
-
-    setMessage("正在强制结束 PTY 进程树...");
-    await bridge.pty.kill(sessionId);
-  }, []);
-
-  const clearTerminal = useCallback(async () => {
-    terminalRef.current?.clear();
-
-    const sessionId = sessionIdRef.current;
-    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
-    if (sessionId && bridge) {
       try {
-        await bridge.pty.clear(sessionId);
-      } catch {
-        sessionIdRef.current = null;
+        const sessionList = await bridge.pty.list();
+        const nextSessions = Object.fromEntries(sessionList.map((session) => [session.id, session]));
+        sessionsRef.current = nextSessions;
+        setSessions(nextSessions);
+        const session = sessionList.find((item) => item.id === target.sessionId);
+
+        if (!session) {
+          writeSystemLine(`${target.title} 尚未启动。请在左侧服务栏启动模块。`);
+          setMessage(`${target.title} 未启动，等待后台 PTY 会话`);
+          return;
+        }
+
+        const buffer = await bridge.pty.getBuffer(session.id);
+        if (buffer.length > 0) {
+          terminal.write(buffer);
+        } else {
+          writeSystemLine(`已附加到 ${target.title}，暂无输出。`);
+        }
+        setMessage(`已附加到 ${target.title}${session.pid ? `，PID ${session.pid}` : ""}`);
+        fitAndResize();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        writeSystemLine(`附加失败: ${errorMessage}`);
+        setMessage(errorMessage);
       }
+    },
+    [fitAndResize, writeSystemLine],
+  );
+
+  const refreshSessions = useCallback(async () => {
+    const bridge = bridgeRef.current ?? window.maibotDesktop ?? null;
+    if (!bridge) {
+      setMessage("Electron preload bridge 不可用");
+      return;
     }
-  }, []);
+
+    setIsRefreshing(true);
+    try {
+      await renderServiceBuffer(activeServiceIdRef.current);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [renderServiceBuffer]);
+
+  useEffect(() => {
+    activeServiceIdRef.current = activeServiceId;
+    void renderServiceBuffer(activeServiceId);
+  }, [activeServiceId, renderServiceBuffer]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -184,15 +207,14 @@ export function TerminalPanel({ active = true }: { active?: boolean }): React.JS
 
     const terminal = new Terminal({
       allowProposedApi: false,
-      convertEol: false,
-      cursorBlink: true,
-      cursorStyle: "bar",
-      disableStdin: false,
-      fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
-      fontSize: 13,
+      convertEol: true,
+      cursorBlink: false,
+      disableStdin: true,
+      fontFamily: "JetBrains Mono, SF Mono, Cascadia Mono, Menlo, Consolas, monospace",
+      fontSize: 12.5,
       fontWeight: "400",
-      lineHeight: 1.18,
-      scrollback: 8000,
+      lineHeight: 1.2,
+      scrollback: 12000,
       tabStopWidth: 4,
       theme: terminalTheme,
       windowsPty: { backend: "conpty" },
@@ -204,38 +226,10 @@ export function TerminalPanel({ active = true }: { active?: boolean }): React.JS
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     fitAddon.fit();
-
-    terminal.writeln("\x1b[38;2;155;213;108m[desktop]\x1b[0m PTY bridge ready");
-
-    const terminalInput = terminal.onData((data) => {
-      const sessionId = sessionIdRef.current;
-      const bridge = bridgeRef.current;
-      if (!sessionId || !bridge) {
-        return;
-      }
-
-      bridge.pty.input({
-        sessionId,
-        data,
-      });
-    });
-
-    const terminalResize = terminal.onResize(({ cols, rows }) => {
-      const sessionId = sessionIdRef.current;
-      const bridge = bridgeRef.current;
-      if (!sessionId || !bridge) {
-        return;
-      }
-
-      bridge.pty.resize({
-        sessionId,
-        cols,
-        rows,
-      });
-    });
+    writeSystemLine("后台 PTY 视图 ready");
 
     const resizeObserver = new ResizeObserver(() => {
-      resizeCurrentSession();
+      fitAndResize();
     });
     resizeObserver.observe(container);
 
@@ -260,150 +254,135 @@ export function TerminalPanel({ active = true }: { active?: boolean }): React.JS
       }
 
       bridgeRef.current = bridge;
-      terminal.writeln("\x1b[38;2;155;213;108m[desktop]\x1b[0m Electron preload bridge connected");
-      setMessage("PTY bridge 已连接，正在附加会话...");
+      writeSystemLine("Electron preload bridge connected");
 
       unsubscribeData = bridge.pty.onData((event) => {
-        if (event.sessionId === sessionIdRef.current) {
-          terminal.write(event.data);
+        const target = serviceTerminals.find((item) => item.sessionId === event.sessionId);
+        if (!target || target.serviceId !== activeServiceIdRef.current) {
+          return;
         }
+
+        terminal.write(event.data);
       });
       unsubscribeExit = bridge.pty.onExit((event) => {
-        if (event.sessionId !== sessionIdRef.current) {
-          return;
-        }
+        setSessions((current) => {
+          const existing = current[event.sessionId];
+          const next = existing
+            ? {
+                ...current,
+                [event.sessionId]: {
+                  ...existing,
+                  status: "exited" as const,
+                  exitCode: event.exitCode,
+                  signal: event.signal,
+                  endedAt: Date.now(),
+                },
+              }
+            : current;
+          sessionsRef.current = next;
+          return next;
+        });
 
-        setMessage(`PTY 已退出，exit=${event.exitCode}${event.signal ? ` signal=${event.signal}` : ""}`);
-        terminal.writeln("");
-        writeSystemLine(`process exited with code ${event.exitCode}`);
+        if (event.sessionId === serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current)?.sessionId) {
+          terminal.writeln("");
+          writeSystemLine(`process exited with code ${event.exitCode}`);
+        }
       });
       unsubscribeError = bridge.pty.onError((event) => {
-        if (event.sessionId === sessionIdRef.current) {
-          setMessage(event.message);
+        if (event.sessionId === serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current)?.sessionId) {
           writeSystemLine(`error: ${event.message}`);
+          setMessage(event.message);
         }
       });
-      unsubscribeSnapshot = bridge.pty.onSnapshot((nextSnapshot) => {
-        if (nextSnapshot.id !== sessionIdRef.current && nextSnapshot.id !== TERMINAL_SESSION_ID) {
-          return;
-        }
-
-        sessionIdRef.current = nextSnapshot.id;
-        setSnapshot(nextSnapshot);
+      unsubscribeSnapshot = bridge.pty.onSnapshot((snapshot) => {
+        setSessions((current) => {
+          const next = { ...current, [snapshot.id]: snapshot };
+          sessionsRef.current = next;
+          return next;
+        });
       });
 
-      try {
-        const sessions = await bridge.pty.list();
-        if (cancelled) {
-          return;
-        }
-
-        const existing = sessions.find((session) => session.id === TERMINAL_SESSION_ID);
-        if (!existing) {
-          await startSession();
-          return;
-        }
-
-        if (existing.status === "exited" || existing.status === "error") {
-          sessionIdRef.current = null;
-          setSnapshot(existing);
-          setMessage("旧 PTY 会话已结束，正在启动新会话...");
-          await startSession();
-          return;
-        }
-
-        sessionIdRef.current = existing.id;
-        setSnapshot(existing);
-        setMessage(`已附加到 PTY，PID ${existing.pid ?? "未知"}`);
-        const buffer = await bridge.pty.getBuffer(existing.id);
-        if (buffer) {
-          terminal.write(buffer);
-        } else {
-          writeSystemLine(`attached to existing session, pid=${existing.pid ?? "unknown"}`);
-        }
-        resizeCurrentSession();
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        setMessage(errorMessage);
-        writeSystemLine(`attach failed: ${errorMessage}`);
-      }
+      await renderServiceBuffer(activeServiceIdRef.current);
     };
 
     void bindBridge();
 
     return () => {
       cancelled = true;
-      if (bridgeRef.current === window.maibotDesktop) {
-        bridgeRef.current = null;
-      }
+      bridgeRef.current = null;
       unsubscribeData();
       unsubscribeExit();
       unsubscribeError();
       unsubscribeSnapshot();
       resizeObserver.disconnect();
-      terminalInput.dispose();
-      terminalResize.dispose();
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [resizeCurrentSession, startSession, writeSystemLine]);
+  }, [fitAndResize, renderServiceBuffer, writeSystemLine]);
 
-  const status = snapshot?.status ?? "starting";
-  const canStart = !snapshot || snapshot.status === "exited" || snapshot.status === "error";
-  const canStop = snapshot?.status === "running";
-  const canKill = snapshot?.status === "running" || snapshot?.status === "stopping";
-
-  useShortcut("Mod+Enter", () => startSession(), { enabled: active && canStart && !isStarting });
-  useShortcut("Mod+Period", () => stopSession(), { enabled: active && canStop });
-  useShortcut("Mod+Shift+Period", () => killSession(), { enabled: active && canKill });
-  useShortcut("Mod+K", () => clearTerminal(), { enabled: active, allowInEditable: true });
-  useShortcut("Mod+Shift+R", () => resizeCurrentSession(), { enabled: active });
+  useShortcut("Mod+Shift+R", refreshSessions, { enabled: active });
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#0f1411] text-[#dfe8d1]">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1f2620] bg-[#11150f] px-4">
+    <section className="flex h-full min-h-0 flex-col bg-[#0c100e] text-[#dfe8d1]">
+      <div className="flex min-h-12 shrink-0 items-center justify-between gap-4 border-b border-[#1f2620] bg-[#101611] px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <TerminalSquare className="size-4 text-[#9bd56c]" />
-          <h2 className="shrink-0 text-sm font-semibold tracking-tight text-[#e9f0db]">
-            PTY 实时终端
-          </h2>
-          <Badge className="border-[#3a4434] bg-[#172017] text-[#b8ed88]" variant="outline">
-            {statusText[status]}
-          </Badge>
-          <span className="truncate font-mono text-xs text-[#8f9a84]">
-            {snapshot?.pid ? `pid ${snapshot.pid}` : message}
-          </span>
+          <TerminalSquare className="size-4 shrink-0 text-[#9bd56c]" />
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-[#e9f0db]">
+              后台 PTY 终端
+            </h2>
+            <p className="truncate text-[11px] text-[#8f9a84]">{message}</p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button disabled={!canStart || isStarting} onClick={startSession} size="sm" variant="outline">
-            <Play />
-            启动
-            <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="muted" />
-          </Button>
-          <Button disabled={!canStop} onClick={stopSession} size="sm" variant="outline">
-            <Square />
-            停止
-            <Kbd className="ml-1" keys="Mod+." size="xs" tone="muted" />
-          </Button>
-          <Button disabled={!canKill} onClick={killSession} size="sm" variant="outline">
-            <Ban />
-            强杀
-            <Kbd className="ml-1" keys="Mod+Shift+." size="xs" tone="muted" />
-          </Button>
-          <Button onClick={clearTerminal} size="icon" title="清屏 (Mod+K)" variant="ghost">
-            <Eraser />
-          </Button>
-          <Button onClick={resizeCurrentSession} size="icon" title="重新适配尺寸 (Mod+Shift+R)" variant="ghost">
-            <RotateCcw />
+          <Button disabled={isRefreshing} onClick={refreshSessions} size="sm" variant="outline">
+            {isRefreshing ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+            刷新附加
+            <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
           </Button>
         </div>
       </div>
+
+      <div className="flex shrink-0 items-center gap-2 border-b border-[#1f2620] bg-[#0f1411] px-3 py-2">
+        {serviceTerminals.map((item) => {
+          const session = sessions[item.sessionId];
+          const service = servicesById.get(item.serviceId);
+          const selected = activeServiceId === item.serviceId;
+          return (
+            <button
+              className={[
+                "flex h-9 min-w-[160px] items-center justify-between gap-3 rounded-md border px-3 text-left transition-colors",
+                selected
+                  ? "border-[#5c7d45] bg-[#182217] text-[#eff8df]"
+                  : "border-[#263027] bg-[#111711] text-[#aebaa6] hover:border-[#3b4939] hover:bg-[#151d15]",
+              ].join(" ")}
+              key={item.serviceId}
+              onClick={() => setActiveServiceId(item.serviceId)}
+              type="button"
+            >
+              <span className="min-w-0 truncate text-xs font-semibold">{item.title}</span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <Badge className="h-5 border-[#344132] bg-transparent px-1.5 text-[10px]" variant={serviceBadgeVariant(service)}>
+                  {service?.status === "running" ? "服务运行" : service?.status === "error" ? "异常" : "未运行"}
+                </Badge>
+                <Badge className="h-5 border-[#344132] bg-[#121a12] px-1.5 text-[10px] text-[#b8ed88]" variant="outline">
+                  {session ? statusText[session.status] : "无 PTY"}
+                </Badge>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div
-          className="size-full overflow-hidden rounded-md border border-[#20281f] bg-[#0f1411] p-2 shadow-inner"
-          ref={containerRef}
-        />
+        <div className="size-full overflow-hidden rounded-md border border-[#20281f] bg-[#0c100e] p-2 shadow-inner">
+          <div className="size-full" ref={containerRef} />
+        </div>
+      </div>
+      <div className="flex h-8 shrink-0 items-center justify-between border-t border-[#1f2620] bg-[#101611] px-4 font-mono text-[11px] text-[#8f9a84]">
+        <span>{activeSession?.pid ? `pid ${activeSession.pid}` : "等待后台服务启动"}</span>
+        <span>{activeService?.command?.[0] ?? "启动命令会在服务启动后显示"}</span>
       </div>
     </section>
   );
