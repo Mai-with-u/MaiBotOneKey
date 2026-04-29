@@ -629,6 +629,7 @@ export class ServiceManager extends EventEmitter {
 
   async refresh(): Promise<ServiceDescriptor[]> {
     this.attachLivePtySessions();
+    this.reconcileExitedPtySessions();
 
     for (const definition of this.definitions) {
       const state = this.getState(definition.id);
@@ -961,6 +962,36 @@ export class ServiceManager extends EventEmitter {
     }
   }
 
+  private reconcileExitedPtySessions(): void {
+    const sessions = new Map(this.pty.list().map((session) => [session.id, session]));
+
+    for (const definition of this.definitions) {
+      const state = this.getState(definition.id);
+      if (!state.ptySessionId || state.status === "stopped" || state.status === "error") {
+        continue;
+      }
+
+      const session = sessions.get(state.ptySessionId);
+      if (!session || session.status === "starting" || session.status === "running" || session.status === "stopping") {
+        continue;
+      }
+
+      const stoppedByRequest = state.status === "stopping" || !state.desired;
+      this.setState(definition.id, {
+        ...state,
+        status: stoppedByRequest ? "stopped" : "error",
+        health: "unknown",
+        managed: false,
+        desired: stoppedByRequest ? false : state.desired,
+        pid: undefined,
+        ptySessionId: undefined,
+        error: stoppedByRequest ? undefined : (session.error ?? `进程异常退出: ${session.exitCode ?? "未知"}`),
+        detail: stoppedByRequest ? "已停止" : `进程异常退出: ${session.exitCode ?? "未知"}`,
+        stoppedAt: session.endedAt ?? Date.now(),
+      });
+    }
+  }
+
   private handlePtyData(event: PtyDataEvent): void {
     const serviceId = serviceIdFromSession(event.sessionId);
     if (!serviceId) {
@@ -1006,6 +1037,7 @@ export class ServiceManager extends EventEmitter {
       health: "unknown",
       managed: false,
       pid: undefined,
+      ptySessionId: undefined,
       detail: stoppedByRequest
         ? "已停止"
         : shouldRestart
@@ -1048,6 +1080,23 @@ export class ServiceManager extends EventEmitter {
 
     const state = this.getState(serviceId);
     if (state.ptySessionId !== snapshot.id) {
+      return;
+    }
+
+    if (snapshot.status === "exited" || snapshot.status === "error") {
+      const stoppedByRequest = state.status === "stopping" || !state.desired;
+      this.setState(serviceId, {
+        ...state,
+        status: stoppedByRequest ? "stopped" : "error",
+        health: "unknown",
+        managed: false,
+        desired: stoppedByRequest ? false : state.desired,
+        pid: undefined,
+        ptySessionId: undefined,
+        error: stoppedByRequest ? undefined : (snapshot.error ?? `进程异常退出: ${snapshot.exitCode ?? "未知"}`),
+        detail: stoppedByRequest ? "已停止" : `进程异常退出: ${snapshot.exitCode ?? "未知"}`,
+        stoppedAt: snapshot.endedAt ?? Date.now(),
+      });
       return;
     }
 

@@ -54,6 +54,10 @@ function writeSystemLine(terminal: Terminal, message: string): void {
   terminal.writeln(`\x1b[38;2;155;213;108m[desktop]\x1b[0m ${message}`);
 }
 
+function canWriteToSession(session?: PtySessionSnapshot): boolean {
+  return session?.status === "running";
+}
+
 async function copyTerminalSelection(terminal: Terminal): Promise<void> {
   const selection = terminal.getSelection();
   if (!selection) {
@@ -156,6 +160,10 @@ export function TerminalPanel({
 
       const disposables: Disposable[] = [
         terminal.onData((data) => {
+          if (!canWriteToSession(sessionsRef.current.get(sessionId))) {
+            return;
+          }
+
           void bridgeRef.current?.pty.input({ sessionId, data }).catch((error: unknown) => {
             writeSystemLine(terminal, error instanceof Error ? error.message : String(error));
           });
@@ -170,6 +178,10 @@ export function TerminalPanel({
           event.preventDefault();
           event.stopPropagation();
           void copyTerminalSelection(terminal);
+          return false;
+        }
+
+        if (event.type === "keydown" && !canWriteToSession(sessionsRef.current.get(sessionId))) {
           return false;
         }
 

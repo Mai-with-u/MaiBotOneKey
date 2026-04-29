@@ -1,18 +1,12 @@
+!ifndef BUILD_UNINSTALLER
 !macro customPageAfterChangeDir
-  !define MUI_PAGE_CUSTOMFUNCTION_SHOW maibotShowInstallDetails
+  ShowInstDetails hide
 !macroend
+!endif
 
 !macro customHeader
-  ShowInstDetails show
+  ShowInstDetails hide
   !ifdef BUILD_UNINSTALLER
-    ShowUninstDetails show
+    ShowUninstDetails hide
   !endif
 !macroend
-
-!macro customInstall
-  SetDetailsView show
-!macroend
-
-Function maibotShowInstallDetails
-  SetDetailsView show
-FunctionEnd
