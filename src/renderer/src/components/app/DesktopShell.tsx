@@ -14,7 +14,6 @@ import type { ComponentProps } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DesktopSnapshot, ServiceDescriptor, ServiceId, ServiceStatus } from "@shared/contracts";
 import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
-import { initializePtyLogStore } from "@/lib/pty-log-store";
 import { useShortcut } from "@/lib/use-shortcut";
 import { useSidebar } from "@/lib/use-sidebar";
 import { useTheme } from "@/lib/use-theme";
@@ -161,8 +160,6 @@ export function DesktopShell(): React.JSX.Element {
 
   useEffect(() => {
     let mounted = true;
-
-    initializePtyLogStore();
 
     refreshSnapshot().then((nextSnapshot) => {
       if (mounted) {
@@ -354,27 +351,27 @@ export function DesktopShell(): React.JSX.Element {
 
         <div className="grid gap-2 px-4 py-4">
           <Button
-            className="w-full justify-between"
+            className="w-full min-w-0 justify-between"
             disabled={actionBusy !== null}
             onClick={startAll}
           >
-            <span className="flex items-center gap-2">
+            <span className="flex min-w-0 flex-1 items-center gap-2">
               {actionBusy === "all:start" ? <Loader2 className="animate-spin" /> : <Power />}
-              启动全部服务
+              <span className="min-w-0 truncate">启动全部服务</span>
             </span>
-            <Kbd keys="Mod+Shift+S" tone="inverse" />
+            <Kbd className="ml-2 shrink-0" compact keys="Mod+Shift+S" size="xs" tone="inverse" />
           </Button>
           <Button
-            className="w-full justify-between"
+            className="w-full min-w-0 justify-between"
             disabled={actionBusy !== null}
             onClick={stopAll}
             variant="outline"
           >
-            <span className="flex items-center gap-2">
+            <span className="flex min-w-0 flex-1 items-center gap-2">
               {actionBusy === "all:stop" ? <Loader2 className="animate-spin" /> : <Square />}
-              停止全部服务
+              <span className="min-w-0 truncate">停止全部服务</span>
             </span>
-            <Kbd keys="Mod+Shift+X" />
+            <Kbd className="ml-2 shrink-0" compact keys="Mod+Shift+X" size="xs" />
           </Button>
           <Button
             className="w-full justify-center"

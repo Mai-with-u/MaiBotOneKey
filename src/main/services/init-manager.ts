@@ -63,6 +63,10 @@ function toDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function createWebsocketToken(): string {
+  return randomBytes(24).toString("base64url").slice(0, 32);
+}
+
 async function runWithoutAsar<T>(operation: () => Promise<T>): Promise<T> {
   const electronProcess = process as NodeJS.Process & { noAsar?: boolean };
   const previousNoAsar = electronProcess.noAsar;
@@ -126,7 +130,7 @@ export class InitManager {
     return { state, changedFiles };
   }
 
-  async setQqAccount(qqAccount: string): Promise<InitState> {
+  async setQqAccount(qqAccount: string, websocketToken = createWebsocketToken()): Promise<InitState> {
     if (!isDigits(qqAccount)) {
       throw new Error("QQ 号必须是纯数字");
     }
@@ -148,7 +152,7 @@ export class InitManager {
 
     await mkdir(dirname(botConfigPath), { recursive: true });
     await writeFile(botConfigPath, content, "utf8");
-    await this.createNapCatConfigs(qqAccount);
+    await this.createNapCatConfigs(qqAccount, websocketToken);
     await this.ensureNapCatWebUiConfig();
     return this.getState();
   }
@@ -476,8 +480,16 @@ export class InitManager {
     };
   }
 
-  private async createNapCatConfigs(qqAccount: string): Promise<void> {
-    const versions = await this.findNapCatVersions();
+  private async createNapCatConfigs(qqAccount: string, websocketToken: string): Promise<void> {
+    const versions = await this.findNapCatConfigVersions();
+    const napcatProtocolConfig = {
+      enable: false,
+      network: {
+        httpServers: [],
+        websocketServers: [],
+        websocketClients: [],
+      },
+    };
     const napcatConfig = {
       fileLog: false,
       consoleLog: true,
@@ -486,63 +498,68 @@ export class InitManager {
       packetBackend: "auto",
       packetServer: "",
       o3HookMode: 1,
+      bypass: {
+        hook: false,
+        window: false,
+        module: false,
+        process: false,
+        container: false,
+        js: false,
+      },
+      autoTimeSync: true,
     };
     const onebotConfig = {
       network: {
         httpServers: [],
         httpSseServers: [],
         httpClients: [],
-        websocketServers: [],
-        websocketClients: [
+        websocketServers: [
           {
             enable: true,
             name: "MaiBot Main",
-            url: "ws://localhost:8095",
+            host: "127.0.0.1",
+            port: 7998,
             reportSelfMessage: false,
+            enableForcePushEvent: true,
             messagePostFormat: "array",
-            token: "",
+            token: websocketToken,
             debug: false,
             heartInterval: 30000,
-            reconnectInterval: 30000,
           },
         ],
+        websocketClients: [],
         plugins: [],
       },
       musicSignUrl: "",
       enableLocalFile2Url: false,
       parseMultMsg: false,
+      imageDownloadProxy: "",
+      timeout: {
+        baseTimeout: 10000,
+        uploadSpeedKBps: 256,
+        downloadSpeedKBps: 256,
+        maxTimeout: 1800000,
+      },
     };
 
     for (const version of versions) {
-      const configDirs = [
-        join(this.paths.modulesRoot, "napcat", "versions", version, "resources", "app", "napcat", "config"),
-        join(
-          this.paths.modulesRoot,
-          "napcatframework",
-          "versions",
-          version,
-          "resources",
-          "app",
-          "LiteLoader",
-          "plugins",
-          "NapCat",
-          "config",
-        ),
-      ];
-
-      for (const configDir of configDirs) {
-        await mkdir(configDir, { recursive: true });
-        await writeFile(
-          join(configDir, `napcat_${qqAccount}.json`),
-          JSON.stringify(napcatConfig, null, 2),
-          "utf8",
-        );
-        await writeFile(
-          join(configDir, `onebot11_${qqAccount}.json`),
-          JSON.stringify(onebotConfig, null, 2),
-          "utf8",
-        );
-      }
+      const configDir = join(this.paths.modulesRoot, "napcat", "versions", version, "resources", "app", "napcat", "config");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, `napcat_protocol_${qqAccount}.json`),
+        JSON.stringify(napcatProtocolConfig, null, 2),
+        "utf8",
+      );
+      await writeFile(
+        join(configDir, `onebot11_${qqAccount}.json`),
+        JSON.stringify(onebotConfig, null, 2),
+        "utf8",
+      );
+      await writeFile(
+        join(configDir, `napcat_${qqAccount}.json`),
+        JSON.stringify(napcatConfig, null, 2),
+        "utf8",
+      );
     }
   }
 
@@ -593,5 +610,44 @@ export class InitManager {
     }
 
     return versions.size > 0 ? [...versions] : [NAPCAT_FALLBACK_VERSION];
+  }
+
+  private async findNapCatConfigVersions(): Promise<string[]> {
+    const versions = await this.findNapCatVersions();
+    const comparable = versions.map((version) => ({
+      version,
+      parts: this.parseNapCatVersion(version),
+    }));
+
+    if (comparable.some((item) => !item.parts)) {
+      return versions;
+    }
+
+    const sorted = comparable.toSorted((left, right) => this.compareVersionParts(left.parts ?? [], right.parts ?? []));
+    return [sorted[sorted.length - 1]?.version ?? NAPCAT_FALLBACK_VERSION];
+  }
+
+  private parseNapCatVersion(version: string): number[] | undefined {
+    const match = version.match(/^(\d+(?:\.\d+)*)(?:-(\d+))?$/u);
+    if (!match) {
+      return undefined;
+    }
+
+    return [
+      ...match[1].split(".").map((part) => Number(part)),
+      match[2] ? Number(match[2]) : 0,
+    ];
+  }
+
+  private compareVersionParts(left: number[], right: number[]): number {
+    const length = Math.max(left.length, right.length);
+    for (let index = 0; index < length; index += 1) {
+      const diff = (left[index] ?? 0) - (right[index] ?? 0);
+      if (diff !== 0) {
+        return diff;
+      }
+    }
+
+    return 0;
   }
 }

@@ -104,8 +104,8 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("init:setQqAccount", async (_event, qqAccount: string): Promise<InitState> => {
-    const state = await initManager.setQqAccount(qqAccount);
+  ipcMain.handle("init:setQqAccount", async (_event, qqAccount: string, websocketToken?: string): Promise<InitState> => {
+    const state = await initManager.setQqAccount(qqAccount, websocketToken);
     logStore.append("desktop", "system", `机器人 QQ 号已配置: ${qqAccount}`);
     await broadcastSnapshot();
     return state;

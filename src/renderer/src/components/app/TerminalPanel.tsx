@@ -1,12 +1,12 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDownToLine, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { CSSProperties } from "react";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
 import type { PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
+import { ArrowDownToLine, Copy, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "@xterm/xterm/css/xterm.css";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
-import { ptyLogStore } from "@/lib/pty-log-store";
 import { useShortcut } from "@/lib/use-shortcut";
 
 const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: string }> = [
@@ -22,37 +22,16 @@ const statusText: Record<PtySessionSnapshot["status"], string> = {
   error: "异常",
 };
 
-const ansi16Colors = [
-  "#11150f",
-  "#e26d5a",
-  "#9bd56c",
-  "#d5ba65",
-  "#7bb5e8",
-  "#c98ee8",
-  "#70d5c1",
-  "#dfe8d1",
-  "#596151",
-  "#f28c78",
-  "#b8ed88",
-  "#ecd37d",
-  "#9fd1ff",
-  "#dfadff",
-  "#96ead9",
-  "#f2f8e8",
-];
-
-interface AnsiStyle {
-  color?: string;
-  backgroundColor?: string;
-  fontWeight?: CSSProperties["fontWeight"];
-  fontStyle?: CSSProperties["fontStyle"];
-  textDecoration?: CSSProperties["textDecoration"];
-  opacity?: number;
+interface Disposable {
+  dispose: () => void;
 }
 
-interface AnsiSegment {
-  text: string;
-  style: AnsiStyle;
+interface TerminalInstance {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  disposables: Disposable[];
+  opened: boolean;
+  bufferLoaded: boolean;
 }
 
 function serviceBadgeVariant(service?: ServiceDescriptor): "success" | "warning" | "danger" | "outline" {
@@ -71,144 +50,17 @@ function serviceBadgeVariant(service?: ServiceDescriptor): "success" | "warning"
   return "outline";
 }
 
-function ansi256ToColor(code: number): string | undefined {
-  if (code >= 0 && code <= 15) {
-    return ansi16Colors[code];
-  }
-
-  if (code >= 16 && code <= 231) {
-    const value = code - 16;
-    const r = Math.floor(value / 36);
-    const g = Math.floor((value % 36) / 6);
-    const b = value % 6;
-    const toChannel = (item: number): number => (item === 0 ? 0 : 55 + item * 40);
-    return `rgb(${toChannel(r)}, ${toChannel(g)}, ${toChannel(b)})`;
-  }
-
-  if (code >= 232 && code <= 255) {
-    const gray = 8 + (code - 232) * 10;
-    return `rgb(${gray}, ${gray}, ${gray})`;
-  }
-
-  return undefined;
+function writeSystemLine(terminal: Terminal, message: string): void {
+  terminal.writeln(`\x1b[38;2;155;213;108m[desktop]\x1b[0m ${message}`);
 }
 
-function stripNonSgrControls(text: string): string {
-  return text
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/\x1b[@-Z\\-_]/gu, "");
-}
-
-function cloneStyle(style: AnsiStyle): AnsiStyle {
-  return { ...style };
-}
-
-function applySgr(style: AnsiStyle, params: number[]): AnsiStyle {
-  const next = cloneStyle(style);
-  const values = params.length > 0 ? params : [0];
-
-  for (let index = 0; index < values.length; index += 1) {
-    const code = values[index];
-
-    if (code === 0) {
-      Object.keys(next).forEach((key) => {
-        delete next[key as keyof AnsiStyle];
-      });
-    } else if (code === 1) {
-      next.fontWeight = 700;
-    } else if (code === 2) {
-      next.opacity = 0.72;
-    } else if (code === 3) {
-      next.fontStyle = "italic";
-    } else if (code === 4) {
-      next.textDecoration = "underline";
-    } else if (code === 22) {
-      delete next.fontWeight;
-      delete next.opacity;
-    } else if (code === 23) {
-      delete next.fontStyle;
-    } else if (code === 24) {
-      delete next.textDecoration;
-    } else if (code === 39) {
-      delete next.color;
-    } else if (code === 49) {
-      delete next.backgroundColor;
-    } else if (code >= 30 && code <= 37) {
-      next.color = ansi16Colors[code - 30];
-    } else if (code >= 90 && code <= 97) {
-      next.color = ansi16Colors[8 + code - 90];
-    } else if (code >= 40 && code <= 47) {
-      next.backgroundColor = ansi16Colors[code - 40];
-    } else if (code >= 100 && code <= 107) {
-      next.backgroundColor = ansi16Colors[8 + code - 100];
-    } else if ((code === 38 || code === 48) && values[index + 1] === 2) {
-      const [r, g, b] = [values[index + 2], values[index + 3], values[index + 4]];
-      if ([r, g, b].every((value) => Number.isFinite(value))) {
-        const color = `rgb(${r}, ${g}, ${b})`;
-        if (code === 38) {
-          next.color = color;
-        } else {
-          next.backgroundColor = color;
-        }
-      }
-      index += 4;
-    } else if ((code === 38 || code === 48) && values[index + 1] === 5) {
-      const color = ansi256ToColor(values[index + 2]);
-      if (color) {
-        if (code === 38) {
-          next.color = color;
-        } else {
-          next.backgroundColor = color;
-        }
-      }
-      index += 2;
-    }
+async function copyTerminalSelection(terminal: Terminal): Promise<void> {
+  const selection = terminal.getSelection();
+  if (!selection) {
+    return;
   }
 
-  return next;
-}
-
-function parseAnsiLine(raw: string): AnsiSegment[] {
-  const segments: AnsiSegment[] = [];
-  const sgrPattern = /\x1b\[([0-9;]*)m/gu;
-  let style: AnsiStyle = {};
-  let lastIndex = 0;
-
-  for (const match of raw.matchAll(sgrPattern)) {
-    const index = match.index ?? 0;
-    const text = stripNonSgrControls(raw.slice(lastIndex, index));
-    if (text.length > 0) {
-      segments.push({ text, style: cloneStyle(style) });
-    }
-
-    const params = match[1]
-      .split(";")
-      .filter((part) => part.length > 0)
-      .map((part) => Number(part));
-    style = applySgr(style, params);
-    lastIndex = index + match[0].length;
-  }
-
-  const tail = stripNonSgrControls(raw.slice(lastIndex));
-  if (tail.length > 0 || segments.length === 0) {
-    segments.push({ text: tail.length > 0 ? tail : " ", style: cloneStyle(style) });
-  }
-
-  return segments;
-}
-
-function AnsiLine({ raw }: { raw: string }): React.JSX.Element {
-  const segments = useMemo(() => parseAnsiLine(raw), [raw]);
-  return (
-    <>
-      {segments.map((segment, index) => (
-        <span key={`${index}-${segment.text.slice(0, 8)}`} style={segment.style}>
-          {segment.text}
-        </span>
-      ))}
-    </>
-  );
+  await navigator.clipboard.writeText(selection);
 }
 
 export function TerminalPanel({
@@ -220,14 +72,12 @@ export function TerminalPanel({
 }): React.JSX.Element {
   const [activeServiceId, setActiveServiceId] = useState<ServiceId>("maibot");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isFollowing, setIsFollowing] = useState(true);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const followRef = useRef(true);
-  const version = useSyncExternalStore(
-    (listener) => ptyLogStore.subscribe(listener),
-    () => ptyLogStore.getVersion(),
-    () => ptyLogStore.getVersion(),
-  );
+  const [sessionVersion, setSessionVersion] = useState(0);
+  const sessionsRef = useRef(new Map<string, PtySessionSnapshot>());
+  const terminalsRef = useRef(new Map<string, TerminalInstance>());
+  const panesRef = useRef(new Map<string, HTMLDivElement>());
+  const bridgeRef = useRef<typeof window.maibotDesktop | null>(null);
+  const activeServiceIdRef = useRef(activeServiceId);
 
   const servicesById = useMemo(
     () => new Map<ServiceId, ServiceDescriptor>(services.map((service) => [service.id, service])),
@@ -235,55 +85,259 @@ export function TerminalPanel({
   );
 
   const activeTerminal = serviceTerminals.find((terminal) => terminal.serviceId === activeServiceId) ?? serviceTerminals[0];
-  const activeSession = ptyLogStore.getSession(activeTerminal.sessionId);
+  const activeSession = sessionsRef.current.get(activeTerminal.sessionId);
   const activeService = servicesById.get(activeServiceId);
-  const lineCount = ptyLogStore.getLineCount(activeTerminal.sessionId);
-
-  const virtualizer = useVirtualizer({
-    count: lineCount,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 18,
-    overscan: 80,
-  });
-
-  const scrollToTail = useCallback(() => {
-    if (lineCount > 0) {
-      virtualizer.scrollToIndex(lineCount - 1, { align: "end" });
-    }
-  }, [lineCount, virtualizer]);
 
   useEffect(() => {
-    if (!followRef.current) {
+    activeServiceIdRef.current = activeServiceId;
+  }, [activeServiceId]);
+
+  const notifySessionsChanged = useCallback(() => {
+    setSessionVersion((version) => version + 1);
+  }, []);
+
+  const fitTerminal = useCallback((sessionId: string) => {
+    const instance = terminalsRef.current.get(sessionId);
+    if (!instance?.opened) {
       return;
     }
 
-    requestAnimationFrame(scrollToTail);
-  }, [scrollToTail, version, activeServiceId]);
+    try {
+      instance.fitAddon.fit();
+    } catch {
+      return;
+    }
+  }, []);
+
+  const getTerminal = useCallback(
+    (sessionId: string): TerminalInstance => {
+      const existing = terminalsRef.current.get(sessionId);
+      if (existing) {
+        return existing;
+      }
+
+      const terminal = new Terminal({
+        allowProposedApi: false,
+        convertEol: false,
+        cursorBlink: true,
+        cursorStyle: "block",
+        fontFamily:
+          '"JetBrains Mono", "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+        fontSize: 12,
+        lineHeight: 1.22,
+        scrollback: 100_000,
+        tabStopWidth: 8,
+        theme: {
+          background: "#0c100e",
+          foreground: "#dfe8d1",
+          cursor: "#b8ed88",
+          cursorAccent: "#0c100e",
+          selectionBackground: "#496240",
+          black: "#11150f",
+          red: "#e26d5a",
+          green: "#9bd56c",
+          yellow: "#d5ba65",
+          blue: "#7bb5e8",
+          magenta: "#c98ee8",
+          cyan: "#70d5c1",
+          white: "#dfe8d1",
+          brightBlack: "#596151",
+          brightRed: "#f28c78",
+          brightGreen: "#b8ed88",
+          brightYellow: "#ecd37d",
+          brightBlue: "#9fd1ff",
+          brightMagenta: "#dfadff",
+          brightCyan: "#96ead9",
+          brightWhite: "#f2f8e8",
+        },
+      });
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      const disposables: Disposable[] = [
+        terminal.onData((data) => {
+          void bridgeRef.current?.pty.input({ sessionId, data }).catch((error: unknown) => {
+            writeSystemLine(terminal, error instanceof Error ? error.message : String(error));
+          });
+        }),
+        terminal.onResize(({ cols, rows }) => {
+          void bridgeRef.current?.pty.resize({ sessionId, cols, rows }).catch(() => undefined);
+        }),
+      ];
+
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.type === "keydown" && event.ctrlKey && !event.altKey && event.key.toLowerCase() === "c") {
+          event.preventDefault();
+          event.stopPropagation();
+          void copyTerminalSelection(terminal);
+          return false;
+        }
+
+        return true;
+      });
+
+      const instance = { terminal, fitAddon, disposables, opened: false, bufferLoaded: false };
+      terminalsRef.current.set(sessionId, instance);
+      return instance;
+    },
+    [],
+  );
+
+  const openTerminal = useCallback(
+    (sessionId: string, element: HTMLDivElement) => {
+      const instance = getTerminal(sessionId);
+      if (!instance.opened) {
+        instance.terminal.open(element);
+        instance.opened = true;
+      }
+
+      requestAnimationFrame(() => fitTerminal(sessionId));
+    },
+    [fitTerminal, getTerminal],
+  );
+
+  const setTerminalPane = useCallback(
+    (sessionId: string) => (element: HTMLDivElement | null) => {
+      if (!element) {
+        panesRef.current.delete(sessionId);
+        return;
+      }
+
+      panesRef.current.set(sessionId, element);
+      openTerminal(sessionId, element);
+    },
+    [openTerminal],
+  );
+
+  const loadSessionBuffer = useCallback(
+    async (sessionId: string, force = false) => {
+      const bridge = bridgeRef.current;
+      const instance = getTerminal(sessionId);
+      if (!bridge?.pty || (!force && instance.bufferLoaded)) {
+        return;
+      }
+
+      try {
+        const buffer = await bridge.pty.getBuffer(sessionId);
+        instance.terminal.reset();
+        if (buffer) {
+          instance.terminal.write(buffer);
+        }
+        instance.bufferLoaded = true;
+      } catch {
+        instance.bufferLoaded = false;
+      }
+    },
+    [getTerminal],
+  );
 
   const refreshSessions = useCallback(async () => {
+    const bridge = window.maibotDesktop;
+    if (!bridge?.pty) {
+      return;
+    }
+
     setIsRefreshing(true);
+    bridgeRef.current = bridge;
     try {
-      await ptyLogStore.connect();
-      requestAnimationFrame(scrollToTail);
+      const sessions = await bridge.pty.list();
+      sessionsRef.current = new Map(sessions.map((session) => [session.id, session]));
+      await Promise.all(serviceTerminals.map((item) => loadSessionBuffer(item.sessionId, true)));
+      notifySessionsChanged();
+      requestAnimationFrame(() => fitTerminal(activeTerminal.sessionId));
     } finally {
       setIsRefreshing(false);
     }
-  }, [scrollToTail]);
+  }, [activeTerminal.sessionId, fitTerminal, loadSessionBuffer, notifySessionsChanged]);
 
-  const handleScroll = useCallback(() => {
-    const element = scrollRef.current;
-    if (!element) {
+  useEffect(() => {
+    void refreshSessions();
+
+    const bridge = window.maibotDesktop;
+    if (!bridge?.pty) {
       return;
     }
 
-    const nextFollowing = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
-    followRef.current = nextFollowing;
-    setIsFollowing(nextFollowing);
+    bridgeRef.current = bridge;
+    const disposers = [
+      bridge.pty.onData((event) => {
+        getTerminal(event.sessionId).terminal.write(event.data);
+      }),
+      bridge.pty.onExit((event) => {
+        const existing = sessionsRef.current.get(event.sessionId);
+        if (existing) {
+          sessionsRef.current.set(event.sessionId, {
+            ...existing,
+            status: "exited",
+            exitCode: event.exitCode,
+            signal: event.signal,
+            endedAt: Date.now(),
+          });
+        }
+        writeSystemLine(getTerminal(event.sessionId).terminal, `process exited with code ${event.exitCode}`);
+        notifySessionsChanged();
+      }),
+      bridge.pty.onError((event) => {
+        writeSystemLine(getTerminal(event.sessionId).terminal, `error: ${event.message}`);
+      }),
+      bridge.pty.onSnapshot((snapshot) => {
+        sessionsRef.current.set(snapshot.id, snapshot);
+        void loadSessionBuffer(snapshot.id);
+        notifySessionsChanged();
+      }),
+    ];
+
+    return () => {
+      for (const dispose of disposers) {
+        dispose();
+      }
+    };
+  }, [getTerminal, loadSessionBuffer, notifySessionsChanged, refreshSessions]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const sessionId = activeTerminal.sessionId;
+    requestAnimationFrame(() => {
+      fitTerminal(sessionId);
+      getTerminal(sessionId).terminal.focus();
+    });
+  }, [active, activeTerminal.sessionId, fitTerminal, getTerminal, sessionVersion]);
+
+  useEffect(() => {
+    const pane = panesRef.current.get(activeTerminal.sessionId);
+    if (!pane) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => fitTerminal(activeTerminal.sessionId));
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [activeTerminal.sessionId, fitTerminal]);
+
+  useEffect(() => {
+    return () => {
+      for (const instance of terminalsRef.current.values()) {
+        for (const disposable of instance.disposables) {
+          disposable.dispose();
+        }
+        instance.terminal.dispose();
+      }
+      terminalsRef.current.clear();
+    };
   }, []);
 
+  const copySelection = useCallback(() => {
+    void copyTerminalSelection(getTerminal(activeTerminal.sessionId).terminal);
+  }, [activeTerminal.sessionId, getTerminal]);
+
+  const scrollToTail = useCallback(() => {
+    getTerminal(activeTerminal.sessionId).terminal.scrollToBottom();
+  }, [activeTerminal.sessionId, getTerminal]);
+
   const selectService = useCallback((serviceId: ServiceId) => {
-    followRef.current = true;
-    setIsFollowing(true);
     setActiveServiceId(serviceId);
   }, []);
 
@@ -299,20 +353,22 @@ export function TerminalPanel({
               后台 PTY 终端
             </h2>
             <p className="truncate text-[11px] text-[#8f9a84]">
-              全局订阅已开启，当前缓存 {lineCount.toLocaleString("zh-CN")} 行
+              {activeSession?.pid ? `PID ${activeSession.pid}` : "等待后台服务启动"} · Ctrl+C 复制选中内容
             </p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!isFollowing ? (
-            <Button onClick={scrollToTail} size="sm" variant="outline">
-              <ArrowDownToLine />
-              跟随底部
-            </Button>
-          ) : null}
+          <Button onClick={copySelection} size="sm" variant="outline">
+            <Copy />
+            复制
+          </Button>
+          <Button onClick={scrollToTail} size="sm" variant="outline">
+            <ArrowDownToLine />
+            底部
+          </Button>
           <Button disabled={isRefreshing} onClick={refreshSessions} size="sm" variant="outline">
             {isRefreshing ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-            刷新附加
+            附加
             <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
           </Button>
         </div>
@@ -320,7 +376,7 @@ export function TerminalPanel({
 
       <div className="flex shrink-0 items-center gap-2 border-b border-[#1f2620] bg-[#0f1411] px-3 py-2">
         {serviceTerminals.map((item) => {
-          const session = ptyLogStore.getSession(item.sessionId);
+          const session = sessionsRef.current.get(item.sessionId);
           const service = servicesById.get(item.serviceId);
           const selected = activeServiceId === item.serviceId;
           return (
@@ -350,37 +406,18 @@ export function TerminalPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div
-          className="size-full overflow-auto rounded-md border border-[#20281f] bg-[#0c100e] shadow-inner"
-          onScroll={handleScroll}
-          ref={scrollRef}
-        >
-          <div
-            className="relative w-full font-mono text-[12px] leading-[18px] text-[#dfe8d1]"
-            style={{
-              height: `${virtualizer.getTotalSize()}px`,
-              fontVariantLigatures: "none",
-            }}
-          >
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const line = ptyLogStore.getLine(activeTerminal.sessionId, virtualRow.index);
-              return (
-                <div
-                  className="absolute left-0 top-0 min-h-[18px] w-full whitespace-pre-wrap break-all px-3"
-                  data-index={virtualRow.index}
-                  key={line?.id === -1 ? `partial-${activeTerminal.sessionId}` : line?.id ?? virtualRow.key}
-                  ref={virtualizer.measureElement}
-                  style={{ transform: `translateY(${virtualRow.start}px)` }}
-                >
-                  {line ? <AnsiLine raw={line.raw} /> : null}
-                </div>
-              );
-            })}
-          </div>
+        <div className="size-full overflow-hidden rounded-md border border-[#20281f] bg-[#0c100e] shadow-inner">
+          {serviceTerminals.map((item) => (
+            <div
+              className={item.serviceId === activeServiceId ? "size-full" : "hidden"}
+              key={item.sessionId}
+              ref={setTerminalPane(item.sessionId)}
+            />
+          ))}
         </div>
       </div>
       <div className="flex h-8 shrink-0 items-center justify-between border-t border-[#1f2620] bg-[#101611] px-4 font-mono text-[11px] text-[#8f9a84]">
-        <span>{activeSession?.pid ? `pid ${activeSession.pid}` : "等待后台服务启动"}</span>
+        <span>{activeSession?.pid ? `pid ${activeSession.pid}` : "no pty"}</span>
         <span className="min-w-0 truncate pl-4 text-right">{activeService?.command?.[0] ?? "启动命令会在服务启动后显示"}</span>
       </div>
     </section>

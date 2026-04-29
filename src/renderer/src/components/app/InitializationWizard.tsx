@@ -1,12 +1,11 @@
-import { AlertTriangle, CheckCircle2, Loader2, Save, Wrench } from "lucide-react";
-import type { ComponentProps } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DesktopSnapshot, InitCheckStatus } from "@shared/contracts";
-import { Badge } from "@/components/ui/badge";
+import { Bot, KeyRound, Loader2, Save } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import type { DesktopSnapshot } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { createSecureToken } from "@/lib/secure-token";
 import { useShortcut } from "@/lib/use-shortcut";
 
 interface InitializationWizardProps {
@@ -14,29 +13,25 @@ interface InitializationWizardProps {
   onSnapshot: (snapshot: DesktopSnapshot) => void;
 }
 
-const DISMISS_KEY = "maibot-init-wizard-dismissed";
-
-const checkVariant: Record<InitCheckStatus, ComponentProps<typeof Badge>["variant"]> = {
-  ok: "success",
-  warning: "warning",
-  error: "danger",
-};
-
-const checkLabel: Record<InitCheckStatus, string> = {
-  ok: "正常",
-  warning: "需确认",
-  error: "缺失",
-};
+const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function readDismissed(): boolean {
+function readStartupWizardSeen(): boolean {
   try {
-    return sessionStorage.getItem(DISMISS_KEY) === "1";
+    return localStorage.getItem(STARTUP_WIZARD_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+function markStartupWizardSeen(): void {
+  try {
+    localStorage.setItem(STARTUP_WIZARD_KEY, "1");
+  } catch {
+    // Local storage can be unavailable in isolated previews.
   }
 }
 
@@ -44,21 +39,16 @@ export function InitializationWizard({
   snapshot,
   onSnapshot,
 }: InitializationWizardProps): React.JSX.Element | null {
-  const [dismissed, setDismissed] = useState(readDismissed);
+  const [seen, setSeen] = useState(readStartupWizardSeen);
   const [qqAccount, setQqAccount] = useState(snapshot.initState.qqAccount ?? "");
-  const [busy, setBusy] = useState<"repair" | "qq" | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setQqAccount(snapshot.initState.qqAccount ?? "");
   }, [snapshot.initState.qqAccount]);
 
-  const checksNeedingAttention = useMemo(
-    () => snapshot.initState.checks.filter((check) => check.status !== "ok"),
-    [snapshot.initState.checks],
-  );
-  const needsAttention = checksNeedingAttention.length > 0;
-  const open = needsAttention && !dismissed;
+  const open = !seen && !snapshot.initState.qqAccount;
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();
@@ -67,152 +57,71 @@ export function InitializationWizard({
     }
   }, [onSnapshot]);
 
-  const dismiss = useCallback(() => {
-    try {
-      sessionStorage.setItem(DISMISS_KEY, "1");
-    } catch {
-      // Session storage can be unavailable in isolated previews.
-    }
-    setDismissed(true);
+  const close = useCallback(() => {
+    markStartupWizardSeen();
+    setSeen(true);
   }, []);
-
-  const repair = useCallback(async () => {
-    setBusy("repair");
-    setError(null);
-    try {
-      await window.maibotDesktop?.init.repair();
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot]);
 
   const saveQqAccount = useCallback(async () => {
     const trimmed = qqAccount.trim();
     if (trimmed.length === 0) {
       return;
     }
-    setBusy("qq");
+
+    setBusy(true);
     setError(null);
     try {
-      await window.maibotDesktop?.init.setQqAccount(trimmed);
+      await window.maibotDesktop?.init.setQqAccount(trimmed, createSecureToken());
       await refreshSnapshot();
+      close();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
-  }, [qqAccount, refreshSnapshot]);
+  }, [close, qqAccount, refreshSnapshot]);
 
-  const canSave = busy === null && qqAccount.trim().length > 0;
+  const canSave = !busy && qqAccount.trim().length > 0;
 
-  useShortcut("Escape", dismiss, { enabled: open, allowInEditable: true });
+  useShortcut("Escape", close, { enabled: open, allowInEditable: true });
   useShortcut("Mod+Enter", saveQqAccount, { enabled: open && canSave, allowInEditable: true });
-  useShortcut("Mod+Shift+R", repair, { enabled: open && busy === null });
 
   return (
     <Dialog
-      ariaLabelledBy="init-wizard-title"
-      onClose={dismiss}
+      ariaLabelledBy="startup-wizard-title"
+      onClose={close}
       open={open}
       showCloseButton
-      size="lg"
+      size="md"
     >
       <DialogHeader
-        description="先确认内置 runtime、模块入口和依赖完整性；MaiBot 配置由主程序首次启动时自动生成。"
-        icon={<AlertTriangle className="size-4" />}
-        title="首次初始化检查"
-        titleId="init-wizard-title"
-        tone="warning"
+        description="填写机器人账号后会生成 NapCat 与 OneBot 连接配置。"
+        icon={<Bot className="size-4" />}
+        title="启动向导"
+        titleId="startup-wizard-title"
+        tone="default"
       />
 
-      <DialogBody className="grid gap-5 md:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="min-h-0 rounded-lg border border-border/70 bg-muted/30">
-          <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-2.5">
-            <span className="text-xs font-semibold text-foreground">检查项</span>
-            <Badge variant={snapshot.initState.isReady ? "warning" : "danger"}>
-              {checksNeedingAttention.length} 项待处理
-            </Badge>
-          </div>
-          <div className="max-h-80 overflow-y-auto p-2">
-            {snapshot.initState.checks.map((check) => (
-              <div
-                className="flex items-start gap-2 rounded-md px-2 py-2 text-xs"
-                key={check.id}
-              >
-                <CheckCircle2
-                  className={
-                    check.status === "ok"
-                      ? "mt-0.5 size-3.5 shrink-0 text-emerald-600"
-                      : "mt-0.5 size-3.5 shrink-0 text-amber-600"
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-medium">{check.label}</span>
-                    <Badge variant={checkVariant[check.status]}>{checkLabel[check.status]}</Badge>
-                  </div>
-                  <p
-                    className="mt-1 truncate text-[11px] text-muted-foreground"
-                    title={check.path}
-                  >
-                    {check.detail}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <div className="rounded-lg border border-border/70 bg-panel/70 p-3">
-            <label
-              className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
-              htmlFor="init-qq-input"
-            >
-              机器人 QQ 号
-            </label>
-            <Input
-              className="mt-2"
-              id="init-qq-input"
-              inputMode="numeric"
-              monospace
-              onChange={(event) => setQqAccount(event.target.value)}
-              placeholder="例如 123456789"
-              value={qqAccount}
-            />
-            <Button
-              className="mt-3 w-full justify-between"
-              disabled={!canSave}
-              onClick={saveQqAccount}
-              size="sm"
-            >
-              <span className="flex items-center gap-2">
-                {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
-                保存 QQ 配置
-              </span>
-              <Kbd keys="Mod+Enter" size="xs" tone="inverse" />
-            </Button>
-          </div>
-
-          <Button
-            className="w-full justify-between"
-            disabled={busy !== null}
-            onClick={repair}
-            size="sm"
-            variant="outline"
+      <DialogBody className="space-y-4">
+        <div className="rounded-lg border border-border/70 bg-panel/70 p-4">
+          <label
+            className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+            htmlFor="startup-qq-input"
           >
-            <span className="flex items-center gap-2">
-              {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
-              准备基础目录
-            </span>
-            <Kbd keys="Mod+Shift+R" size="xs" tone="muted" />
-          </Button>
-
+            <KeyRound className="size-3.5" />
+            机器人 QQ 号
+          </label>
+          <Input
+            className="mt-3"
+            id="startup-qq-input"
+            inputMode="numeric"
+            monospace
+            onChange={(event) => setQqAccount(event.target.value)}
+            placeholder="例如 123456789"
+            value={qqAccount}
+          />
           {error ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
+            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
               {error}
             </div>
           ) : null}
@@ -220,9 +129,14 @@ export function InitializationWizard({
       </DialogBody>
 
       <DialogFooter>
-        <Button onClick={dismiss} size="sm" variant="ghost">
-          稍后处理
+        <Button onClick={close} size="sm" variant="ghost">
+          稍后设置
           <Kbd className="ml-1" keys="Esc" size="xs" tone="muted" />
+        </Button>
+        <Button disabled={!canSave} onClick={saveQqAccount} size="sm">
+          {busy ? <Loader2 className="animate-spin" /> : <Save />}
+          保存并继续
+          <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
         </Button>
       </DialogFooter>
     </Dialog>

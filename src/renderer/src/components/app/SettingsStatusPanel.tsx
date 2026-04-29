@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { createSecureToken } from "@/lib/secure-token";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useShortcut } from "@/lib/use-shortcut";
 
@@ -414,7 +415,7 @@ export function SettingsStatusPanel({
     setBusy("qq");
     setError(null);
     try {
-      await window.maibotDesktop?.init.setQqAccount(trimmed);
+      await window.maibotDesktop?.init.setQqAccount(trimmed, createSecureToken());
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));

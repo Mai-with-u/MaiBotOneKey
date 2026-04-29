@@ -229,7 +229,7 @@ export interface DesktopBridge {
   init: {
     getState: () => Promise<InitState>;
     repair: () => Promise<InitRepairResult>;
-    setQqAccount: (qqAccount: string) => Promise<InitState>;
+    setQqAccount: (qqAccount: string, websocketToken?: string) => Promise<InitState>;
   };
   services: {
     start: (serviceId: ServiceId) => Promise<ServiceDescriptor>;

@@ -60,8 +60,8 @@ const desktopBridge: DesktopBridge = {
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
     repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
-    setQqAccount: (qqAccount: string) =>
-      ipcRenderer.invoke("init:setQqAccount", qqAccount) as Promise<InitState>,
+    setQqAccount: (qqAccount: string, websocketToken?: string) =>
+      ipcRenderer.invoke("init:setQqAccount", qqAccount, websocketToken) as Promise<InitState>,
   },
   services: {
     start: (serviceId: ServiceId) =>

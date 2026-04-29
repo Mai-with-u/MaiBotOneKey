@@ -5,6 +5,7 @@ import { formatShortcut, usePlatform } from "@/lib/platform";
 export interface KbdProps extends React.HTMLAttributes<HTMLElement> {
   /** Shortcut spec using "Mod" for ⌘/Ctrl, e.g. "Mod+Shift+S". */
   keys: string;
+  compact?: boolean;
   size?: "xs" | "sm";
   tone?: "default" | "muted" | "inverse";
 }
@@ -23,6 +24,7 @@ const sizeStyles: Record<NonNullable<KbdProps["size"]>, string> = {
 
 export function Kbd({
   keys,
+  compact = false,
   size = "sm",
   tone = "default",
   className,
@@ -37,7 +39,7 @@ export function Kbd({
       className={cn("inline-flex items-center gap-0.5 align-middle font-mono", className)}
       {...props}
     >
-      {tokens.map((token, index) => (
+      {(compact ? [tokens.join("+")] : tokens).map((token, index) => (
         <span
           // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional
           key={`${token}-${index}`}
