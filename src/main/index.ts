@@ -21,6 +21,28 @@ let tray: Tray | null = null;
 let allowQuit = false;
 let quitRequested = false;
 
+function createFallbackIcon(): Electron.NativeImage {
+  return nativeImage.createFromDataURL(
+    "data:image/svg+xml;utf8," +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+          <rect width="32" height="32" rx="7" fill="#245B3A"/>
+          <path d="M9 20.5V11l7 6 7-6v9.5" fill="none" stroke="#F4FFF6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="11" cy="22" r="1.6" fill="#B7F0C4"/>
+          <circle cx="21" cy="22" r="1.6" fill="#B7F0C4"/>
+        </svg>`,
+      ),
+  );
+}
+
+function createAppIcon(): Electron.NativeImage {
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, "icon.png")
+    : join(process.cwd(), "resources", "icon.png");
+  const icon = nativeImage.createFromPath(iconPath);
+  return icon.isEmpty() ? createFallbackIcon() : icon;
+}
+
 function broadcastWindowState(window: BrowserWindow): void {
   if (window.isDestroyed()) {
     return;
@@ -43,6 +65,7 @@ function createMainWindow(): BrowserWindow {
     show: false,
     backgroundColor: "#f5f7f2",
     frame: false,
+    icon: createAppIcon(),
     titleBarStyle: process.platform === "darwin" ? "hidden" : "default",
     trafficLightPosition: process.platform === "darwin" ? { x: -100, y: -100 } : undefined,
     webPreferences: {
@@ -129,18 +152,7 @@ function requestQuit(): void {
 }
 
 function createTray(): Tray {
-  const icon = nativeImage.createFromDataURL(
-    "data:image/svg+xml;utf8," +
-      encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-          <rect width="32" height="32" rx="7" fill="#245B3A"/>
-          <path d="M9 20.5V11l7 6 7-6v9.5" fill="none" stroke="#F4FFF6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="11" cy="22" r="1.6" fill="#B7F0C4"/>
-          <circle cx="21" cy="22" r="1.6" fill="#B7F0C4"/>
-        </svg>`,
-      ),
-  );
-  const nextTray = new Tray(icon);
+  const nextTray = new Tray(createAppIcon().resize({ width: 32, height: 32 }));
 
   const withLog =
     (action: () => Promise<unknown>) =>

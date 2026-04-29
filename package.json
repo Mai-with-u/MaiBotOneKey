@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "license": "GPL-3.0-only",
   "type": "module",
@@ -12,7 +12,8 @@
     "check": "bun run typecheck && bun run build",
     "preview": "electron-vite preview",
     "release:check": "bun run scripts/release/check-windows-payload.ts",
-    "release:win": "bun run release:check && bun run build && electron-builder --win nsis --x64",
+    "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
+    "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && electron-builder --win nsis --x64",
     "pack:win": "bun run release:win"
   },
   "dependencies": {
@@ -65,6 +66,10 @@
     ],
     "extraResources": [
       {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
         "from": "runtime",
         "to": "runtime",
         "filter": [
@@ -87,8 +92,15 @@
     ],
     "win": {
       "target": "nsis",
+      "icon": "resources/icon.ico",
       "requestedExecutionLevel": "asInvoker",
       "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "mac": {
+      "icon": "resources/icon.icns"
+    },
+    "linux": {
+      "icon": "resources/icon.png"
     },
     "nsis": {
       "oneClick": false,
