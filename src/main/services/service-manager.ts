@@ -515,7 +515,11 @@ export class ServiceManager extends EventEmitter {
     );
 
     try {
-      const useCommandLine = !resolved.command || (process.platform === "win32" && definition.id === "napcat");
+      const useCommandLine = !resolved.command;
+      const agreementEnv = await this.initManager.getAgreementEnvVars();
+      const baseEnv =
+        definition.id === "maibot" ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
+      const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
       const session = this.pty.start({
         id: sessionId,
         title: definition.name,
@@ -525,7 +529,7 @@ export class ServiceManager extends EventEmitter {
         cols: SERVICE_TERMINAL_COLS,
         rows: SERVICE_TERMINAL_ROWS,
         encoding: "auto",
-        env: definition.id === "maibot" ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined,
+        env: Object.keys(mergedEnv).length > 0 ? mergedEnv : undefined,
       });
 
       this.setState(serviceId, {
@@ -726,6 +730,9 @@ export class ServiceManager extends EventEmitter {
     const maibotRoot = this.getRuntimePath("maibot");
     const napcatRoot = this.getRuntimePath("napcat");
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
+    const napcatLauncherName = "napcat-launch.cmd";
+    const napcatLauncherPath = join(napcatRoot, napcatLauncherName);
+    const cmdShell = process.env.ComSpec || "cmd.exe";
 
     return [
       {
@@ -757,6 +764,15 @@ export class ServiceManager extends EventEmitter {
         buildDefaultCommand: async () => {
           const qq = await this.initManager.readQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
+          if (process.platform === "win32" && existsSync(napcatLauncherPath)) {
+            // 通过 cmd.exe 调用磁盘上的 napcat-launch.cmd（已固定 chcp 65001），
+            // argv 各元素独立传递，不会触发 cmd /C 字符串拼接的引号歧义。
+            const args = ["/D", "/S", "/C", napcatLauncherName];
+            if (qq) {
+              args.push(qq);
+            }
+            return [cmdShell, ...args];
+          }
           return qq ? [napcatExe, qq] : [napcatExe];
         },
         buildDefaultCommandLine: async () => {

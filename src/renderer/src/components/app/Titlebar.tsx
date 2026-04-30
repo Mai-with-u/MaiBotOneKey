@@ -4,8 +4,6 @@ import {
   Minus,
   MonitorCog,
   Moon,
-  PanelLeft,
-  PanelLeftClose,
   Square,
   Sun,
   X,
@@ -20,8 +18,6 @@ import type { ThemeApi } from "@/lib/use-theme";
 interface TitlebarProps {
   appVersion: string;
   installRoot?: string;
-  sidebarCollapsed: boolean;
-  onToggleSidebar: () => void;
   theme: ThemeApi;
 }
 
@@ -88,7 +84,7 @@ function MacTrafficLights(): React.JSX.Element {
 function WinControls({ isMaximized }: { isMaximized: boolean }): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   const baseBtn =
-    "grid h-full w-12 place-items-center text-foreground/70 transition-colors hover:bg-foreground/5 hover:text-foreground focus:outline-none";
+    "grid h-full w-12 place-items-center text-foreground/70 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
   return (
     <div className="flex h-full items-stretch" data-app-region="no-drag">
       <button
@@ -141,13 +137,11 @@ const themeLabel = {
 } as const;
 
 const titlebarBtn =
-  "inline-grid h-7 place-items-center rounded-md px-1.5 text-foreground/70 transition-colors hover:bg-foreground/8 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50";
+  "inline-grid h-7 place-items-center rounded-md px-1.5 text-foreground/70 transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50";
 
 export function Titlebar({
   appVersion,
   installRoot,
-  sidebarCollapsed,
-  onToggleSidebar,
   theme,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
@@ -155,7 +149,6 @@ export function Titlebar({
   const isMac = platform === "darwin";
   const bridge = window.maibotDesktop?.window;
 
-  // Cross-platform window shortcuts
   useShortcut("Mod+M", () => bridge?.minimize());
   useShortcut("Mod+Shift+M", () => bridge?.toggleMaximize());
 
@@ -166,42 +159,27 @@ export function Titlebar({
   return (
     <div
       className={cn(
-        "relative z-40 flex h-9 shrink-0 items-stretch border-b border-border bg-panel/95 backdrop-blur",
+        "relative z-40 flex h-9 shrink-0 items-stretch border-b border-border bg-card",
         !state.isFocused && "opacity-90",
       )}
       data-app-region="drag"
     >
       {isMac ? <MacTrafficLights /> : null}
 
-      {/* Left: sidebar toggle + (when collapsed) logo */}
-      <div className="flex items-center gap-1 px-1.5" data-app-region="no-drag">
-        <button
-          aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
-          className={titlebarBtn}
-          onClick={onToggleSidebar}
-          title={sidebarCollapsed ? "展开侧栏 (Mod+B)" : "收起侧栏 (Mod+B)"}
-          type="button"
-        >
-          {sidebarCollapsed ? (
-            <PanelLeft className="size-3.5" strokeWidth={1.8} />
-          ) : (
-            <PanelLeftClose className="size-3.5" strokeWidth={1.8} />
-          )}
-        </button>
-        {sidebarCollapsed ? (
-          <span className="grid size-5 shrink-0 place-items-center rounded bg-primary/15 text-primary">
-            <Bot className="size-3" strokeWidth={2} />
-          </span>
-        ) : null}
+      {/* Brand */}
+      <div className="flex items-center gap-2 px-2" data-app-region="no-drag">
+        <span className="grid size-5 shrink-0 place-items-center rounded-md bg-primary/15 text-primary">
+          <Bot className="size-3" strokeWidth={2} />
+        </span>
       </div>
 
       <div
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2",
-          isMac ? "justify-center px-3" : "px-2",
+          isMac ? "justify-center px-3" : "px-1",
         )}
       >
-        <span className="truncate text-[12px] font-medium tracking-tight text-foreground/85">
+        <span className="truncate text-[12px] font-semibold tracking-tight">
           MaiBot OneKey
         </span>
         <span className="hidden h-3 w-px bg-border md:inline-block" />
@@ -211,20 +189,13 @@ export function Titlebar({
         >
           {installRoot ?? "—"}
         </span>
-        {isMac ? null : (
-          <span className="ml-auto hidden font-mono text-[10px] text-muted-foreground/80 md:inline-block">
-            v{appVersion}
-          </span>
-        )}
       </div>
 
-      {/* Right cluster: theme toggle (+ version on mac) + window controls */}
+      {/* Right cluster */}
       <div className="flex items-center gap-1 px-1.5" data-app-region="no-drag">
-        {isMac ? (
-          <span className="hidden font-mono text-[10px] text-muted-foreground/80 md:inline-block">
-            v{appVersion}
-          </span>
-        ) : null}
+        <span className="hidden font-mono text-[10px] text-muted-foreground md:inline-block">
+          v{appVersion}
+        </span>
         <button
           aria-label={themeTitle}
           className={titlebarBtn}

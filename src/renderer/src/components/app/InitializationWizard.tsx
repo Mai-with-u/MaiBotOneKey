@@ -2,7 +2,13 @@ import { Bot, KeyRound, Loader2, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { DesktopSnapshot } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { createSecureToken } from "@/lib/secure-token";
@@ -88,23 +94,17 @@ export function InitializationWizard({
   useShortcut("Mod+Enter", saveQqAccount, { enabled: open && canSave, allowInEditable: true });
 
   return (
-    <Dialog
-      ariaLabelledBy="startup-wizard-title"
-      onClose={close}
-      open={open}
-      showCloseButton
-      size="md"
-    >
+    <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
+      <DialogContent size="md">
       <DialogHeader
         description="填写机器人账号后会生成 NapCat 与 OneBot 连接配置。"
         icon={<Bot className="size-4" />}
         title="启动向导"
-        titleId="startup-wizard-title"
         tone="default"
       />
 
       <DialogBody className="space-y-4">
-        <div className="rounded-lg border border-border/70 bg-panel/70 p-4">
+        <div className="rounded-lg border border-border bg-muted/40 p-4">
           <label
             className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
             htmlFor="startup-qq-input"
@@ -122,7 +122,7 @@ export function InitializationWizard({
             value={qqAccount}
           />
           {error ? (
-            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
+            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
               {error}
             </div>
           ) : null}
@@ -140,6 +140,7 @@ export function InitializationWizard({
           <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
         </Button>
       </DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }

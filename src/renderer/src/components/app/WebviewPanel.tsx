@@ -225,8 +225,8 @@ export function WebviewPanel({
   const showWebview = hasRenderedPage || loadState === "ready";
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-panel/85 px-3 backdrop-blur-sm">
+    <section className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 ">
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="shrink-0 text-[12px] font-semibold tracking-tight">{title}</h2>
           <Badge
@@ -251,7 +251,7 @@ export function WebviewPanel({
           </Badge>
           <span className="hidden h-3 w-px bg-border sm:block" />
           <code
-            className="hidden min-w-0 max-w-[420px] truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block"
+            className="hidden min-w-0 max-w-[420px] truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block"
             title={url}
           >
             {url}
@@ -337,7 +337,7 @@ function DefaultWebviewPanel({
   const isError = loadState === "error";
   const Icon = isError ? AlertTriangle : loadState === "loading" ? PlugZap : Globe;
   const tone = isError
-    ? "border-destructive/30 bg-destructive/12 text-destructive"
+    ? "border-destructive/30 bg-destructive/15 text-destructive"
     : "border-primary/25 bg-primary/12 text-primary";
 
   const headline = isError
@@ -352,9 +352,9 @@ function DefaultWebviewPanel({
   return (
     <div
       aria-live="polite"
-      className="absolute inset-0 grid place-items-center overflow-auto bg-surface/95 p-6 backdrop-blur-sm"
+      className="absolute inset-0 grid place-items-center overflow-auto bg-background/95 p-6 "
     >
-      <div className="w-full max-w-[520px] rounded-2xl border border-border/70 bg-elevated/95 p-6 shadow-xl">
+      <div className="w-full max-w-[520px] rounded-2xl border border-border bg-card p-6 shadow-xl">
         <div className="flex items-start gap-3">
           <span className={`grid size-10 shrink-0 place-items-center rounded-xl border ${tone}`}>
             <Icon className="size-4" />
@@ -368,7 +368,7 @@ function DefaultWebviewPanel({
             </div>
             <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
             <code
-              className="mt-3 block min-w-0 break-all rounded-md border border-border/70 bg-muted/65 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/80"
+              className="mt-3 block min-w-0 break-all rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/80"
               title={url}
             >
               {url}
@@ -377,7 +377,7 @@ function DefaultWebviewPanel({
         </div>
 
         {isError ? (
-          <ul className="mt-5 space-y-1.5 rounded-lg border border-border/60 bg-muted/35 p-3 text-[12px] leading-relaxed text-muted-foreground">
+          <ul className="mt-5 space-y-1.5 rounded-lg border border-border bg-muted/40 p-3 text-[12px] leading-relaxed text-muted-foreground">
             <li className="flex items-start gap-2">
               <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
               先在「设置状态」里确认对应服务正在运行。

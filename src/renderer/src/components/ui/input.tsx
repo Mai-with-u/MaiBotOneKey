@@ -19,7 +19,7 @@ export function Input({
       type={type}
       {...ariaProps}
       className={cn(
-        "flex h-9 w-full min-w-0 rounded-md border border-input bg-elevated px-3 text-sm leading-none text-foreground",
+        "flex h-9 w-full min-w-0 rounded-md border border-input bg-card px-3 text-sm leading-none text-foreground",
         "transition-[border-color,box-shadow] outline-none placeholder:text-muted-foreground/70",
         "focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/40",
         "disabled:cursor-not-allowed disabled:opacity-60",

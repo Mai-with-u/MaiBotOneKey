@@ -22,10 +22,31 @@ const GIT_RUNTIME_DIR = "git";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_LEGACY_CONFIG_VERSION = "1.0.0";
 
-const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName: string; confirmFileName: string }> = [
-  { id: "eula", title: "最终用户许可协议", fileName: "EULA.md", confirmFileName: "eula.confirmed" },
-  { id: "privacy", title: "隐私政策", fileName: "PRIVACY.md", confirmFileName: "privacy.confirmed" },
+const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName: string; envVar: string }> = [
+  { id: "eula", title: "最终用户许可协议", fileName: "EULA.md", envVar: "EULA_AGREE" },
+  { id: "privacy", title: "隐私政策", fileName: "PRIVACY.md", envVar: "PRIVACY_AGREE" },
 ];
+
+const AGREEMENT_STORE_FILE = "agreement.json";
+
+/**
+ * NapCat 启动包装 .cmd：在启动 exe 前先切控制台到 UTF-8，避免中文乱码。
+ * 内容是固定的、不依赖任何运行时拼接的变量：不会遇到 cmd 引号解析问题。
+ */
+const NAPCAT_LAUNCHER_FILE = "napcat-launch.cmd";
+const NAPCAT_LAUNCHER_CONTENT = [
+  "@echo off",
+  "chcp 65001 >nul",
+  'cd /d "%~dp0"',
+  '"%~dp0NapCatWinBootMain.exe" %*',
+  "",
+].join("\r\n");
+
+interface StoredAgreementFile {
+  version: 1;
+  hashes: Partial<Record<AgreementDocumentId, string>>;
+  confirmedAt?: number;
+}
 
 function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
@@ -84,7 +105,11 @@ function createWebsocketToken(): string {
 }
 
 function md5Utf8(content: string): string {
-  return createHash("md5").update(content, "utf8").digest("hex");
+  // 与 Python `open(path, encoding="utf-8").read()` 行为对齐：
+  // Python 文本模式会把 \r\n / \r 统一转成 \n，再交给 hashlib。
+  // Node 的 readFile(path, 'utf8') 保留原始 CRLF，所以这里手动归一化以匹配 MaiBot 的哈希结果。
+  const normalized = content.replace(/\r\n?/g, "\n");
+  return createHash("md5").update(normalized, "utf8").digest("hex");
 }
 
 function hasInnerVersion(content: string): boolean {
@@ -180,7 +205,10 @@ export class InitManager {
   }
 
   async getAgreementState(): Promise<StartupAgreementState> {
-    const documents = await Promise.all(AGREEMENT_FILES.map((agreement) => this.readAgreementDocument(agreement)));
+    const stored = await this.readAgreementStore();
+    const documents = await Promise.all(
+      AGREEMENT_FILES.map((agreement) => this.readAgreementDocument(agreement, stored)),
+    );
     return {
       isConfirmed: documents.every((document) => document.exists && document.confirmed),
       documents,
@@ -195,15 +223,20 @@ export class InitManager {
       throw new Error(`${missing.title} 文件缺失: ${missing.sourcePath}`);
     }
 
+    const hashes: Partial<Record<AgreementDocumentId, string>> = {};
     for (const document of state.documents) {
-      if (document.confirmed) {
-        continue;
-      }
-
-      await mkdir(dirname(document.confirmPath), { recursive: true });
-      await writeFile(document.confirmPath, document.hash, "utf8");
-      changedFiles.push(document.confirmPath);
+      hashes[document.id] = document.hash;
     }
+
+    const storePath = this.agreementStorePath();
+    const payload: StoredAgreementFile = {
+      version: 1,
+      hashes,
+      confirmedAt: Date.now(),
+    };
+    await mkdir(dirname(storePath), { recursive: true });
+    await writeFile(storePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    changedFiles.push(storePath);
 
     return {
       state: await this.getAgreementState(),
@@ -215,6 +248,53 @@ export class InitManager {
     const state = await this.getAgreementState();
     if (!state.isConfirmed) {
       throw new Error("请先阅读并同意 MaiBot EULA 与隐私政策。");
+    }
+  }
+
+  /**
+   * 计算当前 EULA / PRIVACY 的最新 MD5，作为环境变量在每次启动 MaiBot 时注入。
+   * 麦麦的 bot.py 会读取 `EULA_AGREE` 与 `PRIVACY_AGREE`，等于当前文件 hash 即视为已同意，
+   * 协议有更新时 hash 自动变化，麦麦端会触发重新确认流程。
+   */
+  async getAgreementEnvVars(): Promise<Record<string, string>> {
+    const env: Record<string, string> = {};
+    for (const agreement of AGREEMENT_FILES) {
+      const sourcePath = this.agreementSourcePath(agreement.fileName);
+      if (!existsSync(sourcePath)) {
+        continue;
+      }
+      try {
+        const content = await readFile(sourcePath, "utf8");
+        env[agreement.envVar] = md5Utf8(content);
+      } catch {
+        // 忽略读取失败，麦麦会回退到交互式确认
+      }
+    }
+    return env;
+  }
+
+  private agreementStorePath(): string {
+    return join(this.paths.userDataRoot, AGREEMENT_STORE_FILE);
+  }
+
+  private async readAgreementStore(): Promise<StoredAgreementFile | undefined> {
+    const storePath = this.agreementStorePath();
+    if (!existsSync(storePath)) {
+      return undefined;
+    }
+    try {
+      const raw = await readFile(storePath, "utf8");
+      const parsed = JSON.parse(raw) as Partial<StoredAgreementFile>;
+      if (!parsed || typeof parsed !== "object" || !parsed.hashes) {
+        return undefined;
+      }
+      return {
+        version: 1,
+        hashes: parsed.hashes,
+        confirmedAt: typeof parsed.confirmedAt === "number" ? parsed.confirmedAt : undefined,
+      };
+    } catch {
+      return undefined;
     }
   }
 
@@ -254,6 +334,10 @@ export class InitManager {
     await mkdir(this.paths.logsRoot, { recursive: true });
 
     if (this.paths.modulesRoot === this.paths.bundledModulesRoot) {
+      if (serviceId === "napcat") {
+        const launcher = await this.ensureNapCatLauncher();
+        return launcher ? [launcher] : [];
+      }
       return [];
     }
 
@@ -267,13 +351,47 @@ export class InitManager {
       return repairedConfig ? [...changedFiles, repairedConfig] : changedFiles;
     }
 
-    return [
+    const changedFiles = [
       ...(await this.ensureBundledModuleSubtree("napcat", [
         "NapCatWinBootMain.exe",
         join("Files", "versions", "config.json"),
       ])),
       ...(await this.ensureBundledModuleSubtree("napcatframework", ["versions"], true)),
     ];
+    const launcher = await this.ensureNapCatLauncher();
+    if (launcher) {
+      changedFiles.push(launcher);
+    }
+    return changedFiles;
+  }
+
+  /**
+   * 在 napcat 目录下生成一个固定的引导 .cmd，启动时先 chcp 65001 再调 exe，
+   * 避免在源码里拼接 `cmd /C` 字符串带来的引号问题，同时保留控制台 UTF-8
+   * 以免中文输出乱码。
+   */
+  private async ensureNapCatLauncher(): Promise<string | undefined> {
+    const napcatRoot = join(this.paths.modulesRoot, "napcat");
+    if (!existsSync(napcatRoot)) {
+      return undefined;
+    }
+
+    const launcherPath = join(napcatRoot, NAPCAT_LAUNCHER_FILE);
+    const desired = NAPCAT_LAUNCHER_CONTENT;
+
+    if (existsSync(launcherPath)) {
+      try {
+        const current = await readFile(launcherPath, "utf8");
+        if (current === desired) {
+          return undefined;
+        }
+      } catch {
+        // 读不到就重写
+      }
+    }
+
+    await writeFile(launcherPath, desired, "utf8");
+    return launcherPath;
   }
 
   async readQqAccount(): Promise<string | undefined> {
@@ -455,19 +573,21 @@ export class InitManager {
     return join(this.paths.bundledModulesRoot, "MaiBot", fileName);
   }
 
-  private async readAgreementDocument({
-    id,
-    title,
-    fileName,
-    confirmFileName,
-  }: {
-    id: AgreementDocumentId;
-    title: string;
-    fileName: string;
-    confirmFileName: string;
-  }): Promise<AgreementDocument> {
+  private async readAgreementDocument(
+    {
+      id,
+      title,
+      fileName,
+    }: {
+      id: AgreementDocumentId;
+      title: string;
+      fileName: string;
+      envVar: string;
+    },
+    stored: StoredAgreementFile | undefined,
+  ): Promise<AgreementDocument> {
     const sourcePath = this.agreementSourcePath(fileName);
-    const confirmPath = join(this.paths.modulesRoot, "MaiBot", confirmFileName);
+    const confirmPath = this.agreementStorePath();
     if (!existsSync(sourcePath)) {
       return {
         id,
@@ -486,7 +606,7 @@ export class InitManager {
     try {
       const content = await readFile(sourcePath, "utf8");
       const hash = md5Utf8(content);
-      const confirmed = existsSync(confirmPath) && (await readFile(confirmPath, "utf8")) === hash;
+      const confirmed = stored?.hashes?.[id] === hash;
       return {
         id,
         title,

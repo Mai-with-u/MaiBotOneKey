@@ -57,10 +57,10 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     }
 
     return (
-      <main className="grid h-screen place-items-center bg-surface p-6 text-foreground">
-        <div className="w-full max-w-[640px] rounded-2xl border border-border bg-elevated shadow-xl">
+      <main className="grid h-screen place-items-center bg-background p-6 text-foreground">
+        <div className="w-full max-w-[640px] rounded-2xl border border-border bg-card shadow-xl">
           <div className="flex items-start gap-3 border-b border-border px-6 py-5">
-            <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-destructive/12 text-destructive">
+            <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-destructive/15 text-destructive">
               <AlertTriangle className="size-4" />
             </span>
             <div className="min-w-0 flex-1">
@@ -75,15 +75,15 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
           </div>
 
           <div className="space-y-3 px-6 py-5">
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs leading-relaxed text-destructive">
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 font-mono text-xs leading-relaxed text-destructive">
               {error.message}
             </div>
-            <pre className="max-h-[280px] overflow-auto rounded-lg border border-border/70 bg-muted/60 p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
+            <pre className="max-h-[280px] overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
               {error.stack ?? error.message}
             </pre>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/35 px-6 py-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/40 px-6 py-3">
             <Button onClick={this.handleCopy} size="sm" variant="ghost">
               <Copy />
               {copied ? "已拷贝" : "拷贝错误"}

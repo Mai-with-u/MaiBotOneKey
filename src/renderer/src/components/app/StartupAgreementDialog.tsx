@@ -2,7 +2,13 @@ import { BookOpenCheck, Loader2, Power, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { AgreementDocumentId, DesktopSnapshot } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -79,23 +85,23 @@ export function StartupAgreementDialog({
   }
 
   return (
-    <Dialog
-      ariaLabelledBy="startup-agreement-title"
-      closeOnBackdrop={false}
-      open
-      size="lg"
-    >
+    <Dialog open={!agreement.isConfirmed}>
+      <DialogContent
+        size="lg"
+        showCloseButton={false}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+      >
       <DialogHeader
         description="首次启动前需要阅读并同意 MaiBot 的协议文件；确认后会在可写 MaiBot 目录写入确认文件。"
         icon={<BookOpenCheck className="size-4" />}
         title="MaiBot 协议确认"
-        titleId="startup-agreement-title"
         tone="primary"
       />
 
       <DialogBody className="space-y-4">
         <Tabs className="space-y-3" defaultValue={activeTab}>
-          <TabsList className="h-8 rounded-md border border-border/80 bg-muted/45 p-1">
+          <TabsList className="h-8 rounded-md border border-border bg-muted/40 p-1">
             {documents.map((document) => (
               <TabsTrigger className="h-6 px-2.5 text-[11px]" key={document.id} value={document.id}>
                 <ShieldCheck className="size-3" />
@@ -106,16 +112,16 @@ export function StartupAgreementDialog({
 
           {documents.map((document) => (
             <TabsContent className="space-y-3" key={document.id} value={document.id}>
-              <ScrollArea className="h-[min(52vh,520px)] rounded-lg border border-border/70 bg-panel/65 px-4 py-3">
+              <ScrollArea className="h-[min(52vh,520px)] rounded-lg border border-border bg-muted/30 px-4 py-3">
                 {document.exists ? (
                   <MarkdownRenderer content={document.content} />
                 ) : (
-                  <div className="rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive">
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                     {document.error ?? `${document.fileName} 文件缺失`}
                   </div>
                 )}
               </ScrollArea>
-              <label className="flex items-start gap-2 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-xs leading-relaxed text-foreground/85">
+              <label className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground/85">
                 <input
                   checked={accepted[document.id]}
                   className="mt-0.5 size-3.5 accent-primary"
@@ -132,7 +138,7 @@ export function StartupAgreementDialog({
         </Tabs>
 
         {error ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
             {error}
           </div>
         ) : null}
@@ -148,6 +154,7 @@ export function StartupAgreementDialog({
           同意并继续
         </Button>
       </DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }

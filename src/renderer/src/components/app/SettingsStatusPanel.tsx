@@ -40,7 +40,13 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogBody, DialogFooter, DialogHeader } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -123,7 +129,7 @@ function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.J
   const output = result.output.slice(-120).join("\n");
 
   return (
-    <div className="space-y-3 rounded-lg border border-border/70 bg-elevated/75 p-3">
+    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={result.changed ? "success" : "secondary"}>
           {result.changed ? "已更新" : "已是最新"}
@@ -145,7 +151,7 @@ function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.J
         </span>
       </div>
       {output.length > 0 ? (
-        <pre className="max-h-64 overflow-auto rounded-md bg-muted/70 p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
+        <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
           {output}
         </pre>
       ) : null}
@@ -157,7 +163,7 @@ function PythonInstallOutput({ result }: { result: PythonPackageInstallResult })
   const output = result.output.slice(-80).join("\n");
 
   return (
-    <div className="space-y-3 rounded-lg border border-border/70 bg-elevated/75 p-3">
+    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="success">已安装</Badge>
         <span className="font-mono text-[11px] text-muted-foreground">
@@ -169,7 +175,7 @@ function PythonInstallOutput({ result }: { result: PythonPackageInstallResult })
         覆盖目录: {result.targetDir}
       </p>
       {output.length > 0 ? (
-        <pre className="max-h-48 overflow-auto rounded-md bg-muted/70 p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
+        <pre className="max-h-48 overflow-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
           {output}
         </pre>
       ) : null}
@@ -193,7 +199,7 @@ function PathField({
       </span>
       <div className="flex min-w-0 items-start gap-2">
         <code
-          className="block min-w-0 flex-1 break-all rounded-md border border-border/70 bg-muted/70 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/85"
+          className="block min-w-0 flex-1 break-all rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/85"
           title={value}
         >
           {value}
@@ -236,7 +242,7 @@ function RuntimePathEditor({
   const dirty = value.trim() !== config.value;
 
   return (
-    <div className="rounded-lg border border-border/70 bg-elevated/75 p-3">
+    <div className="rounded-lg border border-border bg-card p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -316,7 +322,7 @@ function ServiceDetail({
   );
 
   return (
-    <div className="rounded-lg border border-border/70 bg-elevated/80 p-3">
+    <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -347,12 +353,12 @@ function ServiceDetail({
         <span>重启次数: {service.restartAttempts ?? 0}</span>
       </div>
       {service.command ? (
-        <code className="mt-3 block overflow-hidden text-ellipsis whitespace-nowrap rounded-md bg-muted/65 px-2 py-1.5 font-mono text-[11px] text-foreground/75">
+        <code className="mt-3 block overflow-hidden text-ellipsis whitespace-nowrap rounded-md bg-muted px-2 py-1.5 font-mono text-[11px] text-foreground/75">
           {service.command.join(" ")}
         </code>
       ) : null}
       {commandConfig ? (
-        <div className="mt-3 grid gap-2 rounded-md border border-border/70 bg-muted/35 p-2.5">
+        <div className="mt-3 grid gap-2 rounded-md border border-border bg-muted/40 p-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <p className="text-xs font-medium text-foreground">启动命令</p>
@@ -429,7 +435,7 @@ function ServiceDetail({
 
 function LogLine({ entry }: { entry: LogEntry }): React.JSX.Element {
   return (
-    <div className="grid grid-cols-[74px_66px_minmax(0,1fr)] gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] last:border-b-0">
+    <div className="grid grid-cols-[74px_66px_minmax(0,1fr)] gap-2 border-b border-border px-3 py-2 font-mono text-[11px] last:border-b-0">
       <span className="text-muted-foreground">{formatTime(entry.timestamp)}</span>
       <span
         className={
@@ -704,9 +710,9 @@ export function SettingsStatusPanel({
 
   return (
     <>
-    <section className="h-full overflow-auto bg-surface/60 px-6 py-6">
+    <section className="h-full overflow-auto bg-background px-6 py-6">
       <div className="mx-auto w-full max-w-[1180px]">
-        <Card className="border-border/80 bg-panel/70 backdrop-blur-sm">
+        <Card className="border-border bg-card ">
           <CardHeader className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
@@ -731,7 +737,7 @@ export function SettingsStatusPanel({
               </div>
             </div>
             {error ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs leading-relaxed text-destructive">
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
                 {error}
               </div>
             ) : null}
@@ -739,7 +745,7 @@ export function SettingsStatusPanel({
 
           <CardContent>
             <Tabs className="space-y-4" defaultValue="checks">
-              <TabsList className="h-8 rounded-md border border-border/80 bg-muted/45 p-1">
+              <TabsList className="h-8 rounded-md border border-border bg-muted/40 p-1">
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="checks">
                   <ClipboardCheck className="size-3" />
                   环境检查
@@ -770,13 +776,13 @@ export function SettingsStatusPanel({
                 <div className="grid gap-2 md:grid-cols-2">
                   {initState.checks.map((check) => (
                     <div
-                      className="flex min-w-0 items-start gap-2 rounded-lg border border-border/70 bg-elevated/75 px-3 py-2.5"
+                      className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5"
                       key={check.id}
                     >
                       {check.status === "ok" ? (
-                        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
+                        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
                       ) : (
-                        <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+                        <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
@@ -793,7 +799,7 @@ export function SettingsStatusPanel({
                   ))}
                 </div>
 
-                <div className="flex justify-end rounded-lg border border-border/70 bg-muted/35 p-3">
+                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
                   <Button disabled={busy !== null} onClick={repair} variant="outline">
                     {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
                     准备基础目录
@@ -806,7 +812,7 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   机器人 QQ 号配置将用于 NapCat 登录与联动，请确保填写的是目标机器人账号。
                 </p>
-                <div className="grid gap-3 rounded-lg border border-border/70 bg-muted/35 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
                   <Input
                     inputMode="numeric"
                     monospace
@@ -843,7 +849,7 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   使用内置 Git 更新可写 MaiBot 模块。更新器不会执行清理命令，不会删除 data、logs、config 等用户数据目录。
                 </p>
-                <div className="grid gap-3 rounded-lg border border-border/70 bg-muted/35 p-3">
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -874,18 +880,18 @@ export function SettingsStatusPanel({
                     </div>
                   </div>
                   {maibotUpdateBlocked ? (
-                    <div className="rounded-md border border-amber-300/60 bg-amber-50/80 px-3 py-2 text-xs text-amber-800">
+                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
                       请先停止 MaiBot Core，再执行模块更新。
                     </div>
                   ) : (
-                    <div className="rounded-md border border-border/70 bg-elevated/70 px-3 py-2 text-xs text-muted-foreground">
+                    <div className="rounded-md border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground">
                       会强制同步远端代码并覆盖模块内的本地代码改动；用户运行数据仍保留在 MaiBot/data。
                     </div>
                   )}
                 </div>
                 {moduleUpdateResult ? <ModuleUpdateOutput result={moduleUpdateResult} /> : null}
 
-                <div className="grid gap-3 rounded-lg border border-border/70 bg-muted/35 p-3">
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -911,7 +917,7 @@ export function SettingsStatusPanel({
                   <div className="grid gap-2 md:grid-cols-2">
                     {managedPythonPackages.map((pythonPackage) => (
                       <div
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border/70 bg-elevated/75 p-2.5"
+                        className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card p-2.5"
                         key={pythonPackage.name}
                       >
                         <div className="min-w-0">
@@ -931,7 +937,7 @@ export function SettingsStatusPanel({
                     ))}
                   </div>
                   {maibotUpdateBlocked ? (
-                    <div className="rounded-md border border-amber-300/60 bg-amber-50/80 px-3 py-2 text-xs text-amber-800">
+                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
                       请先停止 MaiBot Core，再更新 Python 覆盖依赖。
                     </div>
                   ) : null}
@@ -975,7 +981,7 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   服务 stdout、stderr 和桌面壳系统事件会写入日志目录。
                 </p>
-                <div className="max-h-[420px] overflow-y-auto rounded-lg border border-border/70 bg-elevated/80">
+                <div className="max-h-[420px] overflow-y-auto rounded-lg border border-border bg-card">
                   {recentLogs.length > 0 ? (
                     recentLogs.map((entry) => <LogLine entry={entry} key={entry.id} />)
                   ) : (
@@ -993,17 +999,16 @@ export function SettingsStatusPanel({
       </div>
     </section>
     <Dialog
-      ariaLabelledBy="python-deps-version-title"
-      closeOnBackdrop={busy?.startsWith("py:") !== true}
-      onClose={() => setPythonVersionsOpen(false)}
       open={pythonVersionsOpen}
-      size="lg"
+      onOpenChange={(next) => {
+        if (!next && busy?.startsWith("py:") !== true) setPythonVersionsOpen(false);
+      }}
     >
+      <DialogContent size="lg">
       <DialogHeader
         description="版本列表来自清华 PyPI 镜像，并按发布时间降序排列；dev 与预发布版本会额外标记。"
         icon={<Package className="size-4" />}
         title={pythonVersions ? `选择 ${pythonVersions.packageName} 版本` : "读取 Python 依赖版本"}
-        titleId="python-deps-version-title"
         tone="primary"
       />
       <DialogBody className="space-y-3">
@@ -1015,11 +1020,11 @@ export function SettingsStatusPanel({
               <span>获取: {formatDateTime(pythonVersions.fetchedAt)}</span>
               {selectedPythonVersion.length === 0 ? <Badge variant="outline">未选择</Badge> : null}
             </div>
-            <ScrollArea className="h-[min(52vh,520px)] rounded-lg border border-border/70 bg-panel/65 p-2">
+            <ScrollArea className="h-[min(52vh,520px)] rounded-lg border border-border bg-muted/30 p-2">
               <div className="space-y-1">
                 {pythonVersions.versions.map((version) => (
                   <label
-                    className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-muted/60"
+                    className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-muted"
                     key={version.version}
                   >
                     <span className="flex min-w-0 items-center gap-2">
@@ -1044,7 +1049,7 @@ export function SettingsStatusPanel({
             </ScrollArea>
           </>
         ) : (
-          <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-8 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-8 text-sm text-muted-foreground">
             <Loader2 className="animate-spin" />
             正在从清华源读取版本列表
           </div>
@@ -1063,29 +1068,29 @@ export function SettingsStatusPanel({
           安装选中版本
         </Button>
       </DialogFooter>
+      </DialogContent>
     </Dialog>
     <Dialog
-      ariaLabelledBy="maibot-module-update-title"
-      closeOnBackdrop={busy !== "module:maibot"}
-      onClose={() => setConfirmUpdateOpen(false)}
       open={confirmUpdateOpen}
-      size="md"
+      onOpenChange={(next) => {
+        if (!next && busy !== "module:maibot") setConfirmUpdateOpen(false);
+      }}
     >
+      <DialogContent size="md">
       <DialogHeader
         description="更新器会使用内置 Git 强制同步 MaiBot 远端代码。它不会执行 git clean，也不会删除 data、logs、config 等用户数据目录。"
         icon={<GitBranch className="size-4" />}
         title="确认更新 MaiBot 模块？"
-        titleId="maibot-module-update-title"
         tone="warning"
       />
       <DialogBody className="space-y-3 text-sm">
-        <div className="rounded-md border border-border/70 bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
           这会覆盖 MaiBot 模块里的本地代码改动，并将代码重置到远端分支。用户数据仍保留在可写模块目录下的
-          <code className="mx-1 rounded bg-elevated px-1 py-0.5 font-mono">data</code>
+          <code className="mx-1 rounded bg-card px-1 py-0.5 font-mono">data</code>
           目录。
         </div>
         {maibotUpdateBlocked ? (
-          <div className="rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
             MaiBot Core 当前未停止，请先停止服务后再更新。
           </div>
         ) : null}
@@ -1099,6 +1104,7 @@ export function SettingsStatusPanel({
           确认更新
         </Button>
       </DialogFooter>
+      </DialogContent>
     </Dialog>
     </>
   );

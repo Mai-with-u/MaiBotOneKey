@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -8,6 +8,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:web": "vite --config vite.renderer.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
     "check": "bun run typecheck && bun run build",
@@ -27,9 +28,12 @@
     "clsx": "^2.1.1",
     "iconv-lite": "^0.7.2",
     "lucide-react": "^0.468.0",
+    "next-themes": "^0.4.6",
     "node-pty": "^1.1.0",
+    "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {

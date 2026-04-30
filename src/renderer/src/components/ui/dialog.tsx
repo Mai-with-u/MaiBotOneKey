@@ -1,136 +1,134 @@
-import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { XIcon } from "lucide-react";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import * as React from "react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+
+export const Dialog = DialogPrimitive.Root;
+export const DialogTrigger = DialogPrimitive.Trigger;
+export const DialogPortal = DialogPrimitive.Portal;
+export const DialogClose = DialogPrimitive.Close;
+
+export function DialogOverlay({
+  className,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Overlay>): React.JSX.Element {
+  return (
+    <DialogPrimitive.Overlay
+      data-slot="dialog-overlay"
+      className={cn(
+        "fixed inset-0 z-50 bg-foreground/35 backdrop-blur-[3px]",
+        "data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+        "data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
 
 const sizeStyles = {
-  sm: "max-w-[420px]",
-  md: "max-w-[520px]",
-  lg: "max-w-[720px]",
-  xl: "max-w-[960px]",
+  sm: "sm:max-w-[420px]",
+  md: "sm:max-w-[520px]",
+  lg: "sm:max-w-[720px]",
+  xl: "sm:max-w-[960px]",
 } as const;
 
 export type DialogSize = keyof typeof sizeStyles;
 
-interface DialogProps {
-  open: boolean;
-  onClose?: () => void;
+export interface DialogContentProps
+  extends React.ComponentProps<typeof DialogPrimitive.Content> {
   size?: DialogSize;
-  ariaLabel?: string;
-  ariaLabelledBy?: string;
-  closeOnBackdrop?: boolean;
   showCloseButton?: boolean;
-  className?: string;
-  children: ReactNode;
 }
 
-/**
- * Lightweight modal scaffold: backdrop + centered card.
- * Renders inline (no portal) so it relies on z-index stacking.
- */
-export function Dialog({
-  open,
-  onClose,
-  size = "md",
-  ariaLabel,
-  ariaLabelledBy,
-  closeOnBackdrop = true,
-  showCloseButton = false,
+export function DialogContent({
   className,
   children,
-}: DialogProps): React.JSX.Element | null {
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    cardRef.current?.focus();
-  }, [open]);
-
-  if (!open) {
-    return null;
-  }
-
+  size = "md",
+  showCloseButton = true,
+  ...props
+}: DialogContentProps): React.JSX.Element {
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-6 backdrop-blur-sm"
-      onMouseDown={(event) => {
-        if (closeOnBackdrop && event.target === event.currentTarget) {
-          onClose?.();
-        }
-      }}
-    >
-      <div
-        ref={cardRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={ariaLabel}
-        aria-labelledby={ariaLabelledBy}
-        tabIndex={-1}
+    <DialogPortal>
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        data-slot="dialog-content"
         className={cn(
-          "relative w-full rounded-2xl border border-border/80 bg-elevated shadow-2xl outline-none",
+          "fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-h-[calc(100vh-3rem)]",
+          "-translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)_auto]",
+          "overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none",
+          "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+          "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           sizeStyles[size],
           className,
         )}
+        {...props}
       >
-        {showCloseButton && onClose ? (
-          <Button
-            aria-label="关闭"
-            className="absolute right-3 top-3 z-10"
-            onClick={onClose}
-            size="icon"
-            variant="ghost"
-          >
-            <X />
-          </Button>
-        ) : null}
         {children}
-      </div>
-    </div>
+        {showCloseButton ? (
+          <DialogPrimitive.Close
+            data-slot="dialog-close"
+            className="absolute right-3 top-3 grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <XIcon className="size-4" />
+            <span className="sr-only">关闭</span>
+          </DialogPrimitive.Close>
+        ) : null}
+      </DialogPrimitive.Content>
+    </DialogPortal>
   );
 }
+
+interface DialogHeaderProps {
+  icon?: React.ReactNode;
+  tone?: "default" | "primary" | "warning" | "danger";
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  /** @deprecated Radix 现在自管理 id，传值会被忽略。 */
+  titleId?: string;
+  className?: string;
+}
+
+const headerTone = {
+  default: "bg-muted text-foreground/70",
+  primary: "bg-primary/15 text-primary",
+  warning: "bg-warning/20 text-warning-foreground",
+  danger: "bg-destructive/12 text-destructive",
+} as const;
 
 export function DialogHeader({
   icon,
   tone = "default",
   title,
   description,
-  titleId,
-  align = "start",
-}: {
-  icon?: ReactNode;
-  tone?: "default" | "warning" | "danger" | "primary";
-  title: ReactNode;
-  description?: ReactNode;
-  titleId?: string;
-  align?: "start" | "center";
-}): React.JSX.Element {
-  const iconTone = {
-    default: "bg-muted text-foreground/70",
-    primary: "bg-primary/12 text-primary",
-    warning: "bg-amber-500/15 text-amber-700",
-    danger: "bg-destructive/12 text-destructive",
-  }[tone];
-
+  titleId: _titleId,
+  className,
+}: DialogHeaderProps): React.JSX.Element {
   return (
     <div
       className={cn(
-        "flex gap-3 border-b border-border px-5 py-4",
-        align === "center" ? "items-center" : "items-start",
+        "flex items-start gap-3 border-b border-border px-5 py-4",
+        className,
       )}
     >
       {icon ? (
-        <span className={cn("grid size-9 shrink-0 place-items-center rounded-lg", iconTone)}>
+        <span
+          className={cn(
+            "grid size-9 shrink-0 place-items-center rounded-lg",
+            headerTone[tone],
+          )}
+        >
           {icon}
         </span>
       ) : null}
-      <div className="min-w-0 flex-1">
-        <h2 id={titleId} className="text-base font-semibold leading-tight tracking-tight">
+      <div className="min-w-0 flex-1 pr-8">
+        <DialogPrimitive.Title className="text-base font-semibold leading-tight tracking-tight">
           {title}
-        </h2>
+        </DialogPrimitive.Title>
         {description ? (
-          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
+          <DialogPrimitive.Description className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+            {description}
+          </DialogPrimitive.Description>
         ) : null}
       </div>
     </div>
@@ -141,23 +139,27 @@ export function DialogBody({
   children,
   className,
 }: {
-  children: ReactNode;
+  children: React.ReactNode;
   className?: string;
 }): React.JSX.Element {
-  return <div className={cn("px-5 py-5", className)}>{children}</div>;
+  return (
+    <div className={cn("min-h-0 overflow-y-auto px-5 py-5", className)}>
+      {children}
+    </div>
+  );
 }
 
 export function DialogFooter({
   children,
   className,
 }: {
-  children: ReactNode;
+  children: React.ReactNode;
   className?: string;
 }): React.JSX.Element {
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/35 px-5 py-3",
+        "flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3",
         className,
       )}
     >
@@ -165,3 +167,7 @@ export function DialogFooter({
     </div>
   );
 }
+
+// Re-export Title/Description for advanced usage
+export const DialogTitle = DialogPrimitive.Title;
+export const DialogDescription = DialogPrimitive.Description;

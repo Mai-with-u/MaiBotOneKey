@@ -8,6 +8,56 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { useShortcut } from "@/lib/use-shortcut";
+import { useTheme, type ResolvedTheme } from "@/lib/use-theme";
+
+const XTERM_THEMES = {
+  dark: {
+    background: "#0c100e",
+    foreground: "#dfe8d1",
+    cursor: "#b8ed88",
+    cursorAccent: "#0c100e",
+    selectionBackground: "#496240",
+    black: "#11150f",
+    red: "#e26d5a",
+    green: "#9bd56c",
+    yellow: "#d5ba65",
+    blue: "#7bb5e8",
+    magenta: "#c98ee8",
+    cyan: "#70d5c1",
+    white: "#dfe8d1",
+    brightBlack: "#596151",
+    brightRed: "#f28c78",
+    brightGreen: "#b8ed88",
+    brightYellow: "#ecd37d",
+    brightBlue: "#9fd1ff",
+    brightMagenta: "#dfadff",
+    brightCyan: "#96ead9",
+    brightWhite: "#f2f8e8",
+  },
+  light: {
+    background: "#fbf8f4",
+    foreground: "#2a2520",
+    cursor: "#c75a14",
+    cursorAccent: "#fbf8f4",
+    selectionBackground: "#ffd9b8",
+    black: "#2a2520",
+    red: "#c0392b",
+    green: "#3f7d2c",
+    yellow: "#a06800",
+    blue: "#1f6fb0",
+    magenta: "#9c2c95",
+    cyan: "#187a73",
+    white: "#f4ece1",
+    brightBlack: "#6c5f53",
+    brightRed: "#d8553f",
+    brightGreen: "#5aa83b",
+    brightYellow: "#c2871a",
+    brightBlue: "#3387d3",
+    brightMagenta: "#b94db0",
+    brightCyan: "#229690",
+    brightWhite: "#fffaf2",
+  },
+} as const satisfies Record<ResolvedTheme, NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"]>;
 
 const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: string }> = [
   { serviceId: "maibot", sessionId: "service:maibot", title: "MaiBot Core" },
@@ -82,6 +132,7 @@ export function TerminalPanel({
   const panesRef = useRef(new Map<string, HTMLDivElement>());
   const bridgeRef = useRef<typeof window.maibotDesktop | null>(null);
   const activeServiceIdRef = useRef(activeServiceId);
+  const { resolved: resolvedTheme } = useTheme();
 
   const servicesById = useMemo(
     () => new Map<ServiceId, ServiceDescriptor>(services.map((service) => [service.id, service])),
@@ -131,29 +182,7 @@ export function TerminalPanel({
         lineHeight: 1.22,
         scrollback: 100_000,
         tabStopWidth: 8,
-        theme: {
-          background: "#0c100e",
-          foreground: "#dfe8d1",
-          cursor: "#b8ed88",
-          cursorAccent: "#0c100e",
-          selectionBackground: "#496240",
-          black: "#11150f",
-          red: "#e26d5a",
-          green: "#9bd56c",
-          yellow: "#d5ba65",
-          blue: "#7bb5e8",
-          magenta: "#c98ee8",
-          cyan: "#70d5c1",
-          white: "#dfe8d1",
-          brightBlack: "#596151",
-          brightRed: "#f28c78",
-          brightGreen: "#b8ed88",
-          brightYellow: "#ecd37d",
-          brightBlue: "#9fd1ff",
-          brightMagenta: "#dfadff",
-          brightCyan: "#96ead9",
-          brightWhite: "#f2f8e8",
-        },
+        theme: XTERM_THEMES[resolvedTheme],
       });
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
@@ -192,7 +221,7 @@ export function TerminalPanel({
       terminalsRef.current.set(sessionId, instance);
       return instance;
     },
-    [],
+    [resolvedTheme],
   );
 
   const openTerminal = useCallback(
@@ -330,6 +359,13 @@ export function TerminalPanel({
   }, [activeTerminal.sessionId, fitTerminal]);
 
   useEffect(() => {
+    const theme = XTERM_THEMES[resolvedTheme];
+    for (const instance of terminalsRef.current.values()) {
+      instance.terminal.options.theme = theme;
+    }
+  }, [resolvedTheme]);
+
+  useEffect(() => {
     return () => {
       for (const instance of terminalsRef.current.values()) {
         for (const disposable of instance.disposables) {
@@ -356,15 +392,15 @@ export function TerminalPanel({
   useShortcut("Mod+Shift+R", refreshSessions, { enabled: active });
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#0c100e] text-[#dfe8d1]">
-      <div className="flex min-h-12 shrink-0 items-center justify-between gap-4 border-b border-[#1f2620] bg-[#101611] px-4 py-2">
+    <section className="flex h-full min-h-0 flex-col bg-background text-foreground">
+      <div className="flex min-h-12 shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <TerminalSquare className="size-4 shrink-0 text-[#9bd56c]" />
+          <TerminalSquare className="size-4 shrink-0 text-primary" />
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-tight text-[#e9f0db]">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
               后台 PTY 终端
             </h2>
-            <p className="truncate text-[11px] text-[#8f9a84]">
+            <p className="truncate text-[11px] text-muted-foreground">
               {activeSession?.pid ? `PID ${activeSession.pid}` : "等待后台服务启动"} · Ctrl+C 复制选中内容
             </p>
           </div>
@@ -386,7 +422,7 @@ export function TerminalPanel({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-b border-[#1f2620] bg-[#0f1411] px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card/60 px-3 py-2">
         {serviceTerminals.map((item) => {
           const session = sessionsRef.current.get(item.sessionId);
           const service = servicesById.get(item.serviceId);
@@ -396,8 +432,8 @@ export function TerminalPanel({
               className={[
                 "flex h-9 min-w-[174px] items-center justify-between gap-3 rounded-md border px-3 text-left transition-colors",
                 selected
-                  ? "border-[#5c7d45] bg-[#182217] text-[#eff8df]"
-                  : "border-[#263027] bg-[#111711] text-[#aebaa6] hover:border-[#3b4939] hover:bg-[#151d15]",
+                  ? "border-primary/60 bg-primary/10 text-foreground"
+                  : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent/40 hover:text-foreground",
               ].join(" ")}
               key={item.serviceId}
               onClick={() => selectService(item.serviceId)}
@@ -405,10 +441,10 @@ export function TerminalPanel({
             >
               <span className="min-w-0 truncate text-xs font-semibold">{item.title}</span>
               <span className="flex shrink-0 items-center gap-1.5">
-                <Badge className="h-5 border-[#344132] bg-transparent px-1.5 text-[10px]" variant={serviceBadgeVariant(service)}>
+                <Badge className="h-5 px-1.5 text-[10px]" variant={serviceBadgeVariant(service)}>
                   {service?.status === "running" ? "服务运行" : service?.status === "error" ? "异常" : "未运行"}
                 </Badge>
-                <Badge className="h-5 border-[#344132] bg-[#121a12] px-1.5 text-[10px] text-[#b8ed88]" variant="outline">
+                <Badge className="h-5 px-1.5 text-[10px]" variant="outline">
                   {session ? statusText[session.status] : "无 PTY"}
                 </Badge>
               </span>
@@ -418,7 +454,10 @@ export function TerminalPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="size-full overflow-hidden rounded-md border border-[#20281f] bg-[#0c100e] shadow-inner">
+        <div
+          className="size-full overflow-hidden rounded-md border border-border shadow-inner"
+          style={{ backgroundColor: XTERM_THEMES[resolvedTheme].background }}
+        >
           {serviceTerminals.map((item) => (
             <div
               className={item.serviceId === activeServiceId ? "size-full" : "hidden"}
@@ -428,7 +467,7 @@ export function TerminalPanel({
           ))}
         </div>
       </div>
-      <div className="flex h-8 shrink-0 items-center justify-between border-t border-[#1f2620] bg-[#101611] px-4 font-mono text-[11px] text-[#8f9a84]">
+      <div className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-card px-4 font-mono text-[11px] text-muted-foreground">
         <span>{activeSession?.pid ? `pid ${activeSession.pid}` : "no pty"}</span>
         <span className="min-w-0 truncate pl-4 text-right">{activeService?.command?.[0] ?? "启动命令会在服务启动后显示"}</span>
       </div>

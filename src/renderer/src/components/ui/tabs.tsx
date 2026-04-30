@@ -30,7 +30,7 @@ export function TabsTrigger({
         "text-muted-foreground hover:text-foreground/90",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
         "disabled:pointer-events-none disabled:opacity-50",
-        "data-[state=active]:bg-elevated data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+        "data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm",
         "[&_svg]:size-3.5 [&_svg]:shrink-0",
         className,
       )}
