@@ -24,6 +24,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
+import { StartupAgreementDialog } from "./StartupAgreementDialog";
 import { TerminalPanel } from "./TerminalPanel";
 import { Titlebar } from "./Titlebar";
 import { WebviewPanel } from "./WebviewPanel";
@@ -484,6 +485,7 @@ export function DesktopShell(): React.JSX.Element {
         </Tabs>
       </main>
       </div>
+      {snapshot ? <StartupAgreementDialog onSnapshot={setSnapshot} snapshot={snapshot} /> : null}
       {snapshot ? <InitializationWizard onSnapshot={setSnapshot} snapshot={snapshot} /> : null}
     </div>
   );

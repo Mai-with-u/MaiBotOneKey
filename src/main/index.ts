@@ -6,15 +6,19 @@ import { PtySessionManager } from "./pty/pty-session-manager";
 import { InitManager } from "./services/init-manager";
 import { acquireInstallInstanceLock } from "./services/instance-lock";
 import { LogStore } from "./services/log-store";
+import { ModuleUpdater } from "./services/module-updater";
 import { configureRuntimePaths } from "./services/paths";
+import { PythonDependencyManager } from "./services/python-dependency-manager";
 import { ServiceManager } from "./services/service-manager";
 
 const runtimePaths = configureRuntimePaths();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
+const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
+const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager);
 const ptySessionManager = new PtySessionManager();
-const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, ptySessionManager);
+const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, ptySessionManager, pythonDependencyManager);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -190,6 +194,8 @@ if (!instanceLock.acquired) {
     registerAppIpc({
       paths: runtimePaths,
       initManager,
+      moduleUpdater,
+      pythonDependencyManager,
       serviceManager,
       logStore,
       getMainWindow: () => mainWindow,

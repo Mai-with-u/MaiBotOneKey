@@ -1,7 +1,8 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "Electron desktop shell for MaiBot OneKey.",
+  "author": "MotricSeven",
   "license": "GPL-3.0-only",
   "type": "module",
   "main": "out/main/index.js",

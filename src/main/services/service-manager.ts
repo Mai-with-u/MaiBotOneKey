@@ -23,6 +23,7 @@ import type {
 import type { PtySessionManager } from "../pty/pty-session-manager";
 import { InitManager } from "./init-manager";
 import { LogStore } from "./log-store";
+import { PythonDependencyManager } from "./python-dependency-manager";
 
 interface ServiceDefinition {
   id: ServiceId;
@@ -372,6 +373,7 @@ export class ServiceManager extends EventEmitter {
     private readonly initManager: InitManager,
     private readonly logs: LogStore,
     private readonly pty: PtySessionManager,
+    private readonly pythonDependencyManager?: PythonDependencyManager,
   ) {
     super();
     this.commandStore = new ServiceCommandStore(paths);
@@ -402,6 +404,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async startAll(): Promise<ServiceDescriptor[]> {
+    await this.initManager.assertAgreementsConfirmed();
     for (const serviceId of ["napcat", "maibot"] as ServiceId[]) {
       await this.start(serviceId);
     }
@@ -444,6 +447,10 @@ export class ServiceManager extends EventEmitter {
     const state = this.getState(serviceId);
     const sessionId = serviceSessionId(serviceId);
     const existingSession = this.pty.list().find((session) => session.id === sessionId);
+
+    if (serviceId === "maibot") {
+      await this.initManager.assertAgreementsConfirmed();
+    }
 
     if (existingSession && isLivePtyStatus(existingSession.status)) {
       this.setState(serviceId, {
@@ -508,15 +515,17 @@ export class ServiceManager extends EventEmitter {
     );
 
     try {
+      const useCommandLine = !resolved.command || (process.platform === "win32" && definition.id === "napcat");
       const session = this.pty.start({
         id: sessionId,
         title: definition.name,
         cwd: resolved.cwd,
-        command: resolved.command,
-        commandLine: resolved.command ? undefined : resolved.commandLine,
+        command: useCommandLine ? undefined : resolved.command,
+        commandLine: useCommandLine ? resolved.commandLine : undefined,
         cols: SERVICE_TERMINAL_COLS,
         rows: SERVICE_TERMINAL_ROWS,
         encoding: "auto",
+        env: definition.id === "maibot" ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined,
       });
 
       this.setState(serviceId, {

@@ -1,15 +1,31 @@
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { InitCheck, InitRepairResult, InitState, RuntimePaths, ServiceId } from "../../shared/contracts";
+import type {
+  AgreementDocument,
+  AgreementDocumentId,
+  InitCheck,
+  InitRepairResult,
+  InitState,
+  RuntimePaths,
+  ServiceId,
+  StartupAgreementConfirmResult,
+  StartupAgreementState,
+} from "../../shared/contracts";
 
 const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
 const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
 const GIT_RUNTIME_DIR = "git";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
+const MAIBOT_LEGACY_CONFIG_VERSION = "1.0.0";
+
+const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName: string; confirmFileName: string }> = [
+  { id: "eula", title: "最终用户许可协议", fileName: "EULA.md", confirmFileName: "eula.confirmed" },
+  { id: "privacy", title: "隐私政策", fileName: "PRIVACY.md", confirmFileName: "privacy.confirmed" },
+];
 
 function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
@@ -65,6 +81,39 @@ function toDetail(error: unknown): string {
 
 function createWebsocketToken(): string {
   return randomBytes(24).toString("base64url").slice(0, 32);
+}
+
+function md5Utf8(content: string): string {
+  return createHash("md5").update(content, "utf8").digest("hex");
+}
+
+function hasInnerVersion(content: string): boolean {
+  const innerMatch = content.match(/(^|\n)\s*\[inner\]\s*(?:\n|$)/u);
+  if (!innerMatch) {
+    return false;
+  }
+
+  const sectionStart = (innerMatch.index ?? 0) + innerMatch[0].length;
+  const nextSection = content.slice(sectionStart).search(/\n\s*\[[^\]]+\]\s*(?:\n|$)/u);
+  const section =
+    nextSection === -1
+      ? content.slice(sectionStart)
+      : content.slice(sectionStart, sectionStart + nextSection);
+  return /^\s*version\s*=\s*["'][^"']+["']\s*$/mu.test(section);
+}
+
+function ensureInnerVersion(content: string, version: string): string {
+  if (hasInnerVersion(content)) {
+    return content;
+  }
+
+  const innerMatch = content.match(/(^|\n)(\s*\[inner\]\s*)(?:\n|$)/u);
+  if (!innerMatch) {
+    return `[inner]\nversion = "${version}"\n\n${content.replace(/^\uFEFF/u, "")}`;
+  }
+
+  const insertAt = (innerMatch.index ?? 0) + innerMatch[0].length;
+  return `${content.slice(0, insertAt)}version = "${version}"\n${content.slice(insertAt)}`;
 }
 
 async function runWithoutAsar<T>(operation: () => Promise<T>): Promise<T> {
@@ -130,6 +179,45 @@ export class InitManager {
     return { state, changedFiles };
   }
 
+  async getAgreementState(): Promise<StartupAgreementState> {
+    const documents = await Promise.all(AGREEMENT_FILES.map((agreement) => this.readAgreementDocument(agreement)));
+    return {
+      isConfirmed: documents.every((document) => document.exists && document.confirmed),
+      documents,
+    };
+  }
+
+  async confirmAgreements(): Promise<StartupAgreementConfirmResult> {
+    const changedFiles = await this.ensureServiceReady("maibot");
+    const state = await this.getAgreementState();
+    const missing = state.documents.find((document) => !document.exists);
+    if (missing) {
+      throw new Error(`${missing.title} 文件缺失: ${missing.sourcePath}`);
+    }
+
+    for (const document of state.documents) {
+      if (document.confirmed) {
+        continue;
+      }
+
+      await mkdir(dirname(document.confirmPath), { recursive: true });
+      await writeFile(document.confirmPath, document.hash, "utf8");
+      changedFiles.push(document.confirmPath);
+    }
+
+    return {
+      state: await this.getAgreementState(),
+      changedFiles,
+    };
+  }
+
+  async assertAgreementsConfirmed(): Promise<void> {
+    const state = await this.getAgreementState();
+    if (!state.isConfirmed) {
+      throw new Error("请先阅读并同意 MaiBot EULA 与隐私政策。");
+    }
+  }
+
   async setQqAccount(qqAccount: string, websocketToken = createWebsocketToken()): Promise<InitState> {
     if (!isDigits(qqAccount)) {
       throw new Error("QQ 号必须是纯数字");
@@ -138,9 +226,7 @@ export class InitManager {
     await this.ensureServiceReady("maibot");
 
     const botConfigPath = this.botConfigPath();
-    let content = existsSync(botConfigPath)
-      ? await readFile(botConfigPath, "utf8")
-      : "[bot]\n";
+    let content = await this.readOrCreateBotConfigContent();
 
     if (QQ_PATTERN.test(content)) {
       content = content.replace(QQ_PATTERN, `qq_account = ${qqAccount}`);
@@ -176,7 +262,9 @@ export class InitManager {
     }
 
     if (serviceId === "maibot") {
-      return this.ensureBundledModuleSubtree("MaiBot", ["bot.py"]);
+      const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"]);
+      const repairedConfig = await this.repairBotConfigVersionInfo();
+      return repairedConfig ? [...changedFiles, repairedConfig] : changedFiles;
     }
 
     return [
@@ -356,6 +444,100 @@ export class InitManager {
 
   private botConfigPath(): string {
     return join(this.paths.modulesRoot, "MaiBot", "config", "bot_config.toml");
+  }
+
+  private agreementSourcePath(fileName: string): string {
+    const writablePath = join(this.paths.modulesRoot, "MaiBot", fileName);
+    if (existsSync(writablePath)) {
+      return writablePath;
+    }
+
+    return join(this.paths.bundledModulesRoot, "MaiBot", fileName);
+  }
+
+  private async readAgreementDocument({
+    id,
+    title,
+    fileName,
+    confirmFileName,
+  }: {
+    id: AgreementDocumentId;
+    title: string;
+    fileName: string;
+    confirmFileName: string;
+  }): Promise<AgreementDocument> {
+    const sourcePath = this.agreementSourcePath(fileName);
+    const confirmPath = join(this.paths.modulesRoot, "MaiBot", confirmFileName);
+    if (!existsSync(sourcePath)) {
+      return {
+        id,
+        title,
+        fileName,
+        sourcePath,
+        confirmPath,
+        content: "",
+        hash: "",
+        exists: false,
+        confirmed: false,
+        error: `${fileName} 文件缺失`,
+      };
+    }
+
+    try {
+      const content = await readFile(sourcePath, "utf8");
+      const hash = md5Utf8(content);
+      const confirmed = existsSync(confirmPath) && (await readFile(confirmPath, "utf8")) === hash;
+      return {
+        id,
+        title,
+        fileName,
+        sourcePath,
+        confirmPath,
+        content,
+        hash,
+        exists: true,
+        confirmed,
+      };
+    } catch (error) {
+      return {
+        id,
+        title,
+        fileName,
+        sourcePath,
+        confirmPath,
+        content: "",
+        hash: "",
+        exists: false,
+        confirmed: false,
+        error: toDetail(error),
+      };
+    }
+  }
+
+  private async readOrCreateBotConfigContent(): Promise<string> {
+    const botConfigPath = this.botConfigPath();
+    if (!existsSync(botConfigPath)) {
+      return `[inner]\nversion = "${MAIBOT_LEGACY_CONFIG_VERSION}"\n\n[bot]\n`;
+    }
+
+    const content = await readFile(botConfigPath, "utf8");
+    return ensureInnerVersion(content, MAIBOT_LEGACY_CONFIG_VERSION);
+  }
+
+  private async repairBotConfigVersionInfo(): Promise<string | undefined> {
+    const botConfigPath = this.botConfigPath();
+    if (!existsSync(botConfigPath)) {
+      return undefined;
+    }
+
+    const content = await readFile(botConfigPath, "utf8");
+    const repaired = ensureInnerVersion(content, MAIBOT_LEGACY_CONFIG_VERSION);
+    if (repaired === content) {
+      return undefined;
+    }
+
+    await writeFile(botConfigPath, repaired, "utf8");
+    return botConfigPath;
   }
 
   private async checkDependencies(): Promise<InitCheck[]> {

@@ -6,6 +6,12 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  ManagedPythonPackageName,
+  ModuleUpdateResult,
+  PythonOverridesState,
+  PythonPackageInstallRequest,
+  PythonPackageInstallResult,
+  PythonPackageVersionList,
   RuntimePaths,
   RuntimePathConfig,
   RuntimePathKey,
@@ -13,15 +19,21 @@ import type {
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
+  StartupAgreementConfirmResult,
+  StartupAgreementState,
   WindowState,
 } from "../../shared/contracts";
 import { InitManager } from "../services/init-manager";
 import { LogStore } from "../services/log-store";
+import { ModuleUpdater } from "../services/module-updater";
+import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { ServiceManager } from "../services/service-manager";
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
   initManager: InitManager;
+  moduleUpdater: ModuleUpdater;
+  pythonDependencyManager: PythonDependencyManager;
   serviceManager: ServiceManager;
   logStore: LogStore;
   getMainWindow: () => BrowserWindow | null;
@@ -44,6 +56,8 @@ function readWindowState(window: BrowserWindow | null): WindowState {
 export function registerAppIpc({
   paths,
   initManager,
+  moduleUpdater,
+  pythonDependencyManager,
   serviceManager,
   logStore,
   getMainWindow,
@@ -59,6 +73,7 @@ export function registerAppIpc({
     platform: process.platform,
     windowState: readWindowState(getMainWindow()),
     initState: await initManager.getState(),
+    startupAgreement: await initManager.getAgreementState(),
     recentLogs: logStore.list(),
   });
 
@@ -109,6 +124,60 @@ export function registerAppIpc({
     logStore.append("desktop", "system", `机器人 QQ 号已配置: ${qqAccount}`);
     await broadcastSnapshot();
     return state;
+  });
+
+  ipcMain.handle("agreements:getState", async (): Promise<StartupAgreementState> => {
+    return initManager.getAgreementState();
+  });
+
+  ipcMain.handle("agreements:confirm", async (): Promise<StartupAgreementConfirmResult> => {
+    const result = await initManager.confirmAgreements();
+    logStore.append("desktop", "system", `MaiBot EULA 与隐私政策已确认，写入 ${result.changedFiles.length} 个文件`);
+    await broadcastSnapshot();
+    return result;
+  });
+
+  ipcMain.handle("modules:updateMaibot", async (): Promise<ModuleUpdateResult> => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
+      throw new Error("请先停止 MaiBot Core，再更新 MaiBot 模块。");
+    }
+
+    logStore.append("desktop", "system", "开始更新 MaiBot 模块：使用内置 Git 强制拉取远端代码");
+    await initManager.ensureServiceReady("maibot");
+    const result = await moduleUpdater.updateMaiBot();
+    logStore.append(
+      "desktop",
+      "system",
+      `MaiBot 模块更新完成: ${result.before ?? "-"} -> ${result.after ?? "-"} (${result.changed ? "已更新" : "已是最新"})`,
+    );
+    await broadcastSnapshot();
+    return result;
+  });
+
+  ipcMain.handle("pythonDeps:getState", (): PythonOverridesState => {
+    return pythonDependencyManager.getState();
+  });
+
+  ipcMain.handle("pythonDeps:listVersions", async (_event, packageName: ManagedPythonPackageName): Promise<PythonPackageVersionList> => {
+    return pythonDependencyManager.listVersions(packageName);
+  });
+
+  ipcMain.handle("pythonDeps:installVersion", async (_event, request: PythonPackageInstallRequest): Promise<PythonPackageInstallResult> => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
+      throw new Error("请先停止 MaiBot Core，再更新 Python 依赖。");
+    }
+
+    logStore.append("desktop", "system", `开始更新 Python 覆盖依赖: ${request.packageName}==${request.version}`);
+    const result = await pythonDependencyManager.installVersion(request);
+    logStore.append(
+      "desktop",
+      "system",
+      `Python 覆盖依赖更新完成: ${result.packageName}==${result.version} -> ${result.targetDir}`,
+    );
+    await broadcastSnapshot();
+    return result;
   });
 
   ipcMain.handle("services:start", async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {

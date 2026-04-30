@@ -48,7 +48,8 @@ export function InitializationWizard({
     setQqAccount(snapshot.initState.qqAccount ?? "");
   }, [snapshot.initState.qqAccount]);
 
-  const open = !seen && !snapshot.initState.qqAccount;
+  const agreementPending = !snapshot.startupAgreement.isConfirmed;
+  const open = !agreementPending && !seen && !snapshot.initState.qqAccount;
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();

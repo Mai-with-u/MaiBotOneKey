@@ -6,6 +6,12 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  ManagedPythonPackageName,
+  ModuleUpdateResult,
+  PythonOverridesState,
+  PythonPackageInstallRequest,
+  PythonPackageInstallResult,
+  PythonPackageVersionList,
   PtyDataEvent,
   PtyErrorEvent,
   PtyExitEvent,
@@ -21,6 +27,8 @@ import type {
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
+  StartupAgreementConfirmResult,
+  StartupAgreementState,
   WindowState,
 } from "../shared/contracts";
 
@@ -62,6 +70,20 @@ const desktopBridge: DesktopBridge = {
     repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
     setQqAccount: (qqAccount: string, websocketToken?: string) =>
       ipcRenderer.invoke("init:setQqAccount", qqAccount, websocketToken) as Promise<InitState>,
+  },
+  agreements: {
+    getState: () => ipcRenderer.invoke("agreements:getState") as Promise<StartupAgreementState>,
+    confirm: () => ipcRenderer.invoke("agreements:confirm") as Promise<StartupAgreementConfirmResult>,
+  },
+  modules: {
+    updateMaiBot: () => ipcRenderer.invoke("modules:updateMaibot") as Promise<ModuleUpdateResult>,
+  },
+  pythonDeps: {
+    getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,
+    listVersions: (packageName: ManagedPythonPackageName) =>
+      ipcRenderer.invoke("pythonDeps:listVersions", packageName) as Promise<PythonPackageVersionList>,
+    installVersion: (request: PythonPackageInstallRequest) =>
+      ipcRenderer.invoke("pythonDeps:installVersion", request) as Promise<PythonPackageInstallResult>,
   },
   services: {
     start: (serviceId: ServiceId) =>

@@ -108,6 +108,10 @@ const fallbackSnapshot: DesktopSnapshot = {
       },
     ],
   },
+  startupAgreement: {
+    isConfirmed: true,
+    documents: [],
+  },
   recentLogs: [],
 };
 
@@ -128,6 +132,7 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
       ...snapshot.initState,
       checks: snapshot.initState?.checks ?? fallbackSnapshot.initState.checks,
     },
+    startupAgreement: snapshot.startupAgreement ?? fallbackSnapshot.startupAgreement,
     services: snapshot.services ?? fallbackSnapshot.services,
     serviceCommands: snapshot.serviceCommands ?? fallbackSnapshot.serviceCommands,
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,

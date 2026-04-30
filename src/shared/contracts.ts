@@ -112,6 +112,7 @@ export interface DesktopSnapshot {
   platform: NodeJS.Platform;
   windowState: WindowState;
   initState: InitState;
+  startupAgreement: StartupAgreementState;
   recentLogs: LogEntry[];
 }
 
@@ -139,6 +140,89 @@ export interface InitState {
 export interface InitRepairResult {
   state: InitState;
   changedFiles: string[];
+}
+
+export type AgreementDocumentId = "eula" | "privacy";
+
+export interface AgreementDocument {
+  id: AgreementDocumentId;
+  title: string;
+  fileName: string;
+  sourcePath: string;
+  confirmPath: string;
+  content: string;
+  hash: string;
+  exists: boolean;
+  confirmed: boolean;
+  error?: string;
+}
+
+export interface StartupAgreementState {
+  isConfirmed: boolean;
+  documents: AgreementDocument[];
+}
+
+export interface StartupAgreementConfirmResult {
+  state: StartupAgreementState;
+  changedFiles: string[];
+}
+
+export interface ModuleUpdateResult {
+  moduleId: "maibot";
+  moduleName: string;
+  cwd: string;
+  gitPath: string;
+  remote?: string;
+  branch?: string;
+  upstream?: string;
+  before?: string;
+  after?: string;
+  changed: boolean;
+  output: string[];
+  updatedAt: number;
+}
+
+export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message";
+
+export interface ManagedPythonPackage {
+  name: ManagedPythonPackageName;
+  label: string;
+}
+
+export interface PythonPackageVersion {
+  version: string;
+  isPrerelease: boolean;
+  isDev: boolean;
+  uploadedAt?: string;
+  uploadedAtMs?: number;
+}
+
+export interface PythonPackageVersionList {
+  packageName: ManagedPythonPackageName;
+  sourceUrl: string;
+  versions: PythonPackageVersion[];
+  output: string[];
+  fetchedAt: number;
+}
+
+export interface PythonPackageInstallRequest {
+  packageName: ManagedPythonPackageName;
+  version: string;
+}
+
+export interface PythonPackageInstallResult {
+  packageName: ManagedPythonPackageName;
+  version: string;
+  sourceUrl: string;
+  targetDir: string;
+  output: string[];
+  installedAt: number;
+}
+
+export interface PythonOverridesState {
+  root: string;
+  sourceUrl: string;
+  packages: ManagedPythonPackage[];
 }
 
 export interface LogEntry {
@@ -230,6 +314,18 @@ export interface DesktopBridge {
     getState: () => Promise<InitState>;
     repair: () => Promise<InitRepairResult>;
     setQqAccount: (qqAccount: string, websocketToken?: string) => Promise<InitState>;
+  };
+  agreements: {
+    getState: () => Promise<StartupAgreementState>;
+    confirm: () => Promise<StartupAgreementConfirmResult>;
+  };
+  modules: {
+    updateMaiBot: () => Promise<ModuleUpdateResult>;
+  };
+  pythonDeps: {
+    getState: () => Promise<PythonOverridesState>;
+    listVersions: (packageName: ManagedPythonPackageName) => Promise<PythonPackageVersionList>;
+    installVersion: (request: PythonPackageInstallRequest) => Promise<PythonPackageInstallResult>;
   };
   services: {
     start: (serviceId: ServiceId) => Promise<ServiceDescriptor>;
