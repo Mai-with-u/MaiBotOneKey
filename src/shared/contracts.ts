@@ -252,6 +252,12 @@ export interface ModuleUpdateResult {
   changed: boolean;
   output: string[];
   updatedAt: number;
+  /** 实际拉取来源：remote = GitHub 上游；bundled = 一键包内置兜底快照。 */
+  source: "remote" | "bundled";
+  /** 当回退到 bundled 时面向用户展示的提示文本。 */
+  warning?: string;
+  /** 当回退到 bundled 时，记录尝试 origin 失败的原始错误信息，便于排查网络问题。 */
+  remoteError?: string;
 }
 
 export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message";

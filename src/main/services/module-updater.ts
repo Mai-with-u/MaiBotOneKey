@@ -61,6 +61,28 @@ export class ModuleUpdater {
       remote = MAIBOT_REMOTE_URL;
     }
 
+    const bundledMaiBot = join(this.paths.bundledModulesRoot, "MaiBot");
+    const bundledHasGit =
+      bundledMaiBot !== cwd && existsSync(join(bundledMaiBot, ".git"));
+    if (bundledHasGit) {
+      const existingBundledUrl = await this.readGitValue(gitPath, cwd, [
+        "config",
+        "--get",
+        "remote.bundled.url",
+      ]);
+      if (!existingBundledUrl) {
+        append(
+          `remote add bundled ${bundledMaiBot}`,
+          (await this.runGit(gitPath, cwd, ["remote", "add", "bundled", bundledMaiBot], 30_000)).output,
+        );
+      } else if (existingBundledUrl !== bundledMaiBot) {
+        append(
+          `remote set-url bundled ${bundledMaiBot}`,
+          (await this.runGit(gitPath, cwd, ["remote", "set-url", "bundled", bundledMaiBot], 30_000)).output,
+        );
+      }
+    }
+
     const before = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
     const branch = await this.readGitValue(gitPath, cwd, ["branch", "--show-current"]);
     const statusBefore = await this.readGitValue(gitPath, cwd, ["status", "--short"]);
@@ -69,20 +91,67 @@ export class ModuleUpdater {
     }
 
     append("--version", (await this.runGit(gitPath, cwd, ["--version"], 8_000)).output);
-    append(
-      "fetch origin --prune --tags --force --progress",
-      (await this.runGit(gitPath, cwd, ["fetch", "origin", "--prune", "--tags", "--force", "--progress"])).output,
-    );
 
-    const upstream = await this.resolveUpstream(gitPath, cwd, branch);
-    append(
-      `reset --hard ${upstream}`,
-      (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
-    );
-    append(
-      "submodule update --init --recursive --force",
-      (await this.runGit(gitPath, cwd, ["submodule", "update", "--init", "--recursive", "--force"])).output,
-    );
+    let source: "remote" | "bundled" = "remote";
+    let warning: string | undefined;
+    let remoteError: string | undefined;
+    let upstream: string;
+
+    try {
+      append(
+        "fetch origin --prune --tags --force --progress",
+        (await this.runGit(gitPath, cwd, ["fetch", "origin", "--prune", "--tags", "--force", "--progress"])).output,
+      );
+      upstream = await this.resolveUpstream(gitPath, cwd, branch);
+      append(
+        `reset --hard ${upstream}`,
+        (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
+      );
+    } catch (originErr) {
+      remoteError = toDetail(originErr);
+      output.push(`远端 (origin) 拉取失败: ${remoteError}`);
+      if (!bundledHasGit) {
+        throw new Error(
+          `无法连接 GitHub 远端 (${MAIBOT_REMOTE_URL})，且未找到一键包内置兜底仓库可供回退：${remoteError}`,
+        );
+      }
+
+      output.push(
+        "⚠ 网络拉取失败，已自动回退到一键包内置 MaiBot 快照（与本一键包发布日同步，可能落后于上游最新代码）。",
+      );
+      append(
+        "fetch bundled --prune --tags --force",
+        (await this.runGit(gitPath, cwd, ["fetch", "bundled", "--prune", "--tags", "--force"])).output,
+      );
+      const bundledHead =
+        (await this.readGitValue(gitPath, cwd, [
+          "symbolic-ref",
+          "--quiet",
+          "--short",
+          "refs/remotes/bundled/HEAD",
+        ])) ?? (branch ? `bundled/${branch}` : "bundled/main");
+      upstream = bundledHead;
+      append(
+        `reset --hard ${upstream}`,
+        (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
+      );
+      source = "bundled";
+      warning =
+        "已回退到一键包内置 MaiBot 快照。该版本仅与本一键包发布时同步，可能落后于上游最新代码；请稍后在网络恢复后再次执行「更新 MaiBot」以拉取最新版本。";
+    }
+
+    try {
+      append(
+        "submodule update --init --recursive --force",
+        (await this.runGit(gitPath, cwd, ["submodule", "update", "--init", "--recursive", "--force"])).output,
+      );
+    } catch (subErr) {
+      if (source === "bundled") {
+        output.push(`子模块更新跳过（离线兜底模式）: ${toDetail(subErr)}`);
+      } else {
+        throw subErr;
+      }
+    }
 
     const after = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
 
@@ -99,6 +168,9 @@ export class ModuleUpdater {
       changed: before ? Boolean(after && before !== after) : Boolean(after),
       output,
       updatedAt: Date.now(),
+      source,
+      warning,
+      remoteError,
     };
   }
 

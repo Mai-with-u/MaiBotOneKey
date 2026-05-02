@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -90,9 +90,11 @@
         "to": "modules",
         "filter": [
           "**/*",
-          "!**/.git/**",
           "!**/__pycache__/**",
-          "!**/*.pyc"
+          "!**/*.pyc",
+          "!**/.git/index.lock",
+          "!**/.git/objects/pack/.tmp-*",
+          "!napcat/.git/**"
         ]
       }
     ],

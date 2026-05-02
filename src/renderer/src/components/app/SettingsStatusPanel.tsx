@@ -127,6 +127,7 @@ function formatDateTime(timestamp?: number): string {
 
 function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.JSX.Element {
   const output = result.output.slice(-120).join("\n");
+  const fellBack = result.source === "bundled";
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-3">
@@ -134,11 +135,25 @@ function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.J
         <Badge variant={result.changed ? "success" : "secondary"}>
           {result.changed ? "已更新" : "已是最新"}
         </Badge>
+        <Badge variant={fellBack ? "danger" : "outline"}>
+          {fellBack ? "已回退到内置版本" : "来自 GitHub 上游"}
+        </Badge>
         <span className="font-mono text-[11px] text-muted-foreground">
           {result.before ?? "-"} -&gt; {result.after ?? "-"}
         </span>
         <span className="text-[11px] text-muted-foreground">{formatDateTime(result.updatedAt)}</span>
       </div>
+      {fellBack && result.warning ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-[12px] leading-relaxed text-destructive">
+          <p className="font-semibold">⚠ 网络异常：本次更新未连接到 GitHub</p>
+          <p className="mt-1 text-destructive/90">{result.warning}</p>
+          {result.remoteError ? (
+            <p className="mt-1 break-all font-mono text-[11px] text-destructive/80">
+              原始错误：{result.remoteError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="grid gap-2 text-[11px] text-muted-foreground md:grid-cols-2">
         <span className="truncate" title={result.branch ?? ""}>
           分支: {result.branch ?? "-"}
