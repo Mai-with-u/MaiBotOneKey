@@ -251,7 +251,7 @@ export interface QqAccountSetupRequest {
 }
 
 export interface ModuleUpdateResult {
-  moduleId: "maibot";
+  moduleId: "maibot" | "napcat-adapter";
   moduleName: string;
   cwd: string;
   gitPath: string;
@@ -269,6 +269,8 @@ export interface ModuleUpdateResult {
   warning?: string;
   /** 当回退到 bundled 时，记录尝试 origin 失败的原始错误信息，便于排查网络问题。 */
   remoteError?: string;
+  /** 仅 moduleId="maibot" 时携带；同次更新里同步的子插件结果（如 napcat-adapter）。 */
+  plugins?: ModuleUpdateResult[];
 }
 
 export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message";
@@ -410,6 +412,7 @@ export interface DesktopBridge {
   };
   modules: {
     updateMaiBot: () => Promise<ModuleUpdateResult>;
+    repairNapcatAdapter: () => Promise<ModuleUpdateResult>;
   };
   data: {
     importMaiBotDatabase: () => Promise<MaiBotDataImportResult | null>;

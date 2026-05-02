@@ -170,6 +170,40 @@ function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.J
           {output}
         </pre>
       ) : null}
+      {result.plugins && result.plugins.length > 0 ? (
+        <div className="space-y-2">
+          <div className="text-[11px] font-semibold text-muted-foreground">同步的子插件</div>
+          {result.plugins.map((plugin) => (
+            <div
+              key={plugin.moduleId}
+              className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-2.5"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{plugin.moduleName}</span>
+                <Badge variant={plugin.changed ? "success" : "secondary"}>
+                  {plugin.changed ? "已更新" : "已是最新"}
+                </Badge>
+                <Badge variant={plugin.source === "bundled" ? "danger" : "outline"}>
+                  {plugin.source === "bundled" ? "已回退到内置版本" : "来自 GitHub 上游"}
+                </Badge>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {plugin.before ?? "-"} -&gt; {plugin.after ?? "-"}
+                </span>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                <span className="truncate" title={plugin.cwd}>
+                  目录: {plugin.cwd}
+                </span>
+              </div>
+              {plugin.warning ? (
+                <p className="rounded-sm border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive">
+                  {plugin.warning}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

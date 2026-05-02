@@ -85,6 +85,8 @@ const desktopBridge: DesktopBridge = {
   },
   modules: {
     updateMaiBot: () => ipcRenderer.invoke("modules:updateMaibot") as Promise<ModuleUpdateResult>,
+    repairNapcatAdapter: () =>
+      ipcRenderer.invoke("modules:repairNapcatAdapter") as Promise<ModuleUpdateResult>,
   },
   data: {
     importMaiBotDatabase: () =>

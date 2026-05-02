@@ -1,14 +1,32 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { cp, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
 import { InitManager } from "./init-manager";
 
 const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
+/** 单次 git fetch origin 的最长等待时间。失败/超时后会立即回退到 bundled 兜底。 */
+const FETCH_ORIGIN_TIMEOUT_MS = 3 * 60 * 1000;
 const MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
+const NAPCAT_ADAPTER_REMOTE_URL =
+  "https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
 
 interface GitRunResult {
   output: string[];
+}
+
+interface RepoUpdateSpec {
+  moduleId: ModuleUpdateResult["moduleId"];
+  moduleName: string;
+  cwd: string;
+  bundledDir: string;
+  remoteUrl: string;
+  defaultBranch: string;
+  /** 是否在更新失败时把错误抛到外层（false 时仅返回 result，原地保留错误信息）。 */
+  throwOnFailure: boolean;
+  /** 是否执行 git submodule 更新（仅主仓需要）。 */
+  runSubmodule: boolean;
 }
 
 function splitOutput(output: string): string[] {
@@ -31,14 +49,148 @@ export class ModuleUpdater {
   ) {}
 
   async updateMaiBot(): Promise<ModuleUpdateResult> {
-    const cwd = join(this.paths.modulesRoot, "MaiBot");
     const gitPath = this.initManager.getGitPath();
-
     if (!existsSync(gitPath)) {
       throw new Error(`内置 Git 不存在: ${gitPath}`);
     }
+
+    // 主仓
+    const mainResult = await this.updateGitRepository(gitPath, {
+      moduleId: "maibot",
+      moduleName: "MaiBot",
+      cwd: join(this.paths.modulesRoot, "MaiBot"),
+      bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
+      remoteUrl: MAIBOT_REMOTE_URL,
+      defaultBranch: "main",
+      throwOnFailure: true,
+      runSubmodule: true,
+    });
+
+    // napcat-adapter（独立仓库，被主仓 .gitignore 排除，必须单独更新）
+    const adapterCwd = join(
+      this.paths.modulesRoot,
+      "MaiBot",
+      "plugins",
+      "napcat-adapter",
+    );
+    const adapterBundled = join(
+      this.paths.bundledModulesRoot,
+      "MaiBot",
+      "plugins",
+      "napcat-adapter",
+    );
+    const plugins: ModuleUpdateResult[] = [];
+    if (existsSync(adapterCwd) || existsSync(adapterBundled)) {
+      try {
+        const adapterResult = await this.updateGitRepository(gitPath, {
+          moduleId: "napcat-adapter",
+          moduleName: "napcat-adapter",
+          cwd: adapterCwd,
+          bundledDir: adapterBundled,
+          remoteUrl: NAPCAT_ADAPTER_REMOTE_URL,
+          defaultBranch: "plugin",
+          throwOnFailure: false,
+          runSubmodule: false,
+        });
+        plugins.push(adapterResult);
+      } catch (err) {
+        // throwOnFailure=false 下理论不会到这里，兜底捕获以免拖垮主流程
+        plugins.push({
+          moduleId: "napcat-adapter",
+          moduleName: "napcat-adapter",
+          cwd: adapterCwd,
+          gitPath,
+          changed: false,
+          output: [`napcat-adapter 更新过程异常: ${toDetail(err)}`],
+          updatedAt: Date.now(),
+          source: "remote",
+          warning: `napcat-adapter 更新失败：${toDetail(err)}`,
+          remoteError: toDetail(err),
+        });
+      }
+    }
+
+    if (plugins.length > 0) {
+      mainResult.plugins = plugins;
+    }
+    return mainResult;
+  }
+
+  /**
+   * 直接用一键包内置的 napcat-adapter 快照覆盖可写目录里的对应插件，不走任何网络。
+   * 适用场景：用户因 .gitignore 历史问题导致 plugins/napcat-adapter/runtime/ 缺失，
+   * 报 `[E_PLUGIN_NOT_FOUND] No module named '_maibot_plugin_maibot_team_napcat_adapter.runtime'`，
+   * 又不想等 git fetch 联网。强制清空再整目录复制 bundled，含 .git。
+   */
+  async repairNapcatAdapterFromBundled(): Promise<ModuleUpdateResult> {
+    const moduleId: ModuleUpdateResult["moduleId"] = "napcat-adapter";
+    const moduleName = "napcat-adapter";
+    const cwd = join(this.paths.modulesRoot, "MaiBot", "plugins", "napcat-adapter");
+    const bundled = join(this.paths.bundledModulesRoot, "MaiBot", "plugins", "napcat-adapter");
+    const gitPath = this.initManager.getGitPath();
+    const output: string[] = [];
+
+    if (!existsSync(bundled)) {
+      throw new Error(`一键包内置的 napcat-adapter 模板缺失: ${bundled}`);
+    }
+    let bundledStat: Awaited<ReturnType<typeof stat>>;
+    try {
+      bundledStat = await stat(bundled);
+    } catch (err) {
+      throw new Error(`无法读取一键包内置 napcat-adapter 模板: ${toDetail(err)}`);
+    }
+    if (!bundledStat.isDirectory()) {
+      throw new Error(`一键包内置 napcat-adapter 路径不是目录: ${bundled}`);
+    }
+
+    output.push(`[${moduleName}] 使用一键包内置快照修复（不联网，强制覆盖整个插件目录）。`);
+    output.push(`[${moduleName}] 来源: ${bundled}`);
+    output.push(`[${moduleName}] 目标: ${cwd}`);
+
+    if (existsSync(cwd)) {
+      output.push(`[${moduleName}] 删除既有目录...`);
+      await rm(cwd, { recursive: true, force: true });
+    }
+
+    output.push(`[${moduleName}] 复制内置快照（含 .git）...`);
+    await cp(bundled, cwd, {
+      recursive: true,
+      force: true,
+      errorOnExist: false,
+    });
+
+    let after: string | undefined;
+    if (existsSync(join(cwd, ".git"))) {
+      after = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
+    }
+
+    output.push(`[${moduleName}] ✓ 修复完成。`);
+
+    return {
+      moduleId,
+      moduleName,
+      cwd,
+      gitPath,
+      changed: true,
+      after,
+      output,
+      updatedAt: Date.now(),
+      source: "bundled",
+      warning:
+        "已使用一键包内置 napcat-adapter 快照覆盖修复。此快照与本一键包发布日同步，可能落后于上游最新代码；建议稍后在网络恢复时点击「更新 MaiBot」拉取最新版本。",
+    };
+  }
+
+  private async updateGitRepository(
+    gitPath: string,
+    spec: RepoUpdateSpec,
+  ): Promise<ModuleUpdateResult> {
+    const { cwd, bundledDir, remoteUrl, defaultBranch, moduleId, moduleName } = spec;
+
     if (!existsSync(cwd)) {
-      throw new Error(`MaiBot 模块目录不存在: ${cwd}`);
+      // 模块目录不存在：若 bundled 里有，则尝试从 bundled 复制 .git 后再走 reset 流程；
+      // 这里简单抛错让上层（init-manager 的 ensure 流程）先确保目录存在。
+      throw new Error(`模块目录不存在: ${cwd}`);
     }
 
     const output: string[] = [];
@@ -48,22 +200,22 @@ export class ModuleUpdater {
     };
 
     if (!existsSync(join(cwd, ".git"))) {
-      output.push("未发现 .git，正在把现有 MaiBot 模块接入官方 Git 仓库；不会清理 data/logs/config 等用户数据目录。");
-      append("init", (await this.runGit(gitPath, cwd, ["init"], 30_000)).output);
+      output.push(
+        `[${moduleName}] 未发现 .git，正在接入官方 Git 仓库；不会清理 data/logs/config 等用户数据目录。`,
+      );
+      append(`[${moduleName}] init`, (await this.runGit(gitPath, cwd, ["init"], 30_000)).output);
     }
 
     let remote = await this.readGitValue(gitPath, cwd, ["config", "--get", "remote.origin.url"]);
     if (!remote) {
       append(
-        `remote add origin ${MAIBOT_REMOTE_URL}`,
-        (await this.runGit(gitPath, cwd, ["remote", "add", "origin", MAIBOT_REMOTE_URL], 30_000)).output,
+        `[${moduleName}] remote add origin ${remoteUrl}`,
+        (await this.runGit(gitPath, cwd, ["remote", "add", "origin", remoteUrl], 30_000)).output,
       );
-      remote = MAIBOT_REMOTE_URL;
+      remote = remoteUrl;
     }
 
-    const bundledMaiBot = join(this.paths.bundledModulesRoot, "MaiBot");
-    const bundledHasGit =
-      bundledMaiBot !== cwd && existsSync(join(bundledMaiBot, ".git"));
+    const bundledHasGit = bundledDir !== cwd && existsSync(join(bundledDir, ".git"));
     if (bundledHasGit) {
       const existingBundledUrl = await this.readGitValue(gitPath, cwd, [
         "config",
@@ -72,13 +224,13 @@ export class ModuleUpdater {
       ]);
       if (!existingBundledUrl) {
         append(
-          `remote add bundled ${bundledMaiBot}`,
-          (await this.runGit(gitPath, cwd, ["remote", "add", "bundled", bundledMaiBot], 30_000)).output,
+          `[${moduleName}] remote add bundled ${bundledDir}`,
+          (await this.runGit(gitPath, cwd, ["remote", "add", "bundled", bundledDir], 30_000)).output,
         );
-      } else if (existingBundledUrl !== bundledMaiBot) {
+      } else if (existingBundledUrl !== bundledDir) {
         append(
-          `remote set-url bundled ${bundledMaiBot}`,
-          (await this.runGit(gitPath, cwd, ["remote", "set-url", "bundled", bundledMaiBot], 30_000)).output,
+          `[${moduleName}] remote set-url bundled ${bundledDir}`,
+          (await this.runGit(gitPath, cwd, ["remote", "set-url", "bundled", bundledDir], 30_000)).output,
         );
       }
     }
@@ -87,10 +239,10 @@ export class ModuleUpdater {
     const branch = await this.readGitValue(gitPath, cwd, ["branch", "--show-current"]);
     const statusBefore = await this.readGitValue(gitPath, cwd, ["status", "--short"]);
     if (statusBefore) {
-      output.push("检测到 MaiBot 代码工作区存在本地改动；本次强制更新会覆盖代码改动，但不会清理 data/logs/config 等用户数据目录。");
+      output.push(
+        `[${moduleName}] 检测到工作区存在本地改动；本次强制更新会覆盖代码改动，但不会清理 data/logs/config 等用户数据目录。`,
+      );
     }
-
-    append("--version", (await this.runGit(gitPath, cwd, ["--version"], 8_000)).output);
 
     let source: "remote" | "bundled" = "remote";
     let warning: string | undefined;
@@ -99,28 +251,53 @@ export class ModuleUpdater {
 
     try {
       append(
-        "fetch origin --prune --tags --force --progress",
-        (await this.runGit(gitPath, cwd, ["fetch", "origin", "--prune", "--tags", "--force", "--progress"])).output,
+        `[${moduleName}] fetch origin --prune --tags --force --progress (timeout ${Math.round(FETCH_ORIGIN_TIMEOUT_MS / 1000)}s)`,
+        (
+          await this.runGit(
+            gitPath,
+            cwd,
+            ["fetch", "origin", "--prune", "--tags", "--force", "--progress"],
+            FETCH_ORIGIN_TIMEOUT_MS,
+          )
+        ).output,
       );
-      upstream = await this.resolveUpstream(gitPath, cwd, branch);
+      upstream = await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
       append(
-        `reset --hard ${upstream}`,
+        `[${moduleName}] reset --hard ${upstream}`,
         (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
       );
     } catch (originErr) {
       remoteError = toDetail(originErr);
-      output.push(`远端 (origin) 拉取失败: ${remoteError}`);
+      output.push(
+        `[${moduleName}] 远端 (origin) 拉取失败（${Math.round(FETCH_ORIGIN_TIMEOUT_MS / 1000)} 秒内未完成或网络异常）: ${remoteError}`,
+      );
       if (!bundledHasGit) {
-        throw new Error(
-          `无法连接 GitHub 远端 (${MAIBOT_REMOTE_URL})，且未找到一键包内置兜底仓库可供回退：${remoteError}`,
-        );
+        const failure = `无法连接 GitHub 远端 (${remoteUrl})，且未找到一键包内置兜底仓库可供回退：${remoteError}`;
+        if (spec.throwOnFailure) {
+          throw new Error(failure);
+        }
+        return {
+          moduleId,
+          moduleName,
+          cwd,
+          gitPath,
+          remote,
+          branch,
+          before,
+          changed: false,
+          output: [...output, failure],
+          updatedAt: Date.now(),
+          source: "remote",
+          warning: failure,
+          remoteError,
+        };
       }
 
       output.push(
-        "⚠ 网络拉取失败，已自动回退到一键包内置 MaiBot 快照（与本一键包发布日同步，可能落后于上游最新代码）。",
+        `[${moduleName}] ⚠ 网络拉取失败，已自动回退到一键包内置快照（与本一键包发布日同步，可能落后于上游最新代码）。`,
       );
       append(
-        "fetch bundled --prune --tags --force",
+        `[${moduleName}] fetch bundled --prune --tags --force`,
         (await this.runGit(gitPath, cwd, ["fetch", "bundled", "--prune", "--tags", "--force"])).output,
       );
       const bundledHead =
@@ -129,35 +306,38 @@ export class ModuleUpdater {
           "--quiet",
           "--short",
           "refs/remotes/bundled/HEAD",
-        ])) ?? (branch ? `bundled/${branch}` : "bundled/main");
+        ])) ?? `bundled/${branch ?? defaultBranch}`;
       upstream = bundledHead;
       append(
-        `reset --hard ${upstream}`,
+        `[${moduleName}] reset --hard ${upstream}`,
         (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
       );
       source = "bundled";
-      warning =
-        "已回退到一键包内置 MaiBot 快照。该版本仅与本一键包发布时同步，可能落后于上游最新代码；请稍后在网络恢复后再次执行「更新 MaiBot」以拉取最新版本。";
+      warning = `${moduleName} 已回退到一键包内置快照。该版本仅与本一键包发布时同步，可能落后于上游最新代码；请稍后在网络恢复后再次执行更新以拉取最新版本。`;
     }
 
-    try {
-      append(
-        "submodule update --init --recursive --force",
-        (await this.runGit(gitPath, cwd, ["submodule", "update", "--init", "--recursive", "--force"])).output,
-      );
-    } catch (subErr) {
-      if (source === "bundled") {
-        output.push(`子模块更新跳过（离线兜底模式）: ${toDetail(subErr)}`);
-      } else {
-        throw subErr;
+    if (spec.runSubmodule) {
+      try {
+        append(
+          `[${moduleName}] submodule update --init --recursive --force`,
+          (await this.runGit(gitPath, cwd, ["submodule", "update", "--init", "--recursive", "--force"])).output,
+        );
+      } catch (subErr) {
+        if (source === "bundled") {
+          output.push(`[${moduleName}] 子模块更新跳过（离线兜底模式）: ${toDetail(subErr)}`);
+        } else if (spec.throwOnFailure) {
+          throw subErr;
+        } else {
+          output.push(`[${moduleName}] 子模块更新失败（已忽略）: ${toDetail(subErr)}`);
+        }
       }
     }
 
     const after = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
 
     return {
-      moduleId: "maibot",
-      moduleName: "MaiBot",
+      moduleId,
+      moduleName,
       cwd,
       gitPath,
       remote,

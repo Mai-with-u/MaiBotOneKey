@@ -170,6 +170,28 @@ export function registerAppIpc({
     return result;
   });
 
+  ipcMain.handle("modules:repairNapcatAdapter", async (): Promise<ModuleUpdateResult> => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
+      throw new Error("请先停止 MaiBot Core，再修复 napcat-adapter 插件。");
+    }
+
+    logStore.append(
+      "desktop",
+      "system",
+      "开始修复 napcat-adapter：使用一键包内置快照覆盖（不联网）",
+    );
+    await initManager.ensureServiceReady("maibot");
+    const result = await moduleUpdater.repairNapcatAdapterFromBundled();
+    logStore.append(
+      "desktop",
+      "system",
+      `napcat-adapter 修复完成: ${result.cwd} (${result.after ?? "-"})`,
+    );
+    await broadcastSnapshot();
+    return result;
+  });
+
   ipcMain.handle("data:importMaibotDb", async (): Promise<MaiBotDataImportResult | null> => {
     const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
     if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {

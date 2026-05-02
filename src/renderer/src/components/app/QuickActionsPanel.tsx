@@ -6,6 +6,7 @@ import {
   FolderInput,
   Loader2,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -29,6 +30,7 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  ModuleUpdateResult,
 } from "../../../../shared/contracts";
 import { NapcatAdapterConfigCard } from "./NapcatAdapterConfigCard";
 
@@ -57,6 +59,10 @@ export function QuickActionsPanel(): React.JSX.Element {
   const [lastConfigImports, setLastConfigImports] = useState<
     Partial<Record<MaiBotConfigFileName, MaiBotConfigImportResult>>
   >({});
+
+  const [repairingAdapter, setRepairingAdapter] = useState(false);
+  const [lastAdapterRepair, setLastAdapterRepair] =
+    useState<ModuleUpdateResult | null>(null);
 
   const [confirm1Open, setConfirm1Open] = useState(false);
   const [confirm2Open, setConfirm2Open] = useState(false);
@@ -114,6 +120,27 @@ export function QuickActionsPanel(): React.JSX.Element {
       });
     } finally {
       setImportingConfig(null);
+    }
+  };
+
+  const handleRepairAdapter = async (): Promise<void> => {
+    if (!window.maibotDesktop?.modules) {
+      toast.error("当前环境不支持该操作");
+      return;
+    }
+    setRepairingAdapter(true);
+    try {
+      const result = await window.maibotDesktop.modules.repairNapcatAdapter();
+      setLastAdapterRepair(result);
+      toast.success("napcat-adapter 修复完成", {
+        description: "已使用一键包内置快照覆盖。",
+      });
+    } catch (error) {
+      toast.error("修复失败", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setRepairingAdapter(false);
     }
   };
 
@@ -311,6 +338,72 @@ export function QuickActionsPanel(): React.JSX.Element {
         </Card>
 
         <NapcatAdapterConfigCard />
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
+                <Wrench className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <CardTitle>修复 napcat-adapter（离线）</CardTitle>
+                <CardDescription>
+                  当 WebUI 报{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+                    [E_PLUGIN_NOT_FOUND] No module named
+                    &apos;_maibot_plugin_maibot_team_napcat_adapter.runtime&apos;
+                  </code>{" "}
+                  时，点此用一键包内置的 napcat-adapter 快照直接覆盖现有目录，<strong>不联网</strong>，秒级完成。请先停止 MaiBot Core。
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={handleRepairAdapter}
+                disabled={repairingAdapter}
+                size="sm"
+                variant="default"
+              >
+                {repairingAdapter ? <Loader2 className="animate-spin" /> : <Wrench />}
+                立即修复（使用内置快照）
+              </Button>
+              <span className="text-[11px] text-muted-foreground">
+                会删除并重建 plugins/napcat-adapter 目录
+              </span>
+            </div>
+            {lastAdapterRepair ? (
+              <div className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-foreground">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <CheckCircle2 className="size-3.5" />
+                  最近一次修复
+                </div>
+                <dl className="mt-1.5 grid gap-0.5 text-muted-foreground">
+                  <div className="flex gap-2">
+                    <dt className="shrink-0">目标目录：</dt>
+                    <dd className="break-all">{lastAdapterRepair.cwd}</dd>
+                  </div>
+                  {lastAdapterRepair.after ? (
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">commit：</dt>
+                      <dd className="break-all">{lastAdapterRepair.after}</dd>
+                    </div>
+                  ) : null}
+                  <div className="flex gap-2">
+                    <dt className="shrink-0">时间：</dt>
+                    <dd>{formatTime(lastAdapterRepair.updatedAt)}</dd>
+                  </div>
+                </dl>
+                {lastAdapterRepair.warning ? (
+                  <p className="mt-2 text-[11px] leading-relaxed text-warning">
+                    {lastAdapterRepair.warning}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
 
         <Card className="border-destructive/40">
           <CardHeader>
