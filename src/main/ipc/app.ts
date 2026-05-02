@@ -6,6 +6,8 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  MaiBotConfigFileName,
+  MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   ManagedPythonPackageName,
@@ -199,6 +201,50 @@ export function registerAppIpc({
     await broadcastSnapshot();
     return importResult;
   });
+
+  ipcMain.handle(
+    "data:importMaibotConfig",
+    async (_event, fileName: MaiBotConfigFileName): Promise<MaiBotConfigImportResult | null> => {
+      const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("请先停止 MaiBot Core，再覆盖配置文件。");
+      }
+
+      if (fileName !== "bot_config.toml" && fileName !== "model_config.toml") {
+        throw new Error(`不支持的配置文件名: ${fileName}`);
+      }
+
+      const mainWindow = getMainWindow();
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: `选择 ${fileName}`,
+        properties: ["openFile"],
+        filters: [
+          { name: "TOML 配置", extensions: ["toml"] },
+          { name: "全部文件", extensions: ["*"] },
+        ],
+      };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+
+      const importResult = await initManager.importMaiBotConfig(fileName, result.filePaths[0]);
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot ${fileName} 导入完成: ${importResult.sourcePath} -> ${importResult.destPath}`,
+      );
+      await broadcastSnapshot();
+      return importResult;
+    },
+  );
 
   ipcMain.handle("data:resetMaibotData", async (): Promise<MaiBotDataResetResult> => {
     const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");

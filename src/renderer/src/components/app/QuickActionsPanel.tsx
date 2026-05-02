@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   DatabaseBackup,
+  FileCog,
   FolderInput,
   Loader2,
   Trash2,
@@ -24,6 +25,8 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import type {
+  MaiBotConfigFileName,
+  MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
 } from "../../../../shared/contracts";
@@ -47,6 +50,13 @@ export function QuickActionsPanel(): React.JSX.Element {
     null,
   );
   const [lastReset, setLastReset] = useState<MaiBotDataResetResult | null>(null);
+
+  const [importingConfig, setImportingConfig] = useState<MaiBotConfigFileName | null>(
+    null,
+  );
+  const [lastConfigImports, setLastConfigImports] = useState<
+    Partial<Record<MaiBotConfigFileName, MaiBotConfigImportResult>>
+  >({});
 
   const [confirm1Open, setConfirm1Open] = useState(false);
   const [confirm2Open, setConfirm2Open] = useState(false);
@@ -78,6 +88,33 @@ export function QuickActionsPanel(): React.JSX.Element {
 
   const handleResetRequest = (): void => {
     setConfirm1Open(true);
+  };
+
+  const handleImportConfig = async (
+    fileName: MaiBotConfigFileName,
+  ): Promise<void> => {
+    if (!window.maibotDesktop?.data) {
+      toast.error("当前环境不支持该操作");
+      return;
+    }
+    setImportingConfig(fileName);
+    try {
+      const result = await window.maibotDesktop.data.importMaiBotConfig(fileName);
+      if (!result) {
+        toast.info("已取消导入");
+        return;
+      }
+      setLastConfigImports((prev) => ({ ...prev, [fileName]: result }));
+      toast.success(`${fileName} 导入完成`, {
+        description: `已写入 ${result.destPath}`,
+      });
+    } catch (error) {
+      toast.error(`${fileName} 导入失败`, {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setImportingConfig(null);
+    }
   };
 
   const handleConfirm1 = (): void => {
@@ -180,6 +217,96 @@ export function QuickActionsPanel(): React.JSX.Element {
                 </dl>
               </div>
             ) : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+                <FileCog className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <CardTitle>导入 MaiBot 配置文件</CardTitle>
+                <CardDescription>
+                  覆盖 <code className="rounded bg-muted px-1 py-0.5 text-[11px]">MaiBot/config</code>
+                  目录下的 <code className="rounded bg-muted px-1 py-0.5 text-[11px]">bot_config.toml</code>
+                  或 <code className="rounded bg-muted px-1 py-0.5 text-[11px]">model_config.toml</code>。
+                  覆盖前会对原文件做时间戳备份（<code className="rounded bg-muted px-1 py-0.5 text-[11px]">*.bak.&lt;时间&gt;</code>）。
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={() => handleImportConfig("bot_config.toml")}
+                disabled={importingConfig !== null}
+                size="sm"
+              >
+                {importingConfig === "bot_config.toml" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <FolderInput />
+                )}
+                导入 bot_config.toml
+              </Button>
+              <Button
+                onClick={() => handleImportConfig("model_config.toml")}
+                disabled={importingConfig !== null}
+                size="sm"
+                variant="secondary"
+              >
+                {importingConfig === "model_config.toml" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <FolderInput />
+                )}
+                导入 model_config.toml
+              </Button>
+              <span className="text-[11px] text-muted-foreground">
+                覆盖配置前请先停止 MaiBot Core
+              </span>
+            </div>
+            {(["bot_config.toml", "model_config.toml"] as const).map((name) => {
+              const last = lastConfigImports[name];
+              if (!last) return null;
+              return (
+                <div
+                  key={name}
+                  className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-foreground"
+                >
+                  <div className="flex items-center gap-1.5 font-medium text-success">
+                    <CheckCircle2 className="size-3.5" />
+                    {name} · 最近一次导入
+                  </div>
+                  <dl className="mt-1.5 grid gap-0.5 text-muted-foreground">
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">来源：</dt>
+                      <dd className="break-all">{last.sourcePath}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">目标：</dt>
+                      <dd className="break-all">{last.destPath}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">大小：</dt>
+                      <dd>{formatBytes(last.sizeBytes)}</dd>
+                    </div>
+                    {last.backupPath ? (
+                      <div className="flex gap-2">
+                        <dt className="shrink-0">原文件备份：</dt>
+                        <dd className="break-all">{last.backupPath}</dd>
+                      </div>
+                    ) : null}
+                    <div className="flex gap-2">
+                      <dt className="shrink-0">时间：</dt>
+                      <dd>{formatTime(last.importedAt)}</dd>
+                    </div>
+                  </dl>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
 

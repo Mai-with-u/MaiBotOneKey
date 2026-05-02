@@ -10,6 +10,8 @@ import type {
   InitCheck,
   InitRepairResult,
   InitState,
+  MaiBotConfigFileName,
+  MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   NapcatAdapterChatConfig,
@@ -472,6 +474,55 @@ export class InitManager {
 
   getMaiBotDataDir(): string {
     return join(this.paths.modulesRoot, "MaiBot", "data");
+  }
+
+  getMaiBotConfigDir(): string {
+    return join(this.paths.modulesRoot, "MaiBot", "config");
+  }
+
+  /**
+   * 把用户提供的 bot_config.toml / model_config.toml 覆盖到 MaiBot/config 下，
+   * 自动准备好可写的 MaiBot 模块目录与 config 子目录，并对原文件做时间戳备份。
+   */
+  async importMaiBotConfig(
+    fileName: MaiBotConfigFileName,
+    sourcePath: string,
+  ): Promise<MaiBotConfigImportResult> {
+    if (fileName !== "bot_config.toml" && fileName !== "model_config.toml") {
+      throw new Error(`不支持的配置文件名: ${fileName}`);
+    }
+    if (!sourcePath) {
+      throw new Error("未选择配置文件");
+    }
+    if (!existsSync(sourcePath)) {
+      throw new Error(`配置文件不存在: ${sourcePath}`);
+    }
+    const sourceStat = await stat(sourcePath);
+    if (!sourceStat.isFile()) {
+      throw new Error("选择的路径不是文件");
+    }
+
+    await this.ensureServiceReady("maibot");
+    const configDir = this.getMaiBotConfigDir();
+    await mkdir(configDir, { recursive: true });
+    const destPath = join(configDir, fileName);
+
+    let backupPath: string | undefined;
+    if (existsSync(destPath)) {
+      backupPath = `${destPath}.bak.${Date.now()}`;
+      await copyFile(destPath, backupPath);
+    }
+
+    await copyFile(sourcePath, destPath);
+
+    return {
+      fileName,
+      sourcePath,
+      destPath,
+      backupPath,
+      sizeBytes: sourceStat.size,
+      importedAt: Date.now(),
+    };
   }
 
   /**

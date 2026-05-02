@@ -6,6 +6,8 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  MaiBotConfigFileName,
+  MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   ManagedPythonPackageName,
@@ -87,6 +89,11 @@ const desktopBridge: DesktopBridge = {
   data: {
     importMaiBotDatabase: () =>
       ipcRenderer.invoke("data:importMaibotDb") as Promise<MaiBotDataImportResult | null>,
+    importMaiBotConfig: (fileName: MaiBotConfigFileName) =>
+      ipcRenderer.invoke(
+        "data:importMaibotConfig",
+        fileName,
+      ) as Promise<MaiBotConfigImportResult | null>,
     resetMaiBotData: () =>
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },

@@ -181,6 +181,17 @@ export interface MaiBotDataResetResult {
   clearedAt: number;
 }
 
+export type MaiBotConfigFileName = "bot_config.toml" | "model_config.toml";
+
+export interface MaiBotConfigImportResult {
+  fileName: MaiBotConfigFileName;
+  sourcePath: string;
+  destPath: string;
+  backupPath?: string;
+  sizeBytes: number;
+  importedAt: number;
+}
+
 export type NapcatChatListMode = "whitelist" | "blacklist";
 
 export interface NapcatAdapterChatConfig {
@@ -402,6 +413,7 @@ export interface DesktopBridge {
   };
   data: {
     importMaiBotDatabase: () => Promise<MaiBotDataImportResult | null>;
+    importMaiBotConfig: (fileName: MaiBotConfigFileName) => Promise<MaiBotConfigImportResult | null>;
     resetMaiBotData: () => Promise<MaiBotDataResetResult>;
   };
   napcatAdapter: {
