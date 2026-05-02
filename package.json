@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -33,6 +33,7 @@
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "smol-toml": "^1.6.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1"
   },

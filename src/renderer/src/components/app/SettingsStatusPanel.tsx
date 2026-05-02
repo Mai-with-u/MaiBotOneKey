@@ -541,7 +541,10 @@ export function SettingsStatusPanel({
     setBusy("qq");
     setError(null);
     try {
-      await window.maibotDesktop?.init.setQqAccount(trimmed, createSecureToken());
+      await window.maibotDesktop?.init.setQqAccount({
+        qqAccount: trimmed,
+        websocketToken: createSecureToken(),
+      });
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));

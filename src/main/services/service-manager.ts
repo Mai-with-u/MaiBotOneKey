@@ -799,7 +799,7 @@ export class ServiceManager extends EventEmitter {
       health: ready ? "ready" : "unreachable",
       healthFailures: ready ? 0 : (state.healthFailures ?? 0) + 1,
       detail: ready ? "服务端口可访问" : "PTY 已启动，但端口暂不可访问",
-      dynamicUrl: definition.id === "napcat" ? await this.resolveNapCatUrl(definition.url) : definition.url,
+      dynamicUrl: await this.resolveServiceUrl(definition.id, definition.url),
     });
   }
 
@@ -953,9 +953,41 @@ export class ServiceManager extends EventEmitter {
       .trim();
   }
 
+  private async resolveServiceUrl(serviceId: ServiceId, fallback: string): Promise<string> {
+    if (serviceId === "napcat") {
+      return this.resolveNapCatUrl(fallback);
+    }
+    if (serviceId === "maibot") {
+      return this.resolveMaiBotUrl(fallback);
+    }
+    return fallback;
+  }
+
   private async resolveNapCatUrl(fallback: string): Promise<string> {
-    const { token } = await this.initManager.readNapCatWebUiToken();
-    return token ? `http://127.0.0.1:6099/webui/web_login?token=${encodeURIComponent(token)}` : fallback;
+    try {
+      const { token } = await this.initManager.readNapCatWebUiToken();
+      return token ? `http://127.0.0.1:6099/webui/web_login?token=${encodeURIComponent(token)}` : fallback;
+    } catch {
+      // 任何读取异常都直接回退到普通登录页，避免阻塞主面板。
+      return fallback;
+    }
+  }
+
+  /**
+   * MaiBot Core WebUI 支持 `/auth?token=<access_token>` 直接登录；
+   * webui.json 还未生成或字段缺失时直接回退为根地址，由用户走普通登录流程。
+   */
+  private async resolveMaiBotUrl(fallback: string): Promise<string> {
+    try {
+      const { token } = await this.initManager.readMaiBotWebUiToken();
+      if (!token) {
+        return fallback;
+      }
+      const base = fallback.replace(/\/+$/u, "");
+      return `${base}/auth?token=${encodeURIComponent(token)}`;
+    } catch {
+      return fallback;
+    }
   }
 
   private attachLivePtySessions(): void {

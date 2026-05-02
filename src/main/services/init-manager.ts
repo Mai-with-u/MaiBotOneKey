@@ -1,14 +1,22 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
   AgreementDocument,
   AgreementDocumentId,
   InitCheck,
   InitRepairResult,
   InitState,
+  MaiBotDataImportResult,
+  MaiBotDataResetResult,
+  NapcatAdapterChatConfig,
+  NapcatAdapterConfig,
+  NapcatAdapterConfigSaveResult,
+  NapcatAdapterConfigState,
+  NapcatChatListMode,
   RuntimePaths,
   ServiceId,
   StartupAgreementConfirmResult,
@@ -41,6 +49,195 @@ const NAPCAT_LAUNCHER_CONTENT = [
   '"%~dp0NapCatWinBootMain.exe" %*',
   "",
 ].join("\r\n");
+
+const NAPCAT_ADAPTER_DIR = join("MaiBot", "plugins", "napcat-adapter");
+const NAPCAT_ADAPTER_CONFIG_VERSION = "0.1.0";
+const NAPCAT_ADAPTER_HOST = "127.0.0.1";
+const NAPCAT_ADAPTER_PORT = 7998;
+
+function buildDefaultNapcatAdapterConfig(token = ""): NapcatAdapterConfig {
+  return {
+    plugin: {
+      enabled: true,
+      configVersion: NAPCAT_ADAPTER_CONFIG_VERSION,
+    },
+    server: {
+      host: NAPCAT_ADAPTER_HOST,
+      port: NAPCAT_ADAPTER_PORT,
+      token,
+      heartbeatInterval: 30,
+      reconnectDelaySec: 5,
+      actionTimeoutSec: 15,
+      connectionId: "",
+    },
+    chat: {
+      enableChatListFilter: true,
+      showDroppedChatListMessages: false,
+      groupListType: "whitelist",
+      groupList: [],
+      privateListType: "whitelist",
+      privateList: [],
+      banUserId: [],
+      banQqBot: false,
+    },
+    filters: {
+      ignoreSelfMessage: true,
+    },
+  };
+}
+
+function asString(value: unknown, fallback: string): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  return fallback;
+}
+
+function asBool(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function asPositiveNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === "bigint" && value > 0n) return Number(value);
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
+}
+
+function asPositiveInt(value: unknown, fallback: number): number {
+  const num = asPositiveNumber(value, fallback);
+  return Math.max(1, Math.floor(num));
+}
+
+function asListMode(value: unknown, fallback: NapcatChatListMode): NapcatChatListMode {
+  if (value === "whitelist" || value === "blacklist") return value;
+  return fallback;
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const text = typeof item === "string" ? item.trim() : String(item ?? "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function normalizeNapcatAdapterConfig(
+  raw: Record<string, unknown>,
+  defaults: NapcatAdapterConfig,
+): NapcatAdapterConfig {
+  const pluginRaw = (raw["plugin"] as Record<string, unknown> | undefined) ?? {};
+  const serverRaw = ((raw["napcat_server"] ?? raw["connection"]) as Record<string, unknown> | undefined) ?? {};
+  const chatRaw = (raw["chat"] as Record<string, unknown> | undefined) ?? {};
+  const filtersRaw = (raw["filters"] as Record<string, unknown> | undefined) ?? {};
+
+  return {
+    plugin: {
+      enabled: asBool(pluginRaw["enabled"], defaults.plugin.enabled),
+      configVersion: asString(pluginRaw["config_version"], defaults.plugin.configVersion),
+    },
+    server: {
+      host: asString(serverRaw["host"], defaults.server.host).trim() || defaults.server.host,
+      port: asPositiveInt(serverRaw["port"], defaults.server.port),
+      token: asString(serverRaw["token"] ?? serverRaw["access_token"], defaults.server.token),
+      heartbeatInterval: asPositiveNumber(
+        serverRaw["heartbeat_interval"] ?? serverRaw["heartbeat_sec"],
+        defaults.server.heartbeatInterval,
+      ),
+      reconnectDelaySec: asPositiveNumber(
+        serverRaw["reconnect_delay_sec"],
+        defaults.server.reconnectDelaySec,
+      ),
+      actionTimeoutSec: asPositiveNumber(
+        serverRaw["action_timeout_sec"],
+        defaults.server.actionTimeoutSec,
+      ),
+      connectionId: asString(serverRaw["connection_id"], defaults.server.connectionId),
+    },
+    chat: {
+      enableChatListFilter: asBool(
+        chatRaw["enable_chat_list_filter"],
+        defaults.chat.enableChatListFilter,
+      ),
+      showDroppedChatListMessages: asBool(
+        chatRaw["show_dropped_chat_list_messages"],
+        defaults.chat.showDroppedChatListMessages,
+      ),
+      groupListType: asListMode(chatRaw["group_list_type"], defaults.chat.groupListType),
+      groupList: asStringList(chatRaw["group_list"] ?? defaults.chat.groupList),
+      privateListType: asListMode(chatRaw["private_list_type"], defaults.chat.privateListType),
+      privateList: asStringList(chatRaw["private_list"] ?? defaults.chat.privateList),
+      banUserId: asStringList(chatRaw["ban_user_id"] ?? defaults.chat.banUserId),
+      banQqBot: asBool(chatRaw["ban_qq_bot"], defaults.chat.banQqBot),
+    },
+    filters: {
+      ignoreSelfMessage: asBool(filtersRaw["ignore_self_message"], defaults.filters.ignoreSelfMessage),
+    },
+  };
+}
+
+function napcatAdapterConfigToToml(config: NapcatAdapterConfig): string {
+  const document = {
+    plugin: {
+      enabled: config.plugin.enabled,
+      config_version: config.plugin.configVersion,
+    },
+    napcat_server: {
+      host: config.server.host,
+      port: config.server.port,
+      token: config.server.token,
+      heartbeat_interval: config.server.heartbeatInterval,
+      reconnect_delay_sec: config.server.reconnectDelaySec,
+      action_timeout_sec: config.server.actionTimeoutSec,
+      connection_id: config.server.connectionId,
+    },
+    chat: {
+      enable_chat_list_filter: config.chat.enableChatListFilter,
+      show_dropped_chat_list_messages: config.chat.showDroppedChatListMessages,
+      group_list_type: config.chat.groupListType,
+      group_list: config.chat.groupList,
+      private_list_type: config.chat.privateListType,
+      private_list: config.chat.privateList,
+      ban_user_id: config.chat.banUserId,
+      ban_qq_bot: config.chat.banQqBot,
+    },
+    filters: {
+      ignore_self_message: config.filters.ignoreSelfMessage,
+    },
+  } as const;
+  return stringifyToml(document);
+}
+
+function applyChatOverrides(
+  base: NapcatAdapterChatConfig,
+  override?: Partial<NapcatAdapterChatConfig>,
+): NapcatAdapterChatConfig {
+  if (!override) return base;
+  return {
+    enableChatListFilter: override.enableChatListFilter ?? base.enableChatListFilter,
+    showDroppedChatListMessages:
+      override.showDroppedChatListMessages ?? base.showDroppedChatListMessages,
+    groupListType: override.groupListType ?? base.groupListType,
+    groupList: override.groupList ? asStringList(override.groupList) : base.groupList,
+    privateListType: override.privateListType ?? base.privateListType,
+    privateList: override.privateList ? asStringList(override.privateList) : base.privateList,
+    banUserId: override.banUserId ? asStringList(override.banUserId) : base.banUserId,
+    banQqBot: override.banQqBot ?? base.banQqBot,
+  };
+}
 
 interface StoredAgreementFile {
   version: 1;
@@ -273,6 +470,73 @@ export class InitManager {
     return env;
   }
 
+  getMaiBotDataDir(): string {
+    return join(this.paths.modulesRoot, "MaiBot", "data");
+  }
+
+  /**
+   * 把用户提供的 MaiBot.db 覆盖到 MaiBot/data/MaiBot.db，
+   * 自动准备好可写的 MaiBot 模块目录与 data 子目录。
+   */
+  async importMaiBotDatabase(sourcePath: string): Promise<MaiBotDataImportResult> {
+    if (!sourcePath) {
+      throw new Error("未选择数据库文件");
+    }
+    if (!existsSync(sourcePath)) {
+      throw new Error(`数据库文件不存在: ${sourcePath}`);
+    }
+    const sourceStat = await stat(sourcePath);
+    if (!sourceStat.isFile()) {
+      throw new Error("选择的路径不是文件");
+    }
+
+    await this.ensureServiceReady("maibot");
+    const dataDir = this.getMaiBotDataDir();
+    await mkdir(dataDir, { recursive: true });
+    const destPath = join(dataDir, "MaiBot.db");
+
+    let backupPath: string | undefined;
+    if (existsSync(destPath)) {
+      backupPath = `${destPath}.bak.${Date.now()}`;
+      await copyFile(destPath, backupPath);
+    }
+
+    await copyFile(sourcePath, destPath);
+
+    return {
+      sourcePath,
+      destPath,
+      backupPath,
+      sizeBytes: sourceStat.size,
+      importedAt: Date.now(),
+    };
+  }
+
+  /**
+   * 清空 MaiBot/data 目录下的所有内容（不会删除 data 目录本身）。
+   * 仅作用于可写模块目录，开发态指向 bundled 模板时会拒绝执行。
+   */
+  async resetMaiBotData(): Promise<MaiBotDataResetResult> {
+    if (this.paths.modulesRoot === this.paths.bundledModulesRoot) {
+      throw new Error("当前指向内置模板目录，拒绝清空数据；请在打包后的环境执行。");
+    }
+
+    const dataDir = this.getMaiBotDataDir();
+    if (!existsSync(dataDir)) {
+      return { dataDir, removedEntries: [], clearedAt: Date.now() };
+    }
+
+    const entries = await readdir(dataDir);
+    const removed: string[] = [];
+    for (const entry of entries) {
+      const target = join(dataDir, entry);
+      await rm(target, { recursive: true, force: true });
+      removed.push(target);
+    }
+
+    return { dataDir, removedEntries: removed, clearedAt: Date.now() };
+  }
+
   private agreementStorePath(): string {
     return join(this.paths.userDataRoot, AGREEMENT_STORE_FILE);
   }
@@ -298,7 +562,11 @@ export class InitManager {
     }
   }
 
-  async setQqAccount(qqAccount: string, websocketToken = createWebsocketToken()): Promise<InitState> {
+  async setQqAccount(
+    qqAccount: string,
+    websocketToken = createWebsocketToken(),
+    chatOverrides?: Partial<NapcatAdapterChatConfig>,
+  ): Promise<InitState> {
     if (!isDigits(qqAccount)) {
       throw new Error("QQ 号必须是纯数字");
     }
@@ -320,7 +588,166 @@ export class InitManager {
     await writeFile(botConfigPath, content, "utf8");
     await this.createNapCatConfigs(qqAccount, websocketToken);
     await this.ensureNapCatWebUiConfig();
+    await this.writeNapcatAdapterConfigForToken(websocketToken, chatOverrides);
     return this.getState();
+  }
+
+  napcatAdapterConfigPath(): string {
+    return join(this.paths.modulesRoot, NAPCAT_ADAPTER_DIR, "config.toml");
+  }
+
+  /**
+   * 读取最新一份 onebot11_<qq>.json 中已写入的 WebSocket Token，
+   * 用于在 napcat-adapter 配置中复用同一个 token，避免麦麦端连不上。
+   */
+  async readNapcatWebsocketToken(): Promise<string> {
+    try {
+      const versions = await this.findNapCatConfigVersions();
+      for (const version of versions) {
+        const configDir = join(
+          this.paths.modulesRoot,
+          "napcat",
+          "versions",
+          version,
+          "resources",
+          "app",
+          "napcat",
+          "config",
+        );
+        if (!existsSync(configDir)) continue;
+        const entries = await readdir(configDir);
+        const onebotFile = entries.find((name) => /^onebot11_\d+\.json$/i.test(name));
+        if (!onebotFile) continue;
+        const raw = await readFile(join(configDir, onebotFile), "utf8");
+        const parsed = JSON.parse(raw) as {
+          network?: { websocketServers?: Array<{ token?: string; port?: number }> };
+        };
+        const server = parsed?.network?.websocketServers?.find((entry) => entry?.token);
+        if (server?.token) {
+          return String(server.token);
+        }
+      }
+    } catch {
+      // ignore — fall through to empty token
+    }
+    return "";
+  }
+
+  async getNapcatAdapterConfig(): Promise<NapcatAdapterConfigState> {
+    const configPath = this.napcatAdapterConfigPath();
+    const token = await this.readNapcatWebsocketToken();
+    const defaults = buildDefaultNapcatAdapterConfig(token);
+
+    if (!existsSync(configPath)) {
+      return { configPath, exists: false, config: defaults, defaults };
+    }
+
+    let raw: Record<string, unknown> = {};
+    try {
+      const text = await readFile(configPath, "utf8");
+      const parsed = parseToml(text);
+      if (parsed && typeof parsed === "object") {
+        raw = parsed as Record<string, unknown>;
+      }
+    } catch (error) {
+      throw new Error(
+        `读取 napcat-adapter 配置失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const config = normalizeNapcatAdapterConfig(raw, defaults);
+    if (!config.server.token && token) {
+      config.server.token = token;
+    }
+    return { configPath, exists: true, config, defaults };
+  }
+
+  async saveNapcatAdapterConfig(
+    payload: NapcatAdapterConfig,
+  ): Promise<NapcatAdapterConfigSaveResult> {
+    await this.ensureServiceReady("maibot");
+    const fallbackToken = await this.readNapcatWebsocketToken();
+    const defaults = buildDefaultNapcatAdapterConfig(fallbackToken);
+    const normalized = normalizeNapcatAdapterConfig(
+      {
+        plugin: {
+          enabled: payload.plugin.enabled,
+          config_version: payload.plugin.configVersion,
+        },
+        napcat_server: {
+          host: payload.server.host,
+          port: payload.server.port,
+          token: payload.server.token,
+          heartbeat_interval: payload.server.heartbeatInterval,
+          reconnect_delay_sec: payload.server.reconnectDelaySec,
+          action_timeout_sec: payload.server.actionTimeoutSec,
+          connection_id: payload.server.connectionId,
+        },
+        chat: {
+          enable_chat_list_filter: payload.chat.enableChatListFilter,
+          show_dropped_chat_list_messages: payload.chat.showDroppedChatListMessages,
+          group_list_type: payload.chat.groupListType,
+          group_list: payload.chat.groupList,
+          private_list_type: payload.chat.privateListType,
+          private_list: payload.chat.privateList,
+          ban_user_id: payload.chat.banUserId,
+          ban_qq_bot: payload.chat.banQqBot,
+        },
+        filters: {
+          ignore_self_message: payload.filters.ignoreSelfMessage,
+        },
+      },
+      defaults,
+    );
+
+    const configPath = this.napcatAdapterConfigPath();
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, napcatAdapterConfigToToml(normalized), "utf8");
+    return { configPath, config: normalized, savedAt: Date.now() };
+  }
+
+  /**
+   * 创建/更新 napcat-adapter 的 config.toml；
+   * token 直接来自当前 setQqAccount 流程生成的 websocket token，
+   * chat 设置则取用户在引导界面填写的覆盖值（缺省即默认）。
+   */
+  private async writeNapcatAdapterConfigForToken(
+    websocketToken: string,
+    chatOverrides?: Partial<NapcatAdapterChatConfig>,
+  ): Promise<void> {
+    const defaults = buildDefaultNapcatAdapterConfig(websocketToken);
+    let existing: NapcatAdapterConfig = defaults;
+    const configPath = this.napcatAdapterConfigPath();
+
+    if (existsSync(configPath)) {
+      try {
+        const text = await readFile(configPath, "utf8");
+        const parsed = parseToml(text);
+        if (parsed && typeof parsed === "object") {
+          existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
+        }
+      } catch {
+        // 解析失败则直接以默认值覆盖
+      }
+    }
+
+    const merged: NapcatAdapterConfig = {
+      ...existing,
+      plugin: {
+        enabled: true,
+        configVersion: NAPCAT_ADAPTER_CONFIG_VERSION,
+      },
+      server: {
+        ...existing.server,
+        host: NAPCAT_ADAPTER_HOST,
+        port: NAPCAT_ADAPTER_PORT,
+        token: websocketToken,
+      },
+      chat: applyChatOverrides(existing.chat, chatOverrides),
+    };
+
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, napcatAdapterConfigToToml(merged), "utf8");
   }
 
   async ensureModulesReady(): Promise<string[]> {
@@ -552,6 +979,40 @@ export class InitManager {
           return { token: raw.token, exists: true };
         }
         firstError ??= `缺少 token: ${candidate}`;
+      } catch (error) {
+        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
+      }
+    }
+
+    return { exists: sawExisting, error: firstError };
+  }
+
+  /**
+   * 读取 MaiBot Core WebUI 的 access_token，用于在 WebUI 入口拼接
+   * `?token=<access_token>` 实现自动登录。
+   * 文件不存在或缺字段时返回空 token，调用方应回退为不带参数的地址。
+   */
+  async readMaiBotWebUiToken(): Promise<{ token?: string; exists: boolean; error?: string }> {
+    const candidates = [
+      join(this.paths.modulesRoot, "MaiBot", "data", "webui.json"),
+      join(this.paths.bundledModulesRoot, "MaiBot", "data", "webui.json"),
+    ];
+
+    let sawExisting = false;
+    let firstError: string | undefined;
+
+    for (const candidate of candidates) {
+      if (!existsSync(candidate)) {
+        continue;
+      }
+
+      sawExisting = true;
+      try {
+        const raw = JSON.parse(await readFile(candidate, "utf8")) as { access_token?: unknown };
+        if (typeof raw.access_token === "string" && raw.access_token.length > 0) {
+          return { token: raw.access_token, exists: true };
+        }
+        firstError ??= `缺少 access_token: ${candidate}`;
       } catch (error) {
         firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
       }

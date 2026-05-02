@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { mkdir } from "node:fs/promises";
 import type {
   CloseAction,
@@ -6,12 +6,18 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  MaiBotDataImportResult,
+  MaiBotDataResetResult,
   ManagedPythonPackageName,
   ModuleUpdateResult,
+  NapcatAdapterConfig,
+  NapcatAdapterConfigSaveResult,
+  NapcatAdapterConfigState,
   PythonOverridesState,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersionList,
+  QqAccountSetupRequest,
   RuntimePaths,
   RuntimePathConfig,
   RuntimePathKey,
@@ -119,12 +125,19 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("init:setQqAccount", async (_event, qqAccount: string, websocketToken?: string): Promise<InitState> => {
-    const state = await initManager.setQqAccount(qqAccount, websocketToken);
-    logStore.append("desktop", "system", `机器人 QQ 号已配置: ${qqAccount}`);
-    await broadcastSnapshot();
-    return state;
-  });
+  ipcMain.handle(
+    "init:setQqAccount",
+    async (_event, request: QqAccountSetupRequest): Promise<InitState> => {
+      const state = await initManager.setQqAccount(
+        request.qqAccount,
+        request.websocketToken,
+        request.chat,
+      );
+      logStore.append("desktop", "system", `机器人 QQ 号已配置: ${request.qqAccount}`);
+      await broadcastSnapshot();
+      return state;
+    },
+  );
 
   ipcMain.handle("agreements:getState", async (): Promise<StartupAgreementState> => {
     return initManager.getAgreementState();
@@ -154,6 +167,72 @@ export function registerAppIpc({
     await broadcastSnapshot();
     return result;
   });
+
+  ipcMain.handle("data:importMaibotDb", async (): Promise<MaiBotDataImportResult | null> => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
+      throw new Error("请先停止 MaiBot Core，再导入旧版本数据库。");
+    }
+
+    const mainWindow = getMainWindow();
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: "选择旧版本 MaiBot.db",
+      properties: ["openFile"],
+      filters: [
+        { name: "MaiBot 数据库", extensions: ["db"] },
+        { name: "全部文件", extensions: ["*"] },
+      ],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    const importResult = await initManager.importMaiBotDatabase(result.filePaths[0]);
+    logStore.append(
+      "desktop",
+      "system",
+      `MaiBot.db 导入完成: ${importResult.sourcePath} -> ${importResult.destPath}`,
+    );
+    await broadcastSnapshot();
+    return importResult;
+  });
+
+  ipcMain.handle("data:resetMaibotData", async (): Promise<MaiBotDataResetResult> => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
+      throw new Error("请先停止 MaiBot Core，再重置数据。");
+    }
+
+    const resetResult = await initManager.resetMaiBotData();
+    logStore.append(
+      "desktop",
+      "system",
+      `已清空 MaiBot data 目录 (${resetResult.removedEntries.length} 项): ${resetResult.dataDir}`,
+    );
+    await broadcastSnapshot();
+    return resetResult;
+  });
+
+  ipcMain.handle("napcatAdapter:getConfig", async (): Promise<NapcatAdapterConfigState> => {
+    return initManager.getNapcatAdapterConfig();
+  });
+
+  ipcMain.handle(
+    "napcatAdapter:saveConfig",
+    async (_event, payload: NapcatAdapterConfig): Promise<NapcatAdapterConfigSaveResult> => {
+      const result = await initManager.saveNapcatAdapterConfig(payload);
+      logStore.append(
+        "desktop",
+        "system",
+        `napcat-adapter 配置已保存: ${result.configPath}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
   ipcMain.handle("pythonDeps:getState", (): PythonOverridesState => {
     return pythonDependencyManager.getState();

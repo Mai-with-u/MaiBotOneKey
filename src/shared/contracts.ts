@@ -167,6 +167,78 @@ export interface StartupAgreementConfirmResult {
   changedFiles: string[];
 }
 
+export interface MaiBotDataImportResult {
+  sourcePath: string;
+  destPath: string;
+  backupPath?: string;
+  sizeBytes: number;
+  importedAt: number;
+}
+
+export interface MaiBotDataResetResult {
+  dataDir: string;
+  removedEntries: string[];
+  clearedAt: number;
+}
+
+export type NapcatChatListMode = "whitelist" | "blacklist";
+
+export interface NapcatAdapterChatConfig {
+  enableChatListFilter: boolean;
+  showDroppedChatListMessages: boolean;
+  groupListType: NapcatChatListMode;
+  groupList: string[];
+  privateListType: NapcatChatListMode;
+  privateList: string[];
+  banUserId: string[];
+  banQqBot: boolean;
+}
+
+export interface NapcatAdapterServerConfig {
+  host: string;
+  port: number;
+  token: string;
+  heartbeatInterval: number;
+  reconnectDelaySec: number;
+  actionTimeoutSec: number;
+  connectionId: string;
+}
+
+export interface NapcatAdapterPluginOptions {
+  enabled: boolean;
+  configVersion: string;
+}
+
+export interface NapcatAdapterFilterConfig {
+  ignoreSelfMessage: boolean;
+}
+
+export interface NapcatAdapterConfig {
+  plugin: NapcatAdapterPluginOptions;
+  server: NapcatAdapterServerConfig;
+  chat: NapcatAdapterChatConfig;
+  filters: NapcatAdapterFilterConfig;
+}
+
+export interface NapcatAdapterConfigState {
+  configPath: string;
+  exists: boolean;
+  config: NapcatAdapterConfig;
+  defaults: NapcatAdapterConfig;
+}
+
+export interface NapcatAdapterConfigSaveResult {
+  configPath: string;
+  config: NapcatAdapterConfig;
+  savedAt: number;
+}
+
+export interface QqAccountSetupRequest {
+  qqAccount: string;
+  websocketToken?: string;
+  chat?: Partial<NapcatAdapterChatConfig>;
+}
+
 export interface ModuleUpdateResult {
   moduleId: "maibot";
   moduleName: string;
@@ -313,7 +385,7 @@ export interface DesktopBridge {
   init: {
     getState: () => Promise<InitState>;
     repair: () => Promise<InitRepairResult>;
-    setQqAccount: (qqAccount: string, websocketToken?: string) => Promise<InitState>;
+    setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };
   agreements: {
     getState: () => Promise<StartupAgreementState>;
@@ -321,6 +393,14 @@ export interface DesktopBridge {
   };
   modules: {
     updateMaiBot: () => Promise<ModuleUpdateResult>;
+  };
+  data: {
+    importMaiBotDatabase: () => Promise<MaiBotDataImportResult | null>;
+    resetMaiBotData: () => Promise<MaiBotDataResetResult>;
+  };
+  napcatAdapter: {
+    getConfig: () => Promise<NapcatAdapterConfigState>;
+    saveConfig: (config: NapcatAdapterConfig) => Promise<NapcatAdapterConfigSaveResult>;
   };
   pythonDeps: {
     getState: () => Promise<PythonOverridesState>;

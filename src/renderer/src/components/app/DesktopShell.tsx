@@ -9,7 +9,9 @@ import {
   RefreshCw,
   Settings,
   Square,
+  Store,
   TerminalSquare,
+  Wrench,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
@@ -33,6 +35,8 @@ import {
 } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { InitializationWizard } from "./InitializationWizard";
+import { PluginMarketPanel } from "./PluginMarketPanel";
+import { QuickActionsPanel } from "./QuickActionsPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
 import { TerminalPanel } from "./TerminalPanel";
@@ -278,7 +282,9 @@ export function DesktopShell(): React.JSX.Element {
   useShortcut("Mod+1", () => setActiveTab("maibot"));
   useShortcut("Mod+2", () => setActiveTab("napcat"));
   useShortcut("Mod+3", () => setActiveTab("terminal"));
-  useShortcut("Mod+4", () => setActiveTab("settings"));
+  useShortcut("Mod+4", () => setActiveTab("quickactions"));
+  useShortcut("Mod+5", () => setActiveTab("pluginmarket"));
+  useShortcut("Mod+6", () => setActiveTab("settings"));
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
   useShortcut("Mod+Shift+X", stopAll);
@@ -418,10 +424,20 @@ export function DesktopShell(): React.JSX.Element {
                   终端
                   <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
+                <TabsTrigger value="quickactions" className="gap-1.5">
+                  <Wrench />
+                  快捷操作
+                  <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
+                </TabsTrigger>
+                <TabsTrigger value="pluginmarket" className="gap-1.5">
+                  <Store />
+                  插件市场
+                  <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
+                </TabsTrigger>
                 <TabsTrigger value="settings" className="gap-1.5">
                   <Settings />
                   设置
-                  <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
+                  <Kbd keys="Mod+6" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
               </TabsList>
               <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -469,6 +485,20 @@ export function DesktopShell(): React.JSX.Element {
                 active={activeTab === "terminal"}
                 services={services}
               />
+            </TabsContent>
+
+            <TabsContent
+              value="quickactions"
+              className="min-h-0 flex-1 overflow-hidden outline-none"
+            >
+              <QuickActionsPanel />
+            </TabsContent>
+
+            <TabsContent
+              value="pluginmarket"
+              className="min-h-0 flex-1 overflow-hidden outline-none"
+            >
+              <PluginMarketPanel />
             </TabsContent>
 
             <TabsContent

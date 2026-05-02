@@ -6,8 +6,13 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  MaiBotDataImportResult,
+  MaiBotDataResetResult,
   ManagedPythonPackageName,
   ModuleUpdateResult,
+  NapcatAdapterConfig,
+  NapcatAdapterConfigSaveResult,
+  NapcatAdapterConfigState,
   PythonOverridesState,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
@@ -20,6 +25,7 @@ import type {
   PtySessionSnapshot,
   PtyStartRequest,
   PtyStopRequest,
+  QqAccountSetupRequest,
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
@@ -68,8 +74,8 @@ const desktopBridge: DesktopBridge = {
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
     repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
-    setQqAccount: (qqAccount: string, websocketToken?: string) =>
-      ipcRenderer.invoke("init:setQqAccount", qqAccount, websocketToken) as Promise<InitState>,
+    setQqAccount: (request: QqAccountSetupRequest) =>
+      ipcRenderer.invoke("init:setQqAccount", request) as Promise<InitState>,
   },
   agreements: {
     getState: () => ipcRenderer.invoke("agreements:getState") as Promise<StartupAgreementState>,
@@ -77,6 +83,18 @@ const desktopBridge: DesktopBridge = {
   },
   modules: {
     updateMaiBot: () => ipcRenderer.invoke("modules:updateMaibot") as Promise<ModuleUpdateResult>,
+  },
+  data: {
+    importMaiBotDatabase: () =>
+      ipcRenderer.invoke("data:importMaibotDb") as Promise<MaiBotDataImportResult | null>,
+    resetMaiBotData: () =>
+      ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
+  },
+  napcatAdapter: {
+    getConfig: () =>
+      ipcRenderer.invoke("napcatAdapter:getConfig") as Promise<NapcatAdapterConfigState>,
+    saveConfig: (config: NapcatAdapterConfig) =>
+      ipcRenderer.invoke("napcatAdapter:saveConfig", config) as Promise<NapcatAdapterConfigSaveResult>,
   },
   pythonDeps: {
     getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,
