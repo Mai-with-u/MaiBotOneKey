@@ -2,6 +2,7 @@ import type { DesktopSnapshot } from "@shared/contracts";
 
 const fallbackSnapshot: DesktopSnapshot = {
   appVersion: "0.1.0",
+  moduleVersions: {},
   platform:
     typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
       ? "darwin"
@@ -136,6 +137,10 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     services: snapshot.services ?? fallbackSnapshot.services,
     serviceCommands: snapshot.serviceCommands ?? fallbackSnapshot.serviceCommands,
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
+    moduleVersions: {
+      ...fallbackSnapshot.moduleVersions,
+      ...snapshot.moduleVersions,
+    },
     recentLogs: snapshot.recentLogs ?? fallbackSnapshot.recentLogs,
   };
 }

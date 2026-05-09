@@ -24,6 +24,8 @@ import type {
   InitCheckStatus,
   LogEntry,
   ManagedPythonPackageName,
+  ModuleSourceConfig,
+  ModuleSourcePreset,
   ModuleUpdateResult,
   PythonOverridesState,
   PythonPackageInstallResult,
@@ -513,6 +515,10 @@ export function SettingsStatusPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirmUpdateOpen, setConfirmUpdateOpen] = useState(false);
   const [moduleUpdateResult, setModuleUpdateResult] = useState<ModuleUpdateResult | null>(null);
+  const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
+  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
+  const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
+  const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
   const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
   const [pythonVersionsOpen, setPythonVersionsOpen] = useState(false);
   const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
@@ -544,6 +550,26 @@ export function SettingsStatusPanel({
         if (mounted) {
           setPythonDepsState(state);
         }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    window.maibotDesktop?.modules
+      .getSourceConfig()
+      .then((config) => {
+        if (!mounted) {
+          return;
+        }
+        setModuleSourceConfig(config);
+        setModuleSourcePreset(config.preset);
+        setCustomMaiBotUrl(config.maibotUrl);
+        setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
       })
       .catch(() => undefined);
 
@@ -633,6 +659,30 @@ export function SettingsStatusPanel({
       setBusy(null);
     }
   }, [refreshSnapshot]);
+
+  const saveModuleSourceConfig = useCallback(async () => {
+    setBusy("module:source");
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.modules) {
+        throw new Error("妗岄潰妗ユ湭灏辩华锛屾棤娉曚繚瀛樻ā鍧楁洿鏂版簮");
+      }
+
+      const config = await window.maibotDesktop.modules.saveSourceConfig({
+        preset: moduleSourcePreset,
+        maibotUrl: customMaiBotUrl,
+        napcatAdapterUrl: customNapcatAdapterUrl,
+      });
+      setModuleSourceConfig(config);
+      setModuleSourcePreset(config.preset);
+      setCustomMaiBotUrl(config.maibotUrl);
+      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
   const openPythonVersions = useCallback(async (packageName: ManagedPythonPackageName) => {
     setPythonVersionsOpen(true);
@@ -901,6 +951,64 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   使用内置 Git 更新可写 MaiBot 模块。更新器不会执行清理命令，不会删除 data、logs、config 等用户数据目录。
                 </p>
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <label className="grid min-w-40 gap-1.5 text-xs font-medium">
+                      更新源
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        disabled={busy !== null}
+                        value={moduleSourcePreset}
+                        onChange={(event) => {
+                          const preset = event.target.value as ModuleSourcePreset;
+                          setModuleSourcePreset(preset);
+                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
+                          if (option) {
+                            setCustomMaiBotUrl(option.maibotUrl);
+                            setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
+                          }
+                        }}
+                      >
+                        {moduleSourceConfig?.options.map((option) => (
+                          <option key={option.preset} value={option.preset}>
+                            {option.label}
+                          </option>
+                        ))}
+                        <option value="custom">自定义</option>
+                      </select>
+                    </label>
+                    <Button
+                      disabled={busy !== null || !moduleSourceConfig}
+                      onClick={saveModuleSourceConfig}
+                      size="sm"
+                      variant="secondary"
+                    >
+                      {busy === "module:source" ? <Loader2 className="animate-spin" /> : <Save />}
+                      保存更新源
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      MaiBot 仓库
+                      <Input
+                        disabled={busy !== null || moduleSourcePreset !== "custom"}
+                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
+                        value={customMaiBotUrl}
+                      />
+                    </label>
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      napcat-adapter 仓库
+                      <Input
+                        disabled={busy !== null || moduleSourcePreset !== "custom"}
+                        onChange={(event) => setCustomNapcatAdapterUrl(event.target.value)}
+                        value={customNapcatAdapterUrl}
+                      />
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    当前模块更新会把 origin 设置为这里选择的地址；远程拉取失败时仍会回退到一键包内置快照。
+                  </p>
+                </div>
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">

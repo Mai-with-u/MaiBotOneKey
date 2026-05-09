@@ -1,7 +1,8 @@
-import {
+﻿import {
   Activity,
   Bot,
   FolderOpen,
+  Home,
   Loader2,
   Play,
   Power,
@@ -9,7 +10,6 @@ import {
   RefreshCw,
   Settings,
   Square,
-  Store,
   TerminalSquare,
   Wrench,
 } from "lucide-react";
@@ -34,6 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
 import { PluginMarketPanel } from "./PluginMarketPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
@@ -151,7 +152,7 @@ function ServiceChip({
 
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
-  const [activeTab, setActiveTab] = useState("maibot");
+  const [activeTab, setActiveTab] = useState("home");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const theme = useTheme();
@@ -279,11 +280,11 @@ export function DesktopShell(): React.JSX.Element {
   );
 
   // Shortcuts
-  useShortcut("Mod+1", () => setActiveTab("maibot"));
-  useShortcut("Mod+2", () => setActiveTab("napcat"));
-  useShortcut("Mod+3", () => setActiveTab("terminal"));
-  useShortcut("Mod+4", () => setActiveTab("quickactions"));
-  useShortcut("Mod+5", () => setActiveTab("pluginmarket"));
+  useShortcut("Mod+1", () => setActiveTab("home"));
+  useShortcut("Mod+2", () => setActiveTab("maibot"));
+  useShortcut("Mod+3", () => setActiveTab("napcat"));
+  useShortcut("Mod+4", () => setActiveTab("terminal"));
+  useShortcut("Mod+5", () => setActiveTab("quickactions"));
   useShortcut("Mod+6", () => setActiveTab("settings"));
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
@@ -409,29 +410,29 @@ export function DesktopShell(): React.JSX.Element {
           >
             <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-background px-3">
               <TabsList className="h-8">
+                <TabsTrigger value="home" className="gap-1.5">
+                  <Home />
+                  首页
+                  <Kbd keys="Mod+1" size="xs" tone="muted" className="ml-1" />
+                </TabsTrigger>
                 <TabsTrigger value="maibot" className="gap-1.5">
                   <Radar />
                   MaiBot
-                  <Kbd keys="Mod+1" size="xs" tone="muted" className="ml-1" />
+                  <Kbd keys="Mod+2" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
                 <TabsTrigger value="napcat" className="gap-1.5">
                   <Bot />
                   NapCat
-                  <Kbd keys="Mod+2" size="xs" tone="muted" className="ml-1" />
+                  <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
                 <TabsTrigger value="terminal" className="gap-1.5">
                   <TerminalSquare />
                   终端
-                  <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
+                  <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
                 <TabsTrigger value="quickactions" className="gap-1.5">
                   <Wrench />
                   快捷操作
-                  <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
-                <TabsTrigger value="pluginmarket" className="gap-1.5">
-                  <Store />
-                  插件市场
                   <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
                 <TabsTrigger value="settings" className="gap-1.5">
@@ -461,6 +462,19 @@ export function DesktopShell(): React.JSX.Element {
                 </Tooltip>
               </div>
             </div>
+
+            <TabsContent value="home" className="min-h-0 flex-1 outline-none">
+              {snapshot ? (
+                <HomePanel active={activeTab === "home"} onOpenTab={setActiveTab} snapshot={snapshot} />
+              ) : (
+                <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    正在读取首页状态
+                  </span>
+                </div>
+              )}
+            </TabsContent>
 
             <TabsContent value="maibot" className="min-h-0 flex-1 outline-none">
               <WebviewPanel

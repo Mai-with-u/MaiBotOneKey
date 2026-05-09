@@ -103,12 +103,25 @@ export interface RuntimePaths {
   logsRoot: string;
 }
 
+export interface ModuleRuntimeVersions {
+  maibotLocal?: string;
+  maibotLocalSource?: "pyproject" | "unknown";
+  maibotLatestStableTag?: string;
+  maibotLatestPrereleaseTag?: string;
+  maibotRemoteSource?: string;
+  dashboardOverride?: string;
+  dashboardOverrideSource?: "python-overrides" | "unknown";
+  dashboardLatestPypi?: string;
+  dashboardPypiSource?: string;
+}
+
 export interface DesktopSnapshot {
   paths: RuntimePaths;
   services: ServiceDescriptor[];
   serviceCommands: ServiceCommandConfig[];
   runtimePathConfigs: RuntimePathConfig[];
   appVersion: string;
+  moduleVersions: ModuleRuntimeVersions;
   platform: NodeJS.Platform;
   windowState: WindowState;
   initState: InitState;
@@ -273,6 +286,28 @@ export interface ModuleUpdateResult {
   plugins?: ModuleUpdateResult[];
 }
 
+export type ModuleSourcePreset = "ghproxy" | "official" | "custom";
+
+export interface ModuleSourceOption {
+  preset: Exclude<ModuleSourcePreset, "custom">;
+  label: string;
+  maibotUrl: string;
+  napcatAdapterUrl: string;
+}
+
+export interface ModuleSourceConfig {
+  preset: ModuleSourcePreset;
+  maibotUrl: string;
+  napcatAdapterUrl: string;
+  options: ModuleSourceOption[];
+}
+
+export interface ModuleSourceUpdate {
+  preset: ModuleSourcePreset;
+  maibotUrl?: string;
+  napcatAdapterUrl?: string;
+}
+
 export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message";
 
 export interface ManagedPythonPackage {
@@ -412,7 +447,8 @@ export interface DesktopBridge {
   };
   modules: {
     updateMaiBot: () => Promise<ModuleUpdateResult>;
-    repairNapcatAdapter: () => Promise<ModuleUpdateResult>;
+    getSourceConfig: () => Promise<ModuleSourceConfig>;
+    saveSourceConfig: (config: ModuleSourceUpdate) => Promise<ModuleSourceConfig>;
   };
   data: {
     importMaiBotDatabase: () => Promise<MaiBotDataImportResult | null>;

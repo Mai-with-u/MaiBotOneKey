@@ -1,5 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   CloseAction,
   DesktopSnapshot,
@@ -11,7 +14,10 @@ import type {
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   ManagedPythonPackageName,
+  ModuleRuntimeVersions,
   ModuleUpdateResult,
+  ModuleSourceConfig,
+  ModuleSourceUpdate,
   NapcatAdapterConfig,
   NapcatAdapterConfigSaveResult,
   NapcatAdapterConfigState,
@@ -61,6 +67,102 @@ function readWindowState(window: BrowserWindow | null): WindowState {
   };
 }
 
+function runProcess(file: string, args: string[], cwd: string, env?: Record<string, string>): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      file,
+      args,
+      {
+        cwd,
+        timeout: 10_000,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+          ...env,
+        },
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolve(undefined);
+          return;
+        }
+        resolve(`${stdout}${stderr}`.trim() || undefined);
+      },
+    );
+  });
+}
+
+interface ParsedVersionTag {
+  tag: string;
+  parts: number[];
+  prerelease: boolean;
+}
+
+async function readPyprojectVersion(path: string): Promise<string | undefined> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const content = await readFile(path, "utf8");
+    return content.match(/^\s*version\s*=\s*["']([^"']+)["']/mu)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function parseVersionTag(tag: string): ParsedVersionTag | undefined {
+  const normalized = tag.replace(/^v/iu, "");
+  const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:[-._]?([a-z]+)\.?(\d*)?)?$/iu);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    tag,
+    parts: match[1].split(".").map((part) => Number(part)),
+    prerelease: Boolean(match[2]),
+  };
+}
+
+function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): number {
+  const length = Math.max(left.parts.length, right.parts.length);
+  for (let index = 0; index < length; index++) {
+    const diff = (left.parts[index] ?? 0) - (right.parts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return left.tag.localeCompare(right.tag, "en-US", { numeric: true, sensitivity: "base" });
+}
+
+function pickLatestTags(rawTags: string[]): Pick<ModuleRuntimeVersions, "maibotLatestStableTag" | "maibotLatestPrereleaseTag"> {
+  const parsed = rawTags.map(parseVersionTag).filter((tag): tag is ParsedVersionTag => Boolean(tag));
+  const stable = parsed.filter((tag) => !tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+  const prerelease = parsed.filter((tag) => tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+  return {
+    maibotLatestStableTag: stable,
+    maibotLatestPrereleaseTag: prerelease,
+  };
+}
+
+async function fetchPypiLatestVersion(packageName: string): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`https://pypi.org/pypi/${packageName}/json`, { signal: controller.signal });
+    if (!response.ok) {
+      return undefined;
+    }
+    const data = (await response.json()) as { info?: { version?: unknown } };
+    return typeof data.info?.version === "string" ? data.info.version : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function registerAppIpc({
   paths,
   initManager,
@@ -72,12 +174,81 @@ export function registerAppIpc({
   requestQuit,
   showMainWindow,
 }: RegisterAppIpcOptions): void {
+  const readModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
+    const versions: ModuleRuntimeVersions = {};
+    const maibotRoot = join(paths.modulesRoot, "MaiBot");
+
+    const pyprojectVersion = await readPyprojectVersion(join(maibotRoot, "pyproject.toml"));
+    if (pyprojectVersion) {
+      versions.maibotLocal = pyprojectVersion;
+      versions.maibotLocalSource = "pyproject";
+    }
+
+    const gitPath = initManager.getGitPath();
+    const sourceConfig = await moduleUpdater.getSourceConfig().catch(() => undefined);
+    const tagRemoteUrls = [sourceConfig?.maibotUrl, "https://github.com/Mai-with-u/MaiBot.git"].filter(
+      (url, index, urls): url is string => Boolean(url && urls.indexOf(url) === index),
+    );
+    if (existsSync(gitPath)) {
+      for (const remoteUrl of tagRemoteUrls) {
+        const tagsOutput = await runProcess(gitPath, ["ls-remote", "--tags", remoteUrl], paths.installRoot);
+        if (!tagsOutput) {
+          continue;
+        }
+        const tags = tagsOutput
+          .split(/\r?\n/u)
+          .map((line) => line.match(/refs\/tags\/(.+?)(?:\^\{\})?$/u)?.[1])
+          .filter((tag): tag is string => Boolean(tag));
+        Object.assign(versions, pickLatestTags(Array.from(new Set(tags))));
+        versions.maibotRemoteSource = remoteUrl;
+        break;
+      }
+    }
+
+    const pythonPath = initManager.getPythonPath();
+    if (existsSync(pythonPath)) {
+      const overridesRoot = pythonDependencyManager.getOverridesRoot();
+      const dashboardVersion = await runProcess(
+        pythonPath,
+        [
+          "-c",
+          [
+            "import importlib.metadata as m, sys",
+            `root=${JSON.stringify(overridesRoot)}`,
+            "target='maibot-dashboard'",
+            "for d in m.distributions(path=[root]):",
+            "    name=(d.metadata.get('Name') or '').lower().replace('_','-')",
+            "    if name == target:",
+            "        print(d.version)",
+            "        break",
+            "else:",
+            "    sys.exit(1)",
+          ].join("\n"),
+        ],
+        paths.installRoot,
+      );
+      if (dashboardVersion) {
+        versions.dashboardOverride = dashboardVersion;
+        versions.dashboardOverrideSource = "python-overrides";
+      }
+    }
+
+    const latestDashboard = await fetchPypiLatestVersion("maibot-dashboard");
+    if (latestDashboard) {
+      versions.dashboardLatestPypi = latestDashboard;
+      versions.dashboardPypiSource = "PyPI";
+    }
+
+    return versions;
+  };
+
   const buildSnapshot = async (): Promise<DesktopSnapshot> => ({
     paths,
     services: serviceManager.snapshot(),
     serviceCommands: await serviceManager.getCommandConfigs(),
     runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
     appVersion: app.getVersion(),
+    moduleVersions: await readModuleVersions(),
     platform: process.platform,
     windowState: readWindowState(getMainWindow()),
     initState: await initManager.getState(),
@@ -170,27 +341,16 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("modules:repairNapcatAdapter", async (): Promise<ModuleUpdateResult> => {
-    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
-    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
-      throw new Error("请先停止 MaiBot Core，再修复 napcat-adapter 插件。");
-    }
+  ipcMain.handle("modules:getSourceConfig", async (): Promise<ModuleSourceConfig> => {
+    return moduleUpdater.getSourceConfig();
+  });
 
-    logStore.append(
-      "desktop",
-      "system",
-      "开始修复 napcat-adapter：使用一键包内置快照覆盖（不联网）",
-    );
-    await initManager.ensureServiceReady("maibot");
-    const result = await moduleUpdater.repairNapcatAdapterFromBundled();
-    logStore.append(
-      "desktop",
-      "system",
-      `napcat-adapter 修复完成: ${result.cwd} (${result.after ?? "-"})`,
-    );
-    await broadcastSnapshot();
+  ipcMain.handle("modules:saveSourceConfig", async (_event, config: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
+    const result = await moduleUpdater.saveSourceConfig(config);
+    logStore.append("desktop", "system", `模块更新源已切换: ${result.preset} (${result.maibotUrl})`);
     return result;
   });
+
 
   ipcMain.handle("data:importMaibotDb", async (): Promise<MaiBotDataImportResult | null> => {
     const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");

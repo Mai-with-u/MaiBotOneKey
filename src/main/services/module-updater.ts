@@ -1,16 +1,40 @@
-import { execFile } from "node:child_process";
+﻿import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
-import type { ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import type {
+  ModuleSourceConfig,
+  ModuleSourceOption,
+  ModuleSourcePreset,
+  ModuleSourceUpdate,
+  ModuleUpdateResult,
+  RuntimePaths,
+} from "../../shared/contracts";
 import { InitManager } from "./init-manager";
 
 const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
 /** 单次 git fetch origin 的最长等待时间。失败/超时后会立即回退到 bundled 兜底。 */
 const FETCH_ORIGIN_TIMEOUT_MS = 3 * 60 * 1000;
-const MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
-const NAPCAT_ADAPTER_REMOTE_URL =
-  "https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
+const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
+const OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
+const GHPROXY_MAIBOT_REMOTE_URL = "https://gh.llkk.cc/https://github.com/Mai-with-u/MaiBot.git";
+const GHPROXY_NAPCAT_ADAPTER_REMOTE_URL =
+  "https://gh.llkk.cc/https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
+const SOURCE_CONFIG_FILE = "module-sources.json";
+const SOURCE_OPTIONS: ModuleSourceOption[] = [
+  {
+    preset: "ghproxy",
+    label: "GitHub 镜像代理",
+    maibotUrl: GHPROXY_MAIBOT_REMOTE_URL,
+    napcatAdapterUrl: GHPROXY_NAPCAT_ADAPTER_REMOTE_URL,
+  },
+  {
+    preset: "official",
+    label: "官方 GitHub",
+    maibotUrl: OFFICIAL_MAIBOT_REMOTE_URL,
+    napcatAdapterUrl: OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL,
+  },
+];
 
 interface GitRunResult {
   output: string[];
@@ -43,10 +67,38 @@ function toDetail(error: unknown): string {
 }
 
 export class ModuleUpdater {
+  private readonly sourceConfigPath: string;
+
   constructor(
     private readonly paths: RuntimePaths,
     private readonly initManager: InitManager,
-  ) {}
+  ) {
+    this.sourceConfigPath = join(paths.userDataRoot, SOURCE_CONFIG_FILE);
+  }
+
+  async getSourceConfig(): Promise<ModuleSourceConfig> {
+    return this.resolveSourceConfig(await this.readStoredSourceConfig());
+  }
+
+  async saveSourceConfig(update: ModuleSourceUpdate): Promise<ModuleSourceConfig> {
+    const config = this.resolveSourceConfig(update);
+    await mkdir(dirname(this.sourceConfigPath), { recursive: true });
+    await writeFile(
+      this.sourceConfigPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          preset: config.preset,
+          maibotUrl: config.maibotUrl,
+          napcatAdapterUrl: config.napcatAdapterUrl,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    return config;
+  }
 
   async updateMaiBot(): Promise<ModuleUpdateResult> {
     const gitPath = this.initManager.getGitPath();
@@ -54,13 +106,15 @@ export class ModuleUpdater {
       throw new Error(`内置 Git 不存在: ${gitPath}`);
     }
 
+    const sourceConfig = await this.getSourceConfig();
+
     // 主仓
     const mainResult = await this.updateGitRepository(gitPath, {
       moduleId: "maibot",
       moduleName: "MaiBot",
       cwd: join(this.paths.modulesRoot, "MaiBot"),
       bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
-      remoteUrl: MAIBOT_REMOTE_URL,
+      remoteUrl: sourceConfig.maibotUrl,
       defaultBranch: "main",
       throwOnFailure: true,
       runSubmodule: true,
@@ -87,7 +141,7 @@ export class ModuleUpdater {
           moduleName: "napcat-adapter",
           cwd: adapterCwd,
           bundledDir: adapterBundled,
-          remoteUrl: NAPCAT_ADAPTER_REMOTE_URL,
+          remoteUrl: sourceConfig.napcatAdapterUrl,
           defaultBranch: "plugin",
           throwOnFailure: false,
           runSubmodule: false,
@@ -211,6 +265,12 @@ export class ModuleUpdater {
       append(
         `[${moduleName}] remote add origin ${remoteUrl}`,
         (await this.runGit(gitPath, cwd, ["remote", "add", "origin", remoteUrl], 30_000)).output,
+      );
+      remote = remoteUrl;
+    } else if (remote !== remoteUrl) {
+      append(
+        `[${moduleName}] remote set-url origin ${remoteUrl}`,
+        (await this.runGit(gitPath, cwd, ["remote", "set-url", "origin", remoteUrl], 30_000)).output,
       );
       remote = remoteUrl;
     }
@@ -380,6 +440,41 @@ export class ModuleUpdater {
     }
 
     return "origin/main";
+  }
+
+  private async readStoredSourceConfig(): Promise<ModuleSourceUpdate | undefined> {
+    try {
+      const raw = JSON.parse(await readFile(this.sourceConfigPath, "utf8")) as Partial<ModuleSourceUpdate>;
+      return {
+        preset: raw.preset ?? "ghproxy",
+        maibotUrl: raw.maibotUrl,
+        napcatAdapterUrl: raw.napcatAdapterUrl,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private resolveSourceConfig(update?: ModuleSourceUpdate): ModuleSourceConfig {
+    const preset = this.normalizePreset(update?.preset);
+    const option = SOURCE_OPTIONS.find((item) => item.preset === preset);
+    const maibotUrl = preset === "custom" ? update?.maibotUrl?.trim() : option?.maibotUrl;
+    const napcatAdapterUrl = preset === "custom" ? update?.napcatAdapterUrl?.trim() : option?.napcatAdapterUrl;
+
+    if (!maibotUrl || !napcatAdapterUrl) {
+      throw new Error("自定义模块更新源需要同时填写 MaiBot 与 napcat-adapter 仓库地址。");
+    }
+
+    return {
+      preset,
+      maibotUrl,
+      napcatAdapterUrl,
+      options: SOURCE_OPTIONS,
+    };
+  }
+
+  private normalizePreset(preset: ModuleSourcePreset | undefined): ModuleSourcePreset {
+    return preset === "official" || preset === "custom" ? preset : "ghproxy";
   }
 
   private async readGitValue(gitPath: string, cwd: string, args: string[]): Promise<string | undefined> {

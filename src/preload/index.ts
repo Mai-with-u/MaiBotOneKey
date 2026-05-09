@@ -12,6 +12,8 @@ import type {
   MaiBotDataResetResult,
   ManagedPythonPackageName,
   ModuleUpdateResult,
+  ModuleSourceConfig,
+  ModuleSourceUpdate,
   NapcatAdapterConfig,
   NapcatAdapterConfigSaveResult,
   NapcatAdapterConfigState,
@@ -85,8 +87,9 @@ const desktopBridge: DesktopBridge = {
   },
   modules: {
     updateMaiBot: () => ipcRenderer.invoke("modules:updateMaibot") as Promise<ModuleUpdateResult>,
-    repairNapcatAdapter: () =>
-      ipcRenderer.invoke("modules:repairNapcatAdapter") as Promise<ModuleUpdateResult>,
+    getSourceConfig: () => ipcRenderer.invoke("modules:getSourceConfig") as Promise<ModuleSourceConfig>,
+    saveSourceConfig: (config: ModuleSourceUpdate) =>
+      ipcRenderer.invoke("modules:saveSourceConfig", config) as Promise<ModuleSourceConfig>,
   },
   data: {
     importMaiBotDatabase: () =>
