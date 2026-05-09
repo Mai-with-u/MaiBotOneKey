@@ -54,7 +54,11 @@ function ServiceSummary({
             </p>
           </div>
         </div>
-        {service ? <Badge dot variant={statusVariant[service.status]}>{statusText[service.status]}</Badge> : null}
+        {service ? (
+          <Badge dot variant={statusVariant[service.status]}>
+            {statusText[service.status]}
+          </Badge>
+        ) : null}
       </div>
       <div className="grid grid-cols-3 gap-2 text-xs">
         <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
@@ -78,61 +82,34 @@ function VersionTile({
   icon,
   label,
   value,
+  latest,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string | undefined;
+  latest: Array<{ label: string; value: string | undefined }>;
 }): React.JSX.Element {
   return (
     <div className="flex min-h-24 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4">
       <span className="grid size-9 shrink-0 place-items-center rounded-md bg-secondary text-secondary-foreground">
         {icon}
       </span>
-      <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="mt-1 truncate font-mono text-base font-semibold" title={value}>
-          {valueOrFallback(value)}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function VersionPairTile({
-  icon,
-  label,
-  leftLabel,
-  leftValue,
-  rightLabel,
-  rightValue,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  leftLabel: string;
-  leftValue: string | undefined;
-  rightLabel: string;
-  rightValue: string | undefined;
-}): React.JSX.Element {
-  return (
-    <div className="flex min-h-24 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4">
-      <span className="grid size-9 shrink-0 place-items-center rounded-md bg-secondary text-secondary-foreground">
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <div className="mt-2 grid grid-cols-2 gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] text-muted-foreground">{leftLabel}</p>
-            <p className="truncate font-mono text-base font-semibold" title={leftValue}>
-              {valueOrFallback(leftValue)}
-            </p>
-          </div>
-          <div className="min-w-0">
-            <p className="text-[11px] text-muted-foreground">{rightLabel}</p>
-            <p className="truncate font-mono text-base font-semibold" title={rightValue}>
-              {valueOrFallback(rightValue)}
-            </p>
-          </div>
+      <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="mt-1 truncate font-mono text-base font-semibold" title={value}>
+            {valueOrFallback(value)}
+          </p>
+        </div>
+        <div className="grid min-w-0 gap-1 sm:min-w-44">
+          {latest.map((item) => (
+            <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]" key={item.label}>
+              <span className="shrink-0 text-muted-foreground">{item.label}</span>
+              <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={item.value}>
+                {valueOrFallback(item.value)}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -180,7 +157,9 @@ export function HomePanel({
               <Activity className="size-4 text-primary" />
               服务运行
             </div>
-            <p className="mt-3 text-2xl font-semibold tabular-nums">{runningCount}/{services.length}</p>
+            <p className="mt-3 text-2xl font-semibold tabular-nums">
+              {runningCount}/{services.length}
+            </p>
             <p className="text-xs text-muted-foreground">托管服务正在运行</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4">
@@ -188,13 +167,15 @@ export function HomePanel({
               <Gauge className="size-4 text-primary" />
               端口可用
             </div>
-            <p className="mt-3 text-2xl font-semibold tabular-nums">{readyCount}/{services.length}</p>
+            <p className="mt-3 text-2xl font-semibold tabular-nums">
+              {readyCount}/{services.length}
+            </p>
             <p className="text-xs text-muted-foreground">健康检查已通过</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-4">
             <div className="flex items-center gap-2 text-sm font-medium">
               <PackageCheck className="size-4 text-primary" />
-              桌面版本
+              一键包版本
             </div>
             <p className="mt-3 font-mono text-2xl font-semibold">v{snapshot.appVersion}</p>
             <p className="text-xs text-muted-foreground">MaiBot OneKey</p>
@@ -211,24 +192,16 @@ export function HomePanel({
             icon={<Server className="size-5" />}
             label="MaiBot 本地版本"
             value={snapshot.moduleVersions.maibotLocal}
-          />
-          <VersionPairTile
-            icon={<Server className="size-5" />}
-            label="MaiBot 远端最新"
-            leftLabel="正式版"
-            leftValue={snapshot.moduleVersions.maibotLatestStableTag}
-            rightLabel="测试版"
-            rightValue={snapshot.moduleVersions.maibotLatestPrereleaseTag}
+            latest={[
+              { label: "最新正式版", value: snapshot.moduleVersions.maibotLatestStableTag },
+              { label: "最新测试版", value: snapshot.moduleVersions.maibotLatestPrereleaseTag },
+            ]}
           />
           <VersionTile
             icon={<PackageCheck className="size-5" />}
-            label="Dashboard 覆盖版本"
+            label="WebUI 已安装版本"
             value={snapshot.moduleVersions.dashboardOverride}
-          />
-          <VersionTile
-            icon={<PackageCheck className="size-5" />}
-            label="Dashboard PyPI 最新版"
-            value={snapshot.moduleVersions.dashboardLatestPypi}
+            latest={[{ label: "最新版", value: snapshot.moduleVersions.dashboardLatestPypi }]}
           />
         </div>
       </div>

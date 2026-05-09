@@ -286,6 +286,11 @@ export interface ModuleUpdateResult {
   plugins?: ModuleUpdateResult[];
 }
 
+export interface ModuleTagOption {
+  name: string;
+  isPrerelease: boolean;
+}
+
 export type ModuleSourcePreset = "ghproxy" | "official" | "custom";
 
 export interface ModuleSourceOption {
@@ -446,7 +451,8 @@ export interface DesktopBridge {
     confirm: () => Promise<StartupAgreementConfirmResult>;
   };
   modules: {
-    updateMaiBot: () => Promise<ModuleUpdateResult>;
+    updateMaiBot: (tag?: string) => Promise<ModuleUpdateResult>;
+    listMaiBotTags: () => Promise<ModuleTagOption[]>;
     getSourceConfig: () => Promise<ModuleSourceConfig>;
     saveSourceConfig: (config: ModuleSourceUpdate) => Promise<ModuleSourceConfig>;
   };

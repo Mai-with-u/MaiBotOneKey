@@ -18,6 +18,7 @@ import type {
   ModuleUpdateResult,
   ModuleSourceConfig,
   ModuleSourceUpdate,
+  ModuleTagOption,
   NapcatAdapterConfig,
   NapcatAdapterConfigSaveResult,
   NapcatAdapterConfigState,
@@ -323,7 +324,7 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("modules:updateMaibot", async (): Promise<ModuleUpdateResult> => {
+  ipcMain.handle("modules:updateMaibot", async (_event, tag?: string): Promise<ModuleUpdateResult> => {
     const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
     if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
       throw new Error("请先停止 MaiBot Core，再更新 MaiBot 模块。");
@@ -331,7 +332,7 @@ export function registerAppIpc({
 
     logStore.append("desktop", "system", "开始更新 MaiBot 模块：使用内置 Git 强制拉取远端代码");
     await initManager.ensureServiceReady("maibot");
-    const result = await moduleUpdater.updateMaiBot();
+    const result = await moduleUpdater.updateMaiBot(tag);
     logStore.append(
       "desktop",
       "system",
@@ -339,6 +340,10 @@ export function registerAppIpc({
     );
     await broadcastSnapshot();
     return result;
+  });
+
+  ipcMain.handle("modules:listMaibotTags", async (): Promise<ModuleTagOption[]> => {
+    return moduleUpdater.listMaiBotTags();
   });
 
   ipcMain.handle("modules:getSourceConfig", async (): Promise<ModuleSourceConfig> => {

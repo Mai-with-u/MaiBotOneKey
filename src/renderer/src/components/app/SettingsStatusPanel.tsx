@@ -1,4 +1,4 @@
-import {
+﻿import {
   CheckCircle2,
   CircleAlert,
   ClipboardCheck,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import type {
   DesktopSnapshot,
   InitCheckStatus,
@@ -26,6 +27,7 @@ import type {
   ManagedPythonPackageName,
   ModuleSourceConfig,
   ModuleSourcePreset,
+  ModuleTagOption,
   ModuleUpdateResult,
   PythonOverridesState,
   PythonPackageInstallResult,
@@ -519,6 +521,8 @@ export function SettingsStatusPanel({
   const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
   const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
   const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
+  const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
+  const [selectedMaibotTag, setSelectedMaibotTag] = useState("");
   const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
   const [pythonVersionsOpen, setPythonVersionsOpen] = useState(false);
   const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
@@ -577,6 +581,19 @@ export function SettingsStatusPanel({
       mounted = false;
     };
   }, []);
+
+  const refreshMaiBotTags = useCallback(async () => {
+    try {
+      const tags = await window.maibotDesktop?.modules.listMaiBotTags();
+      setMaibotTags(tags ?? []);
+    } catch {
+      setMaibotTags([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMaiBotTags();
+  }, [refreshMaiBotTags]);
 
   const attentionChecks = useMemo(
     () => initState.checks.filter((check) => check.status !== "ok"),
@@ -649,7 +666,7 @@ export function SettingsStatusPanel({
         throw new Error("桌面桥未就绪，无法更新模块");
       }
 
-      const result = await window.maibotDesktop.modules.updateMaiBot();
+      const result = await window.maibotDesktop.modules.updateMaiBot(selectedMaibotTag || undefined);
       setModuleUpdateResult(result);
       setConfirmUpdateOpen(false);
       await refreshSnapshot();
@@ -658,7 +675,7 @@ export function SettingsStatusPanel({
     } finally {
       setBusy(null);
     }
-  }, [refreshSnapshot]);
+  }, [refreshSnapshot, selectedMaibotTag]);
 
   const saveModuleSourceConfig = useCallback(async () => {
     setBusy("module:source");
@@ -677,12 +694,15 @@ export function SettingsStatusPanel({
       setModuleSourcePreset(config.preset);
       setCustomMaiBotUrl(config.maibotUrl);
       setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+      setSelectedMaibotTag("");
+      toast.success("更新源已保存");
+      void refreshMaiBotTags();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
+  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset, refreshMaiBotTags]);
 
   const openPythonVersions = useCallback(async (packageName: ManagedPythonPackageName) => {
     setPythonVersionsOpen(true);
@@ -965,7 +985,6 @@ export function SettingsStatusPanel({
                           const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
                           if (option) {
                             setCustomMaiBotUrl(option.maibotUrl);
-                            setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
                           }
                         }}
                       >
@@ -987,21 +1006,13 @@ export function SettingsStatusPanel({
                       保存更新源
                     </Button>
                   </div>
-                  <div className="grid gap-2 md:grid-cols-2">
+                  <div className="grid gap-2">
                     <label className="grid gap-1.5 text-xs font-medium">
                       MaiBot 仓库
                       <Input
                         disabled={busy !== null || moduleSourcePreset !== "custom"}
                         onChange={(event) => setCustomMaiBotUrl(event.target.value)}
                         value={customMaiBotUrl}
-                      />
-                    </label>
-                    <label className="grid gap-1.5 text-xs font-medium">
-                      napcat-adapter 仓库
-                      <Input
-                        disabled={busy !== null || moduleSourcePreset !== "custom"}
-                        onChange={(event) => setCustomNapcatAdapterUrl(event.target.value)}
-                        value={customNapcatAdapterUrl}
                       />
                     </label>
                   </div>
@@ -1030,6 +1041,22 @@ export function SettingsStatusPanel({
                           {statusText[maibotService.status]}
                         </Badge>
                       ) : null}
+                      <select
+                        className="h-9 max-w-56 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        disabled={busy !== null}
+                        onChange={(event) => setSelectedMaibotTag(event.target.value)}
+                        value={selectedMaibotTag}
+                      >
+                        <option value="">默认分支</option>
+                        {maibotTags.map((tag) => (
+                          <option key={tag.name} value={tag.name}>
+                            {tag.name}{tag.isPrerelease ? " (测试)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <Button disabled={busy !== null} onClick={refreshMaiBotTags} size="icon-sm" variant="outline">
+                        <RefreshCw />
+                      </Button>
                       <Button
                         disabled={busy !== null || maibotUpdateBlocked}
                         onClick={() => setConfirmUpdateOpen(true)}

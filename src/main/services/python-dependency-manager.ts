@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { delimiter, join } from "node:path";
@@ -49,6 +49,8 @@ interface StartupDependencyUpgradeResult {
   installedAt: number;
 }
 
+type PythonOutputHandler = (line: string) => void;
+
 function splitOutput(output: string): string[] {
   return output
     .replace(/\r\n/gu, "\n")
@@ -64,7 +66,7 @@ function toDetail(error: unknown): string {
 
 function assertManagedPackage(packageName: ManagedPythonPackageName): void {
   if (!MANAGED_PACKAGES.some((item) => item.name === packageName)) {
-    throw new Error(`不支持更新此 Python 依赖: ${packageName}`);
+    throw new Error(`涓嶆敮鎸佹洿鏂版 Python 渚濊禆: ${packageName}`);
   }
 }
 
@@ -320,6 +322,8 @@ function hasMissingUploadTimes(versions: PythonPackageVersion[]): boolean {
 
 export class PythonDependencyManager {
   private startupUpgradePromise?: Promise<StartupDependencyUpgradeResult>;
+  private startupUpgradeAbort?: AbortController;
+  private startupUpgradeChild?: ChildProcessWithoutNullStreams;
 
   constructor(
     private readonly paths: RuntimePaths,
@@ -353,24 +357,24 @@ export class PythonDependencyManager {
       let versions = await fetchSimpleVersions(packageName, TUNA_SIMPLE_INDEX);
       output.push(`从清华 Simple 索引解析到 ${versions.length} 个版本`);
       if (versions.length === 0) {
-        throw new Error("清华 Simple 索引没有返回可解析的版本");
+        throw new Error("娓呭崕 Simple 绱㈠紩娌℃湁杩斿洖鍙В鏋愮殑鐗堟湰");
       }
 
       if (hasMissingUploadTimes(versions)) {
-        output.push(`清华 Simple 索引缺少部分发布时间，尝试从 ${PYPI_SIMPLE_INDEX}/${packageName}/ 补齐排序信息`);
+        output.push(`娓呭崕 Simple 绱㈠紩缂哄皯閮ㄥ垎鍙戝竷鏃堕棿锛屽皾璇曚粠 ${PYPI_SIMPLE_INDEX}/${packageName}/ 琛ラ綈鎺掑簭淇℃伅`);
         try {
           const supplemental = await fetchSimpleVersions(packageName, PYPI_SIMPLE_INDEX);
           versions = mergeVersionLists(versions, supplemental);
           output.push("发布时间补齐完成，仍以清华源作为安装源");
         } catch (metadataError) {
-          output.push(`发布时间补齐失败，将按可用时间与版本号排序: ${toDetail(metadataError)}`);
+          output.push(`鍙戝竷鏃堕棿琛ラ綈澶辫触锛屽皢鎸夊彲鐢ㄦ椂闂翠笌鐗堟湰鍙锋帓搴? ${toDetail(metadataError)}`);
         }
       }
 
       output.push(
         hasMissingUploadTimes(versions)
-          ? `找到 ${versions.length} 个版本，已按可用发布时间降序排列；缺失发布时间的版本用版本号补位`
-          : `找到 ${versions.length} 个版本，已按发布时间降序排列`,
+          ? `鎵惧埌 ${versions.length} 涓増鏈紝宸叉寜鍙敤鍙戝竷鏃堕棿闄嶅簭鎺掑垪锛涚己澶卞彂甯冩椂闂寸殑鐗堟湰鐢ㄧ増鏈彿琛ヤ綅`
+          : `鎵惧埌 ${versions.length} 涓増鏈紝宸叉寜鍙戝竷鏃堕棿闄嶅簭鎺掑垪`,
       );
       return {
         packageName,
@@ -380,7 +384,7 @@ export class PythonDependencyManager {
         fetchedAt: Date.now(),
       };
     } catch (error) {
-      output.push(`读取版本列表失败: ${toDetail(error)}`);
+      output.push(`璇诲彇鐗堟湰鍒楄〃澶辫触: ${toDetail(error)}`);
       throw new Error(output.join("\n"));
     }
   }
@@ -388,7 +392,7 @@ export class PythonDependencyManager {
   async installVersion(request: PythonPackageInstallRequest): Promise<PythonPackageInstallResult> {
     assertManagedPackage(request.packageName);
     if (!request.version.trim()) {
-      throw new Error("请选择要安装的版本");
+      throw new Error("璇烽€夋嫨瑕佸畨瑁呯殑鐗堟湰");
     }
 
     const targetDir = this.getOverridesRoot();
@@ -427,18 +431,41 @@ export class PythonDependencyManager {
     };
   }
 
-  async upgradeStartupDependencies(): Promise<StartupDependencyUpgradeResult> {
-    this.startupUpgradePromise ??= this.installProjectDeclaredDependencies().catch((error: unknown) => {
-      this.startupUpgradePromise = undefined;
-      throw error;
-    });
+  async upgradeStartupDependencies(onOutput?: PythonOutputHandler): Promise<StartupDependencyUpgradeResult> {
+    if (!this.startupUpgradePromise) {
+      const controller = new AbortController();
+      this.startupUpgradeAbort = controller;
+      this.startupUpgradePromise = this.installProjectDeclaredDependencies(controller.signal, onOutput).finally(() => {
+        if (this.startupUpgradeAbort === controller) {
+          this.startupUpgradeAbort = undefined;
+        }
+        this.startupUpgradePromise = undefined;
+      });
+    }
     return this.startupUpgradePromise;
   }
 
-  private async installProjectDeclaredDependencies(): Promise<StartupDependencyUpgradeResult> {
-    const targetDir = this.getOverridesRoot();
-    await mkdir(targetDir, { recursive: true });
+  cancelStartupUpgrade(): boolean {
+    if (!this.startupUpgradeAbort || this.startupUpgradeAbort.signal.aborted) {
+      return false;
+    }
 
+    const child = this.startupUpgradeChild;
+    this.startupUpgradeAbort.abort();
+    if (child?.pid) {
+      if (process.platform === "win32") {
+        execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
+      } else {
+        child.kill("SIGKILL");
+      }
+    }
+    return true;
+  }
+
+  private async installProjectDeclaredDependencies(
+    signal?: AbortSignal,
+    onOutput?: PythonOutputHandler,
+  ): Promise<StartupDependencyUpgradeResult> {
     const maibotRoot = join(this.paths.modulesRoot, "MaiBot");
     const requirementsPath = join(maibotRoot, "requirements.txt");
     const pyprojectPath = join(maibotRoot, "pyproject.toml");
@@ -449,8 +476,28 @@ export class PythonDependencyManager {
         : undefined;
 
     if (!sourceFile) {
-      throw new Error(`未找到 MaiBot 依赖声明文件: ${requirementsPath} 或 ${pyprojectPath}`);
+      throw new Error(`鏈壘鍒?MaiBot 渚濊禆澹版槑鏂囦欢: ${requirementsPath} 鎴?${pyprojectPath}`);
     }
+
+    if (sourceFile === requirementsPath) {
+      const satisfied = await this.areRequirementsSatisfied(requirementsPath);
+      if (satisfied) {
+        const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
+        for (const line of output) {
+          onOutput?.(line);
+        }
+        return {
+          sourceFile,
+          sourceUrl: TUNA_SIMPLE_INDEX,
+          targetDir: this.getOverridesRoot(),
+          output,
+          installedAt: Date.now(),
+        };
+      }
+    }
+
+    const targetDir = this.getOverridesRoot();
+    await mkdir(targetDir, { recursive: true });
 
     const sourceArgs = sourceFile === requirementsPath ? ["-r", requirementsPath] : [maibotRoot];
     const args = [
@@ -458,6 +505,8 @@ export class PythonDependencyManager {
       "pip",
       "install",
       "--upgrade",
+      "--upgrade-strategy",
+      "only-if-needed",
       "--target",
       targetDir,
       "--index-url",
@@ -468,10 +517,12 @@ export class PythonDependencyManager {
       "120",
       "--retries",
       "5",
-      "--no-warn-script-location",
+      "--disable-pip-version-check",
+      "--progress-bar",
+      "off",
       ...sourceArgs,
     ];
-    const output = await this.runPython(args);
+    const output = await this.runPython(args, signal, onOutput);
 
     return {
       sourceFile,
@@ -482,7 +533,57 @@ export class PythonDependencyManager {
     };
   }
 
-  private runPython(args: string[]): Promise<string[]> {
+  private async areRequirementsSatisfied(requirementsPath: string): Promise<boolean> {
+    const script = String.raw`
+import importlib.metadata as metadata
+import pathlib
+import re
+import sys
+from packaging.requirements import Requirement
+
+path = pathlib.Path(sys.argv[1])
+missing = []
+for raw_line in path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or line.startswith(("-", "git+", "http://", "https://")):
+        continue
+    line = re.sub(r"\s+#.*$", "", line)
+    try:
+        requirement = Requirement(line)
+    except Exception:
+        missing.append(f"unparsed requirement: {line}")
+        continue
+    try:
+        version = metadata.version(requirement.name)
+    except metadata.PackageNotFoundError:
+        missing.append(f"missing: {requirement.name}")
+        continue
+    if requirement.specifier and not requirement.specifier.contains(version, prereleases=True):
+        missing.append(f"version mismatch: {requirement.name} {version} not in {requirement.specifier}")
+
+if missing:
+    print("\n".join(missing))
+    raise SystemExit(1)
+`;
+
+    try {
+      await this.runPython(["-c", script, requirementsPath], undefined, undefined, this.buildPythonPathEnv());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private runPython(
+    args: string[],
+    signal?: AbortSignal,
+    onOutput?: PythonOutputHandler,
+    extraEnv?: Record<string, string>,
+  ): Promise<string[]> {
+    if (onOutput) {
+      return this.runPythonStreaming(args, signal, onOutput, extraEnv);
+    }
+
     return new Promise((resolve, reject) => {
       execFile(
         this.initManager.getPythonPath(),
@@ -492,8 +593,10 @@ export class PythonDependencyManager {
           timeout: PIP_TIMEOUT_MS,
           windowsHide: true,
           maxBuffer: 8 * 1024 * 1024,
+          signal,
           env: {
             ...process.env,
+            ...extraEnv,
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
           },
@@ -510,4 +613,95 @@ export class PythonDependencyManager {
       );
     });
   }
+
+  private runPythonStreaming(
+    args: string[],
+    signal: AbortSignal | undefined,
+    onOutput: PythonOutputHandler,
+    extraEnv?: Record<string, string>,
+  ): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+      const output: string[] = [];
+      const child = spawn(this.initManager.getPythonPath(), args, {
+        cwd: this.paths.installRoot,
+        windowsHide: true,
+        signal,
+        env: {
+          ...process.env,
+          ...extraEnv,
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+        },
+      });
+      this.startupUpgradeChild = child;
+      let settled = false;
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+      const timeout = setTimeout(() => {
+        child.kill();
+        finish(new Error(`Python command timed out after ${Math.round(PIP_TIMEOUT_MS / 1000)}s`));
+      }, PIP_TIMEOUT_MS);
+
+      const emitLine = (line: string): void => {
+        const normalized = line.trimEnd();
+        if (!normalized) {
+          return;
+        }
+        output.push(normalized);
+        onOutput(normalized);
+      };
+
+      const collect = (chunk: Buffer, stream: "stdout" | "stderr"): void => {
+        const current = stream === "stdout" ? stdoutBuffer : stderrBuffer;
+        const parts = `${current}${chunk.toString("utf8")}`.replace(/\r(?!\n)/gu, "\n").split(/\n/u);
+        const nextBuffer = parts.pop() ?? "";
+        for (const part of parts) {
+          emitLine(part);
+        }
+        if (stream === "stdout") {
+          stdoutBuffer = nextBuffer;
+        } else {
+          stderrBuffer = nextBuffer;
+        }
+      };
+
+      const flush = (): void => {
+        emitLine(stdoutBuffer);
+        emitLine(stderrBuffer);
+        stdoutBuffer = "";
+        stderrBuffer = "";
+      };
+
+      const finish = (error?: Error): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.startupUpgradeChild === child) {
+          this.startupUpgradeChild = undefined;
+        }
+        clearTimeout(timeout);
+        flush();
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(output);
+      };
+
+      child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
+      child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
+      child.on("error", (error) => finish(error));
+      child.on("close", (code, signalName) => {
+        if (code === 0) {
+          finish();
+          return;
+        }
+
+        const detail = output.join("\n") || `Python command exited with code ${code ?? "null"} signal ${signalName ?? "null"}`;
+        finish(new Error(detail));
+      });
+    });
+  }
 }
+

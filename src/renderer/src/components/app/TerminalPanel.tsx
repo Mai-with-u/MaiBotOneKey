@@ -1,6 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
+import type { LogEntry, PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
 import { ArrowDownToLine, Copy, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
@@ -108,6 +108,10 @@ function canWriteToSession(session?: PtySessionSnapshot): boolean {
   return session?.status === "running";
 }
 
+function serviceIdFromLog(entry: LogEntry): ServiceId | undefined {
+  return entry.source === "maibot" || entry.source === "napcat" ? entry.source : undefined;
+}
+
 async function copyTerminalSelection(terminal: Terminal): Promise<void> {
   const selection = terminal.getSelection();
   if (!selection) {
@@ -132,6 +136,7 @@ export function TerminalPanel({
   const panesRef = useRef(new Map<string, HTMLDivElement>());
   const bridgeRef = useRef<typeof window.maibotDesktop | null>(null);
   const activeServiceIdRef = useRef(activeServiceId);
+  const prePtyNoticeRef = useRef(new Map<ServiceId, string>());
   const { resolved: resolvedTheme } = useTheme();
 
   const servicesById = useMemo(
@@ -237,6 +242,25 @@ export function TerminalPanel({
     [fitTerminal, getTerminal],
   );
 
+  useEffect(() => {
+    for (const item of serviceTerminals) {
+      const service = servicesById.get(item.serviceId);
+      const session = sessionsRef.current.get(item.sessionId);
+      if (session || service?.status !== "starting") {
+        prePtyNoticeRef.current.delete(item.serviceId);
+        continue;
+      }
+
+      const message = service.detail || "正在启动；后台会先检查并更新依赖，完成后再创建 PTY";
+      if (prePtyNoticeRef.current.get(item.serviceId) === message) {
+        continue;
+      }
+
+      prePtyNoticeRef.current.set(item.serviceId, message);
+      writeSystemLine(getTerminal(item.sessionId).terminal, message);
+    }
+  }, [getTerminal, servicesById, sessionVersion]);
+
   const setTerminalPane = useCallback(
     (sessionId: string) => (element: HTMLDivElement | null) => {
       if (!element) {
@@ -325,6 +349,15 @@ export function TerminalPanel({
         sessionsRef.current.set(snapshot.id, snapshot);
         void loadSessionBuffer(snapshot.id);
         notifySessionsChanged();
+      }),
+      bridge.logs.onEntry((entry) => {
+        const serviceId = serviceIdFromLog(entry);
+        if (!serviceId || entry.stream !== "system") {
+          return;
+        }
+
+        const sessionId = `service:${serviceId}`;
+        writeSystemLine(getTerminal(sessionId).terminal, entry.message);
       }),
     ];
 

@@ -14,6 +14,10 @@ interface RegisterPtyIpcOptions {
   getMainWindow: () => BrowserWindow | null;
 }
 
+function isMissingSession(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("PTY session not found:");
+}
+
 export function registerPtyIpc({ manager, getMainWindow }: RegisterPtyIpcOptions): void {
   const sendToRenderer = (channel: string, payload: unknown): void => {
     const window = getMainWindow();
@@ -38,7 +42,13 @@ export function registerPtyIpc({ manager, getMainWindow }: RegisterPtyIpcOptions
   });
 
   ipcMain.handle("pty:resize", (_event, request: PtyResizeRequest): void => {
-    manager.resize(request);
+    try {
+      manager.resize(request);
+    } catch (error) {
+      if (!isMissingSession(error)) {
+        throw error;
+      }
+    }
   });
 
   ipcMain.handle("pty:stop", (_event, request: PtyStopRequest): void => {
@@ -58,6 +68,13 @@ export function registerPtyIpc({ manager, getMainWindow }: RegisterPtyIpcOptions
   });
 
   ipcMain.handle("pty:getBuffer", (_event, sessionId: string): string => {
-    return manager.getBuffer(sessionId);
+    try {
+      return manager.getBuffer(sessionId);
+    } catch (error) {
+      if (!isMissingSession(error)) {
+        throw error;
+      }
+      return "";
+    }
   });
 }

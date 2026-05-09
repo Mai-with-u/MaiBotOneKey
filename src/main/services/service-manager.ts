@@ -452,6 +452,10 @@ export class ServiceManager extends EventEmitter {
       await this.initManager.assertAgreementsConfirmed();
     }
 
+    if (state.status === "starting") {
+      return this.toDescriptor(definition, state);
+    }
+
     if (existingSession && isLivePtyStatus(existingSession.status)) {
       this.setState(serviceId, {
         ...state,
@@ -503,7 +507,7 @@ export class ServiceManager extends EventEmitter {
       error: undefined,
       detail: `正在启动 ${definition.name} PTY`,
       stoppedAt: undefined,
-      ptySessionId: sessionId,
+      ptySessionId: undefined,
       command: displayCommand,
       cwd: resolved.cwd,
     });
@@ -521,16 +525,33 @@ export class ServiceManager extends EventEmitter {
         definition.id === "maibot" ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
       const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
       if (definition.id === "maibot" && this.pythonDependencyManager) {
+        this.setState("maibot", {
+          ...this.getState("maibot"),
+          detail: "正在更新 MaiBot 依赖，完成后会启动后台 PTY",
+        });
         this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependency files");
-        const upgradeResult = await this.pythonDependencyManager.upgradeStartupDependencies();
-        for (const line of upgradeResult.output) {
-          this.logs.append("maibot", "system", `startup dependency upgrade: ${line}`);
-        }
+        const dependencyUpgradeStartedAt = Date.now();
+        const dependencyUpgradeHeartbeat = setInterval(() => {
+          const elapsedSeconds = Math.round((Date.now() - dependencyUpgradeStartedAt) / 1000);
+          this.logs.append("maibot", "system", `startup dependency upgrade still running (${elapsedSeconds}s)`);
+        }, 15_000);
+        const upgradeResult = await this.pythonDependencyManager
+          .upgradeStartupDependencies((line) => {
+            this.logs.append("maibot", "system", `startup dependency upgrade: ${line}`);
+          })
+          .finally(() => clearInterval(dependencyUpgradeHeartbeat));
         this.logs.append(
           "maibot",
           "system",
           `startup dependency upgrade completed: ${upgradeResult.sourceFile} -> ${upgradeResult.targetDir}`,
         );
+        if (!this.getState("maibot").desired) {
+          return this.toDescriptor(definition, this.getState("maibot"));
+        }
+        this.setState("maibot", {
+          ...this.getState("maibot"),
+          detail: "依赖更新完成，正在启动 MaiBot Core PTY",
+        });
       }
       const session = this.pty.start({
         id: sessionId,
@@ -562,6 +583,21 @@ export class ServiceManager extends EventEmitter {
       return this.toDescriptor(definition, this.getState(serviceId));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const current = this.getState(serviceId);
+      if (!current.desired && !current.ptySessionId) {
+        this.logs.append(serviceId, "system", `start cancelled before PTY session was created: ${message}`);
+        this.setState(serviceId, {
+          ...current,
+          status: "stopped",
+          health: "unknown",
+          managed: false,
+          pid: undefined,
+          error: undefined,
+          detail: "已取消启动",
+          stoppedAt: Date.now(),
+        });
+        return this.toDescriptor(definition, this.getState(serviceId));
+      }
       this.logs.append(serviceId, "system", `start process failed: ${message}`);
       this.setState(serviceId, {
         ...this.getState(serviceId),
@@ -581,6 +617,21 @@ export class ServiceManager extends EventEmitter {
   async stop(serviceId: ServiceId): Promise<ServiceDescriptor> {
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
+    if (!state.ptySessionId && state.status === "starting") {
+      const cancelledDependencyUpdate =
+        serviceId === "maibot" ? (this.pythonDependencyManager?.cancelStartupUpgrade() ?? false) : false;
+      this.logs.append(serviceId, "system", "startup cancelled before PTY session was created");
+      this.setState(serviceId, {
+        ...state,
+        status: "stopped",
+        health: "unknown",
+        desired: false,
+        managed: false,
+        detail: cancelledDependencyUpdate ? "已取消启动并中断依赖更新" : "已取消启动",
+        stoppedAt: Date.now(),
+      });
+      return this.toDescriptor(definition, this.getState(serviceId));
+    }
     if (!state.ptySessionId || state.status === "stopped") {
       return this.toDescriptor(definition, state);
     }
@@ -623,6 +674,23 @@ export class ServiceManager extends EventEmitter {
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
     if (!state.ptySessionId) {
+      if (state.status === "starting") {
+        const cancelledDependencyUpdate =
+          serviceId === "maibot" ? (this.pythonDependencyManager?.cancelStartupUpgrade() ?? false) : false;
+        this.logs.append(serviceId, "system", "startup force-cancelled before PTY session was created");
+        this.setState(serviceId, {
+          ...state,
+          status: "stopped",
+          health: "unknown",
+          desired: false,
+          managed: false,
+          pid: undefined,
+          error: undefined,
+          detail: cancelledDependencyUpdate ? "已强制取消启动并中断依赖更新" : "已强制取消启动",
+          stoppedAt: Date.now(),
+        });
+        return this.toDescriptor(definition, this.getState(serviceId));
+      }
       return this.toDescriptor(definition, state);
     }
 

@@ -79,11 +79,13 @@ function ServiceChip({
 }): React.JSX.Element {
   const isTransitioning =
     service.status === "starting" || service.status === "stopping" || busy;
+  const isStarting = service.status === "starting";
   const canStart = service.status === "stopped" || service.status === "error";
   const canStop =
     service.status === "running" ||
     service.status === "starting" ||
     service.status === "error";
+  const stopDisabled = !canStop || (busy && !isStarting) || service.status === "stopping";
 
   return (
     <div className="flex h-7 min-w-0 shrink-0 items-center gap-2 rounded-full border border-border bg-card pr-1 pl-2.5">
@@ -122,7 +124,7 @@ function ServiceChip({
             <button
               type="button"
               aria-label={`停止 ${service.name}`}
-              disabled={!canStop || isTransitioning}
+              disabled={stopDisabled}
               onClick={() => onStop(service.id)}
               className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
             >
@@ -202,6 +204,9 @@ export function DesktopShell(): React.JSX.Element {
   const maibotService = serviceById.get("maibot");
   const napcatService = serviceById.get("napcat");
   const runningCount = services.filter((s) => s.status === "running").length;
+  const canInterruptStartup =
+    actionBusy === "all:start" ||
+    services.some((service) => service.status === "starting");
 
   const openLogs = useCallback(() => {
     void window.maibotDesktop?.openLogsDirectory();
@@ -357,7 +362,7 @@ export function DesktopShell(): React.JSX.Element {
                   size="sm"
                   variant="ghost"
                   onClick={stopAll}
-                  disabled={actionBusy !== null}
+                  disabled={actionBusy !== null && !canInterruptStartup}
                   className="h-7 px-2 text-[11px]"
                 >
                   {actionBusy === "all:stop" ? (

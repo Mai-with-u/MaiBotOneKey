@@ -14,6 +14,7 @@ import type {
   ModuleUpdateResult,
   ModuleSourceConfig,
   ModuleSourceUpdate,
+  ModuleTagOption,
   NapcatAdapterConfig,
   NapcatAdapterConfigSaveResult,
   NapcatAdapterConfigState,
@@ -86,7 +87,8 @@ const desktopBridge: DesktopBridge = {
     confirm: () => ipcRenderer.invoke("agreements:confirm") as Promise<StartupAgreementConfirmResult>,
   },
   modules: {
-    updateMaiBot: () => ipcRenderer.invoke("modules:updateMaibot") as Promise<ModuleUpdateResult>,
+    updateMaiBot: (tag?: string) => ipcRenderer.invoke("modules:updateMaibot", tag) as Promise<ModuleUpdateResult>,
+    listMaiBotTags: () => ipcRenderer.invoke("modules:listMaibotTags") as Promise<ModuleTagOption[]>,
     getSourceConfig: () => ipcRenderer.invoke("modules:getSourceConfig") as Promise<ModuleSourceConfig>,
     saveSourceConfig: (config: ModuleSourceUpdate) =>
       ipcRenderer.invoke("modules:saveSourceConfig", config) as Promise<ModuleSourceConfig>,

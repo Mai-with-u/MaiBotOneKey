@@ -7,6 +7,7 @@ import type {
   ModuleSourceOption,
   ModuleSourcePreset,
   ModuleSourceUpdate,
+  ModuleTagOption,
   ModuleUpdateResult,
   RuntimePaths,
 } from "../../shared/contracts";
@@ -51,6 +52,11 @@ interface RepoUpdateSpec {
   throwOnFailure: boolean;
   /** 是否执行 git submodule 更新（仅主仓需要）。 */
   runSubmodule: boolean;
+  targetTag?: string;
+}
+
+function isPrereleaseTag(tag: string): boolean {
+  return /(?:^|[._+-])(?:a|alpha|b|beta|rc|pre|preview|dev)\d*/iu.test(tag);
 }
 
 function splitOutput(output: string): string[] {
@@ -100,7 +106,24 @@ export class ModuleUpdater {
     return config;
   }
 
-  async updateMaiBot(): Promise<ModuleUpdateResult> {
+  async listMaiBotTags(): Promise<ModuleTagOption[]> {
+    const gitPath = this.initManager.getGitPath();
+    const sourceConfig = await this.getSourceConfig();
+    const result = await this.runGit(
+      gitPath,
+      this.paths.installRoot,
+      ["ls-remote", "--tags", "--refs", sourceConfig.maibotUrl],
+      FETCH_ORIGIN_TIMEOUT_MS,
+    );
+    return result.output
+      .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
+      .filter((tag): tag is string => Boolean(tag))
+      .sort((left, right) => right.localeCompare(left, "en-US", { numeric: true, sensitivity: "base" }))
+      .slice(0, 80)
+      .map((name) => ({ name, isPrerelease: isPrereleaseTag(name) }));
+  }
+
+  async updateMaiBot(targetTag?: string): Promise<ModuleUpdateResult> {
     const gitPath = this.initManager.getGitPath();
     if (!existsSync(gitPath)) {
       throw new Error(`内置 Git 不存在: ${gitPath}`);
@@ -118,55 +141,8 @@ export class ModuleUpdater {
       defaultBranch: "main",
       throwOnFailure: true,
       runSubmodule: true,
+      targetTag: targetTag?.trim() || undefined,
     });
-
-    // napcat-adapter（独立仓库，被主仓 .gitignore 排除，必须单独更新）
-    const adapterCwd = join(
-      this.paths.modulesRoot,
-      "MaiBot",
-      "plugins",
-      "napcat-adapter",
-    );
-    const adapterBundled = join(
-      this.paths.bundledModulesRoot,
-      "MaiBot",
-      "plugins",
-      "napcat-adapter",
-    );
-    const plugins: ModuleUpdateResult[] = [];
-    if (existsSync(adapterCwd) || existsSync(adapterBundled)) {
-      try {
-        const adapterResult = await this.updateGitRepository(gitPath, {
-          moduleId: "napcat-adapter",
-          moduleName: "napcat-adapter",
-          cwd: adapterCwd,
-          bundledDir: adapterBundled,
-          remoteUrl: sourceConfig.napcatAdapterUrl,
-          defaultBranch: "plugin",
-          throwOnFailure: false,
-          runSubmodule: false,
-        });
-        plugins.push(adapterResult);
-      } catch (err) {
-        // throwOnFailure=false 下理论不会到这里，兜底捕获以免拖垮主流程
-        plugins.push({
-          moduleId: "napcat-adapter",
-          moduleName: "napcat-adapter",
-          cwd: adapterCwd,
-          gitPath,
-          changed: false,
-          output: [`napcat-adapter 更新过程异常: ${toDetail(err)}`],
-          updatedAt: Date.now(),
-          source: "remote",
-          warning: `napcat-adapter 更新失败：${toDetail(err)}`,
-          remoteError: toDetail(err),
-        });
-      }
-    }
-
-    if (plugins.length > 0) {
-      mainResult.plugins = plugins;
-    }
     return mainResult;
   }
 
@@ -321,7 +297,7 @@ export class ModuleUpdater {
           )
         ).output,
       );
-      upstream = await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
+      upstream = spec.targetTag ? `refs/tags/${spec.targetTag}` : await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
       append(
         `[${moduleName}] reset --hard ${upstream}`,
         (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
@@ -331,6 +307,9 @@ export class ModuleUpdater {
       output.push(
         `[${moduleName}] 远端 (origin) 拉取失败（${Math.round(FETCH_ORIGIN_TIMEOUT_MS / 1000)} 秒内未完成或网络异常）: ${remoteError}`,
       );
+      if (spec.targetTag) {
+        throw new Error(`无法拉取远端 tag ${spec.targetTag}: ${remoteError}`);
+      }
       if (!bundledHasGit) {
         const failure = `无法连接 GitHub 远端 (${remoteUrl})，且未找到一键包内置兜底仓库可供回退：${remoteError}`;
         if (spec.throwOnFailure) {
