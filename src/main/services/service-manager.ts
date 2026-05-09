@@ -520,6 +520,18 @@ export class ServiceManager extends EventEmitter {
       const baseEnv =
         definition.id === "maibot" ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
       const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
+      if (definition.id === "maibot" && this.pythonDependencyManager) {
+        this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependency files");
+        const upgradeResult = await this.pythonDependencyManager.upgradeStartupDependencies();
+        for (const line of upgradeResult.output) {
+          this.logs.append("maibot", "system", `startup dependency upgrade: ${line}`);
+        }
+        this.logs.append(
+          "maibot",
+          "system",
+          `startup dependency upgrade completed: ${upgradeResult.sourceFile} -> ${upgradeResult.targetDir}`,
+        );
+      }
       const session = this.pty.start({
         id: sessionId,
         title: definition.name,
@@ -550,7 +562,7 @@ export class ServiceManager extends EventEmitter {
       return this.toDescriptor(definition, this.getState(serviceId));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logs.append(serviceId, "system", `pty start failed: ${message}`);
+      this.logs.append(serviceId, "system", `start process failed: ${message}`);
       this.setState(serviceId, {
         ...this.getState(serviceId),
         status: "error",

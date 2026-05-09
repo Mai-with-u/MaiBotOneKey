@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type {
@@ -38,6 +39,14 @@ interface SimpleProjectJson {
 interface FetchTextResult {
   contentType: string;
   text: string;
+}
+
+interface StartupDependencyUpgradeResult {
+  sourceFile: string;
+  sourceUrl: string;
+  targetDir: string;
+  output: string[];
+  installedAt: number;
 }
 
 function splitOutput(output: string): string[] {
@@ -310,6 +319,8 @@ function hasMissingUploadTimes(versions: PythonPackageVersion[]): boolean {
 }
 
 export class PythonDependencyManager {
+  private startupUpgradePromise?: Promise<StartupDependencyUpgradeResult>;
+
   constructor(
     private readonly paths: RuntimePaths,
     private readonly initManager: InitManager,
@@ -409,6 +420,61 @@ export class PythonDependencyManager {
     return {
       packageName: request.packageName,
       version: request.version.trim(),
+      sourceUrl: TUNA_SIMPLE_INDEX,
+      targetDir,
+      output,
+      installedAt: Date.now(),
+    };
+  }
+
+  async upgradeStartupDependencies(): Promise<StartupDependencyUpgradeResult> {
+    this.startupUpgradePromise ??= this.installProjectDeclaredDependencies().catch((error: unknown) => {
+      this.startupUpgradePromise = undefined;
+      throw error;
+    });
+    return this.startupUpgradePromise;
+  }
+
+  private async installProjectDeclaredDependencies(): Promise<StartupDependencyUpgradeResult> {
+    const targetDir = this.getOverridesRoot();
+    await mkdir(targetDir, { recursive: true });
+
+    const maibotRoot = join(this.paths.modulesRoot, "MaiBot");
+    const requirementsPath = join(maibotRoot, "requirements.txt");
+    const pyprojectPath = join(maibotRoot, "pyproject.toml");
+    const sourceFile = existsSync(requirementsPath)
+      ? requirementsPath
+      : existsSync(pyprojectPath)
+        ? pyprojectPath
+        : undefined;
+
+    if (!sourceFile) {
+      throw new Error(`未找到 MaiBot 依赖声明文件: ${requirementsPath} 或 ${pyprojectPath}`);
+    }
+
+    const sourceArgs = sourceFile === requirementsPath ? ["-r", requirementsPath] : [maibotRoot];
+    const args = [
+      "-m",
+      "pip",
+      "install",
+      "--upgrade",
+      "--target",
+      targetDir,
+      "--index-url",
+      TUNA_SIMPLE_INDEX,
+      "--trusted-host",
+      "pypi.tuna.tsinghua.edu.cn",
+      "--timeout",
+      "120",
+      "--retries",
+      "5",
+      "--no-warn-script-location",
+      ...sourceArgs,
+    ];
+    const output = await this.runPython(args);
+
+    return {
+      sourceFile,
       sourceUrl: TUNA_SIMPLE_INDEX,
       targetDir,
       output,
