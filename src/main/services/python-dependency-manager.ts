@@ -416,6 +416,7 @@ export class PythonDependencyManager {
       "--retries",
       "5",
       "--no-deps",
+      "--no-compile",
       "--no-warn-script-location",
       requirement,
     ];
@@ -469,37 +470,49 @@ export class PythonDependencyManager {
     const maibotRoot = join(this.paths.modulesRoot, "MaiBot");
     const requirementsPath = join(maibotRoot, "requirements.txt");
     const pyprojectPath = join(maibotRoot, "pyproject.toml");
-    const sourceFile = existsSync(requirementsPath)
-      ? requirementsPath
-      : existsSync(pyprojectPath)
-        ? pyprojectPath
-        : undefined;
+    const pyprojectDependencies = existsSync(pyprojectPath)
+      ? await this.readPyprojectDependencies(pyprojectPath).catch(() => [])
+      : [];
+    const sourceFile = pyprojectDependencies.length > 0
+      ? pyprojectPath
+      : existsSync(requirementsPath)
+        ? requirementsPath
+        : existsSync(pyprojectPath)
+          ? pyprojectPath
+          : undefined;
 
     if (!sourceFile) {
       throw new Error(`鏈壘鍒?MaiBot 渚濊禆澹版槑鏂囦欢: ${requirementsPath} 鎴?${pyprojectPath}`);
     }
+    if (sourceFile === pyprojectPath && pyprojectDependencies.length === 0) {
+      throw new Error(`MaiBot pyproject.toml 娌℃湁鍙敤鐨?[project.dependencies]: ${pyprojectPath}`);
+    }
 
-    if (sourceFile === requirementsPath) {
-      const satisfied = await this.areRequirementsSatisfied(requirementsPath);
-      if (satisfied) {
-        const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
-        for (const line of output) {
-          onOutput?.(line);
-        }
-        return {
-          sourceFile,
-          sourceUrl: TUNA_SIMPLE_INDEX,
-          targetDir: this.getOverridesRoot(),
-          output,
-          installedAt: Date.now(),
-        };
+    const sourceArgs = pyprojectDependencies.length > 0 ? pyprojectDependencies : ["-r", requirementsPath];
+    if (pyprojectDependencies.length > 0) {
+      onOutput?.(`using pyproject dependencies (${pyprojectDependencies.length} entries)`);
+    }
+
+    const satisfied = pyprojectDependencies.length > 0
+      ? await this.areDependencySpecifiersSatisfied(pyprojectDependencies)
+      : await this.areRequirementsSatisfied(requirementsPath);
+    if (satisfied) {
+      const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
+      for (const line of output) {
+        onOutput?.(line);
       }
+      return {
+        sourceFile,
+        sourceUrl: TUNA_SIMPLE_INDEX,
+        targetDir: this.getOverridesRoot(),
+        output,
+        installedAt: Date.now(),
+      };
     }
 
     const targetDir = this.getOverridesRoot();
     await mkdir(targetDir, { recursive: true });
 
-    const sourceArgs = sourceFile === requirementsPath ? ["-r", requirementsPath] : [maibotRoot];
     const args = [
       "-m",
       "pip",
@@ -518,6 +531,8 @@ export class PythonDependencyManager {
       "--retries",
       "5",
       "--disable-pip-version-check",
+      "--no-compile",
+      "--no-warn-script-location",
       "--progress-bar",
       "off",
       ...sourceArgs,
@@ -568,6 +583,66 @@ if missing:
 
     try {
       await this.runPython(["-c", script, requirementsPath], undefined, undefined, this.buildPythonPathEnv());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readPyprojectDependencies(pyprojectPath: string): Promise<string[]> {
+    const script = String.raw`
+import json
+import pathlib
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
+data = tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+dependencies = data.get("project", {}).get("dependencies", [])
+if not isinstance(dependencies, list):
+    dependencies = []
+print(json.dumps([item for item in dependencies if isinstance(item, str) and item.strip()]))
+`;
+    const output = await this.runPython(["-c", script, pyprojectPath]);
+    const raw = output.find((line) => line.trim().startsWith("[")) ?? "[]";
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  }
+
+  private async areDependencySpecifiersSatisfied(dependencies: string[]): Promise<boolean> {
+    const script = String.raw`
+import importlib.metadata as metadata
+import json
+import sys
+from packaging.requirements import Requirement
+
+missing = []
+for line in json.loads(sys.argv[1]):
+    try:
+        requirement = Requirement(line)
+    except Exception:
+        missing.append(f"unparsed requirement: {line}")
+        continue
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        continue
+    try:
+        version = metadata.version(requirement.name)
+    except metadata.PackageNotFoundError:
+        missing.append(f"missing: {requirement.name}")
+        continue
+    if requirement.specifier and not requirement.specifier.contains(version, prereleases=True):
+        missing.append(f"version mismatch: {requirement.name} {version} not in {requirement.specifier}")
+
+if missing:
+    print("\n".join(missing))
+    raise SystemExit(1)
+`;
+
+    try {
+      await this.runPython(["-c", script, JSON.stringify(dependencies)], undefined, undefined, this.buildPythonPathEnv());
       return true;
     } catch {
       return false;
@@ -657,6 +732,9 @@ if missing:
         const nextBuffer = parts.pop() ?? "";
         for (const part of parts) {
           emitLine(part);
+          if (/Installing collected packages/iu.test(part)) {
+            emitLine("pip is writing package files; this step can be quiet for a while");
+          }
         }
         if (stream === "stdout") {
           stdoutBuffer = nextBuffer;

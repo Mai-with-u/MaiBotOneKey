@@ -123,9 +123,11 @@ async function copyTerminalSelection(terminal: Terminal): Promise<void> {
 
 export function TerminalPanel({
   active = true,
+  recentLogs = [],
   services = [],
 }: {
   active?: boolean;
+  recentLogs?: LogEntry[];
   services?: ServiceDescriptor[];
 }): React.JSX.Element {
   const [activeServiceId, setActiveServiceId] = useState<ServiceId>("maibot");
@@ -137,6 +139,8 @@ export function TerminalPanel({
   const bridgeRef = useRef<typeof window.maibotDesktop | null>(null);
   const activeServiceIdRef = useRef(activeServiceId);
   const prePtyNoticeRef = useRef(new Map<ServiceId, string>());
+  const recentLogsRef = useRef<LogEntry[]>(recentLogs);
+  const writtenSystemLogIdsRef = useRef(new Set<string>());
   const { resolved: resolvedTheme } = useTheme();
 
   const servicesById = useMemo(
@@ -151,6 +155,10 @@ export function TerminalPanel({
   useEffect(() => {
     activeServiceIdRef.current = activeServiceId;
   }, [activeServiceId]);
+
+  useEffect(() => {
+    recentLogsRef.current = recentLogs;
+  }, [recentLogs]);
 
   const notifySessionsChanged = useCallback(() => {
     setSessionVersion((version) => version + 1);
@@ -242,6 +250,21 @@ export function TerminalPanel({
     [fitTerminal, getTerminal],
   );
 
+  const writeStoredSystemLogs = useCallback(
+    (sessionId: string) => {
+      const terminal = getTerminal(sessionId).terminal;
+      for (const entry of recentLogsRef.current) {
+        const serviceId = serviceIdFromLog(entry);
+        if (!serviceId || entry.stream !== "system" || `service:${serviceId}` !== sessionId) {
+          continue;
+        }
+        writeSystemLine(terminal, entry.message);
+        writtenSystemLogIdsRef.current.add(entry.id);
+      }
+    },
+    [getTerminal],
+  );
+
   useEffect(() => {
     for (const item of serviceTerminals) {
       const service = servicesById.get(item.serviceId);
@@ -288,12 +311,13 @@ export function TerminalPanel({
         if (buffer) {
           instance.terminal.write(buffer);
         }
+        writeStoredSystemLogs(sessionId);
         instance.bufferLoaded = true;
       } catch {
         instance.bufferLoaded = false;
       }
     },
-    [getTerminal],
+    [getTerminal, writeStoredSystemLogs],
   );
 
   const refreshSessions = useCallback(async () => {
@@ -356,6 +380,10 @@ export function TerminalPanel({
           return;
         }
 
+        if (writtenSystemLogIdsRef.current.has(entry.id)) {
+          return;
+        }
+        writtenSystemLogIdsRef.current.add(entry.id);
         const sessionId = `service:${serviceId}`;
         writeSystemLine(getTerminal(sessionId).terminal, entry.message);
       }),
@@ -367,6 +395,17 @@ export function TerminalPanel({
       }
     };
   }, [getTerminal, loadSessionBuffer, notifySessionsChanged, refreshSessions]);
+
+  useEffect(() => {
+    for (const entry of recentLogs) {
+      const serviceId = serviceIdFromLog(entry);
+      if (!serviceId || entry.stream !== "system" || writtenSystemLogIdsRef.current.has(entry.id)) {
+        continue;
+      }
+      writtenSystemLogIdsRef.current.add(entry.id);
+      writeSystemLine(getTerminal(`service:${serviceId}`).terminal, entry.message);
+    }
+  }, [getTerminal, recentLogs]);
 
   useEffect(() => {
     if (!active) {

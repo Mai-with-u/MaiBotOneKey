@@ -112,6 +112,35 @@ async function readPyprojectVersion(path: string): Promise<string | undefined> {
   }
 }
 
+function normalizePythonPackageName(name: string): string {
+  return name.toLowerCase().replace(/[-_.]+/gu, "-");
+}
+
+async function readPythonDistInfoVersion(root: string, packageName: string): Promise<string | undefined> {
+  try {
+    const { readdir, readFile } = await import("node:fs/promises");
+    const expectedName = normalizePythonPackageName(packageName);
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.endsWith(".dist-info")) {
+        continue;
+      }
+      const metadata = await readFile(join(root, entry.name, "METADATA"), "utf8").catch(() => undefined);
+      if (!metadata) {
+        continue;
+      }
+      const name = metadata.match(/^Name:\s*(.+)$/imu)?.[1]?.trim();
+      if (!name || normalizePythonPackageName(name) !== expectedName) {
+        continue;
+      }
+      return metadata.match(/^Version:\s*(.+)$/imu)?.[1]?.trim();
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function parseVersionTag(tag: string): ParsedVersionTag | undefined {
   const normalized = tag.replace(/^v/iu, "");
   const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:[-._]?([a-z]+)\.?(\d*)?)?$/iu);
@@ -175,7 +204,10 @@ export function registerAppIpc({
   requestQuit,
   showMainWindow,
 }: RegisterAppIpcOptions): void {
-  const readModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
+  let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
+  let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
+
+  const readLocalModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
     const maibotRoot = join(paths.modulesRoot, "MaiBot");
 
@@ -185,6 +217,20 @@ export function registerAppIpc({
       versions.maibotLocalSource = "pyproject";
     }
 
+    const dashboardVersion = await readPythonDistInfoVersion(
+      pythonDependencyManager.getOverridesRoot(),
+      "maibot-dashboard",
+    );
+    if (dashboardVersion) {
+      versions.dashboardOverride = dashboardVersion;
+      versions.dashboardOverrideSource = "python-overrides";
+    }
+
+    return versions;
+  };
+
+  const readRemoteModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
+    const versions: ModuleRuntimeVersions = {};
     const gitPath = initManager.getGitPath();
     const sourceConfig = await moduleUpdater.getSourceConfig().catch(() => undefined);
     const tagRemoteUrls = [sourceConfig?.maibotUrl, "https://github.com/Mai-with-u/MaiBot.git"].filter(
@@ -206,34 +252,6 @@ export function registerAppIpc({
       }
     }
 
-    const pythonPath = initManager.getPythonPath();
-    if (existsSync(pythonPath)) {
-      const overridesRoot = pythonDependencyManager.getOverridesRoot();
-      const dashboardVersion = await runProcess(
-        pythonPath,
-        [
-          "-c",
-          [
-            "import importlib.metadata as m, sys",
-            `root=${JSON.stringify(overridesRoot)}`,
-            "target='maibot-dashboard'",
-            "for d in m.distributions(path=[root]):",
-            "    name=(d.metadata.get('Name') or '').lower().replace('_','-')",
-            "    if name == target:",
-            "        print(d.version)",
-            "        break",
-            "else:",
-            "    sys.exit(1)",
-          ].join("\n"),
-        ],
-        paths.installRoot,
-      );
-      if (dashboardVersion) {
-        versions.dashboardOverride = dashboardVersion;
-        versions.dashboardOverrideSource = "python-overrides";
-      }
-    }
-
     const latestDashboard = await fetchPypiLatestVersion("maibot-dashboard");
     if (latestDashboard) {
       versions.dashboardLatestPypi = latestDashboard;
@@ -242,6 +260,11 @@ export function registerAppIpc({
 
     return versions;
   };
+
+  const readModuleVersions = async (): Promise<ModuleRuntimeVersions> => ({
+    ...remoteModuleVersionsCache,
+    ...(await readLocalModuleVersions()),
+  });
 
   const buildSnapshot = async (): Promise<DesktopSnapshot> => ({
     paths,
@@ -265,6 +288,24 @@ export function registerAppIpc({
     window.webContents.send("desktop:snapshot", await buildSnapshot());
   };
 
+  const scheduleRemoteModuleVersionsRefresh = (): void => {
+    if (remoteModuleVersionsRefreshPromise) {
+      return;
+    }
+    remoteModuleVersionsRefreshPromise = readRemoteModuleVersions()
+      .then(async (versions) => {
+        remoteModuleVersionsCache = versions;
+        await broadcastSnapshot();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        logStore.append("desktop", "system", `读取远端版本失败: ${message}`);
+      })
+      .finally(() => {
+        remoteModuleVersionsRefreshPromise = null;
+      });
+  };
+
   serviceManager.on("snapshot", (services: ServiceDescriptor[]) => {
     const window = getMainWindow();
     window?.webContents.send("services:snapshot", services);
@@ -277,7 +318,9 @@ export function registerAppIpc({
 
   ipcMain.handle("desktop:getSnapshot", async (): Promise<DesktopSnapshot> => {
     await serviceManager.refresh();
-    return buildSnapshot();
+    const snapshot = await buildSnapshot();
+    scheduleRemoteModuleVersionsRefresh();
+    return snapshot;
   });
 
   ipcMain.handle("desktop:openExternal", async (_event, url: string): Promise<void> => {

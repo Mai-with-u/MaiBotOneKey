@@ -502,6 +502,7 @@ export function DesktopShell(): React.JSX.Element {
             <TabsContent value="terminal" className="min-h-0 flex-1 outline-none">
               <TerminalPanel
                 active={activeTab === "terminal"}
+                recentLogs={snapshot?.recentLogs ?? []}
                 services={services}
               />
             </TabsContent>
