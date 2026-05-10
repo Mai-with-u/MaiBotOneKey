@@ -1,6 +1,6 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type {
   ManagedPythonPackage,
@@ -21,6 +21,7 @@ const MANAGED_PACKAGES: ManagedPythonPackage[] = [
   { name: "maibot-dashboard", label: "MaiBot Dashboard" },
   { name: "maim-message", label: "Maim Message" },
 ];
+const PYTHON_OVERLAY_TARGET_ENV = "MAIBOT_PYTHON_OVERLAY_TARGET";
 const REQUEST_TIMEOUT_MS = 60_000;
 const PIP_TIMEOUT_MS = 10 * 60 * 1000;
 const SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json, application/json;q=0.9, text/html;q=0.8";
@@ -50,6 +51,11 @@ interface StartupDependencyUpgradeResult {
 }
 
 type PythonOutputHandler = (line: string) => void;
+
+interface UnsatisfiedDependency {
+  requirement: string;
+  reason: string;
+}
 
 function splitOutput(output: string): string[] {
   return output
@@ -120,6 +126,14 @@ function versionEntry(version: string, upload?: { uploadedAt?: string; uploadedA
 
 function normalizeProjectName(name: string): string {
   return name.toLowerCase().replace(/[-_.]+/gu, "-");
+}
+
+function packageImportName(name: string): string {
+  return normalizeProjectName(name).replace(/-/gu, "_");
+}
+
+function packageNameFromRequirement(requirement: string): string | undefined {
+  return requirement.trim().match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/u)?.[1];
 }
 
 function stripArchiveExtension(filename: string): string {
@@ -343,8 +357,10 @@ export class PythonDependencyManager {
   }
 
   buildPythonPathEnv(baseEnv: Record<string, string | undefined> = process.env): Record<string, string> {
+    const overridesRoot = this.getOverridesRoot();
     return {
-      PYTHONPATH: [this.getOverridesRoot(), baseEnv.PYTHONPATH].filter(Boolean).join(delimiter),
+      PYTHONPATH: [overridesRoot, baseEnv.PYTHONPATH].filter(Boolean).join(delimiter),
+      [PYTHON_OVERLAY_TARGET_ENV]: overridesRoot,
     };
   }
 
@@ -397,6 +413,7 @@ export class PythonDependencyManager {
 
     const targetDir = this.getOverridesRoot();
     await mkdir(targetDir, { recursive: true });
+    await this.removeOverlayPackage(request.packageName, targetDir);
 
     const requirement = `${request.packageName}==${request.version.trim()}`;
     const args = [
@@ -488,15 +505,14 @@ export class PythonDependencyManager {
       throw new Error(`MaiBot pyproject.toml 娌℃湁鍙敤鐨?[project.dependencies]: ${pyprojectPath}`);
     }
 
-    const sourceArgs = pyprojectDependencies.length > 0 ? pyprojectDependencies : ["-r", requirementsPath];
     if (pyprojectDependencies.length > 0) {
       onOutput?.(`using pyproject dependencies (${pyprojectDependencies.length} entries)`);
     }
 
-    const satisfied = pyprojectDependencies.length > 0
-      ? await this.areDependencySpecifiersSatisfied(pyprojectDependencies)
-      : await this.areRequirementsSatisfied(requirementsPath);
-    if (satisfied) {
+    const unsatisfied = pyprojectDependencies.length > 0
+      ? await this.getUnsatisfiedDependencySpecifiers(pyprojectDependencies)
+      : await this.getUnsatisfiedRequirements(requirementsPath);
+    if (unsatisfied.length === 0) {
       const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
       for (const line of output) {
         onOutput?.(line);
@@ -509,9 +525,14 @@ export class PythonDependencyManager {
         installedAt: Date.now(),
       };
     }
+    for (const item of unsatisfied) {
+      onOutput?.(`dependency needs install: ${item.reason}`);
+    }
 
     const targetDir = this.getOverridesRoot();
     await mkdir(targetDir, { recursive: true });
+    const sourceArgs = unsatisfied.map((item) => item.requirement);
+    await this.removeOverlayPackages(sourceArgs, targetDir);
 
     const args = [
       "-m",
@@ -537,7 +558,7 @@ export class PythonDependencyManager {
       "off",
       ...sourceArgs,
     ];
-    const output = await this.runPython(args, signal, onOutput);
+    const output = await this.runPython(args, signal, onOutput, this.buildPythonPathEnv());
 
     return {
       sourceFile,
@@ -548,9 +569,46 @@ export class PythonDependencyManager {
     };
   }
 
-  private async areRequirementsSatisfied(requirementsPath: string): Promise<boolean> {
+  private async removeOverlayPackages(requirements: string[], targetDir = this.getOverridesRoot()): Promise<void> {
+    const packageNames = requirements
+      .map(packageNameFromRequirement)
+      .filter((name): name is string => Boolean(name));
+
+    await Promise.all(
+      Array.from(new Set(packageNames.map(normalizeProjectName))).map((name) => this.removeOverlayPackage(name, targetDir)),
+    );
+  }
+
+  private async removeOverlayPackage(packageName: string, targetDir = this.getOverridesRoot()): Promise<void> {
+    const normalizedName = normalizeProjectName(packageName);
+    const importName = packageImportName(packageName);
+    let entries;
+    try {
+      entries = await readdir(targetDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .filter((entry) => {
+          const normalizedEntryName = normalizeProjectName(entry.name);
+          const importEntryName = entry.name.toLowerCase().replace(/[-.]+/gu, "_");
+          return (
+            importEntryName === importName
+            || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-dist-info"))
+            || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-egg-info"))
+          );
+        })
+        .map((entry) => rm(join(targetDir, entry.name), { recursive: true, force: true })),
+    );
+  }
+
+  private async getUnsatisfiedRequirements(requirementsPath: string): Promise<UnsatisfiedDependency[]> {
     const script = String.raw`
 import importlib.metadata as metadata
+import json
 import pathlib
 import re
 import sys
@@ -566,26 +624,26 @@ for raw_line in path.read_text(encoding="utf-8").splitlines():
     try:
         requirement = Requirement(line)
     except Exception:
-        missing.append(f"unparsed requirement: {line}")
+        missing.append({"requirement": line, "reason": f"unparsed requirement: {line}"})
+        continue
+    if requirement.marker is not None and not requirement.marker.evaluate():
         continue
     try:
         version = metadata.version(requirement.name)
     except metadata.PackageNotFoundError:
-        missing.append(f"missing: {requirement.name}")
+        missing.append({"requirement": line, "reason": f"missing: {requirement.name}"})
         continue
     if requirement.specifier and not requirement.specifier.contains(version, prereleases=True):
-        missing.append(f"version mismatch: {requirement.name} {version} not in {requirement.specifier}")
+        missing.append({"requirement": line, "reason": f"version mismatch: {requirement.name} {version} not in {requirement.specifier}"})
 
-if missing:
-    print("\n".join(missing))
-    raise SystemExit(1)
+print(json.dumps(missing, ensure_ascii=False))
 `;
 
     try {
-      await this.runPython(["-c", script, requirementsPath], undefined, undefined, this.buildPythonPathEnv());
-      return true;
-    } catch {
-      return false;
+      const output = await this.runPython(["-c", script, requirementsPath], undefined, undefined, this.buildPythonPathEnv());
+      return this.parseUnsatisfiedDependencies(output);
+    } catch (error) {
+      throw new Error(`检查 MaiBot requirements.txt 失败: ${toDetail(error)}`);
     }
   }
 
@@ -612,7 +670,7 @@ print(json.dumps([item for item in dependencies if isinstance(item, str) and ite
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
   }
 
-  private async areDependencySpecifiersSatisfied(dependencies: string[]): Promise<boolean> {
+  private async getUnsatisfiedDependencySpecifiers(dependencies: string[]): Promise<UnsatisfiedDependency[]> {
     const script = String.raw`
 import importlib.metadata as metadata
 import json
@@ -624,29 +682,51 @@ for line in json.loads(sys.argv[1]):
     try:
         requirement = Requirement(line)
     except Exception:
-        missing.append(f"unparsed requirement: {line}")
+        missing.append({"requirement": line, "reason": f"unparsed requirement: {line}"})
         continue
     if requirement.marker is not None and not requirement.marker.evaluate():
         continue
     try:
         version = metadata.version(requirement.name)
     except metadata.PackageNotFoundError:
-        missing.append(f"missing: {requirement.name}")
+        missing.append({"requirement": line, "reason": f"missing: {requirement.name}"})
         continue
     if requirement.specifier and not requirement.specifier.contains(version, prereleases=True):
-        missing.append(f"version mismatch: {requirement.name} {version} not in {requirement.specifier}")
+        missing.append({"requirement": line, "reason": f"version mismatch: {requirement.name} {version} not in {requirement.specifier}"})
 
-if missing:
-    print("\n".join(missing))
-    raise SystemExit(1)
+print(json.dumps(missing, ensure_ascii=False))
 `;
 
     try {
-      await this.runPython(["-c", script, JSON.stringify(dependencies)], undefined, undefined, this.buildPythonPathEnv());
-      return true;
-    } catch {
-      return false;
+      const output = await this.runPython(["-c", script, JSON.stringify(dependencies)], undefined, undefined, this.buildPythonPathEnv());
+      return this.parseUnsatisfiedDependencies(output);
+    } catch (error) {
+      throw new Error(`检查 MaiBot pyproject.toml 依赖失败: ${toDetail(error)}`);
     }
+  }
+
+  private parseUnsatisfiedDependencies(output: string[]): UnsatisfiedDependency[] {
+    const raw = output.find((line) => line.trim().startsWith("[")) ?? "[]";
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((item): UnsatisfiedDependency[] => {
+      if (
+        typeof item === "object"
+        && item !== null
+        && "requirement" in item
+        && "reason" in item
+        && typeof item.requirement === "string"
+        && typeof item.reason === "string"
+        && item.requirement.trim()
+      ) {
+        return [{ requirement: item.requirement, reason: item.reason }];
+      }
+
+      return [];
+    });
   }
 
   private runPython(

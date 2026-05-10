@@ -116,10 +116,32 @@ function normalizePythonPackageName(name: string): string {
   return name.toLowerCase().replace(/[-_.]+/gu, "-");
 }
 
+function normalizePythonVersion(version: string): number[] {
+  const clean = version.trim().toLowerCase().replace(/^v/u, "").split(/[+-]/u, 1)[0];
+  return clean.split(/[._-]/u).map((part) => {
+    const value = part.match(/^\d+/u)?.[0];
+    return value ? Number(value) : 0;
+  });
+}
+
+function comparePythonVersions(left: string, right: string): number {
+  const leftParts = normalizePythonVersion(left);
+  const rightParts = normalizePythonVersion(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index++) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return left.localeCompare(right, "en-US", { numeric: true, sensitivity: "base" });
+}
+
 async function readPythonDistInfoVersion(root: string, packageName: string): Promise<string | undefined> {
   try {
     const { readdir, readFile } = await import("node:fs/promises");
     const expectedName = normalizePythonPackageName(packageName);
+    const versions: string[] = [];
     const entries = await readdir(root, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory() || !entry.name.endsWith(".dist-info")) {
@@ -133,12 +155,15 @@ async function readPythonDistInfoVersion(root: string, packageName: string): Pro
       if (!name || normalizePythonPackageName(name) !== expectedName) {
         continue;
       }
-      return metadata.match(/^Version:\s*(.+)$/imu)?.[1]?.trim();
+      const version = metadata.match(/^Version:\s*(.+)$/imu)?.[1]?.trim();
+      if (version) {
+        versions.push(version);
+      }
     }
+    return versions.sort(comparePythonVersions).at(-1);
   } catch {
     return undefined;
   }
-  return undefined;
 }
 
 function parseVersionTag(tag: string): ParsedVersionTag | undefined {
@@ -166,28 +191,70 @@ function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): num
   return left.tag.localeCompare(right.tag, "en-US", { numeric: true, sensitivity: "base" });
 }
 
-function pickLatestTags(rawTags: string[]): Pick<ModuleRuntimeVersions, "maibotLatestStableTag" | "maibotLatestPrereleaseTag"> {
+function isAtLeastVersion(tag: ParsedVersionTag, minimum: number[]): boolean {
+  const length = Math.max(tag.parts.length, minimum.length);
+  for (let index = 0; index < length; index++) {
+    const diff = (tag.parts[index] ?? 0) - (minimum[index] ?? 0);
+    if (diff !== 0) {
+      return diff > 0;
+    }
+  }
+  return true;
+}
+
+function pickLatestTags(
+  rawTags: string[],
+): Pick<ModuleRuntimeVersions, "maibotLatestStableTag" | "maibotLatestPrereleaseTag" | "maibotLatestLegacyTag"> {
   const parsed = rawTags.map(parseVersionTag).filter((tag): tag is ParsedVersionTag => Boolean(tag));
-  const stable = parsed.filter((tag) => !tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
-  const prerelease = parsed.filter((tag) => tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+  const standard = parsed.filter((tag) => isAtLeastVersion(tag, [1, 0, 0]));
+  const stable = standard.filter((tag) => !tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+  const prerelease = standard.filter((tag) => tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+  const legacy = parsed.filter((tag) => !isAtLeastVersion(tag, [1, 0, 0])).sort(compareParsedTags).at(-1)?.tag;
   return {
     maibotLatestStableTag: stable,
     maibotLatestPrereleaseTag: prerelease,
+    maibotLatestLegacyTag: legacy,
   };
 }
 
-async function fetchPypiLatestVersion(packageName: string): Promise<string | undefined> {
+function parsePackageVersion(version: string): ParsedVersionTag | undefined {
+  const normalized = version.replace(/^v/iu, "");
+  const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:(?:[-._]?(?:dev|a|alpha|b|beta|rc|pre|preview))\d*)?/iu);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    tag: version,
+    parts: match[1].split(".").map((part) => Number(part)),
+    prerelease: /(?:^|[._+-])(?:dev|a|alpha|b|beta|rc|pre|preview)\d*/iu.test(version),
+  };
+}
+
+async function fetchPypiVersionSummary(
+  packageName: string,
+): Promise<Pick<ModuleRuntimeVersions, "dashboardLatestPypi" | "dashboardLatestStablePypi" | "dashboardLatestPrereleasePypi">> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
     const response = await fetch(`https://pypi.org/pypi/${packageName}/json`, { signal: controller.signal });
     if (!response.ok) {
-      return undefined;
+      return {};
     }
-    const data = (await response.json()) as { info?: { version?: unknown } };
-    return typeof data.info?.version === "string" ? data.info.version : undefined;
+    const data = (await response.json()) as { info?: { version?: unknown }; releases?: Record<string, unknown> };
+    const latestPypi = typeof data.info?.version === "string" ? data.info.version : undefined;
+    const parsed = Object.keys(data.releases ?? {})
+      .map(parsePackageVersion)
+      .filter((version): version is ParsedVersionTag => Boolean(version));
+    const stable = parsed.filter((version) => !version.prerelease).sort(compareParsedTags).at(-1)?.tag;
+    const prerelease = parsed.filter((version) => version.prerelease).sort(compareParsedTags).at(-1)?.tag;
+    return {
+      dashboardLatestPypi: latestPypi ?? stable,
+      dashboardLatestStablePypi: stable,
+      dashboardLatestPrereleasePypi: prerelease,
+    };
   } catch {
-    return undefined;
+    return {};
   } finally {
     clearTimeout(timeout);
   }
@@ -252,9 +319,13 @@ export function registerAppIpc({
       }
     }
 
-    const latestDashboard = await fetchPypiLatestVersion("maibot-dashboard");
-    if (latestDashboard) {
-      versions.dashboardLatestPypi = latestDashboard;
+    const dashboardVersions = await fetchPypiVersionSummary("maibot-dashboard");
+    if (
+      dashboardVersions.dashboardLatestPypi
+      || dashboardVersions.dashboardLatestStablePypi
+      || dashboardVersions.dashboardLatestPrereleasePypi
+    ) {
+      Object.assign(versions, dashboardVersions);
       versions.dashboardPypiSource = "PyPI";
     }
 

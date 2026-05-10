@@ -57,6 +57,7 @@
     "productName": "MaiBot OneKey",
     "npmRebuild": false,
     "buildDependenciesFromSource": false,
+    "compression": "store",
     "directories": {
       "output": "release",
       "buildResources": "resources"

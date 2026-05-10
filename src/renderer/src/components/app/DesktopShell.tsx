@@ -470,7 +470,12 @@ export function DesktopShell(): React.JSX.Element {
 
             <TabsContent value="home" className="min-h-0 flex-1 outline-none">
               {snapshot ? (
-                <HomePanel active={activeTab === "home"} onOpenTab={setActiveTab} snapshot={snapshot} />
+                <HomePanel
+                  active={activeTab === "home"}
+                  onOpenTab={setActiveTab}
+                  onSnapshot={setSnapshot}
+                  snapshot={snapshot}
+                />
               ) : (
                 <div className="grid h-full place-items-center text-sm text-muted-foreground">
                   <span className="flex items-center gap-2">

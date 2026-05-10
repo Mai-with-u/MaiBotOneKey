@@ -824,7 +824,10 @@ export class InitManager {
     }
 
     if (serviceId === "maibot") {
-      const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"]);
+      const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", [
+        "bot.py",
+        join("plugins", "napcat-adapter"),
+      ]);
       const repairedConfig = await this.repairBotConfigVersionInfo();
       return repairedConfig ? [...changedFiles, repairedConfig] : changedFiles;
     }

@@ -108,10 +108,13 @@ export interface ModuleRuntimeVersions {
   maibotLocalSource?: "pyproject" | "unknown";
   maibotLatestStableTag?: string;
   maibotLatestPrereleaseTag?: string;
+  maibotLatestLegacyTag?: string;
   maibotRemoteSource?: string;
   dashboardOverride?: string;
   dashboardOverrideSource?: "python-overrides" | "unknown";
   dashboardLatestPypi?: string;
+  dashboardLatestStablePypi?: string;
+  dashboardLatestPrereleasePypi?: string;
   dashboardPypiSource?: string;
 }
 
