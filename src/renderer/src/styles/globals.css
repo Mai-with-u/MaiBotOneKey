@@ -211,10 +211,7 @@ samp {
   border: 2px solid transparent;
 }
 
-/* xterm tweaks — keep terminal body its own dark/light scroll thumb regardless of app theme */
+/* xterm keeps a dark console surface regardless of app theme. */
 .xterm-viewport::-webkit-scrollbar-thumb {
   background: oklch(1 0 0 / 0.18);
-}
-:root:not(.dark) .xterm-viewport::-webkit-scrollbar-thumb {
-  background: oklch(0 0 0 / 0.18);
 }

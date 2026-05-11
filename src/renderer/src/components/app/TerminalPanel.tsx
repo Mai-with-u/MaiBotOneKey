@@ -8,56 +8,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { useShortcut } from "@/lib/use-shortcut";
-import { useTheme, type ResolvedTheme } from "@/lib/use-theme";
 
-const XTERM_THEMES = {
-  dark: {
-    background: "#0c100e",
-    foreground: "#dfe8d1",
-    cursor: "#b8ed88",
-    cursorAccent: "#0c100e",
-    selectionBackground: "#496240",
-    black: "#11150f",
-    red: "#e26d5a",
-    green: "#9bd56c",
-    yellow: "#d5ba65",
-    blue: "#7bb5e8",
-    magenta: "#c98ee8",
-    cyan: "#70d5c1",
-    white: "#dfe8d1",
-    brightBlack: "#596151",
-    brightRed: "#f28c78",
-    brightGreen: "#b8ed88",
-    brightYellow: "#ecd37d",
-    brightBlue: "#9fd1ff",
-    brightMagenta: "#dfadff",
-    brightCyan: "#96ead9",
-    brightWhite: "#f2f8e8",
-  },
-  light: {
-    background: "#fbf8f4",
-    foreground: "#2a2520",
-    cursor: "#c75a14",
-    cursorAccent: "#fbf8f4",
-    selectionBackground: "#ffd9b8",
-    black: "#2a2520",
-    red: "#c0392b",
-    green: "#3f7d2c",
-    yellow: "#a06800",
-    blue: "#1f6fb0",
-    magenta: "#9c2c95",
-    cyan: "#187a73",
-    white: "#f4ece1",
-    brightBlack: "#6c5f53",
-    brightRed: "#d8553f",
-    brightGreen: "#5aa83b",
-    brightYellow: "#c2871a",
-    brightBlue: "#3387d3",
-    brightMagenta: "#b94db0",
-    brightCyan: "#229690",
-    brightWhite: "#fffaf2",
-  },
-} as const satisfies Record<ResolvedTheme, NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"]>;
+const XTERM_THEME = {
+  background: "#0c100e",
+  foreground: "#dfe8d1",
+  cursor: "#b8ed88",
+  cursorAccent: "#0c100e",
+  selectionBackground: "#496240",
+  black: "#11150f",
+  red: "#e26d5a",
+  green: "#9bd56c",
+  yellow: "#d5ba65",
+  blue: "#7bb5e8",
+  magenta: "#c98ee8",
+  cyan: "#70d5c1",
+  white: "#dfe8d1",
+  brightBlack: "#596151",
+  brightRed: "#f28c78",
+  brightGreen: "#b8ed88",
+  brightYellow: "#ecd37d",
+  brightBlue: "#9fd1ff",
+  brightMagenta: "#dfadff",
+  brightCyan: "#96ead9",
+  brightWhite: "#f2f8e8",
+} as const satisfies NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"];
 
 const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: string }> = [
   { serviceId: "maibot", sessionId: "service:maibot", title: "MaiBot Core" },
@@ -141,7 +115,6 @@ export function TerminalPanel({
   const prePtyNoticeRef = useRef(new Map<ServiceId, string>());
   const recentLogsRef = useRef<LogEntry[]>(recentLogs);
   const writtenSystemLogIdsRef = useRef(new Set<string>());
-  const { resolved: resolvedTheme } = useTheme();
 
   const servicesById = useMemo(
     () => new Map<ServiceId, ServiceDescriptor>(services.map((service) => [service.id, service])),
@@ -195,7 +168,7 @@ export function TerminalPanel({
         lineHeight: 1.22,
         scrollback: 100_000,
         tabStopWidth: 8,
-        theme: XTERM_THEMES[resolvedTheme],
+        theme: XTERM_THEME,
       });
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
@@ -234,7 +207,7 @@ export function TerminalPanel({
       terminalsRef.current.set(sessionId, instance);
       return instance;
     },
-    [resolvedTheme],
+    [],
   );
 
   const openTerminal = useCallback(
@@ -431,13 +404,6 @@ export function TerminalPanel({
   }, [activeTerminal.sessionId, fitTerminal]);
 
   useEffect(() => {
-    const theme = XTERM_THEMES[resolvedTheme];
-    for (const instance of terminalsRef.current.values()) {
-      instance.terminal.options.theme = theme;
-    }
-  }, [resolvedTheme]);
-
-  useEffect(() => {
     return () => {
       for (const instance of terminalsRef.current.values()) {
         for (const disposable of instance.disposables) {
@@ -528,7 +494,7 @@ export function TerminalPanel({
       <div className="min-h-0 flex-1 overflow-hidden p-3">
         <div
           className="size-full overflow-hidden rounded-md border border-border shadow-inner"
-          style={{ backgroundColor: XTERM_THEMES[resolvedTheme].background }}
+          style={{ backgroundColor: XTERM_THEME.background }}
         >
           {serviceTerminals.map((item) => (
             <div
