@@ -10,6 +10,10 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  MaiBotInstalledPlugin,
+  MaiBotPluginListResult,
+  MaiBotPluginOperationRequest,
+  MaiBotPluginOperationResult,
   ManagedPythonPackageName,
   ModuleUpdateResult,
   ModuleSourceConfig,
@@ -109,6 +113,16 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("napcatAdapter:getConfig") as Promise<NapcatAdapterConfigState>,
     saveConfig: (config: NapcatAdapterConfig) =>
       ipcRenderer.invoke("napcatAdapter:saveConfig", config) as Promise<NapcatAdapterConfigSaveResult>,
+  },
+  plugins: {
+    listMarket: () => ipcRenderer.invoke("plugins:listMarket") as Promise<MaiBotPluginListResult>,
+    listInstalled: () => ipcRenderer.invoke("plugins:listInstalled") as Promise<MaiBotInstalledPlugin[]>,
+    install: (request: MaiBotPluginOperationRequest) =>
+      ipcRenderer.invoke("plugins:install", request) as Promise<MaiBotPluginOperationResult>,
+    update: (request: MaiBotPluginOperationRequest) =>
+      ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
+    uninstall: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
   },
   pythonDeps: {
     getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,

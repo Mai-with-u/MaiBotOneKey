@@ -13,6 +13,10 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  MaiBotInstalledPlugin,
+  MaiBotPluginListResult,
+  MaiBotPluginOperationRequest,
+  MaiBotPluginOperationResult,
   ManagedPythonPackageName,
   ModuleRuntimeVersions,
   ModuleUpdateResult,
@@ -40,6 +44,7 @@ import type {
 } from "../../shared/contracts";
 import { InitManager } from "../services/init-manager";
 import { LogStore } from "../services/log-store";
+import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { ServiceManager } from "../services/service-manager";
@@ -377,6 +382,11 @@ export function registerAppIpc({
       });
   };
 
+  const maibotPluginClient = new MaiBotPluginClient({
+    maibotRoot: join(paths.modulesRoot, "MaiBot"),
+    gitPath: initManager.getGitPath(),
+  });
+
   serviceManager.on("snapshot", (services: ServiceDescriptor[]) => {
     const window = getMainWindow();
     window?.webContents.send("services:snapshot", services);
@@ -577,6 +587,55 @@ export function registerAppIpc({
         `napcat-adapter 配置已保存: ${result.configPath}`,
       );
       await broadcastSnapshot();
+      return result;
+    },
+  );
+
+  ipcMain.handle("plugins:listMarket", async (): Promise<MaiBotPluginListResult> => {
+    return maibotPluginClient.listMarket();
+  });
+
+  ipcMain.handle("plugins:listInstalled", async (): Promise<MaiBotInstalledPlugin[]> => {
+    return maibotPluginClient.listInstalled();
+  });
+
+  ipcMain.handle(
+    "plugins:install",
+    async (_event, request: MaiBotPluginOperationRequest): Promise<MaiBotPluginOperationResult> => {
+      if (!request.pluginId || !request.repositoryUrl) {
+        throw new Error("Plugin id and repository url are required.");
+      }
+      const result = await maibotPluginClient.install(request.pluginId, request.repositoryUrl, request.branch);
+      logStore.append("desktop", "system", `MaiBot plugin installed: ${request.pluginId}`);
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "plugins:update",
+    async (_event, request: MaiBotPluginOperationRequest): Promise<MaiBotPluginOperationResult> => {
+      if (!request.pluginId || !request.repositoryUrl) {
+        throw new Error("Plugin id and repository url are required.");
+      }
+      const result = await maibotPluginClient.update(
+        request.pluginId,
+        request.repositoryUrl,
+        request.branch,
+        request.latestVersion,
+      );
+      logStore.append("desktop", "system", `MaiBot plugin updated: ${request.pluginId}`);
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "plugins:uninstall",
+    async (_event, pluginId: string): Promise<MaiBotPluginOperationResult> => {
+      if (!pluginId) {
+        throw new Error("Plugin id is required.");
+      }
+      const result = await maibotPluginClient.uninstall(pluginId);
+      logStore.append("desktop", "system", `MaiBot plugin uninstalled: ${pluginId}`);
       return result;
     },
   );

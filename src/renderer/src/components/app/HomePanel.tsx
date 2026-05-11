@@ -1,13 +1,16 @@
 import {
   Activity,
+  ArrowRight,
   Bot,
   Download,
   Gauge,
   Loader2,
   PackageCheck,
+  Puzzle,
   Radar,
   RefreshCw,
   Server,
+  Store,
 } from "lucide-react";
 import type React from "react";
 import { useCallback, useState } from "react";
@@ -225,6 +228,42 @@ function VersionTile({
   );
 }
 
+function ShortcutTile({
+  icon,
+  title,
+  description,
+  actionLabel,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  actionLabel: string;
+  onClick: () => void;
+}): React.JSX.Element {
+  return (
+    <button
+      className="group flex min-h-28 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/35"
+      onClick={onClick}
+      type="button"
+    >
+      <span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-foreground">{title}</span>
+        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1 rounded-md bg-secondary px-2.5 py-1.5 text-[11px] font-medium text-secondary-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+        {actionLabel}
+        <ArrowRight className="size-3.5" />
+      </span>
+    </button>
+  );
+}
+
 export function HomePanel({
   active,
   snapshot,
@@ -283,6 +322,14 @@ export function HomePanel({
     setDashboardChannel((snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi) ? "stable" : "test");
     setUpdateDialog("dashboard");
   }, [snapshot.moduleVersions.dashboardLatestPypi, snapshot.moduleVersions.dashboardLatestStablePypi]);
+
+  const openPluginStore = useCallback(() => {
+    onOpenTab("pluginmarket");
+  }, [onOpenTab]);
+
+  const openPluginManager = useCallback(() => {
+    onOpenTab("pluginmanage");
+  }, [onOpenTab]);
 
   const updateMaiBot = useCallback(async () => {
     const target = maibotTargets[maibotChannel];
@@ -409,6 +456,23 @@ export function HomePanel({
                 busy: busy === "dashboard:update",
                 onClick: openDashboardUpdate,
               }}
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <ShortcutTile
+              icon={<Store className="size-5" />}
+              title="插件商店"
+              description="浏览 MaiBot 插件市场，安装兼容当前版本的插件。"
+              actionLabel="打开"
+              onClick={openPluginStore}
+            />
+            <ShortcutTile
+              icon={<Puzzle className="size-5" />}
+              title="插件管理"
+              description="查看已安装插件，执行更新、卸载与运行配置。"
+              actionLabel="管理"
+              onClick={openPluginManager}
             />
           </div>
         </div>

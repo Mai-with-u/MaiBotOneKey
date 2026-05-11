@@ -6,6 +6,7 @@
   Loader2,
   Play,
   Power,
+  Puzzle,
   Radar,
   RefreshCw,
   Settings,
@@ -155,6 +156,7 @@ function ServiceChip({
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
+  const [pluginMode, setPluginMode] = useState<"market" | "manage">("market");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const theme = useTheme();
@@ -284,13 +286,29 @@ export function DesktopShell(): React.JSX.Element {
     [runServiceAction],
   );
 
+  const selectTab = useCallback((value: string) => {
+    if (value === "pluginmarket") {
+      setPluginMode("market");
+      setActiveTab("plugins");
+      return;
+    }
+    if (value === "pluginmanage") {
+      setPluginMode("manage");
+      setActiveTab("plugins");
+      return;
+    }
+    setActiveTab(value);
+  }, []);
+
   // Shortcuts
-  useShortcut("Mod+1", () => setActiveTab("home"));
-  useShortcut("Mod+2", () => setActiveTab("maibot"));
-  useShortcut("Mod+3", () => setActiveTab("napcat"));
-  useShortcut("Mod+4", () => setActiveTab("terminal"));
-  useShortcut("Mod+5", () => setActiveTab("quickactions"));
-  useShortcut("Mod+6", () => setActiveTab("settings"));
+  useShortcut("Mod+1", () => selectTab("home"));
+  useShortcut("Mod+2", () => selectTab("maibot"));
+  useShortcut("Mod+3", () => selectTab("napcat"));
+  useShortcut("Mod+4", () => selectTab("terminal"));
+  useShortcut("Mod+5", () => selectTab("quickactions"));
+  useShortcut("Mod+6", () => selectTab("pluginmarket"));
+  useShortcut("Mod+7", () => selectTab("pluginmanage"));
+  useShortcut("Mod+8", () => selectTab("settings"));
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
   useShortcut("Mod+Shift+X", stopAll);
@@ -333,6 +351,24 @@ export function DesktopShell(): React.JSX.Element {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  className="h-7 px-2.5 text-[11px]"
+                  onClick={() => selectTab("settings")}
+                  size="sm"
+                  variant={activeTab === "settings" ? "default" : "secondary"}
+                >
+                  <Settings />
+                  设置
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <span className="flex items-center gap-1">
+                  设置 <Kbd keys="Mod+8" size="xs" tone="inverse" />
+                </span>
+              </TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -410,7 +446,7 @@ export function DesktopShell(): React.JSX.Element {
         <main className="flex min-h-0 flex-1 flex-col">
           <Tabs
             value={activeTab}
-            onValueChange={setActiveTab}
+            onValueChange={selectTab}
             className="flex min-h-0 flex-1 flex-col"
           >
             <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-background px-3">
@@ -440,9 +476,9 @@ export function DesktopShell(): React.JSX.Element {
                   快捷操作
                   <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
-                <TabsTrigger value="settings" className="gap-1.5">
-                  <Settings />
-                  设置
+                <TabsTrigger value="plugins" className="gap-1.5">
+                  <Puzzle />
+                  插件
                   <Kbd keys="Mod+6" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
               </TabsList>
@@ -472,7 +508,7 @@ export function DesktopShell(): React.JSX.Element {
               {snapshot ? (
                 <HomePanel
                   active={activeTab === "home"}
-                  onOpenTab={setActiveTab}
+                  onOpenTab={selectTab}
                   onSnapshot={setSnapshot}
                   snapshot={snapshot}
                 />
@@ -486,7 +522,11 @@ export function DesktopShell(): React.JSX.Element {
               )}
             </TabsContent>
 
-            <TabsContent value="maibot" className="min-h-0 flex-1 outline-none">
+            <TabsContent
+              forceMount
+              value="maibot"
+              className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+            >
               <WebviewPanel
                 active={activeTab === "maibot"}
                 emptyText="MaiBot Core 启动后会在这里载入官方 WebUI。"
@@ -495,7 +535,11 @@ export function DesktopShell(): React.JSX.Element {
               />
             </TabsContent>
 
-            <TabsContent value="napcat" className="min-h-0 flex-1 outline-none">
+            <TabsContent
+              forceMount
+              value="napcat"
+              className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+            >
               <WebviewPanel
                 active={activeTab === "napcat"}
                 emptyText="NapCat 启动后会在这里打开它自己的 WebUI。"
@@ -504,7 +548,11 @@ export function DesktopShell(): React.JSX.Element {
               />
             </TabsContent>
 
-            <TabsContent value="terminal" className="min-h-0 flex-1 outline-none">
+            <TabsContent
+              forceMount
+              value="terminal"
+              className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+            >
               <TerminalPanel
                 active={activeTab === "terminal"}
                 recentLogs={snapshot?.recentLogs ?? []}
@@ -520,10 +568,15 @@ export function DesktopShell(): React.JSX.Element {
             </TabsContent>
 
             <TabsContent
-              value="pluginmarket"
+              value="plugins"
               className="min-h-0 flex-1 overflow-hidden outline-none"
             >
-              <PluginMarketPanel />
+              <PluginMarketPanel
+                maibotService={maibotService}
+                maibotVersion={snapshot?.moduleVersions.maibotLocal}
+                mode={pluginMode}
+                onModeChange={setPluginMode}
+              />
             </TabsContent>
 
             <TabsContent

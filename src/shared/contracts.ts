@@ -260,6 +260,58 @@ export interface NapcatAdapterConfigSaveResult {
   savedAt: number;
 }
 
+export interface MaiBotPluginManifest {
+  id?: string;
+  name?: string;
+  version?: string;
+  description?: string;
+  author?: string | { name?: string; url?: string };
+  repository_url?: string;
+  urls?: { repository?: string; homepage?: string };
+  keywords?: string[];
+  categories?: string[];
+  host_application?: { min_version?: string; max_version?: string };
+  manifest_version?: number;
+}
+
+export interface MaiBotMarketPlugin {
+  id: string;
+  manifest: MaiBotPluginManifest;
+  installed?: boolean;
+  installedVersion?: string;
+  source?: string;
+}
+
+export interface MaiBotInstalledPlugin {
+  id: string;
+  manifest: MaiBotPluginManifest;
+  path: string;
+  enabled?: boolean;
+  loaded?: boolean;
+  load_status?: string;
+}
+
+export interface MaiBotPluginListResult {
+  installed: MaiBotInstalledPlugin[];
+  market: MaiBotMarketPlugin[];
+}
+
+export interface MaiBotPluginOperationRequest {
+  pluginId: string;
+  repositoryUrl?: string;
+  branch?: string;
+  latestVersion?: string;
+}
+
+export interface MaiBotPluginOperationResult {
+  success: boolean;
+  message?: string;
+  plugin_id?: string;
+  plugin_name?: string;
+  old_version?: string;
+  new_version?: string;
+}
+
 export interface QqAccountSetupRequest {
   qqAccount: string;
   websocketToken?: string;
@@ -467,6 +519,13 @@ export interface DesktopBridge {
   napcatAdapter: {
     getConfig: () => Promise<NapcatAdapterConfigState>;
     saveConfig: (config: NapcatAdapterConfig) => Promise<NapcatAdapterConfigSaveResult>;
+  };
+  plugins: {
+    listMarket: () => Promise<MaiBotPluginListResult>;
+    listInstalled: () => Promise<MaiBotInstalledPlugin[]>;
+    install: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
+    update: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
+    uninstall: (pluginId: string) => Promise<MaiBotPluginOperationResult>;
   };
   pythonDeps: {
     getState: () => Promise<PythonOverridesState>;

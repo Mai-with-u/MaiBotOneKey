@@ -281,10 +281,10 @@ export function TerminalPanel({
       try {
         const buffer = await bridge.pty.getBuffer(sessionId);
         instance.terminal.reset();
+        writeStoredSystemLogs(sessionId);
         if (buffer) {
           instance.terminal.write(buffer);
         }
-        writeStoredSystemLogs(sessionId);
         instance.bufferLoaded = true;
       } catch {
         instance.bufferLoaded = false;
@@ -306,11 +306,12 @@ export function TerminalPanel({
       sessionsRef.current = new Map(sessions.map((session) => [session.id, session]));
       await Promise.all(serviceTerminals.map((item) => loadSessionBuffer(item.sessionId, true)));
       notifySessionsChanged();
-      requestAnimationFrame(() => fitTerminal(activeTerminal.sessionId));
+      const currentService = serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current) ?? serviceTerminals[0];
+      requestAnimationFrame(() => fitTerminal(currentService.sessionId));
     } finally {
       setIsRefreshing(false);
     }
-  }, [activeTerminal.sessionId, fitTerminal, loadSessionBuffer, notifySessionsChanged]);
+  }, [fitTerminal, loadSessionBuffer, notifySessionsChanged]);
 
   useEffect(() => {
     void refreshSessions();
