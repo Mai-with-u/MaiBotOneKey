@@ -834,8 +834,9 @@ export class InitManager {
 
     const changedFiles = [
       ...(await this.ensureBundledModuleSubtree("napcat", [
-        "NapCatWinBootMain.exe",
-        join("Files", "versions", "config.json"),
+        "node.exe",
+        "index.js",
+        join("napcat", "package.json"),
       ])),
       ...(await this.ensureBundledModuleSubtree("napcatframework", ["versions"], true)),
     ];
@@ -1359,8 +1360,7 @@ export class InitManager {
       },
     };
 
-    for (const version of versions) {
-      const configDir = join(this.paths.modulesRoot, "napcat", "versions", version, "resources", "app", "napcat", "config");
+    for (const configDir of await this.findNapCatRuntimeConfigDirs()) {
       await mkdir(configDir, { recursive: true });
       await writeFile(
         join(configDir, `napcat_protocol_${qqAccount}.json`),
@@ -1386,8 +1386,14 @@ export class InitManager {
   }
 
   private async findNapCatWebUiConfigDirs(): Promise<string[]> {
+    return this.findNapCatRuntimeConfigDirs();
+  }
+
+  private async findNapCatRuntimeConfigDirs(): Promise<string[]> {
     const versions = await this.findNapCatVersions();
-    return versions.flatMap((version) => [
+    return [
+      join(this.paths.modulesRoot, "napcat", "napcat", "config"),
+      ...versions.flatMap((version) => [
       join(this.paths.modulesRoot, "napcat", "versions", version, "resources", "app", "napcat", "config"),
       join(
         this.paths.modulesRoot,
@@ -1401,7 +1407,8 @@ export class InitManager {
         "NapCat",
         "config",
       ),
-    ]);
+      ]),
+    ];
   }
 
   private async findNapCatVersions(): Promise<string[]> {

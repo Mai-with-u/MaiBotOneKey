@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import process from "node:process";
 
@@ -7,6 +7,7 @@ type PathKind = "file" | "dir";
 type Candidate = {
   path: string;
   kind: PathKind;
+  contains?: string[];
 };
 
 type Requirement = {
@@ -23,6 +24,10 @@ function file(path: string): Candidate {
 
 function dir(path: string): Candidate {
   return { path: join(root, path), kind: "dir" };
+}
+
+function dirContaining(path: string, contains: string[]): Candidate {
+  return { path: join(root, path), kind: "dir", contains };
 }
 
 const requirements: Requirement[] = [
@@ -97,9 +102,9 @@ const requirements: Requirement[] = [
     candidates: [dir("modules/napcat")],
   },
   {
-    label: "NapCat Windows launcher",
+    label: "NapCat Windows runtime",
     required: true,
-    candidates: [file("modules/napcat/NapCatWinBootMain.exe")],
+    candidates: [file("modules/napcat/node.exe"), file("modules/napcat/NapCatWinBootMain.exe")],
   },
   {
     label: "node-pty Windows pty binding",
@@ -118,8 +123,12 @@ const requirements: Requirement[] = [
   },
   {
     label: "NapCat version resources",
-    required: false,
-    candidates: [dir("modules/napcat/versions"), dir("modules/napcatframework/versions")],
+    required: true,
+    candidates: [
+      file("modules/napcat/napcat/package.json"),
+      dirContaining("modules/napcat/versions", [join("resources", "app", "package.json")]),
+      dirContaining("modules/napcatframework/versions", [join("resources", "app", "package.json")]),
+    ],
   },
   {
     label: "Windows app icon",
@@ -131,10 +140,39 @@ const requirements: Requirement[] = [
 async function matches(candidate: Candidate): Promise<boolean> {
   try {
     const info = await stat(candidate.path);
-    return candidate.kind === "dir" ? info.isDirectory() : info.isFile();
+    if (candidate.kind === "file") {
+      return info.isFile();
+    }
+    if (!info.isDirectory()) {
+      return false;
+    }
+    if (!candidate.contains?.length) {
+      return true;
+    }
+    return directoryHasAny(candidate.path, candidate.contains);
   } catch {
     return false;
   }
+}
+
+async function directoryHasAny(directory: string, relativePaths: string[]): Promise<boolean> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    for (const relativePath of relativePaths) {
+      try {
+        const info = await stat(join(directory, entry.name, relativePath));
+        if (info.isFile()) {
+          return true;
+        }
+      } catch {
+        // Try the next known NapCat layout.
+      }
+    }
+  }
+  return false;
 }
 
 function describeCandidates(candidates: Candidate[]): string {

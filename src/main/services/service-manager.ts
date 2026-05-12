@@ -810,6 +810,8 @@ export class ServiceManager extends EventEmitter {
     const maibotRoot = this.getRuntimePath("maibot");
     const napcatRoot = this.getRuntimePath("napcat");
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
+    const napcatNode = join(napcatRoot, "node.exe");
+    const napcatNodeEntry = join(napcatRoot, "index.js");
     const napcatLauncherName = "napcat-launch.cmd";
     const napcatLauncherPath = join(napcatRoot, napcatLauncherName);
     const cmdShell = process.env.ComSpec || "cmd.exe";
@@ -835,15 +837,21 @@ export class ServiceManager extends EventEmitter {
         ports: [6099],
         url: "http://127.0.0.1:6099/webui",
         cwd: napcatRoot,
-        defaultRequiredPaths: [napcatRoot, napcatExe],
+        defaultRequiredPaths: [napcatRoot],
         conflictPorts: [6099],
         readyPorts: [6099],
         displayDefaultCommandLine: async () => {
+          if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
+            return `${quoteCommandPart(napcatNode)} index.js`;
+          }
           return `${quoteCommandPart(napcatExe)} <QQ>`;
         },
         buildDefaultCommand: async () => {
           const qq = await this.initManager.readQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
+          if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
+            return [napcatNode, napcatNodeEntry];
+          }
           if (process.platform === "win32" && existsSync(napcatLauncherPath)) {
             // 通过 cmd.exe 调用磁盘上的 napcat-launch.cmd（已固定 chcp 65001），
             // argv 各元素独立传递，不会触发 cmd /C 字符串拼接的引号歧义。
@@ -857,6 +865,9 @@ export class ServiceManager extends EventEmitter {
         },
         buildDefaultCommandLine: async () => {
           await this.initManager.ensureNapCatWebUiConfig();
+          if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
+            return `${quoteCommandPart(napcatNode)} index.js`;
+          }
           return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatExe)} <QQ>`);
         },
       },
