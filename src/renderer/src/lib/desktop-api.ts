@@ -13,9 +13,17 @@ const fallbackSnapshot: DesktopSnapshot = {
   paths: {
     installRoot: "开发预览",
     userDataRoot: "开发预览",
+    defaultResourceRoot: "开发预览",
+    resourceRoot: "开发预览",
     modulesRoot: "开发预览/modules",
+    defaultMaibotRoot: "开发预览/modules/MaiBot",
+    maibotRoot: "开发预览/modules/MaiBot",
+    defaultNapcatRoot: "开发预览/modules/napcat",
+    napcatRoot: "开发预览/modules/napcat",
     bundledModulesRoot: "开发预览/modules",
     runtimeRoot: "开发预览/runtime",
+    defaultPythonOverridesRoot: "开发预览/python-overrides",
+    pythonOverridesRoot: "开发预览/python-overrides",
     logsRoot: "开发预览/logs",
   },
   services: [
@@ -81,23 +89,33 @@ const fallbackSnapshot: DesktopSnapshot = {
       defaultValue: "开发预览/runtime/git/bin/git.exe",
       customized: false,
     },
+  ],
+  runtimeResourcePathConfigs: [
     {
       key: "maibot",
-      label: "麦麦 MaiBot",
-      kind: "dir",
+      label: "MaiBot路径",
       value: "开发预览/modules/MaiBot",
       defaultValue: "开发预览/modules/MaiBot",
       customized: false,
     },
     {
       key: "napcat",
-      label: "NapCat",
-      kind: "dir",
+      label: "NapCat路径",
       value: "开发预览/modules/napcat",
       defaultValue: "开发预览/modules/napcat",
       customized: false,
     },
+    {
+      key: "pythonOverrides",
+      label: "python可写环境",
+      value: "开发预览/python-overrides",
+      defaultValue: "开发预览/python-overrides",
+      customized: false,
+    },
   ],
+  terminalSettings: {
+    useEmbeddedTerminal: true,
+  },
   initState: {
     isReady: false,
     checks: [
@@ -137,6 +155,8 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     services: snapshot.services ?? fallbackSnapshot.services,
     serviceCommands: snapshot.serviceCommands ?? fallbackSnapshot.serviceCommands,
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
+    runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
+    terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
     moduleVersions: {
       ...fallbackSnapshot.moduleVersions,
       ...snapshot.moduleVersions,

@@ -10,7 +10,7 @@
    bun install
    ```
 
-2. 准备 release payload。仓库根目录必须存在：
+2. 准备 release payload。构建完整包时，仓库根目录必须存在：
 
    ```text
    runtime/python/python.exe
@@ -34,7 +34,13 @@
    bun run release:win
    ```
 
-安装包会输出到 `release/`。
+安装包会输出到 `release/`，默认同时生成 `full` 完整包和 `lite` 精简包。`lite` 不包含 `runtime/python/` 与 `runtime/git/`，运行时会寻找系统 Python 3.12+ 与系统 Git，并在缺失时给出下载入口。
+
+只构建精简包时，payload 可以省略 `runtime/python/` 与 `runtime/git/`：
+
+```bash
+bun run release:win:lite
+```
 
 ## GitHub Actions 发布
 

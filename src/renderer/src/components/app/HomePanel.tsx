@@ -1,7 +1,6 @@
-import {
+﻿import {
   Activity,
   ArrowRight,
-  Bot,
   Download,
   Gauge,
   Loader2,
@@ -380,20 +379,10 @@ export function HomePanel({
     <>
       <div className={cn("h-full overflow-auto bg-background px-5 py-4", active ? "block" : "hidden")}>
         <div className="mx-auto grid max-w-6xl gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
             <div className="min-w-0">
               <h2 className="text-lg font-semibold">首页</h2>
               <p className="text-sm text-muted-foreground">MaiBot OneKey 当前运行概览</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button onClick={() => onOpenTab("maibot")} size="sm" variant="secondary">
-                <Radar />
-                MaiBot
-              </Button>
-              <Button onClick={() => onOpenTab("napcat")} size="sm" variant="secondary">
-                <Bot />
-                NapCat
-              </Button>
             </div>
           </div>
 
@@ -423,7 +412,7 @@ export function HomePanel({
 
           <div className="grid gap-3 lg:grid-cols-2">
             <ServiceSummary icon={<Radar className="size-5" />} service={maibot} />
-            <ServiceSummary icon={<Bot className="size-5" />} service={napcat} />
+            <ServiceSummary icon={<Server className="size-5" />} service={napcat} />
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -440,21 +429,6 @@ export function HomePanel({
                 icon: <RefreshCw />,
                 busy: busy === "maibot:update",
                 onClick: openMaiBotUpdate,
-              }}
-            />
-            <VersionTile
-              icon={<PackageCheck className="size-5" />}
-              label="WebUI 已安装版本"
-              value={snapshot.moduleVersions.dashboardOverride}
-              latest={[
-                { label: "最新正式版", value: dashboardTargets.stable },
-                { label: "最新测试版", value: dashboardTargets.test },
-              ]}
-              action={{
-                label: "更新",
-                icon: <Download />,
-                busy: busy === "dashboard:update",
-                onClick: openDashboardUpdate,
               }}
             />
           </div>

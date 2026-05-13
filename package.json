@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -14,8 +14,11 @@
     "check": "bun run typecheck && bun run build",
     "preview": "electron-vite preview",
     "release:check": "bun run scripts/release/check-windows-payload.ts",
+    "release:check:lite": "bun run scripts/release/check-windows-payload.ts --lite",
     "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
-    "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && electron-builder --win nsis --x64",
+    "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
+    "release:win:full": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts --variant full",
+    "release:win:lite": "bun run release:check:lite && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts --variant lite",
     "pack:win": "bun run release:win"
   },
   "dependencies": {

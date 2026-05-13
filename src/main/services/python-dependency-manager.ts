@@ -1,6 +1,6 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type {
   ManagedPythonPackage,
@@ -134,6 +134,18 @@ function packageImportName(name: string): string {
 
 function packageNameFromRequirement(requirement: string): string | undefined {
   return requirement.trim().match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/u)?.[1];
+}
+
+async function readRequirementsFile(path: string): Promise<string[]> {
+  const text = await readFile(path, "utf8");
+  return text
+    .replace(/\r\n/gu, "\n")
+    .replace(/\r/gu, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .map((line) => line.replace(/\s+#.*$/u, "").trim())
+    .filter((line) => line.length > 0 && !line.startsWith("-") && !/^git\+|^https?:\/\//iu.test(line));
 }
 
 function stripArchiveExtension(filename: string): string {
@@ -345,7 +357,7 @@ export class PythonDependencyManager {
   ) {}
 
   getOverridesRoot(): string {
-    return join(this.paths.userDataRoot, "python-overrides");
+    return this.paths.pythonOverridesRoot;
   }
 
   getState(): PythonOverridesState {
@@ -484,7 +496,7 @@ export class PythonDependencyManager {
     signal?: AbortSignal,
     onOutput?: PythonOutputHandler,
   ): Promise<StartupDependencyUpgradeResult> {
-    const maibotRoot = join(this.paths.modulesRoot, "MaiBot");
+    const maibotRoot = this.paths.maibotRoot;
     const requirementsPath = join(maibotRoot, "requirements.txt");
     const pyprojectPath = join(maibotRoot, "pyproject.toml");
     const pyprojectDependencies = existsSync(pyprojectPath)
@@ -509,9 +521,21 @@ export class PythonDependencyManager {
       onOutput?.(`using pyproject dependencies (${pyprojectDependencies.length} entries)`);
     }
 
-    const unsatisfied = pyprojectDependencies.length > 0
-      ? await this.getUnsatisfiedDependencySpecifiers(pyprojectDependencies)
-      : await this.getUnsatisfiedRequirements(requirementsPath);
+    const sourceDependencies = pyprojectDependencies.length > 0
+      ? pyprojectDependencies
+      : await readRequirementsFile(requirementsPath);
+    let unsatisfied: UnsatisfiedDependency[];
+    try {
+      unsatisfied = pyprojectDependencies.length > 0
+        ? await this.getUnsatisfiedDependencySpecifiers(pyprojectDependencies)
+        : await this.getUnsatisfiedRequirements(requirementsPath);
+    } catch (error) {
+      onOutput?.(`dependency probe failed; installing declared dependencies: ${toDetail(error)}`);
+      unsatisfied = sourceDependencies.map((requirement) => ({
+        requirement,
+        reason: "probe failed; install declared dependency",
+      }));
+    }
     if (unsatisfied.length === 0) {
       const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
       for (const line of output) {

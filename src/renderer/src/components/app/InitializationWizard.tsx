@@ -163,7 +163,7 @@ export function InitializationWizard({
   const filterDisabled = !chat.enableChatListFilter;
 
   const description = useMemo(
-    () => "填写机器人账号后会自动生成 NapCat 与 OneBot 连接配置，并初始化 napcat-adapter 插件。",
+    () => "填写机器人账号后会自动生成 NapCat 与 OneBot 连接配置。",
     [],
   );
 
@@ -196,8 +196,8 @@ export function InitializationWizard({
               value={qqAccount}
             />
             <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              保存后会向 NapCat 写入端口 7998 的正向 WebSocket 服务，并把同一个 token 同步到
-              napcat-adapter 插件，无需再手动配置。
+              保存后会向 NapCat 写入端口 7998 的正向 WebSocket 服务；如果当前 MaiBot 已安装
+              napcat-adapter，会同步写入同一个 token。
             </p>
           </section>
 
@@ -207,7 +207,7 @@ export function InitializationWizard({
               群聊 / 私聊名单
             </header>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              首次配置后会写入 napcat-adapter 的 <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">config.toml</code>。后续也可在“快捷操作”里随时调整。
+              当前 MaiBot 已存在 napcat-adapter 时，名单设置会同步写入它的 <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">config.toml</code>。
             </p>
 
             <div className="mt-3 grid gap-3">
@@ -308,7 +308,7 @@ export function InitializationWizard({
 
           <p className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
             <Filter className="size-3.5 shrink-0" />
-            稍后想要修改？打开顶部「快捷操作」标签页 → 「NapCat 适配器配置」即可可视化编辑全部字段。
+            稍后想要修改？打开顶部「插件」标签页，在插件管理中找到对应插件即可调整配置。
           </p>
         </DialogBody>
 

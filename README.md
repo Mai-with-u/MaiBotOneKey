@@ -18,9 +18,13 @@ bun run typecheck
 bun run build
 ```
 
+## 运行时资源
+
+打包版默认把可写运行资源放在 `%APPDATA%\MaiBotOneKeyDesktop\<安装目录hash>` 下；设置中心的「实例路径」页可以迁移运行时资源目录。迁移只移动 `modules/` 与 `python-overrides/`，日志、实例锁和一键包设置仍保留在用户数据目录。
+
 ## Windows 打包
 
-第一版只发布 Windows x64 NSIS 安装包。打包前需要在仓库根目录放好完整 payload：
+Windows x64 NSIS 安装包会同时产出两个变体：`full` 完整包包含内置 Python 与 Git，`lite` 精简包不包含内置 Python 与 Git，会在运行时自动寻找系统 Python 3.12+ 与系统 Git。打包前需要在仓库根目录放好完整 payload：
 
 ```text
 runtime/
@@ -37,23 +41,29 @@ modules/
   napcat/
 ```
 
+只构建 `lite` 变体时，`runtime/python/` 与 `runtime/git/` 可以省略：
+
+```bash
+bun run release:win:lite
+```
+
 发布前检查：
 
 ```bash
 bun run release:check
 ```
 
-生成安装包：
+生成两个安装包：
 
 ```bash
 bun run release:win
 ```
 
-产物输出到 `release/`。`runtime/` 和 `modules/` 会作为 `extraResources` 放进安装包，应用运行时从 Electron resources 目录读取它们。
+产物输出到 `release/`，文件名会带上 `full` 或 `lite` 后缀。`runtime/` 和 `modules/` 会作为 `extraResources` 放进完整包；`lite` 变体会排除 `runtime/python/` 与 `runtime/git/`，缺失时会在环境检查中提供 Python 和 Git 下载入口。
 
 ## CI
 
 - `.github/workflows/ci.yml`：在 Linux、macOS、Windows 上执行依赖安装、类型检查和 Electron 构建，不需要 release payload。
-- `.github/workflows/release-windows.yml`：手动触发 Windows x64 安装包构建，可输入 payload zip URL，zip 内需要包含 `runtime/` 和 `modules/`。
+- `.github/workflows/release-windows.yml`：手动触发 Windows x64 安装包构建，可输入 payload zip URL；构建完整包时 zip 内需要包含 `runtime/` 和 `modules/`。
 
 更多发布细节见 [docs/release.md](docs/release.md)。

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
@@ -19,6 +20,8 @@ import type {
   ServiceHealth,
   ServiceId,
   ServiceStatus,
+  TerminalMode,
+  TerminalSettings,
 } from "../../shared/contracts";
 import type { PtySessionManager } from "../pty/pty-session-manager";
 import { InitManager } from "./init-manager";
@@ -60,6 +63,7 @@ interface ServiceState {
   health: ServiceHealth;
   managed: boolean;
   pid?: number;
+  terminalMode?: TerminalMode;
   detail?: string;
   error?: string;
   desired?: boolean;
@@ -90,6 +94,11 @@ interface StoredRuntimePathFile {
   paths: Partial<Record<RuntimePathKey, string>>;
 }
 
+interface StoredTerminalSettingsFile {
+  version: 1;
+  useEmbeddedTerminal?: boolean;
+}
+
 const STOP_FORCE_AFTER_MS = 10_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_RESTART_ATTEMPTS = 3;
@@ -98,7 +107,11 @@ const SERVICE_TERMINAL_COLS = 120;
 const SERVICE_TERMINAL_ROWS = 36;
 const COMMAND_CONFIG_FILE = "service-commands.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
+const TERMINAL_SETTINGS_FILE = "terminal-settings.json";
 const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
+const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
+  useEmbeddedTerminal: true,
+};
 
 function quoteCommandPart(value: string): string {
   const normalized = normalizePathLikeValue(value);
@@ -168,23 +181,36 @@ function replaceAllPathVariants(value: string, search: string, replacement: stri
 function relocateBundledModulePath(value: string, paths: RuntimePaths): string {
   const normalized = normalizePathLikeValue(value);
   const normalizedWithSlashes = normalizePathSeparators(normalized);
-  const bundledWithSlashes = normalizePathSeparators(paths.bundledModulesRoot);
   const valueForMatch = normalizePathForMatch(normalized);
-  const bundledForMatch = normalizePathForMatch(paths.bundledModulesRoot);
-  const isBundledRoot = valueForMatch === bundledForMatch;
-  const isBundledChild = valueForMatch.startsWith(`${bundledForMatch}/`);
+  const mappings = [
+    { source: join(paths.bundledModulesRoot, "MaiBot"), target: paths.maibotRoot },
+    { source: join(paths.bundledModulesRoot, "napcat"), target: paths.napcatRoot },
+    { source: join(paths.bundledModulesRoot, "napcatframework"), target: join(dirname(paths.napcatRoot), "napcatframework") },
+  ];
 
-  if (!isBundledRoot && !isBundledChild) {
-    return normalized;
+  for (const mapping of mappings) {
+    const sourceWithSlashes = normalizePathSeparators(mapping.source);
+    const sourceForMatch = normalizePathForMatch(mapping.source);
+    const isBundledRoot = valueForMatch === sourceForMatch;
+    const isBundledChild = valueForMatch.startsWith(`${sourceForMatch}/`);
+    if (!isBundledRoot && !isBundledChild) {
+      continue;
+    }
+
+    const suffix = normalizedWithSlashes.slice(sourceWithSlashes.length);
+    const suffixParts = suffix.split("/").filter(Boolean);
+    return join(mapping.target, ...suffixParts);
   }
 
-  const suffix = normalizedWithSlashes.slice(bundledWithSlashes.length);
-  const suffixParts = suffix.split("/").filter(Boolean);
-  return join(paths.modulesRoot, ...suffixParts);
+  return normalized;
 }
 
 function relocateBundledModuleReferences(value: string, paths: RuntimePaths): string {
-  return replaceAllPathVariants(value, paths.bundledModulesRoot, paths.modulesRoot);
+  return [
+    [join(paths.bundledModulesRoot, "MaiBot"), paths.maibotRoot],
+    [join(paths.bundledModulesRoot, "napcat"), paths.napcatRoot],
+    [join(paths.bundledModulesRoot, "napcatframework"), join(dirname(paths.napcatRoot), "napcatframework")],
+  ].reduce((nextValue, [search, replacement]) => replaceAllPathVariants(nextValue, search, replacement), value);
 }
 
 function extractLeadingExecutablePath(commandLine: string): string | undefined {
@@ -218,6 +244,37 @@ function serviceIdFromSession(sessionId: string): ServiceId | undefined {
 
 function isLivePtyStatus(status: PtySessionSnapshot["status"]): boolean {
   return status === "starting" || status === "running" || status === "stopping";
+}
+
+function createServiceEnv(extraEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (!extraEnv) {
+    return env;
+  }
+
+  for (const [key, value] of Object.entries(extraEnv)) {
+    env[key] = value;
+  }
+
+  return env;
+}
+
+function killWindowsProcessTree(pid: number, force: boolean): Promise<void> {
+  const args = force ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
+  return new Promise((resolve, reject) => {
+    const child = spawn("taskkill", args, {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`taskkill exited with code ${code ?? "unknown"}`));
+    });
+  });
 }
 
 function probePort(port: number, host = "127.0.0.1", timeoutMs = 450): Promise<boolean> {
@@ -269,7 +326,6 @@ class ServiceCommandStore {
     }
 
     return {
-      cwd: command.cwd ? relocateBundledModulePath(command.cwd, this.paths) : undefined,
       commandLine: command.commandLine
         ? relocateBundledModuleReferences(normalizeCommandLine(command.commandLine), this.paths)
         : undefined,
@@ -279,7 +335,6 @@ class ServiceCommandStore {
   async set(serviceId: ServiceId, command: StoredServiceCommand): Promise<void> {
     const file = await this.read();
     file.services[serviceId] = {
-      cwd: command.cwd ? relocateBundledModulePath(command.cwd, this.paths) || undefined : undefined,
       commandLine: command.commandLine
         ? relocateBundledModuleReferences(normalizeCommandLine(command.commandLine), this.paths) || undefined
         : undefined,
@@ -360,12 +415,52 @@ class RuntimePathStore {
   }
 }
 
+class TerminalSettingsStore {
+  private readonly path: string;
+  private cache: TerminalSettings;
+
+  constructor(paths: RuntimePaths) {
+    this.path = join(paths.userDataRoot, TERMINAL_SETTINGS_FILE);
+    this.cache = this.read();
+  }
+
+  get(): TerminalSettings {
+    return { ...this.cache };
+  }
+
+  async set(settings: TerminalSettings): Promise<TerminalSettings> {
+    this.cache = {
+      useEmbeddedTerminal: settings.useEmbeddedTerminal !== false,
+    };
+    await mkdir(dirname(this.path), { recursive: true });
+    await writeFile(
+      this.path,
+      `${JSON.stringify({ version: 1, ...this.cache } satisfies StoredTerminalSettingsFile, null, 2)}\n`,
+      "utf8",
+    );
+    return this.get();
+  }
+
+  private read(): TerminalSettings {
+    try {
+      const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredTerminalSettingsFile;
+      return {
+        useEmbeddedTerminal: raw.useEmbeddedTerminal !== false,
+      };
+    } catch {
+      return { ...DEFAULT_TERMINAL_SETTINGS };
+    }
+  }
+}
+
 export class ServiceManager extends EventEmitter {
   private readonly states = new Map<ServiceId, ServiceState>();
   private definitions: ServiceDefinition[];
   private readonly watchdogTimer: NodeJS.Timeout;
   private readonly commandStore: ServiceCommandStore;
   private readonly runtimePathStore: RuntimePathStore;
+  private readonly terminalSettingsStore: TerminalSettingsStore;
+  private readonly externalProcesses = new Map<ServiceId, ChildProcess>();
   private readonly logLineBuffers = new Map<ServiceId, string>();
 
   constructor(
@@ -378,6 +473,7 @@ export class ServiceManager extends EventEmitter {
     super();
     this.commandStore = new ServiceCommandStore(paths);
     this.runtimePathStore = new RuntimePathStore(paths);
+    this.terminalSettingsStore = new TerminalSettingsStore(paths);
     this.definitions = this.createDefinitions();
     for (const definition of this.definitions) {
       this.states.set(definition.id, {
@@ -387,7 +483,7 @@ export class ServiceManager extends EventEmitter {
         desired: false,
         restartAttempts: 0,
         healthFailures: 0,
-        detail: "等待启动",
+        detail: "绛夊緟鍚姩",
       });
     }
 
@@ -423,7 +519,12 @@ export class ServiceManager extends EventEmitter {
 
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      const running = [...this.states.values()].some((state) => state.ptySessionId && state.status !== "stopped");
+      const running = [...this.states.values()].some(
+        (state) =>
+          (state.ptySessionId || state.terminalMode === "external") &&
+          state.status !== "stopped" &&
+          state.status !== "error",
+      );
       if (!running) {
         return this.snapshot();
       }
@@ -464,15 +565,16 @@ export class ServiceManager extends EventEmitter {
         managed: true,
         desired: true,
         pid: existingSession.pid,
+        terminalMode: "embedded",
         ptySessionId: existingSession.id,
-        detail: `已附加到后台 PTY，PID ${existingSession.pid ?? "未知"}`,
+        detail: `宸查檮鍔犲埌鍚庡彴 PTY锛孭ID ${existingSession.pid ?? "鏈煡"}`,
       });
       return this.toDescriptor(definition, this.getState(serviceId));
     }
 
     let resolved: ResolvedServiceCommand;
     try {
-      const changedFiles = await this.initManager.ensureServiceReady(serviceId);
+      const changedFiles = serviceId === "maibot" ? [] : await this.initManager.ensureServiceReady(serviceId);
       if (changedFiles.length > 0) {
         this.logs.append(serviceId, "system", `prepared writable modules: ${changedFiles.join(", ")}`);
       }
@@ -496,6 +598,7 @@ export class ServiceManager extends EventEmitter {
     await this.assertPortsFree(definition);
 
     const displayCommand = resolved.command ?? [resolved.commandLine];
+    const dynamicUrl = await this.resolveServiceUrl(definition.id, definition.url);
 
     this.setState(serviceId, {
       ...state,
@@ -505,11 +608,14 @@ export class ServiceManager extends EventEmitter {
       restartAttempts: resetRestartAttempts ? 0 : (state.restartAttempts ?? 0),
       healthFailures: 0,
       error: undefined,
-      detail: `正在启动 ${definition.name} PTY`,
+      detail: `姝ｅ湪鍚姩 ${definition.name} PTY`,
       stoppedAt: undefined,
+      terminalMode: this.shouldUseEmbeddedTerminal() ? "embedded" : "external",
+      pid: undefined,
       ptySessionId: undefined,
       command: displayCommand,
       cwd: resolved.cwd,
+      dynamicUrl,
     });
 
     this.logs.append(
@@ -521,13 +627,13 @@ export class ServiceManager extends EventEmitter {
     try {
       const useCommandLine = !resolved.command;
       const agreementEnv = await this.initManager.getAgreementEnvVars();
-      const baseEnv =
-        definition.id === "maibot" ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
+      const usePythonOverlay = definition.id === "maibot" && !this.isCustomPythonRuntimeEnabled();
+      const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
       const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
-      if (definition.id === "maibot" && this.pythonDependencyManager) {
+      if (usePythonOverlay && this.pythonDependencyManager) {
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "正在更新 MaiBot 依赖，完成后会启动后台 PTY",
+          detail: "姝ｅ湪鏇存柊 MaiBot 渚濊禆锛屽畬鎴愬悗浼氬惎鍔ㄥ悗鍙?PTY",
         });
         this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependency files");
         const dependencyUpgradeStartedAt = Date.now();
@@ -550,9 +656,29 @@ export class ServiceManager extends EventEmitter {
         }
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "依赖更新完成，正在启动 MaiBot Core PTY",
+          detail: "渚濊禆鏇存柊瀹屾垚锛屾鍦ㄥ惎鍔?MaiBot Core PTY",
         });
       }
+      if (!this.shouldUseEmbeddedTerminal()) {
+        const child = this.startExternalTerminal(definition, resolved, mergedEnv);
+        this.setState(serviceId, {
+          ...this.getState(serviceId),
+          status: "running",
+          health: definition.readyPorts.length > 0 ? "checking" : "ready",
+          managed: true,
+          desired: true,
+          pid: child.pid,
+          terminalMode: "external",
+          command: displayCommand,
+          cwd: resolved.cwd,
+          detail: "外部 Windows 终端已打开，正在检测服务端口",
+          startedAt: Date.now(),
+        });
+
+        void this.waitUntilReady(definition);
+        return this.toDescriptor(definition, this.getState(serviceId));
+      }
+
       const session = this.pty.start({
         id: sessionId,
         title: definition.name,
@@ -572,6 +698,7 @@ export class ServiceManager extends EventEmitter {
         managed: true,
         desired: true,
         pid: session.pid,
+        terminalMode: "embedded",
         ptySessionId: session.id,
         command: displayCommand,
         cwd: resolved.cwd,
@@ -632,6 +759,9 @@ export class ServiceManager extends EventEmitter {
       });
       return this.toDescriptor(definition, this.getState(serviceId));
     }
+    if (state.terminalMode === "external" && state.pid) {
+      return this.stopExternalTerminal(definition, state, false);
+    }
     if (!state.ptySessionId || state.status === "stopped") {
       return this.toDescriptor(definition, state);
     }
@@ -656,7 +786,7 @@ export class ServiceManager extends EventEmitter {
         managed: false,
         desired: false,
         pid: undefined,
-        detail: "PTY 会话不存在，已标记为停止",
+        detail: "PTY 浼氳瘽涓嶅瓨鍦紝宸叉爣璁颁负鍋滄",
         stoppedAt: Date.now(),
       });
     }
@@ -673,6 +803,9 @@ export class ServiceManager extends EventEmitter {
   async kill(serviceId: ServiceId): Promise<ServiceDescriptor> {
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
+    if (state.terminalMode === "external" && state.pid) {
+      return this.stopExternalTerminal(definition, state, true);
+    }
     if (!state.ptySessionId) {
       if (state.status === "starting") {
         const cancelledDependencyUpdate =
@@ -712,7 +845,7 @@ export class ServiceManager extends EventEmitter {
         health: "unknown",
         managed: false,
         pid: undefined,
-        detail: "PTY 会话不存在，已标记为停止",
+        detail: "PTY 浼氳瘽涓嶅瓨鍦紝宸叉爣璁颁负鍋滄",
         stoppedAt: Date.now(),
       });
     }
@@ -726,6 +859,7 @@ export class ServiceManager extends EventEmitter {
 
     for (const definition of this.definitions) {
       const state = this.getState(definition.id);
+      const dynamicUrl = await this.resolveServiceUrl(definition.id, definition.url);
       if (state.managed && state.status === "running") {
         const ready = await this.areReadyPortsOpen(definition);
         const healthFailures = ready ? 0 : (state.healthFailures ?? 0) + 1;
@@ -733,6 +867,7 @@ export class ServiceManager extends EventEmitter {
           ...state,
           health: ready ? "ready" : healthFailures >= 3 ? "unreachable" : "checking",
           healthFailures,
+          dynamicUrl,
           detail: ready ? "服务端口可访问" : healthFailures >= 3 ? "服务端口连续不可达" : state.detail,
         });
       } else if (!state.managed && definition.readyPorts.length > 0) {
@@ -741,9 +876,20 @@ export class ServiceManager extends EventEmitter {
           this.setState(definition.id, {
             ...state,
             health: "conflict",
-            detail: "默认端口已被外部进程占用",
+            dynamicUrl,
+            detail: "榛樿绔彛宸茶澶栭儴杩涚▼鍗犵敤",
+          });
+        } else if (state.dynamicUrl !== dynamicUrl) {
+          this.setState(definition.id, {
+            ...state,
+            dynamicUrl,
           });
         }
+      } else if (state.dynamicUrl !== dynamicUrl) {
+        this.setState(definition.id, {
+          ...state,
+          dynamicUrl,
+        });
       }
     }
     return this.snapshot();
@@ -794,6 +940,21 @@ export class ServiceManager extends EventEmitter {
     return this.getRuntimePathConfigs();
   }
 
+  getTerminalSettings(): TerminalSettings {
+    return this.terminalSettingsStore.get();
+  }
+
+  async saveTerminalSettings(settings: TerminalSettings): Promise<TerminalSettings> {
+    const nextSettings = await this.terminalSettingsStore.set(settings);
+    this.emit("snapshot", this.snapshot());
+    return nextSettings;
+  }
+
+  reloadRuntimePaths(): void {
+    this.definitions = this.createDefinitions();
+    this.emit("snapshot", this.snapshot());
+  }
+
   dispose(): void {
     clearInterval(this.watchdogTimer);
     for (const serviceId of SERVICE_IDS) {
@@ -807,8 +968,8 @@ export class ServiceManager extends EventEmitter {
 
   private createDefinitions(): ServiceDefinition[] {
     const python = this.getRuntimePath("python");
-    const maibotRoot = this.getRuntimePath("maibot");
-    const napcatRoot = this.getRuntimePath("napcat");
+    const maibotRoot = this.paths.maibotRoot;
+    const napcatRoot = this.paths.napcatRoot;
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
     const napcatNode = join(napcatRoot, "node.exe");
     const napcatNodeEntry = join(napcatRoot, "index.js");
@@ -853,8 +1014,8 @@ export class ServiceManager extends EventEmitter {
             return [napcatNode, napcatNodeEntry];
           }
           if (process.platform === "win32" && existsSync(napcatLauncherPath)) {
-            // 通过 cmd.exe 调用磁盘上的 napcat-launch.cmd（已固定 chcp 65001），
-            // argv 各元素独立传递，不会触发 cmd /C 字符串拼接的引号歧义。
+            // 閫氳繃 cmd.exe 璋冪敤纾佺洏涓婄殑 napcat-launch.cmd锛堝凡鍥哄畾 chcp 65001锛夛紝
+            // argv 鍚勫厓绱犵嫭绔嬩紶閫掞紝涓嶄細瑙﹀彂 cmd /C 瀛楃涓叉嫾鎺ョ殑寮曞彿姝т箟銆?
             const args = ["/D", "/S", "/C", napcatLauncherName];
             if (qq) {
               args.push(qq);
@@ -872,6 +1033,132 @@ export class ServiceManager extends EventEmitter {
         },
       },
     ];
+  }
+
+  private shouldUseEmbeddedTerminal(): boolean {
+    return process.platform !== "win32" || this.terminalSettingsStore.get().useEmbeddedTerminal;
+  }
+
+  private startExternalTerminal(
+    definition: ServiceDefinition,
+    resolved: ResolvedServiceCommand,
+    env: Record<string, string>,
+  ): ChildProcess {
+    const commandLine = `title MaiBot OneKey - ${definition.name} & chcp 65001 > nul & ${resolved.commandLine}`;
+    const child = spawn(process.env.ComSpec || "cmd.exe", ["/D", "/S", "/K", commandLine], {
+      cwd: resolved.cwd,
+      detached: true,
+      env: createServiceEnv(Object.keys(env).length > 0 ? env : undefined),
+      shell: false,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+
+    this.externalProcesses.set(definition.id, child);
+    child.once("error", (error) => this.handleExternalTerminalError(definition.id, child.pid, error));
+    child.once("exit", (code, signal) => this.handleExternalTerminalExit(definition.id, child.pid, code, signal));
+    child.unref();
+
+    this.logs.append(definition.id, "system", `external terminal launched: pid=${child.pid ?? "unknown"}`);
+    return child;
+  }
+
+  private handleExternalTerminalError(serviceId: ServiceId, pid: number | undefined, error: unknown): void {
+    const current = this.getState(serviceId);
+    if (current.terminalMode !== "external" || current.pid !== pid) {
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    this.externalProcesses.delete(serviceId);
+    this.logs.append(serviceId, "system", `external terminal error: ${message}`);
+    this.setState(serviceId, {
+      ...current,
+      status: "error",
+      health: "unreachable",
+      managed: false,
+      desired: false,
+      pid: undefined,
+      error: message,
+      detail: message,
+      stoppedAt: Date.now(),
+    });
+  }
+
+  private handleExternalTerminalExit(
+    serviceId: ServiceId,
+    pid: number | undefined,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    const current = this.getState(serviceId);
+    if (current.terminalMode !== "external" || current.pid !== pid) {
+      return;
+    }
+
+    this.externalProcesses.delete(serviceId);
+    const shouldRestart = Boolean(current.desired && current.status !== "stopping");
+    const stoppedByRequest = current.status === "stopping" || !current.desired;
+    this.logs.append(serviceId, "system", `external terminal exit: code=${code ?? "null"} signal=${signal ?? "null"}`);
+    this.setState(serviceId, {
+      ...current,
+      status: stoppedByRequest ? "stopped" : "error",
+      health: "unknown",
+      managed: false,
+      pid: undefined,
+      terminalMode: undefined,
+      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `外部终端异常退出: ${code ?? "unknown"}`,
+      detail: stoppedByRequest
+        ? "外部终端已停止"
+        : shouldRestart
+          ? `外部终端退出，准备自动重启: ${code ?? "unknown"}`
+          : `外部终端异常退出: ${code ?? "unknown"}`,
+      stoppedAt: Date.now(),
+    });
+
+    if (shouldRestart) {
+      this.scheduleRestart(serviceId);
+    }
+  }
+
+  private async stopExternalTerminal(
+    definition: ServiceDefinition,
+    state: ServiceState,
+    force: boolean,
+  ): Promise<ServiceDescriptor> {
+    if (!state.pid) {
+      return this.toDescriptor(definition, state);
+    }
+
+    this.clearRestartTimer(state);
+    this.setState(definition.id, {
+      ...state,
+      status: "stopping",
+      desired: false,
+      detail: force ? "正在强制结束外部 Windows 终端进程树" : "正在停止外部 Windows 终端进程树",
+    });
+    this.logs.append(definition.id, "system", force ? "external terminal force kill requested" : "external terminal stop requested");
+
+    try {
+      await killWindowsProcessTree(state.pid, force);
+    } catch (error) {
+      this.logs.append(definition.id, "system", `external terminal stop failed: ${String(error)}`);
+    }
+
+    this.externalProcesses.delete(definition.id);
+    this.setState(definition.id, {
+      ...this.getState(definition.id),
+      status: "stopped",
+      health: "unknown",
+      managed: false,
+      desired: false,
+      pid: undefined,
+      terminalMode: undefined,
+      error: undefined,
+      detail: "外部终端已停止",
+      stoppedAt: Date.now(),
+    });
+    return this.toDescriptor(definition, this.getState(definition.id));
   }
 
   private async waitUntilReady(definition: ServiceDefinition): Promise<void> {
@@ -912,10 +1199,10 @@ export class ServiceManager extends EventEmitter {
           ...this.getState(definition.id),
           health: "conflict",
           status: "error",
-          error: `端口 ${port} 已被占用`,
-          detail: `端口 ${port} 已被外部进程占用，请手动处理`,
+          error: `绔彛 ${port} 宸茶鍗犵敤`,
+          detail: `绔彛 ${port} 宸茶澶栭儴杩涚▼鍗犵敤锛岃鎵嬪姩澶勭悊`,
         });
-        throw new Error(`端口 ${port} 已被占用，请手动处理`);
+        throw new Error(`绔彛 ${port} 宸茶鍗犵敤锛岃鎵嬪姩澶勭悊`);
       }
     }
   }
@@ -930,15 +1217,15 @@ export class ServiceManager extends EventEmitter {
       ...this.getState(definition.id),
       status: "error",
       health: "unreachable",
-      error: `缺失路径: ${missing}`,
-      detail: `缺失路径: ${missing}`,
+      error: `缂哄け璺緞: ${missing}`,
+      detail: `缂哄け璺緞: ${missing}`,
     });
-    throw new Error(`缺失路径: ${missing}`);
+    throw new Error(`缂哄け璺緞: ${missing}`);
   }
 
   private async resolveStartCommand(definition: ServiceDefinition): Promise<ResolvedServiceCommand> {
     const override = await this.commandStore.get(definition.id);
-    const cwd = override?.cwd ? normalizePathLikeValue(override.cwd) || definition.cwd : definition.cwd;
+    const cwd = definition.cwd;
     const commandLine = override?.commandLine ? normalizeCommandLine(override.commandLine) : undefined;
     if (commandLine) {
       const executablePath = extractLeadingExecutablePath(commandLine);
@@ -969,11 +1256,11 @@ export class ServiceManager extends EventEmitter {
     return {
       serviceId: definition.id,
       serviceName: definition.name,
-      cwd: override?.cwd?.trim() || definition.cwd,
+      cwd: definition.cwd,
       commandLine: override?.commandLine?.trim() || defaultCommandLine,
       defaultCwd: definition.cwd,
       defaultCommandLine,
-      customized: Boolean(override?.cwd?.trim() || override?.commandLine?.trim()),
+      customized: Boolean(override?.commandLine?.trim()),
     };
   }
 
@@ -991,25 +1278,13 @@ export class ServiceManager extends EventEmitter {
         kind: "file",
         defaultValue: this.initManager.getGitPath(),
       },
-      {
-        key: "maibot",
-        label: "麦麦 MaiBot",
-        kind: "dir",
-        defaultValue: join(this.paths.modulesRoot, "MaiBot"),
-      },
-      {
-        key: "napcat",
-        label: "NapCat",
-        kind: "dir",
-        defaultValue: join(this.paths.modulesRoot, "napcat"),
-      },
     ];
   }
 
   private getRuntimePathDefinition(key: RuntimePathKey): RuntimePathDefinition {
     const definition = this.getRuntimePathDefinitions().find((item) => item.key === key);
     if (!definition) {
-      throw new Error(`未知路径配置: ${key}`);
+      throw new Error(`鏈煡璺緞閰嶇疆: ${key}`);
     }
     return definition;
   }
@@ -1017,6 +1292,10 @@ export class ServiceManager extends EventEmitter {
   private getRuntimePath(key: RuntimePathKey): string {
     const definition = this.getRuntimePathDefinition(key);
     return this.runtimePathStore.get(key) ?? definition.defaultValue;
+  }
+
+  private isCustomPythonRuntimeEnabled(): boolean {
+    return Boolean(this.runtimePathStore.get("python"));
   }
 
   private toRuntimePathConfig(definition: RuntimePathDefinition): RuntimePathConfig {
@@ -1059,14 +1338,14 @@ export class ServiceManager extends EventEmitter {
       const { token } = await this.initManager.readNapCatWebUiToken();
       return token ? `http://127.0.0.1:6099/webui/web_login?token=${encodeURIComponent(token)}` : fallback;
     } catch {
-      // 任何读取异常都直接回退到普通登录页，避免阻塞主面板。
+      // 浠讳綍璇诲彇寮傚父閮界洿鎺ュ洖閫€鍒版櫘閫氱櫥褰曢〉锛岄伩鍏嶉樆濉炰富闈㈡澘銆?
       return fallback;
     }
   }
 
   /**
-   * MaiBot Core WebUI 支持 `/auth?token=<access_token>` 直接登录；
-   * webui.json 还未生成或字段缺失时直接回退为根地址，由用户走普通登录流程。
+   * MaiBot Core WebUI 鏀寔 `/auth?token=<access_token>` 鐩存帴鐧诲綍锛?
+   * webui.json 杩樻湭鐢熸垚鎴栧瓧娈电己澶辨椂鐩存帴鍥為€€涓烘牴鍦板潃锛岀敱鐢ㄦ埛璧版櫘閫氱櫥褰曟祦绋嬨€?
    */
   private async resolveMaiBotUrl(fallback: string): Promise<string> {
     try {
@@ -1101,10 +1380,11 @@ export class ServiceManager extends EventEmitter {
         managed: true,
         desired: state.desired ?? true,
         pid: session.pid,
+        terminalMode: "embedded",
         ptySessionId: session.id,
         command: session.command,
         cwd: session.cwd,
-        detail: `已附加到后台 PTY，PID ${session.pid ?? "未知"}`,
+        detail: `宸查檮鍔犲埌鍚庡彴 PTY锛孭ID ${session.pid ?? "鏈煡"}`,
         startedAt: state.startedAt ?? session.startedAt,
       });
     }
@@ -1191,7 +1471,7 @@ export class ServiceManager extends EventEmitter {
         : shouldRestart
           ? `进程退出，准备自动重启: ${event.exitCode}`
           : `进程异常退出: ${event.exitCode}`,
-      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `进程异常退出: ${event.exitCode}`,
+      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `杩涚▼寮傚父閫€鍑? ${event.exitCode}`,
       stoppedAt: Date.now(),
     });
 
@@ -1323,14 +1603,14 @@ export class ServiceManager extends EventEmitter {
       health: "checking",
       managed: false,
       pid: undefined,
-      detail: `${definition.name} 异常退出，${Math.round(RESTART_DELAY_MS / 1000)} 秒后自动重启 (${restartAttempts}/${MAX_RESTART_ATTEMPTS})`,
+      detail: `${definition.name} 寮傚父閫€鍑猴紝${Math.round(RESTART_DELAY_MS / 1000)} 绉掑悗鑷姩閲嶅惎 (${restartAttempts}/${MAX_RESTART_ATTEMPTS})`,
     });
   }
 
   private getDefinition(serviceId: ServiceId): ServiceDefinition {
     const definition = this.definitions.find((item) => item.id === serviceId);
     if (!definition) {
-      throw new Error(`未知服务: ${serviceId}`);
+      throw new Error(`鏈煡鏈嶅姟: ${serviceId}`);
     }
     return definition;
   }
@@ -1338,7 +1618,7 @@ export class ServiceManager extends EventEmitter {
   private getState(serviceId: ServiceId): ServiceState {
     const state = this.states.get(serviceId);
     if (!state) {
-      throw new Error(`未知服务状态: ${serviceId}`);
+      throw new Error(`鏈煡鏈嶅姟鐘舵€? ${serviceId}`);
     }
     return state;
   }
@@ -1356,6 +1636,7 @@ export class ServiceManager extends EventEmitter {
       desired: state.desired,
       restartAttempts: state.restartAttempts,
       pid: state.pid,
+      terminalMode: state.terminalMode,
       detail: state.detail,
       cwd: state.cwd ?? definition.cwd,
       command: state.command,

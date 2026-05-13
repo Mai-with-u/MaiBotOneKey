@@ -11,6 +11,9 @@ import type {
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   MaiBotInstalledPlugin,
+  MaiBotPluginConfigSaveResult,
+  MaiBotPluginConfigState,
+  MaiBotPluginConfigValue,
   MaiBotPluginListResult,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
@@ -19,10 +22,8 @@ import type {
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
-  NapcatAdapterConfig,
-  NapcatAdapterConfigSaveResult,
-  NapcatAdapterConfigState,
   PythonOverridesState,
+  PythonRuntimeCandidate,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -38,12 +39,15 @@ import type {
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
+  RuntimeResourcePathChangeResult,
+  RuntimeResourcePathKey,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
   StartupAgreementConfirmResult,
   StartupAgreementState,
+  TerminalSettings,
   WindowState,
 } from "../shared/contracts";
 
@@ -108,12 +112,6 @@ const desktopBridge: DesktopBridge = {
     resetMaiBotData: () =>
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },
-  napcatAdapter: {
-    getConfig: () =>
-      ipcRenderer.invoke("napcatAdapter:getConfig") as Promise<NapcatAdapterConfigState>,
-    saveConfig: (config: NapcatAdapterConfig) =>
-      ipcRenderer.invoke("napcatAdapter:saveConfig", config) as Promise<NapcatAdapterConfigSaveResult>,
-  },
   plugins: {
     listMarket: () => ipcRenderer.invoke("plugins:listMarket") as Promise<MaiBotPluginListResult>,
     listInstalled: () => ipcRenderer.invoke("plugins:listInstalled") as Promise<MaiBotInstalledPlugin[]>,
@@ -123,6 +121,10 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
     uninstall: (pluginId: string) =>
       ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
+    getConfig: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:getConfig", pluginId) as Promise<MaiBotPluginConfigState>,
+    saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>) =>
+      ipcRenderer.invoke("plugins:saveConfig", pluginId, config) as Promise<MaiBotPluginConfigSaveResult>,
   },
   pythonDeps: {
     getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,
@@ -149,8 +151,24 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("services:saveRuntimePathConfig", config) as Promise<RuntimePathConfig[]>,
     resetRuntimePathConfig: (key: RuntimePathKey) =>
       ipcRenderer.invoke("services:resetRuntimePathConfig", key) as Promise<RuntimePathConfig[]>,
+    listPythonRuntimeCandidates: () =>
+      ipcRenderer.invoke("services:listPythonRuntimeCandidates") as Promise<PythonRuntimeCandidate[]>,
+    selectPythonRuntimePath: () =>
+      ipcRenderer.invoke("services:selectPythonRuntimePath") as Promise<string | null>,
+    saveTerminalSettings: (settings: TerminalSettings) =>
+      ipcRenderer.invoke("services:saveTerminalSettings", settings) as Promise<TerminalSettings>,
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) =>
       onIpc("services:snapshot", callback),
+  },
+  resources: {
+    migratePath: (key: RuntimeResourcePathKey) =>
+      ipcRenderer.invoke("resources:migratePath", key) as Promise<RuntimeResourcePathChangeResult | null>,
+    selectPath: (key: RuntimeResourcePathKey) =>
+      ipcRenderer.invoke("resources:selectPath", key) as Promise<RuntimeResourcePathChangeResult | null>,
+    savePath: (key: RuntimeResourcePathKey, path: string) =>
+      ipcRenderer.invoke("resources:savePath", key, path) as Promise<RuntimeResourcePathChangeResult>,
+    resetPath: (key: RuntimeResourcePathKey) =>
+      ipcRenderer.invoke("resources:resetPath", key) as Promise<RuntimeResourcePathChangeResult>,
   },
   logs: {
     list: () => ipcRenderer.invoke("logs:list") as Promise<LogEntry[]>,

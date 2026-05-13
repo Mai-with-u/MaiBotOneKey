@@ -13,12 +13,13 @@
   RotateCcw,
   Save,
   ShieldCheck,
+  TerminalSquare,
   Trash2,
   UserRound,
   Wrench,
 } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
@@ -32,18 +33,23 @@ import type {
   PythonOverridesState,
   PythonPackageInstallResult,
   PythonPackageVersionList,
+  PythonRuntimeCandidate,
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
+  RuntimeResourcePathConfig,
+  RuntimeResourcePathKey,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceHealth,
   ServiceStatus,
+  TerminalSettings,
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -131,7 +137,7 @@ function formatDateTime(timestamp?: number): string {
 
 function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.JSX.Element {
   const output = result.output.slice(-120).join("\n");
-  const fellBack = result.source === "bundled";
+  const hasWarning = Boolean(result.warning || result.remoteError);
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-3">
@@ -139,18 +145,18 @@ function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.J
         <Badge variant={result.changed ? "success" : "secondary"}>
           {result.changed ? "已更新" : "已是最新"}
         </Badge>
-        <Badge variant={fellBack ? "danger" : "outline"}>
-          {fellBack ? "已回退到内置版本" : "来自 GitHub 上游"}
+        <Badge variant={result.source === "bundled" ? "secondary" : "outline"}>
+          {result.source === "bundled" ? "内置修复" : "来自 Git 远端"}
         </Badge>
         <span className="font-mono text-[11px] text-muted-foreground">
           {result.before ?? "-"} -&gt; {result.after ?? "-"}
         </span>
         <span className="text-[11px] text-muted-foreground">{formatDateTime(result.updatedAt)}</span>
       </div>
-      {fellBack && result.warning ? (
+      {hasWarning ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-[12px] leading-relaxed text-destructive">
-          <p className="font-semibold">⚠ 网络异常：本次更新未连接到 GitHub</p>
-          <p className="mt-1 text-destructive/90">{result.warning}</p>
+          <p className="font-semibold">更新未完成，已恢复到更新前状态</p>
+          {result.warning ? <p className="mt-1 text-destructive/90">{result.warning}</p> : null}
           {result.remoteError ? (
             <p className="mt-1 break-all font-mono text-[11px] text-destructive/80">
               原始错误：{result.remoteError}
@@ -188,7 +194,7 @@ function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.J
                   {plugin.changed ? "已更新" : "已是最新"}
                 </Badge>
                 <Badge variant={plugin.source === "bundled" ? "danger" : "outline"}>
-                  {plugin.source === "bundled" ? "已回退到内置版本" : "来自 GitHub 上游"}
+                  {plugin.source === "bundled" ? "内置修复" : "来自 Git 远端"}
                 </Badge>
                 <span className="font-mono text-[11px] text-muted-foreground">
                   {plugin.before ?? "-"} -&gt; {plugin.after ?? "-"}
@@ -276,23 +282,36 @@ function PathField({
 function RuntimePathEditor({
   config,
   busy,
+  candidates = [],
+  candidatesLoading = false,
   onOpenPath,
+  onRefreshCandidates,
   onReset,
   onSave,
+  onSelectPython,
 }: {
   config: RuntimePathConfig;
   busy: boolean;
+  candidates?: PythonRuntimeCandidate[];
+  candidatesLoading?: boolean;
   onOpenPath: (path: string) => void;
+  onRefreshCandidates: () => void;
   onReset: (key: RuntimePathKey) => void;
   onSave: (config: RuntimePathUpdate) => void;
+  onSelectPython: () => Promise<string | null>;
 }): React.JSX.Element {
   const [value, setValue] = useState(config.value);
+  const [customEnabled, setCustomEnabled] = useState(config.customized);
 
   useEffect(() => {
     setValue(config.value);
-  }, [config.value]);
+    setCustomEnabled(config.customized);
+  }, [config.customized, config.value]);
 
   const dirty = value.trim() !== config.value;
+  const isPython = config.key === "python";
+  const customPythonEnabled = isPython ? customEnabled : true;
+  const pythonCandidateListId = useId();
 
   return (
     <div className="rounded-lg border border-border bg-card p-3">
@@ -309,21 +328,79 @@ function RuntimePathEditor({
           </p>
         </div>
         <Badge variant={config.customized ? "warning" : "secondary"}>
-          {config.customized ? "自定义" : "默认"}
+          {isPython ? (config.customized ? "自定义 Python" : "基础 Python + 覆盖层") : config.customized ? "自定义" : "默认"}
         </Badge>
       </div>
+      {isPython ? (
+        <label className="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-sm">
+          <Checkbox
+            checked={customPythonEnabled}
+            disabled={busy}
+            onCheckedChange={(checked) => {
+              if (checked === true) {
+                setCustomEnabled(true);
+                setValue(config.value || config.defaultValue);
+                return;
+              }
+              setCustomEnabled(false);
+              onReset(config.key);
+            }}
+          />
+          使用自定义 Python 路径
+        </label>
+      ) : null}
       <div className="flex min-w-0 gap-2">
         <Input
           aria-label={`${config.label} 路径`}
+          list={isPython && customPythonEnabled ? pythonCandidateListId : undefined}
+          disabled={isPython && !customPythonEnabled}
           monospace
           onChange={(event) => setValue(event.target.value)}
           placeholder={config.defaultValue}
           value={value}
         />
+        {isPython && customPythonEnabled ? (
+          <datalist id={pythonCandidateListId}>
+            {candidates.map((candidate) => (
+              <option key={candidate.path} label={candidate.source} value={candidate.path} />
+            ))}
+          </datalist>
+        ) : null}
         <Button aria-label={`打开 ${config.label}`} onClick={() => onOpenPath(value)} size="icon" variant="ghost">
           <FolderOpen />
         </Button>
+        {isPython ? (
+          <Button
+            disabled={busy || !customPythonEnabled}
+            onClick={async () => {
+              const selected = await onSelectPython();
+              if (selected) {
+                setValue(selected);
+              }
+            }}
+            size="sm"
+            variant="outline"
+          >
+            <FolderOpen />
+            浏览
+          </Button>
+        ) : null}
       </div>
+      {isPython && customPythonEnabled ? (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+          <p className="text-[11px] text-muted-foreground">
+            {candidatesLoading
+              ? "正在扫描系统 Python"
+              : candidates.length > 0
+                ? `已扫描到 ${candidates.length} 个 Python，可在输入框右侧下拉选择。`
+                : "可手动输入 python.exe 路径，或点击扫描读取系统 Python。"}
+          </p>
+          <Button disabled={busy || candidatesLoading} onClick={onRefreshCandidates} size="sm" variant="ghost">
+            {candidatesLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            扫描
+          </Button>
+        </div>
+      ) : null}
       <div className="mt-2 flex justify-end gap-2">
         <Button
           disabled={busy || (!config.customized && !dirty)}
@@ -335,12 +412,93 @@ function RuntimePathEditor({
           恢复默认
         </Button>
         <Button
-          disabled={busy || !dirty || value.trim().length === 0}
+          disabled={busy || (isPython && !customPythonEnabled) || !dirty || value.trim().length === 0}
           onClick={() => onSave({ key: config.key, value: value.trim() })}
           size="sm"
         >
           {busy ? <Loader2 className="animate-spin" /> : <Save />}
           保存路径
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeResourcePathEditor({
+  config,
+  busy,
+  blocked,
+  onOpenPath,
+  onMigrate,
+  onReset,
+  onSave,
+  onSelect,
+}: {
+  config: RuntimeResourcePathConfig;
+  busy: boolean;
+  blocked: boolean;
+  onOpenPath: (path: string) => void;
+  onMigrate: (key: RuntimeResourcePathKey) => void;
+  onReset: (key: RuntimeResourcePathKey) => void;
+  onSave: (key: RuntimeResourcePathKey, path: string) => void;
+  onSelect: (key: RuntimeResourcePathKey) => void;
+}): React.JSX.Element {
+  const [value, setValue] = useState(config.value);
+
+  useEffect(() => {
+    setValue(config.value);
+  }, [config.value]);
+
+  const trimmedValue = value.trim();
+  const dirty = trimmedValue !== config.value;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{config.label}</span>
+            <Badge variant={config.customized ? "warning" : "secondary"}>
+              {config.customized ? "自定义" : "默认"}
+            </Badge>
+          </div>
+        </div>
+        <Button aria-label={`打开 ${config.label}`} onClick={() => onOpenPath(trimmedValue || config.value)} size="icon" variant="ghost">
+          <FolderOpen />
+        </Button>
+      </div>
+      <Input
+        aria-label={`${config.label} 当前路径`}
+        className="mt-3"
+        monospace
+        onChange={(event) => setValue(event.target.value)}
+        value={value}
+      />
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        <Button disabled={busy || blocked} onClick={() => onSelect(config.key)} size="sm" variant="ghost">
+          {busy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
+          选择已有目录
+        </Button>
+        <Button
+          disabled={busy || blocked || !dirty || trimmedValue.length === 0}
+          onClick={() => onSave(config.key, trimmedValue)}
+          size="sm"
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <Save />}
+          保存路径
+        </Button>
+        <Button disabled={busy || blocked} onClick={() => onMigrate(config.key)} size="sm" variant="secondary">
+          {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          迁移到新目录
+        </Button>
+        <Button
+          disabled={busy || blocked || !config.customized}
+          onClick={() => onReset(config.key)}
+          size="sm"
+          variant="ghost"
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+          恢复默认
         </Button>
       </div>
     </div>
@@ -371,7 +529,7 @@ function ServiceDetail({
   }, [commandConfig?.commandLine, commandConfig?.cwd, service.command, service.cwd]);
 
   const configDirty = Boolean(
-    commandConfig && (cwd.trim() !== commandConfig.cwd || commandLine.trim() !== commandConfig.commandLine),
+    commandConfig && commandLine.trim() !== commandConfig.commandLine,
   );
 
   return (
@@ -392,7 +550,9 @@ function ServiceDetail({
           </p>
         </div>
         <Badge variant={service.managed ? "success" : "outline"}>
-          {service.managed ? `PID ${service.pid ?? "-"}` : "未托管"}
+          {service.managed
+            ? `${service.terminalMode === "external" ? "外部" : "内嵌"} PID ${service.pid ?? "-"}`
+            : "未托管"}
         </Badge>
         {service.desired ? <Badge variant="warning">守护中</Badge> : null}
       </div>
@@ -425,8 +585,8 @@ function ServiceDetail({
           </div>
           <Input
             aria-label={`${service.name} 工作目录`}
+            disabled
             monospace
-            onChange={(event) => setCwd(event.target.value)}
             placeholder={commandConfig.defaultCwd}
             value={cwd}
           />
@@ -452,11 +612,11 @@ function ServiceDetail({
                 恢复默认
               </Button>
               <Button
-                disabled={commandBusy || !configDirty || commandLine.trim().length === 0 || cwd.trim().length === 0}
+                disabled={commandBusy || !configDirty || commandLine.trim().length === 0}
                 onClick={() =>
                   onSaveCommand({
                     serviceId: service.id,
-                    cwd: cwd.trim(),
+                    cwd: commandConfig.defaultCwd,
                     commandLine: commandLine.trim(),
                   })
                 }
@@ -528,10 +688,16 @@ export function SettingsStatusPanel({
   const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
   const [selectedPythonVersion, setSelectedPythonVersion] = useState("");
   const [pythonInstallResult, setPythonInstallResult] = useState<PythonPackageInstallResult | null>(null);
+  const [pythonRuntimeCandidates, setPythonRuntimeCandidates] = useState<PythonRuntimeCandidate[]>([]);
+  const [pythonRuntimeCandidatesLoading, setPythonRuntimeCandidatesLoading] = useState(false);
   const initState = snapshot.initState ?? { isReady: false, checks: [] };
   const services = snapshot.services ?? [];
   const serviceCommands = snapshot.serviceCommands ?? [];
   const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
+  const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
+  const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
+  const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
+  const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true };
   const recentLogEntries = snapshot.recentLogs ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
   const maibotUpdateBlocked = Boolean(
@@ -541,7 +707,13 @@ export function SettingsStatusPanel({
         maibotService.status === "running" ||
         maibotService.status === "stopping"),
   );
-
+  const resourceMoveBlocked = services.some(
+    (service) =>
+      service.managed ||
+      service.status === "starting" ||
+      service.status === "running" ||
+      service.status === "stopping",
+  );
   useEffect(() => {
     setQqAccount(initState.qqAccount ?? "");
   }, [initState.qqAccount]);
@@ -582,6 +754,16 @@ export function SettingsStatusPanel({
     };
   }, []);
 
+  useEffect(() => {
+    if (!snapshot.paths.pythonOverridesRoot) {
+      return;
+    }
+
+    setPythonDepsState((state) =>
+      state ? { ...state, root: snapshot.paths.pythonOverridesRoot } : state,
+    );
+  }, [snapshot.paths.pythonOverridesRoot]);
+
   const refreshMaiBotTags = useCallback(async () => {
     try {
       const tags = await window.maibotDesktop?.modules.listMaiBotTags();
@@ -591,9 +773,25 @@ export function SettingsStatusPanel({
     }
   }, []);
 
+  const refreshPythonRuntimeCandidates = useCallback(async () => {
+    setPythonRuntimeCandidatesLoading(true);
+    try {
+      const candidates = await window.maibotDesktop?.services.listPythonRuntimeCandidates();
+      setPythonRuntimeCandidates(candidates ?? []);
+    } catch {
+      setPythonRuntimeCandidates([]);
+    } finally {
+      setPythonRuntimeCandidatesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshMaiBotTags();
   }, [refreshMaiBotTags]);
+
+  useEffect(() => {
+    void refreshPythonRuntimeCandidates();
+  }, [refreshPythonRuntimeCandidates]);
 
   const attentionChecks = useMemo(
     () => initState.checks.filter((check) => check.status !== "ok"),
@@ -610,6 +808,10 @@ export function SettingsStatusPanel({
 
   const openPath = useCallback((path: string) => {
     void window.maibotDesktop?.openPath(path);
+  }, []);
+
+  const openExternal = useCallback((url: string) => {
+    void window.maibotDesktop?.openExternal(url);
   }, []);
 
   const repair = useCallback(async () => {
@@ -826,6 +1028,105 @@ export function SettingsStatusPanel({
     [onSnapshot, refreshSnapshot, snapshot],
   );
 
+  const selectPythonRuntimePath = useCallback(async () => {
+    return window.maibotDesktop?.services.selectPythonRuntimePath() ?? null;
+  }, []);
+
+  const saveTerminalSettings = useCallback(
+    async (settings: TerminalSettings) => {
+      setBusy("terminal-settings");
+      setError(null);
+      try {
+        const terminalSettings = await window.maibotDesktop?.services.saveTerminalSettings(settings);
+        if (terminalSettings) {
+          onSnapshot({ ...snapshot, terminalSettings });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const migrateRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
+    setBusy(`resource:migrate:${key}`);
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.resources) {
+        throw new Error("桌面桥未就绪，无法迁移资源路径");
+      }
+
+      const result = await window.maibotDesktop.resources.migratePath(key);
+      if (result) {
+        toast.success("资源路径已迁移");
+        await refreshSnapshot();
+      }
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
+
+  const selectRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
+    setBusy(`resource:select:${key}`);
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.resources) {
+        throw new Error("桌面桥未就绪，无法选择资源路径");
+      }
+
+      const result = await window.maibotDesktop.resources.selectPath(key);
+      if (result) {
+        toast.success("资源路径已切换");
+        await refreshSnapshot();
+      }
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
+
+  const saveRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey, path: string) => {
+    setBusy(`resource:save:${key}`);
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.resources) {
+        throw new Error("桌面桥未就绪，无法保存资源路径");
+      }
+
+      await window.maibotDesktop.resources.savePath(key, path);
+      toast.success("资源路径已保存");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
+
+  const resetRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
+    setBusy(`resource:reset:${key}`);
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.resources) {
+        throw new Error("桌面桥未就绪，无法恢复资源路径");
+      }
+
+      await window.maibotDesktop.resources.resetPath(key);
+      toast.success("资源路径已恢复默认");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
+
   const canSaveQq = busy === null && qqAccount.trim().length > 0;
   useShortcut("Mod+Enter", saveQqAccount, { enabled: canSaveQq, allowInEditable: true });
   useShortcut("Mod+Shift+R", repair, { enabled: busy === null });
@@ -917,6 +1218,18 @@ export function SettingsStatusPanel({
                           {check.detail}
                         </p>
                       </div>
+                      {check.actionUrl ? (
+                        <Button
+                          className="h-7 shrink-0 px-2 text-[11px]"
+                          onClick={() => openExternal(check.actionUrl ?? "")}
+                          size="sm"
+                          title={check.actionLabel ?? "打开下载页面"}
+                          variant="outline"
+                        >
+                          <Download className="size-3" />
+                          {check.actionLabel ?? "下载"}
+                        </Button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -954,6 +1267,31 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
                 </p>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <TerminalSquare className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">终端模式</p>
+                      <p className="text-xs text-muted-foreground">
+                        {terminalSettings.useEmbeddedTerminal
+                          ? "服务会在应用内终端页运行"
+                          : "服务会在外部 Windows 终端窗口运行"}
+                      </p>
+                    </div>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                    <Checkbox
+                      checked={terminalSettings.useEmbeddedTerminal}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) =>
+                        void saveTerminalSettings({ useEmbeddedTerminal: checked === true })
+                      }
+                    />
+                    使用内嵌终端
+                  </label>
+                </div>
                 {services.map((service) => (
                   <ServiceDetail
                     commandBusy={busy === `command:${service.id}`}
@@ -969,57 +1307,8 @@ export function SettingsStatusPanel({
 
               <TabsContent className="space-y-3" value="modules">
                 <p className="text-xs text-muted-foreground">
-                  使用内置 Git 更新可写 MaiBot 模块。更新器不会执行清理命令，不会删除 data、logs、config 等用户数据目录。
+                  使用可用 Git 更新可写 MaiBot 模块。更新器不会执行清理命令，不会删除 data、logs、config 等用户数据目录。
                 </p>
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-end gap-3">
-                    <label className="grid min-w-40 gap-1.5 text-xs font-medium">
-                      更新源
-                      <select
-                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        disabled={busy !== null}
-                        value={moduleSourcePreset}
-                        onChange={(event) => {
-                          const preset = event.target.value as ModuleSourcePreset;
-                          setModuleSourcePreset(preset);
-                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
-                          if (option) {
-                            setCustomMaiBotUrl(option.maibotUrl);
-                          }
-                        }}
-                      >
-                        {moduleSourceConfig?.options.map((option) => (
-                          <option key={option.preset} value={option.preset}>
-                            {option.label}
-                          </option>
-                        ))}
-                        <option value="custom">自定义</option>
-                      </select>
-                    </label>
-                    <Button
-                      disabled={busy !== null || !moduleSourceConfig}
-                      onClick={saveModuleSourceConfig}
-                      size="sm"
-                      variant="secondary"
-                    >
-                      {busy === "module:source" ? <Loader2 className="animate-spin" /> : <Save />}
-                      保存更新源
-                    </Button>
-                  </div>
-                  <div className="grid gap-2">
-                    <label className="grid gap-1.5 text-xs font-medium">
-                      MaiBot 仓库
-                      <Input
-                        disabled={busy !== null || moduleSourcePreset !== "custom"}
-                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
-                        value={customMaiBotUrl}
-                      />
-                    </label>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    当前模块更新会把 origin 设置为这里选择的地址；远程拉取失败时仍会回退到一键包内置快照。
-                  </p>
-                </div>
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -1029,8 +1318,8 @@ export function SettingsStatusPanel({
                         </span>
                         <div className="min-w-0">
                           <p className="text-sm font-medium">MaiBot Core</p>
-                          <p className="truncate font-mono text-[11px] text-muted-foreground" title={snapshot.paths.modulesRoot}>
-                            {snapshot.paths.modulesRoot}
+                          <p className="truncate font-mono text-[11px] text-muted-foreground" title={snapshot.paths.maibotRoot}>
+                            {snapshot.paths.maibotRoot}
                           </p>
                         </div>
                       </div>
@@ -1066,6 +1355,48 @@ export function SettingsStatusPanel({
                       </Button>
                     </div>
                   </div>
+                  <div className="grid gap-3 rounded-md border border-border bg-card/60 p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto] lg:items-end">
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      更新源
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        disabled={busy !== null}
+                        value={moduleSourcePreset}
+                        onChange={(event) => {
+                          const preset = event.target.value as ModuleSourcePreset;
+                          setModuleSourcePreset(preset);
+                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
+                          if (option) {
+                            setCustomMaiBotUrl(option.maibotUrl);
+                          }
+                        }}
+                      >
+                        {moduleSourceConfig?.options.map((option) => (
+                          <option key={option.preset} value={option.preset}>
+                            {option.label}
+                          </option>
+                        ))}
+                        <option value="custom">自定义</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      MaiBot 仓库
+                      <Input
+                        disabled={busy !== null || moduleSourcePreset !== "custom"}
+                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
+                        value={customMaiBotUrl}
+                      />
+                    </label>
+                    <Button
+                      disabled={busy !== null || !moduleSourceConfig}
+                      onClick={saveModuleSourceConfig}
+                      size="sm"
+                      variant="secondary"
+                    >
+                      {busy === "module:source" ? <Loader2 className="animate-spin" /> : <Save />}
+                      保存更新源
+                    </Button>
+                  </div>
                   {maibotUpdateBlocked ? (
                     <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
                       请先停止 MaiBot Core，再执行模块更新。
@@ -1086,7 +1417,7 @@ export function SettingsStatusPanel({
                           <Package className="size-4" />
                         </span>
                         <div className="min-w-0">
-                          <p className="text-sm font-medium">Python 覆盖依赖</p>
+                          <p className="text-sm font-medium">手动更新Python 依赖</p>
                           <p
                             className="truncate font-mono text-[11px] text-muted-foreground"
                             title={pythonDepsState?.root ?? ""}
@@ -1098,9 +1429,11 @@ export function SettingsStatusPanel({
                     </div>
                     <Badge variant="secondary">清华源</Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    仅更新 maibot-dashboard 与 maim-message 到用户可写覆盖目录；启动 MaiBot Core 时会优先加载这里的版本。
-                  </p>
+                  {customPythonRuntimeEnabled ? (
+                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+                      已启用自定义 Python 路径，MaiBot Core 将直接使用该 Python，不再注入 python覆盖依赖。
+                    </div>
+                  ) : null}
                   <div className="grid gap-2 md:grid-cols-2">
                     {managedPythonPackages.map((pythonPackage) => (
                       <div
@@ -1112,7 +1445,7 @@ export function SettingsStatusPanel({
                           <p className="truncate font-mono text-[11px] text-muted-foreground">{pythonPackage.name}</p>
                         </div>
                         <Button
-                          disabled={busy !== null || maibotUpdateBlocked}
+                          disabled={busy !== null || maibotUpdateBlocked || customPythonRuntimeEnabled}
                           onClick={() => void openPythonVersions(pythonPackage.name)}
                           size="sm"
                           variant="outline"
@@ -1134,22 +1467,64 @@ export function SettingsStatusPanel({
 
               <TabsContent className="space-y-3" value="paths">
                 <p className="text-xs text-muted-foreground">
-                  每个安装目录使用独立 userData 与安装目录级实例锁。
+                  用户数据目录保存一键包设置；一套数据只绑定一套覆盖路径，MaiBot、NapCat 与 python可写环境可以分别放在独立目录。
                 </p>
-                <PathField label="安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
                 <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
-                <PathField label="runtime" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <HardDrive className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">实例路径</p>
+                        <p className="text-xs text-muted-foreground">
+                          迁移会复制当前目录内容；选择已有目录只切换指向，不复制数据。
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary">唯一实例</Badge>
+                  </div>
+                  <div className="grid gap-2">
+                    {editableRuntimeResourcePathConfigs.map((config) => (
+                      <RuntimeResourcePathEditor
+                        blocked={
+                          resourceMoveBlocked ||
+                          (busy !== null && !(busy.startsWith("resource:") && busy.endsWith(`:${config.key}`)))
+                        }
+                        busy={busy?.startsWith(`resource:`) === true && busy.endsWith(`:${config.key}`)}
+                        config={config}
+                        key={config.key}
+                        onMigrate={migrateRuntimeResourcePath}
+                        onOpenPath={openPath}
+                        onReset={resetRuntimeResourcePath}
+                        onSave={saveRuntimeResourcePath}
+                        onSelect={selectRuntimeResourcePath}
+                      />
+                    ))}
+                  </div>
+                  {resourceMoveBlocked ? (
+                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+                      请先停止所有服务，再调整实例路径。
+                    </div>
+                  ) : null}
+                </div>
+                <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
+                <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
                 <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
-                <PathField label="可写 modules" onOpen={openPath} value={snapshot.paths.modulesRoot} />
                 <div className="grid gap-2 pt-2">
                   {runtimePathConfigs.map((config) => (
                     <RuntimePathEditor
                       busy={busy === `path:${config.key}`}
+                      candidates={config.key === "python" ? pythonRuntimeCandidates : undefined}
+                      candidatesLoading={config.key === "python" ? pythonRuntimeCandidatesLoading : false}
                       config={config}
                       key={config.key}
                       onOpenPath={openPath}
+                      onRefreshCandidates={refreshPythonRuntimeCandidates}
                       onReset={resetRuntimePathConfig}
                       onSave={saveRuntimePathConfig}
+                      onSelectPython={selectPythonRuntimePath}
                     />
                   ))}
                 </div>
@@ -1265,7 +1640,7 @@ export function SettingsStatusPanel({
     >
       <DialogContent size="md">
       <DialogHeader
-        description="更新器会使用内置 Git 强制同步 MaiBot 远端代码。它不会执行 git clean，也不会删除 data、logs、config 等用户数据目录。"
+        description="更新器会使用可用 Git 强制同步 MaiBot 远端代码。它不会执行 git clean，也不会删除 data、logs、config 等用户数据目录。"
         icon={<GitBranch className="size-4" />}
         title="确认更新 MaiBot 模块？"
         tone="warning"

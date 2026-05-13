@@ -1,7 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
+  MaiBotPluginConfigSaveResult,
+  MaiBotPluginConfigSchema,
+  MaiBotPluginConfigState,
+  MaiBotPluginConfigValue,
   MaiBotInstalledPlugin,
   MaiBotMarketPlugin,
   MaiBotPluginListResult,
@@ -12,6 +17,7 @@ import type {
 const MARKET_URL =
   "https://raw.githubusercontent.com/Mai-with-u/plugin-repo/main/plugin_details.json";
 const MARKET_TIMEOUT_MS = 10_000;
+const PLUGIN_CONFIG_FILE = "config.toml";
 
 export interface MaiBotPluginClientOptions {
   maibotRoot: string;
@@ -60,14 +66,16 @@ export class MaiBotPluginClient {
         continue;
       }
       seenIds.add(id);
+      const config = await this.readPluginConfig(pluginPath).catch(() => ({}));
+      const enabled = readPluginEnabled(config);
 
       plugins.push({
         id,
         manifest: { ...manifest, id },
         path: pluginPath,
-        enabled: true,
+        enabled,
         loaded: false,
-        load_status: "offline",
+        load_status: enabled ? "offline" : "disabled",
       });
     }
 
@@ -162,6 +170,60 @@ export class MaiBotPluginClient {
     };
   }
 
+  async getConfig(pluginId: string): Promise<MaiBotPluginConfigState> {
+    const pluginPath = await this.requireInstalledPluginPath(pluginId);
+    const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
+    if (!isPathInside(pluginPath, configPath)) {
+      throw new Error("插件配置路径超出允许范围");
+    }
+
+    const exists = await pathExists(configPath);
+    const raw = exists ? await readFile(configPath, "utf8") : "";
+    const config = exists ? parsePluginConfig(raw, configPath) : {};
+
+    return {
+      pluginId,
+      pluginPath,
+      configPath,
+      exists,
+      config,
+      schema: buildPluginConfigSchema(config),
+      raw,
+    };
+  }
+
+  async saveConfig(
+    pluginId: string,
+    config: Record<string, MaiBotPluginConfigValue>,
+  ): Promise<MaiBotPluginConfigSaveResult> {
+    const pluginPath = await this.requireInstalledPluginPath(pluginId);
+    const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
+    if (!isPathInside(pluginPath, configPath)) {
+      throw new Error("插件配置路径超出允许范围");
+    }
+
+    const normalizedConfig = normalizePluginConfigRootForToml(config);
+    let backupPath: string | undefined;
+    if (await pathExists(configPath)) {
+      backupPath = `${configPath}.${new Date().toISOString().replace(/[:.]/gu, "-")}.bak`;
+      await copyFile(configPath, backupPath);
+    }
+
+    const raw = `${stringifyToml(normalizedConfig)}\n`;
+    await mkdir(pluginPath, { recursive: true });
+    await writeFile(configPath, raw, "utf8");
+
+    return {
+      pluginId,
+      configPath,
+      config: normalizedConfig,
+      schema: buildPluginConfigSchema(normalizedConfig),
+      raw,
+      backupPath,
+      savedAt: Date.now(),
+    };
+  }
+
   private installTargetPath(pluginId: string): string {
     return this.safePluginPath(validatePluginId(pluginId).replace(/\./gu, "_"), false);
   }
@@ -181,6 +243,22 @@ export class MaiBotPluginClient {
 
     const installed = await this.listInstalled();
     return installed.find((plugin) => plugin.id === normalizedId)?.path ?? null;
+  }
+
+  private async requireInstalledPluginPath(pluginId: string): Promise<string> {
+    const pluginPath = await this.resolveInstalledPluginPath(pluginId);
+    if (!pluginPath) {
+      throw new Error("插件未安装");
+    }
+    return pluginPath;
+  }
+
+  private async readPluginConfig(pluginPath: string): Promise<Record<string, MaiBotPluginConfigValue>> {
+    const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
+    if (!isPathInside(pluginPath, configPath) || !(await pathExists(configPath))) {
+      return {};
+    }
+    return parsePluginConfig(await readFile(configPath, "utf8"), configPath);
   }
 
   private async cloneRepository(repositoryUrl: string, targetPath: string, branch: string): Promise<void> {
@@ -293,6 +371,161 @@ function pluginName(plugin: { id: string; manifest: MaiBotPluginManifest }): str
 
 function pluginVersion(manifest: MaiBotPluginManifest): string {
   return manifest.version?.trim() || "unknown";
+}
+
+function parsePluginConfig(raw: string, configPath: string): Record<string, MaiBotPluginConfigValue> {
+  try {
+    return normalizePluginConfigRoot(parseToml(raw));
+  } catch (error) {
+    throw new Error(`TOML 配置解析失败: ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function readPluginEnabled(config: Record<string, MaiBotPluginConfigValue>): boolean {
+  const pluginSection = config.plugin;
+  if (!isConfigRecord(pluginSection)) {
+    return true;
+  }
+  const enabled = pluginSection.enabled;
+  if (typeof enabled === "string") {
+    const normalized = enabled.trim().toLowerCase();
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  }
+  return typeof enabled === "boolean" ? enabled : true;
+}
+
+function normalizePluginConfigRoot(value: unknown): Record<string, MaiBotPluginConfigValue> {
+  if (!isUnknownRecord(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, normalizePluginConfigValue(item)]),
+  );
+}
+
+function normalizePluginConfigValue(value: unknown): MaiBotPluginConfigValue {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizePluginConfigValue);
+  }
+  if (isUnknownRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, normalizePluginConfigValue(item)]),
+    );
+  }
+  return String(value);
+}
+
+function normalizePluginConfigRootForToml(
+  value: Record<string, MaiBotPluginConfigValue>,
+): Record<string, MaiBotPluginConfigValue> {
+  if (!isUnknownRecord(value)) {
+    throw new Error("插件配置必须是对象");
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, normalizePluginConfigValueForToml(item, key)]),
+  );
+}
+
+function normalizePluginConfigValueForToml(value: MaiBotPluginConfigValue, path: string): MaiBotPluginConfigValue {
+  if (value === null) {
+    throw new Error(`TOML 不支持 null: ${path}`);
+  }
+  if (typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`数字配置无效: ${path}`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => normalizePluginConfigValueForToml(item, `${path}.${index}`));
+  }
+  if (isConfigRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        normalizePluginConfigValueForToml(item, `${path}.${key}`),
+      ]),
+    );
+  }
+  throw new Error(`插件配置值不受支持: ${path}`);
+}
+
+function buildPluginConfigSchema(config: Record<string, MaiBotPluginConfigValue>): MaiBotPluginConfigSchema {
+  const generalFields = Object.entries(config)
+    .filter(([, value]) => !isConfigRecord(value) || Array.isArray(value))
+    .map(([key, value]) => buildPluginConfigField([key], key, value));
+
+  const sections = Object.entries(config)
+    .filter(([, value]) => isConfigRecord(value) && !Array.isArray(value))
+    .map(([sectionName, sectionValue]) => ({
+      name: sectionName,
+      title: labelFromKey(sectionName),
+      fields: Object.entries(sectionValue as Record<string, MaiBotPluginConfigValue>).map(([fieldName, fieldValue]) =>
+        buildPluginConfigField([sectionName, fieldName], fieldName, fieldValue),
+      ),
+    }));
+
+  if (generalFields.length > 0) {
+    sections.unshift({
+      name: "general",
+      title: "常规",
+      fields: generalFields,
+    });
+  }
+
+  return { sections };
+}
+
+function buildPluginConfigField(path: string[], name: string, value: MaiBotPluginConfigValue): MaiBotPluginConfigSchema["sections"][number]["fields"][number] {
+  return {
+    name,
+    label: labelFromKey(name),
+    path,
+    type: pluginConfigValueType(value),
+    value,
+  };
+}
+
+function pluginConfigValueType(value: MaiBotPluginConfigValue): MaiBotPluginConfigSchema["sections"][number]["fields"][number]["type"] {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (isConfigRecord(value)) return "object";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "number") return "number";
+  return "string";
+}
+
+function labelFromKey(value: string): string {
+  return value
+    .replace(/[_-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    || value;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isConfigRecord(value: unknown): value is Record<string, MaiBotPluginConfigValue> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isNewerVersion(candidate: string, current: string): boolean {

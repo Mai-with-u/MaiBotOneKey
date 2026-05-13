@@ -4,6 +4,7 @@ import {
   DatabaseBackup,
   FileCog,
   FolderInput,
+  FolderOpen,
   Loader2,
   Trash2,
 } from "lucide-react";
@@ -29,8 +30,8 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  RuntimeResourcePathChangeResult,
 } from "../../../../shared/contracts";
-import { NapcatAdapterConfigCard } from "./NapcatAdapterConfigCard";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -46,10 +47,13 @@ function formatTime(ts: number): string {
 export function QuickActionsPanel(): React.JSX.Element {
   const [importing, setImporting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [selectingMaiBotPath, setSelectingMaiBotPath] = useState(false);
   const [lastImport, setLastImport] = useState<MaiBotDataImportResult | null>(
     null,
   );
   const [lastReset, setLastReset] = useState<MaiBotDataResetResult | null>(null);
+  const [lastMaiBotPathChange, setLastMaiBotPathChange] =
+    useState<RuntimeResourcePathChangeResult | null>(null);
 
   const [importingConfig, setImportingConfig] = useState<MaiBotConfigFileName | null>(
     null,
@@ -88,6 +92,31 @@ export function QuickActionsPanel(): React.JSX.Element {
 
   const handleResetRequest = (): void => {
     setConfirm1Open(true);
+  };
+
+  const handleSelectMaiBotPath = async (): Promise<void> => {
+    if (!window.maibotDesktop?.resources) {
+      toast.error("当前环境不支持该操作");
+      return;
+    }
+    setSelectingMaiBotPath(true);
+    try {
+      const result = await window.maibotDesktop.resources.selectPath("maibot");
+      if (!result) {
+        toast.info("已取消选择");
+        return;
+      }
+      setLastMaiBotPathChange(result);
+      toast.success("MaiBot 路径已切换", {
+        description: result.path,
+      });
+    } catch (error) {
+      toast.error("切换 MaiBot 路径失败", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setSelectingMaiBotPath(false);
+    }
   };
 
   const handleImportConfig = async (
@@ -156,6 +185,63 @@ export function QuickActionsPanel(): React.JSX.Element {
             常用的 MaiBot 数据维护操作。所有操作都会写入可写模块目录，请在执行前确认 MaiBot Core 已停止运行。
           </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+                <FolderOpen className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <CardTitle>设置 MaiBot 路径</CardTitle>
+                <CardDescription>
+                  选择已有 MaiBot Core 目录作为当前实例路径。切换前请先停止所有服务，避免运行中的文件被占用。
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={handleSelectMaiBotPath}
+                disabled={selectingMaiBotPath}
+                size="sm"
+              >
+                {selectingMaiBotPath ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <FolderOpen />
+                )}
+                选择 MaiBot 目录
+              </Button>
+              <span className="text-[11px] text-muted-foreground">
+                仅切换路径，不复制现有 MaiBot 数据
+              </span>
+            </div>
+            {lastMaiBotPathChange ? (
+              <div className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-foreground">
+                <div className="flex items-center gap-1.5 font-medium text-success">
+                  <CheckCircle2 className="size-3.5" />
+                  最近一次路径切换
+                </div>
+                <dl className="mt-1.5 grid gap-0.5 text-muted-foreground">
+                  <div className="flex gap-2">
+                    <dt className="shrink-0">原路径：</dt>
+                    <dd className="break-all">{lastMaiBotPathChange.previousPath}</dd>
+                  </div>
+                  <div className="flex gap-2">
+                    <dt className="shrink-0">新路径：</dt>
+                    <dd className="break-all">{lastMaiBotPathChange.path}</dd>
+                  </div>
+                  <div className="flex gap-2">
+                    <dt className="shrink-0">时间：</dt>
+                    <dd>{formatTime(lastMaiBotPathChange.changedAt)}</dd>
+                  </div>
+                </dl>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -311,7 +397,6 @@ export function QuickActionsPanel(): React.JSX.Element {
           </CardContent>
         </Card>
 
-        <NapcatAdapterConfigCard />
         <Card className="border-destructive/40">
           <CardHeader>
             <div className="flex items-start gap-3">

@@ -1,4 +1,4 @@
-import { AlertTriangle, Download, Loader2, Puzzle, RefreshCw, Search, Store, Trash2, Upload, Wrench } from "lucide-react";
+import { AlertTriangle, Download, Loader2, Puzzle, RefreshCw, Save, Search, SlidersHorizontal, Store, Trash2, Upload, Wrench } from "lucide-react";
 import type { ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -23,12 +23,16 @@ import {
   isNewerPluginVersion,
   isPluginCompatible,
   type MarketPlugin,
+  fetchPluginConfig,
+  type PluginConfigState,
+  type PluginConfigValue,
   pluginAuthor,
   pluginDescription,
   pluginName,
   pluginNeedsUpdate,
   pluginRepositoryUrl,
   pluginVersion,
+  savePluginConfig,
   uninstallMaiBotPlugin,
   updateMaiBotPlugin,
 } from "@/lib/maibot-plugin-api";
@@ -36,6 +40,7 @@ import {
 type PluginPanelMode = "market" | "manage";
 type LoadState = "idle" | "loading" | "ready" | "error";
 type OperationKind = "install" | "update" | "uninstall";
+type ConfigBusyState = "load" | "save" | null;
 
 type PendingOperation = {
   kind: OperationKind;
@@ -78,6 +83,11 @@ export function PluginMarketPanel({
   const [error, setError] = useState<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
   const [operationBusy, setOperationBusy] = useState(false);
+  const [configPlugin, setConfigPlugin] = useState<InstalledPlugin | null>(null);
+  const [configState, setConfigState] = useState<PluginConfigState | null>(null);
+  const [configDraft, setConfigDraft] = useState<Record<string, PluginConfigValue> | null>(null);
+  const [configBusy, setConfigBusy] = useState<ConfigBusyState>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   const loadPlugins = useCallback(async () => {
     setLoadState("loading");
@@ -114,6 +124,58 @@ export function PluginMarketPanel({
 
   const beginOperation = useCallback((operation: PendingOperation) => {
     setPendingOperation(operation);
+  }, []);
+
+  const openPluginConfig = useCallback(async (plugin: InstalledPlugin) => {
+    setConfigPlugin(plugin);
+    setConfigState(null);
+    setConfigDraft(null);
+    setConfigError(null);
+    setConfigBusy("load");
+    try {
+      const state = await fetchPluginConfig(plugin.id);
+      setConfigState(state);
+      setConfigDraft(clonePluginConfig(state.config));
+    } catch (nextError) {
+      setConfigError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setConfigBusy(null);
+    }
+  }, []);
+
+  const saveOpenPluginConfig = useCallback(async () => {
+    if (!configPlugin || !configDraft) {
+      return;
+    }
+
+    setConfigBusy("save");
+    setConfigError(null);
+    try {
+      const result = await savePluginConfig(configPlugin.id, configDraft);
+      setConfigState((state) =>
+        state
+          ? {
+              ...state,
+              exists: true,
+              config: result.config,
+              schema: result.schema,
+              raw: result.raw,
+              configPath: result.configPath,
+            }
+          : state,
+      );
+      setConfigDraft(clonePluginConfig(result.config));
+      toast.success(`配置已保存：${pluginName(configPlugin)}`);
+      await loadPlugins();
+    } catch (nextError) {
+      setConfigError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setConfigBusy(null);
+    }
+  }, [configDraft, configPlugin, loadPlugins]);
+
+  const updateConfigDraft = useCallback((path: string[], value: PluginConfigValue) => {
+    setConfigDraft((draft) => (draft ? setPluginConfigValue(draft, path, value) : draft));
   }, []);
 
   const runPendingOperation = useCallback(async () => {
@@ -278,7 +340,12 @@ export function PluginMarketPanel({
           ) : isMarket ? (
             <PluginGrid maibotVersion={maibotVersion} onOperate={beginOperation} plugins={filteredMarket} />
           ) : (
-            <InstalledGrid maibotVersion={maibotVersion} onOperate={beginOperation} plugins={filteredInstalled} />
+            <InstalledGrid
+              maibotVersion={maibotVersion}
+              onConfigure={openPluginConfig}
+              onOperate={beginOperation}
+              plugins={filteredInstalled}
+            />
           )}
         </div>
       </div>
@@ -291,6 +358,23 @@ export function PluginMarketPanel({
         }}
         operation={pendingOperation}
         setOperation={setPendingOperation}
+      />
+      <PluginConfigDialog
+        busy={configBusy}
+        draft={configDraft}
+        error={configError}
+        onChange={updateConfigDraft}
+        onOpenChange={(open) => {
+          if (!open && configBusy === null) {
+            setConfigPlugin(null);
+            setConfigState(null);
+            setConfigDraft(null);
+            setConfigError(null);
+          }
+        }}
+        onSave={() => void saveOpenPluginConfig()}
+        plugin={configPlugin}
+        state={configState}
       />
     </>
   );
@@ -420,10 +504,12 @@ function PluginGrid({
 function InstalledGrid({
   plugins,
   onOperate,
+  onConfigure,
   maibotVersion,
 }: {
   plugins: InstalledPluginView[];
   onOperate: (operation: PendingOperation) => void;
+  onConfigure: (plugin: InstalledPlugin) => void;
   maibotVersion?: string;
 }): React.JSX.Element {
   if (plugins.length === 0) {
@@ -446,6 +532,12 @@ function InstalledGrid({
         return (
           <PluginCard
             actions={[
+              {
+                label: "配置",
+                icon: <SlidersHorizontal />,
+                variant: "secondary",
+                onClick: () => onConfigure(plugin),
+              },
               {
                 label: updateLabel,
                 icon: <Upload />,
@@ -539,6 +631,280 @@ function PluginCard({
       </div>
     </div>
   );
+}
+
+function PluginConfigDialog({
+  plugin,
+  state,
+  draft,
+  busy,
+  error,
+  onChange,
+  onSave,
+  onOpenChange,
+}: {
+  plugin: InstalledPlugin | null;
+  state: PluginConfigState | null;
+  draft: Record<string, PluginConfigValue> | null;
+  busy: ConfigBusyState;
+  error: string | null;
+  onChange: (path: string[], value: PluginConfigValue) => void;
+  onSave: () => void;
+  onOpenChange: (open: boolean) => void;
+}): React.JSX.Element {
+  const sections = state?.schema.sections ?? [];
+
+  return (
+    <Dialog open={plugin !== null} onOpenChange={onOpenChange}>
+      <DialogContent size="xl">
+        <DialogHeader
+          description={plugin ? `${plugin.id} · ${state?.configPath ?? "config.toml"}` : undefined}
+          icon={<SlidersHorizontal className="size-4" />}
+          title={plugin ? `${pluginName(plugin)} 配置` : "插件配置"}
+          tone="primary"
+        />
+        <DialogBody className="space-y-4">
+          {error ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
+              {error}
+            </div>
+          ) : null}
+
+          {busy === "load" ? (
+            <div className="grid min-h-48 place-items-center rounded-lg border border-border bg-muted/40 text-sm text-muted-foreground">
+              <span className="flex items-center gap-2">
+                <Loader2 className="size-4 animate-spin" />
+                正在读取插件配置
+              </span>
+            </div>
+          ) : state && draft ? (
+            sections.length > 0 ? (
+              <div className="grid gap-3">
+                {sections.map((section) => (
+                  <PluginConfigSection
+                    draft={draft}
+                    key={section.name}
+                    onChange={onChange}
+                    section={section}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border bg-muted/40 px-3 py-8 text-center text-sm text-muted-foreground">
+                这个插件还没有可渲染的 config.toml
+              </div>
+            )
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button disabled={busy !== null} onClick={() => onOpenChange(false)} size="sm" variant="ghost">
+            关闭
+          </Button>
+          <Button disabled={busy !== null || !draft || !state} onClick={onSave} size="sm">
+            {busy === "save" ? <Loader2 className="animate-spin" /> : <Save />}
+            保存配置
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PluginConfigSection({
+  section,
+  draft,
+  onChange,
+}: {
+  section: NonNullable<PluginConfigState["schema"]["sections"]>[number];
+  draft: Record<string, PluginConfigValue>;
+  onChange: (path: string[], value: PluginConfigValue) => void;
+}): React.JSX.Element {
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{section.title}</p>
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground">{section.name}</p>
+        </div>
+        <Badge variant="secondary">{section.fields.length}</Badge>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {section.fields.map((field) => (
+          <PluginConfigField
+            field={field}
+            key={field.path.join(".")}
+            onChange={onChange}
+            value={getPluginConfigValue(draft, field.path) ?? field.value}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PluginConfigField({
+  field,
+  value,
+  onChange,
+}: {
+  field: PluginConfigState["schema"]["sections"][number]["fields"][number];
+  value: PluginConfigValue;
+  onChange: (path: string[], value: PluginConfigValue) => void;
+}): React.JSX.Element {
+  if (typeof value === "boolean") {
+    return (
+      <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-muted/35 px-3 py-2.5">
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">{field.label}</span>
+          <span className="block truncate font-mono text-[10px] text-muted-foreground">{field.name}</span>
+        </span>
+        <Checkbox checked={value} onCheckedChange={(checked) => onChange(field.path, checked === true)} />
+      </label>
+    );
+  }
+
+  if (typeof value === "number") {
+    return (
+      <label className="grid min-w-0 gap-1.5 text-xs font-medium">
+        <span className="truncate">{field.label}</span>
+        <Input
+          inputMode="decimal"
+          monospace
+          onChange={(event) => {
+            const nextValue = Number(event.target.value);
+            onChange(field.path, Number.isFinite(nextValue) ? nextValue : 0);
+          }}
+          type="number"
+          value={String(value)}
+        />
+      </label>
+    );
+  }
+
+  if (typeof value === "string") {
+    return (
+      <label className="grid min-w-0 gap-1.5 text-xs font-medium">
+        <span className="truncate">{field.label}</span>
+        <Input
+          monospace
+          onChange={(event) => onChange(field.path, event.target.value)}
+          value={value}
+        />
+      </label>
+    );
+  }
+
+  return (
+    <JsonConfigField
+      field={field}
+      onChange={(nextValue) => onChange(field.path, nextValue)}
+      value={value}
+    />
+  );
+}
+
+function JsonConfigField({
+  field,
+  value,
+  onChange,
+}: {
+  field: PluginConfigState["schema"]["sections"][number]["fields"][number];
+  value: PluginConfigValue;
+  onChange: (value: PluginConfigValue) => void;
+}): React.JSX.Element {
+  const serialized = useMemo(() => JSON.stringify(value, null, 2), [value]);
+  const [text, setText] = useState(serialized);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setText(serialized);
+    setError(null);
+  }, [serialized]);
+
+  const commit = useCallback((nextText: string) => {
+    try {
+      const parsed = JSON.parse(nextText) as unknown;
+      onChange(normalizeJsonPluginConfigValue(parsed));
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [onChange]);
+
+  return (
+    <label className="grid min-w-0 gap-1.5 text-xs font-medium md:col-span-2">
+      <span className="truncate">{field.label}</span>
+      <textarea
+        className="min-h-24 rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
+        onBlur={() => commit(text)}
+        onChange={(event) => setText(event.target.value)}
+        spellCheck={false}
+        value={text}
+      />
+      {error ? <span className="text-[11px] text-destructive">JSON 格式错误：{error}</span> : null}
+    </label>
+  );
+}
+
+function clonePluginConfig(config: Record<string, PluginConfigValue>): Record<string, PluginConfigValue> {
+  return JSON.parse(JSON.stringify(config)) as Record<string, PluginConfigValue>;
+}
+
+function setPluginConfigValue(
+  config: Record<string, PluginConfigValue>,
+  path: string[],
+  value: PluginConfigValue,
+): Record<string, PluginConfigValue> {
+  const next = clonePluginConfig(config);
+  let cursor: Record<string, PluginConfigValue> = next;
+  for (const segment of path.slice(0, -1)) {
+    const current = cursor[segment];
+    if (!isPluginConfigRecord(current)) {
+      cursor[segment] = {};
+    }
+    cursor = cursor[segment] as Record<string, PluginConfigValue>;
+  }
+  const last = path.at(-1);
+  if (last) {
+    cursor[last] = value;
+  }
+  return next;
+}
+
+function getPluginConfigValue(
+  config: Record<string, PluginConfigValue>,
+  path: string[],
+): PluginConfigValue | undefined {
+  let cursor: PluginConfigValue | Record<string, PluginConfigValue> = config;
+  for (const segment of path) {
+    if (!isPluginConfigRecord(cursor)) {
+      return undefined;
+    }
+    cursor = cursor[segment];
+  }
+  return cursor as PluginConfigValue | undefined;
+}
+
+function normalizeJsonPluginConfigValue(value: unknown): PluginConfigValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeJsonPluginConfigValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, normalizeJsonPluginConfigValue(item)]),
+    );
+  }
+  return String(value);
+}
+
+function isPluginConfigRecord(value: unknown): value is Record<string, PluginConfigValue> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function OperationDialog({

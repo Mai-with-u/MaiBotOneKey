@@ -14,7 +14,7 @@ import type {
 import { InitManager } from "./init-manager";
 
 const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
-/** 单次 git fetch origin 的最长等待时间。失败/超时后会立即回退到 bundled 兜底。 */
+/** 单次 git fetch origin 的最长等待时间。失败/超时后会恢复到更新前状态。 */
 const FETCH_ORIGIN_TIMEOUT_MS = 3 * 60 * 1000;
 const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
 const OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
@@ -126,7 +126,7 @@ export class ModuleUpdater {
   async updateMaiBot(targetTag?: string): Promise<ModuleUpdateResult> {
     const gitPath = this.initManager.getGitPath();
     if (!existsSync(gitPath)) {
-      throw new Error(`内置 Git 不存在: ${gitPath}`);
+      throw new Error(`未找到可用 Git: ${gitPath}`);
     }
 
     const sourceConfig = await this.getSourceConfig();
@@ -135,7 +135,7 @@ export class ModuleUpdater {
     const mainResult = await this.updateGitRepository(gitPath, {
       moduleId: "maibot",
       moduleName: "MaiBot",
-      cwd: join(this.paths.modulesRoot, "MaiBot"),
+      cwd: this.paths.maibotRoot,
       bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
       remoteUrl: sourceConfig.maibotUrl,
       defaultBranch: "main",
@@ -155,7 +155,7 @@ export class ModuleUpdater {
   async repairNapcatAdapterFromBundled(): Promise<ModuleUpdateResult> {
     const moduleId: ModuleUpdateResult["moduleId"] = "napcat-adapter";
     const moduleName = "napcat-adapter";
-    const cwd = join(this.paths.modulesRoot, "MaiBot", "plugins", "napcat-adapter");
+    const cwd = join(this.paths.maibotRoot, "plugins", "napcat-adapter");
     const bundled = join(this.paths.bundledModulesRoot, "MaiBot", "plugins", "napcat-adapter");
     const gitPath = this.initManager.getGitPath();
     const output: string[] = [];
@@ -237,6 +237,8 @@ export class ModuleUpdater {
     }
 
     let remote = await this.readGitValue(gitPath, cwd, ["config", "--get", "remote.origin.url"]);
+    const originalRemote = remote;
+    const hadOriginRemote = Boolean(remote);
     if (!remote) {
       append(
         `[${moduleName}] remote add origin ${remoteUrl}`,
@@ -280,7 +282,6 @@ export class ModuleUpdater {
       );
     }
 
-    let source: "remote" | "bundled" = "remote";
     let warning: string | undefined;
     let remoteError: string | undefined;
     let upstream: string;
@@ -304,55 +305,29 @@ export class ModuleUpdater {
       );
     } catch (originErr) {
       remoteError = toDetail(originErr);
-      output.push(
-        `[${moduleName}] 远端 (origin) 拉取失败（${Math.round(FETCH_ORIGIN_TIMEOUT_MS / 1000)} 秒内未完成或网络异常）: ${remoteError}`,
-      );
-      if (spec.targetTag) {
-        throw new Error(`无法拉取远端 tag ${spec.targetTag}: ${remoteError}`);
+      output.push(`[${moduleName}] 远端拉取或更新失败: ${remoteError}`);
+      await this.restoreRepositoryBeforeUpdate(gitPath, cwd, moduleName, before, originalRemote, hadOriginRemote, output);
+      const failure = spec.targetTag
+        ? `无法拉取远端 tag ${spec.targetTag}，已恢复到更新前状态: ${remoteError}`
+        : `远端更新失败，已恢复到更新前状态: ${remoteError}`;
+      if (spec.throwOnFailure) {
+        throw new Error(failure);
       }
-      if (!bundledHasGit) {
-        const failure = `无法连接 GitHub 远端 (${remoteUrl})，且未找到一键包内置兜底仓库可供回退：${remoteError}`;
-        if (spec.throwOnFailure) {
-          throw new Error(failure);
-        }
-        return {
-          moduleId,
-          moduleName,
-          cwd,
-          gitPath,
-          remote,
-          branch,
-          before,
-          changed: false,
-          output: [...output, failure],
-          updatedAt: Date.now(),
-          source: "remote",
-          warning: failure,
-          remoteError,
-        };
-      }
-
-      output.push(
-        `[${moduleName}] ⚠ 网络拉取失败，已自动回退到一键包内置快照（与本一键包发布日同步，可能落后于上游最新代码）。`,
-      );
-      append(
-        `[${moduleName}] fetch bundled --prune --tags --force`,
-        (await this.runGit(gitPath, cwd, ["fetch", "bundled", "--prune", "--tags", "--force"])).output,
-      );
-      const bundledHead =
-        (await this.readGitValue(gitPath, cwd, [
-          "symbolic-ref",
-          "--quiet",
-          "--short",
-          "refs/remotes/bundled/HEAD",
-        ])) ?? `bundled/${branch ?? defaultBranch}`;
-      upstream = bundledHead;
-      append(
-        `[${moduleName}] reset --hard ${upstream}`,
-        (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
-      );
-      source = "bundled";
-      warning = `${moduleName} 已回退到一键包内置快照。该版本仅与本一键包发布时同步，可能落后于上游最新代码；请稍后在网络恢复后再次执行更新以拉取最新版本。`;
+      return {
+        moduleId,
+        moduleName,
+        cwd,
+        gitPath,
+        remote: originalRemote ?? remote,
+        branch,
+        before,
+        changed: false,
+        output: [...output, failure],
+        updatedAt: Date.now(),
+        source: "remote",
+        warning: failure,
+        remoteError,
+      };
     }
 
     if (spec.runSubmodule) {
@@ -362,10 +337,11 @@ export class ModuleUpdater {
           (await this.runGit(gitPath, cwd, ["submodule", "update", "--init", "--recursive", "--force"])).output,
         );
       } catch (subErr) {
-        if (source === "bundled") {
-          output.push(`[${moduleName}] 子模块更新跳过（离线兜底模式）: ${toDetail(subErr)}`);
-        } else if (spec.throwOnFailure) {
-          throw subErr;
+        if (spec.throwOnFailure) {
+          const remoteError = toDetail(subErr);
+          output.push(`[${moduleName}] 子模块更新失败: ${remoteError}`);
+          await this.restoreRepositoryBeforeUpdate(gitPath, cwd, moduleName, before, originalRemote, hadOriginRemote, output);
+          throw new Error(`子模块更新失败，已恢复到更新前状态: ${remoteError}`);
         } else {
           output.push(`[${moduleName}] 子模块更新失败（已忽略）: ${toDetail(subErr)}`);
         }
@@ -387,7 +363,7 @@ export class ModuleUpdater {
       changed: before ? Boolean(after && before !== after) : Boolean(after),
       output,
       updatedAt: Date.now(),
-      source,
+      source: "remote",
       warning,
       remoteError,
     };
@@ -419,6 +395,37 @@ export class ModuleUpdater {
     }
 
     return "origin/main";
+  }
+
+  private async restoreRepositoryBeforeUpdate(
+    gitPath: string,
+    cwd: string,
+    moduleName: string,
+    before: string | undefined,
+    originalRemote: string | undefined,
+    hadOriginRemote: boolean,
+    output: string[],
+  ): Promise<void> {
+    try {
+      if (before) {
+        output.push(`[${moduleName}] 恢复到更新前提交 ${before} ...`);
+        output.push(...(await this.runGit(gitPath, cwd, ["reset", "--hard", before], 60_000)).output);
+      }
+    } catch (restoreError) {
+      output.push(`[${moduleName}] 恢复提交失败: ${toDetail(restoreError)}`);
+    }
+
+    try {
+      if (hadOriginRemote && originalRemote) {
+        output.push(`[${moduleName}] 恢复 origin: ${originalRemote}`);
+        output.push(...(await this.runGit(gitPath, cwd, ["remote", "set-url", "origin", originalRemote], 30_000)).output);
+      } else {
+        output.push(`[${moduleName}] 移除本次新增的 origin`);
+        output.push(...(await this.runGit(gitPath, cwd, ["remote", "remove", "origin"], 30_000)).output);
+      }
+    } catch (restoreError) {
+      output.push(`[${moduleName}] 恢复 origin 失败: ${toDetail(restoreError)}`);
+    }
   }
 
   private async readStoredSourceConfig(): Promise<ModuleSourceUpdate | undefined> {

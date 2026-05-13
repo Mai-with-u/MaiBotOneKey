@@ -17,7 +17,6 @@ import type { ThemeApi } from "@/lib/use-theme";
 
 interface TitlebarProps {
   appVersion: string;
-  installRoot?: string;
   theme: ThemeApi;
 }
 
@@ -141,7 +140,6 @@ const titlebarBtn =
 
 export function Titlebar({
   appVersion,
-  installRoot,
   theme,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
@@ -181,13 +179,6 @@ export function Titlebar({
       >
         <span className="truncate text-[12px] font-semibold tracking-tight">
           MaiBot OneKey
-        </span>
-        <span className="hidden h-3 w-px bg-border md:inline-block" />
-        <span
-          className="hidden min-w-0 max-w-[420px] truncate font-mono text-[11px] text-muted-foreground md:inline-block"
-          title={installRoot}
-        >
-          {installRoot ?? "—"}
         </span>
       </div>
 

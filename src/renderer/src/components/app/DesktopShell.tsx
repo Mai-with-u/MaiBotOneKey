@@ -206,6 +206,7 @@ export function DesktopShell(): React.JSX.Element {
   const maibotService = serviceById.get("maibot");
   const napcatService = serviceById.get("napcat");
   const runningCount = services.filter((s) => s.status === "running").length;
+  const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal !== true;
   const canInterruptStartup =
     actionBusy === "all:start" ||
     services.some((service) => service.status === "starting");
@@ -287,6 +288,10 @@ export function DesktopShell(): React.JSX.Element {
   );
 
   const selectTab = useCallback((value: string) => {
+    if (value === "terminal" && !showTerminalTab) {
+      setActiveTab("home");
+      return;
+    }
     if (value === "pluginmarket") {
       setPluginMode("market");
       setActiveTab("plugins");
@@ -298,13 +303,19 @@ export function DesktopShell(): React.JSX.Element {
       return;
     }
     setActiveTab(value);
-  }, []);
+  }, [showTerminalTab]);
+
+  useEffect(() => {
+    if (activeTab === "terminal" && !showTerminalTab) {
+      setActiveTab("home");
+    }
+  }, [activeTab, showTerminalTab]);
 
   // Shortcuts
   useShortcut("Mod+1", () => selectTab("home"));
   useShortcut("Mod+2", () => selectTab("maibot"));
   useShortcut("Mod+3", () => selectTab("napcat"));
-  useShortcut("Mod+4", () => selectTab("terminal"));
+  useShortcut("Mod+4", () => selectTab("terminal"), { enabled: showTerminalTab });
   useShortcut("Mod+5", () => selectTab("quickactions"));
   useShortcut("Mod+6", () => selectTab("pluginmarket"));
   useShortcut("Mod+7", () => selectTab("pluginmanage"));
@@ -319,7 +330,6 @@ export function DesktopShell(): React.JSX.Element {
       <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
         <Titlebar
           appVersion={snapshot?.appVersion ?? "0.1.0"}
-          installRoot={snapshot?.paths.installRoot}
           theme={theme}
         />
 
@@ -466,11 +476,13 @@ export function DesktopShell(): React.JSX.Element {
                   NapCat
                   <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
-                <TabsTrigger value="terminal" className="gap-1.5">
-                  <TerminalSquare />
-                  终端
-                  <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
+                {showTerminalTab ? (
+                  <TabsTrigger value="terminal" className="gap-1.5">
+                    <TerminalSquare />
+                    终端
+                    <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
+                  </TabsTrigger>
+                ) : null}
                 <TabsTrigger value="quickactions" className="gap-1.5">
                   <Wrench />
                   快捷操作
@@ -553,11 +565,23 @@ export function DesktopShell(): React.JSX.Element {
               value="terminal"
               className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
             >
-              <TerminalPanel
-                active={activeTab === "terminal"}
-                recentLogs={snapshot?.recentLogs ?? []}
-                services={services}
-              />
+              {snapshot?.terminalSettings.useEmbeddedTerminal === false ? (
+                <div className="grid h-full place-items-center bg-background p-6 text-center">
+                  <div className="max-w-sm rounded-lg border border-border bg-card p-4">
+                    <TerminalSquare className="mx-auto size-6 text-primary" />
+                    <p className="mt-2 text-sm font-medium">外部 Windows 终端模式</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      服务启动时会打开独立终端窗口。
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <TerminalPanel
+                  active={activeTab === "terminal"}
+                  recentLogs={snapshot?.recentLogs ?? []}
+                  services={services}
+                />
+              )}
             </TabsContent>
 
             <TabsContent

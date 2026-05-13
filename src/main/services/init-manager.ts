@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
+﻿import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
   AgreementDocument,
@@ -16,10 +16,9 @@ import type {
   MaiBotDataResetResult,
   NapcatAdapterChatConfig,
   NapcatAdapterConfig,
-  NapcatAdapterConfigSaveResult,
-  NapcatAdapterConfigState,
   NapcatChatListMode,
   RuntimePaths,
+  PythonRuntimeCandidate,
   ServiceId,
   StartupAgreementConfirmResult,
   StartupAgreementState,
@@ -29,8 +28,197 @@ const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
 const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
 const GIT_RUNTIME_DIR = "git";
+const PYTHON_MINIMUM_VERSION = "3.12";
+const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
+const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_LEGACY_CONFIG_VERSION = "1.0.0";
+
+function uniqueExistingPaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const existing: string[] = [];
+
+  for (const path of paths) {
+    const normalized = process.platform === "win32" ? path.toLowerCase() : path;
+    if (seen.has(normalized) || !existsSync(path)) {
+      continue;
+    }
+    seen.add(normalized);
+    existing.push(path);
+  }
+
+  return existing;
+}
+
+function uniquePythonCandidates(candidates: PythonRuntimeCandidate[]): PythonRuntimeCandidate[] {
+  const seen = new Set<string>();
+  const unique: PythonRuntimeCandidate[] = [];
+
+  for (const candidate of candidates) {
+    if (isWindowsAppsPythonAlias(candidate.path)) {
+      continue;
+    }
+    const normalized = normalizePathForCompare(candidate.path);
+    if (seen.has(normalized) || !existsSync(candidate.path)) {
+      continue;
+    }
+    seen.add(normalized);
+    unique.push(candidate);
+  }
+
+  return unique;
+}
+
+function normalizePathForCompare(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function samePath(left: string, right: string): boolean {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
+function sameOrInsidePath(parent: string, child: string): boolean {
+  if (samePath(parent, child)) {
+    return true;
+  }
+  const diff = relative(resolve(parent), resolve(child));
+  return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`);
+}
+
+function cleanPathEntry(entry: string): string {
+  return entry.trim().replace(/^"|"$/gu, "");
+}
+
+function isWindowsAppsAlias(path: string): boolean {
+  return process.platform === "win32" && /\\microsoft\\windowsapps\\git\.exe$/iu.test(path);
+}
+
+function isWindowsAppsPythonAlias(path: string): boolean {
+  return process.platform === "win32" && /\\microsoft\\windowsapps\\python(?:3)?\.exe$/iu.test(path);
+}
+
+function pathGitCandidates(): string[] {
+  const names = process.platform === "win32" ? ["git.exe"] : ["git"];
+  const pathEntries = (process.env.PATH ?? "")
+    .split(delimiter)
+    .map(cleanPathEntry)
+    .filter(Boolean);
+  const candidates: string[] = [];
+
+  for (const entry of pathEntries) {
+    for (const name of names) {
+      const candidate = join(entry, name);
+      if (!isWindowsAppsAlias(candidate)) {
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function pathPythonCandidates(): string[] {
+  const names = process.platform === "win32" ? ["python.exe", "python3.exe"] : ["python3", "python"];
+  const pathEntries = (process.env.PATH ?? "")
+    .split(delimiter)
+    .map(cleanPathEntry)
+    .filter(Boolean);
+  const candidates: string[] = [];
+
+  for (const entry of pathEntries) {
+    for (const name of names) {
+      const candidate = join(entry, name);
+      if (!isWindowsAppsPythonAlias(candidate)) {
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function childPythonCandidates(root: string | undefined): string[] {
+  if (!root || !existsSync(root)) {
+    return [];
+  }
+
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(root, entry.name, process.platform === "win32" ? "python.exe" : "bin/python3"))
+      .filter((candidate) => existsSync(candidate))
+      .sort((left, right) => right.localeCompare(left, "en-US", { numeric: true, sensitivity: "base" }));
+  } catch {
+    return [];
+  }
+}
+
+function childPythonCandidateDetails(root: string | undefined, source: string): PythonRuntimeCandidate[] {
+  return childPythonCandidates(root).map((path) => ({ path, source }));
+}
+
+function systemPythonCandidates(): string[] {
+  return systemPythonCandidateDetails().map((candidate) => candidate.path);
+}
+
+function systemPythonCandidateDetails(): PythonRuntimeCandidate[] {
+  if (process.platform !== "win32") {
+    return uniquePythonCandidates([
+      ...pathPythonCandidates().map((path) => ({ path, source: "PATH" })),
+      { path: "/usr/bin/python3", source: "/usr/bin" },
+      { path: "/usr/local/bin/python3", source: "/usr/local/bin" },
+      { path: "/opt/homebrew/bin/python3", source: "Homebrew" },
+    ]);
+  }
+
+  const candidates: PythonRuntimeCandidate[] = [];
+  if (process.env.LOCALAPPDATA) {
+    candidates.push(...childPythonCandidateDetails(join(process.env.LOCALAPPDATA, "Programs", "Python"), "用户 Python"));
+  }
+  candidates.push(...childPythonCandidateDetails(process.env.ProgramFiles, "Program Files"));
+  candidates.push(...childPythonCandidateDetails(process.env["ProgramFiles(x86)"], "Program Files (x86)"));
+  if (process.env.USERPROFILE) {
+    candidates.push(...childPythonCandidateDetails(join(process.env.USERPROFILE, ".pyenv", "pyenv-win", "versions"), "pyenv-win"));
+  }
+  candidates.push(...pathPythonCandidates().map((path) => ({ path, source: "PATH" })));
+  return uniquePythonCandidates(candidates);
+}
+
+function systemGitCandidates(): string[] {
+  if (process.platform !== "win32") {
+    return [
+      ...pathGitCandidates(),
+      "/usr/bin/git",
+      "/usr/local/bin/git",
+      "/opt/homebrew/bin/git",
+    ];
+  }
+
+  const candidates: string[] = [];
+  const addWindowsGitRoot = (root: string | undefined): void => {
+    if (!root) return;
+    candidates.push(
+      join(root, "Git", "cmd", "git.exe"),
+      join(root, "Git", "bin", "git.exe"),
+      join(root, "Git", "mingw64", "bin", "git.exe"),
+    );
+  };
+
+  addWindowsGitRoot(process.env.ProgramFiles);
+  addWindowsGitRoot(process.env["ProgramFiles(x86)"]);
+  addWindowsGitRoot(process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs") : undefined);
+
+  if (process.env.USERPROFILE) {
+    candidates.push(join(process.env.USERPROFILE, "scoop", "apps", "git", "current", "cmd", "git.exe"));
+  }
+  if (process.env.ProgramData) {
+    candidates.push(join(process.env.ProgramData, "chocolatey", "bin", "git.exe"));
+  }
+
+  candidates.push(...pathGitCandidates());
+  return candidates;
+}
 
 const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName: string; envVar: string }> = [
   { id: "eula", title: "最终用户许可协议", fileName: "EULA.md", envVar: "EULA_AGREE" },
@@ -40,8 +228,8 @@ const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName:
 const AGREEMENT_STORE_FILE = "agreement.json";
 
 /**
- * NapCat 启动包装 .cmd：在启动 exe 前先切控制台到 UTF-8，避免中文乱码。
- * 内容是固定的、不依赖任何运行时拼接的变量：不会遇到 cmd 引号解析问题。
+ * NapCat 鍚姩鍖呰 .cmd锛氬湪鍚姩 exe 鍓嶅厛鍒囨帶鍒跺彴鍒?UTF-8锛岄伩鍏嶄腑鏂囦贡鐮併€?
+ * 鍐呭鏄浐瀹氱殑銆佷笉渚濊禆浠讳綍杩愯鏃舵嫾鎺ョ殑鍙橀噺锛氫笉浼氶亣鍒?cmd 寮曞彿瑙ｆ瀽闂銆?
  */
 const NAPCAT_LAUNCHER_FILE = "napcat-launch.cmd";
 const NAPCAT_LAUNCHER_CONTENT = [
@@ -52,7 +240,7 @@ const NAPCAT_LAUNCHER_CONTENT = [
   "",
 ].join("\r\n");
 
-const NAPCAT_ADAPTER_DIR = join("MaiBot", "plugins", "napcat-adapter");
+const NAPCAT_ADAPTER_DIR = join("plugins", "napcat-adapter");
 const NAPCAT_ADAPTER_CONFIG_VERSION = "0.1.0";
 const NAPCAT_ADAPTER_HOST = "127.0.0.1";
 const NAPCAT_ADAPTER_PORT = 7998;
@@ -256,7 +444,7 @@ function checkFile(path: string, label: string, id: string): InitCheck {
     return { id, label, status: "ok", detail: "已找到", path };
   }
 
-  return { id, label, status: "error", detail: "缺失", path };
+  return { id, label, status: "error", detail: "缂哄け", path };
 }
 
 function checkDir(path: string, label: string, id: string): InitCheck {
@@ -264,7 +452,7 @@ function checkDir(path: string, label: string, id: string): InitCheck {
     return { id, label, status: "ok", detail: "已找到", path };
   }
 
-  return { id, label, status: "error", detail: "缺失", path };
+  return { id, label, status: "error", detail: "缂哄け", path };
 }
 
 function runProcess(file: string, args: string[], cwd: string, timeoutMs = 8_000): Promise<string> {
@@ -299,14 +487,26 @@ function toDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function parsePyLauncherPaths(output: string): PythonRuntimeCandidate[] {
+  return output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .map((line) => {
+      const match = line.match(/(?:-\d+(?:\.\d+)?(?:-\d+)?\s+\*?\s*)?(.+?python(?:3)?\.exe)$/iu);
+      return match?.[1]?.trim();
+    })
+    .filter((path): path is string => Boolean(path))
+    .map((path) => ({ path, source: "py launcher" }));
+}
+
 function createWebsocketToken(): string {
   return randomBytes(24).toString("base64url").slice(0, 32);
 }
 
 function md5Utf8(content: string): string {
-  // 与 Python `open(path, encoding="utf-8").read()` 行为对齐：
-  // Python 文本模式会把 \r\n / \r 统一转成 \n，再交给 hashlib。
-  // Node 的 readFile(path, 'utf8') 保留原始 CRLF，所以这里手动归一化以匹配 MaiBot 的哈希结果。
+  // 涓?Python `open(path, encoding="utf-8").read()` 琛屼负瀵归綈锛?
+  // Python 鏂囨湰妯″紡浼氭妸 \r\n / \r 缁熶竴杞垚 \n锛屽啀浜ょ粰 hashlib銆?
+  // Node 鐨?readFile(path, 'utf8') 淇濈暀鍘熷 CRLF锛屾墍浠ヨ繖閲屾墜鍔ㄥ綊涓€鍖栦互鍖归厤 MaiBot 鐨勫搱甯岀粨鏋溿€?
   const normalized = content.replace(/\r\n?/g, "\n");
   return createHash("md5").update(normalized, "utf8").digest("hex");
 }
@@ -357,40 +557,32 @@ export class InitManager {
 
   constructor(private readonly paths: RuntimePaths) {}
 
-  async getState(): Promise<InitState> {
+  async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
     const qqAccount = await this.readQqAccount();
-    const dependencyChecks = await this.checkDependencies();
+    const dependencyChecks = options.refreshDependencies === false
+      ? this.getCachedDependencyChecks()
+      : await this.checkDependencies();
     const napCatWebUiCheck = await this.checkNapCatWebUi();
     const checks: InitCheck[] = [
-      checkDir(this.paths.runtimeRoot, "内置 runtime", "runtime"),
-      checkDir(this.paths.bundledModulesRoot, "内置 modules 模板", "bundled-modules"),
-      checkDir(this.getPythonRoot(), "内置 Python 目录", "python-runtime"),
-      checkFile(this.getPythonPath(), "内置 Python 可执行文件", "python-exe"),
-      checkDir(this.getPythonLibPath(), "Python 标准库目录", "python-lib"),
-      checkDir(this.getPythonDllsPath(), "Python DLLs 目录", "python-dlls"),
-      checkFile(this.getPipPath(), "Python pip 命令", "python-pip-exe"),
-      checkDir(this.getPipPackagePath(), "Python pip 包", "python-pip-package"),
-      checkDir(this.getGitRoot(), "内置 Git", "git-runtime"),
-      checkDir(join(this.paths.modulesRoot, "MaiBot"), "MaiBot 主模块", "maibot-module"),
-      checkFile(join(this.paths.modulesRoot, "MaiBot", "bot.py"), "MaiBot 启动文件", "maibot-entry"),
-      checkDir(join(this.paths.modulesRoot, "napcat"), "NapCat 模块", "napcat-module"),
+      this.checkRuntimeRoot(),
+      this.checkPythonRuntime(),
+      checkDir(this.paths.maibotRoot, "MaiBot 主模块", "maibot-module"),
+      checkFile(join(this.paths.maibotRoot, "bot.py"), "MaiBot 启动文件", "maibot-entry"),
+      checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
       checkFile(
-        join(this.paths.modulesRoot, "napcat", "NapCatWinBootMain.exe"),
+        join(this.paths.napcatRoot, "NapCatWinBootMain.exe"),
         "NapCat 启动文件",
         "napcat-entry",
       ),
       napCatWebUiCheck,
       ...dependencyChecks,
-      {
-        id: "qq-account",
-        label: "机器人 QQ 号",
-        status: qqAccount ? "ok" : "warning",
-        detail: qqAccount ? `已配置 ${qqAccount}` : "尚未配置，NapCat 启动前需要填写",
-      },
     ];
-
     const isReady = checks.every((check) => check.status !== "error");
     return { isReady, qqAccount, checks };
+  }
+
+  async refreshDependencyChecks(): Promise<InitCheck[]> {
+    return this.checkDependencies();
   }
 
   async repair(): Promise<InitRepairResult> {
@@ -415,11 +607,10 @@ export class InitManager {
   }
 
   async confirmAgreements(): Promise<StartupAgreementConfirmResult> {
-    const changedFiles = await this.ensureServiceReady("maibot");
     const state = await this.getAgreementState();
     const missing = state.documents.find((document) => !document.exists);
     if (missing) {
-      throw new Error(`${missing.title} 文件缺失: ${missing.sourcePath}`);
+      throw new Error(`${missing.title} 鏂囦欢缂哄け: ${missing.sourcePath}`);
     }
 
     const hashes: Partial<Record<AgreementDocumentId, string>> = {};
@@ -435,11 +626,10 @@ export class InitManager {
     };
     await mkdir(dirname(storePath), { recursive: true });
     await writeFile(storePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    changedFiles.push(storePath);
 
     return {
       state: await this.getAgreementState(),
-      changedFiles,
+      changedFiles: [storePath],
     };
   }
 
@@ -451,9 +641,9 @@ export class InitManager {
   }
 
   /**
-   * 计算当前 EULA / PRIVACY 的最新 MD5，作为环境变量在每次启动 MaiBot 时注入。
-   * 麦麦的 bot.py 会读取 `EULA_AGREE` 与 `PRIVACY_AGREE`，等于当前文件 hash 即视为已同意，
-   * 协议有更新时 hash 自动变化，麦麦端会触发重新确认流程。
+   * 璁＄畻褰撳墠 EULA / PRIVACY 鐨勬渶鏂?MD5锛屼綔涓虹幆澧冨彉閲忓湪姣忔鍚姩 MaiBot 鏃舵敞鍏ャ€?
+   * 楹﹂害鐨?bot.py 浼氳鍙?`EULA_AGREE` 涓?`PRIVACY_AGREE`锛岀瓑浜庡綋鍓嶆枃浠?hash 鍗宠涓哄凡鍚屾剰锛?
+   * 鍗忚鏈夋洿鏂版椂 hash 鑷姩鍙樺寲锛岄害楹︾浼氳Е鍙戦噸鏂扮‘璁ゆ祦绋嬨€?
    */
   async getAgreementEnvVars(): Promise<Record<string, string>> {
     const env: Record<string, string> = {};
@@ -466,43 +656,42 @@ export class InitManager {
         const content = await readFile(sourcePath, "utf8");
         env[agreement.envVar] = md5Utf8(content);
       } catch {
-        // 忽略读取失败，麦麦会回退到交互式确认
+        // 蹇界暐璇诲彇澶辫触锛岄害楹︿細鍥為€€鍒颁氦浜掑紡纭
       }
     }
     return env;
   }
 
   getMaiBotDataDir(): string {
-    return join(this.paths.modulesRoot, "MaiBot", "data");
+    return join(this.paths.maibotRoot, "data");
   }
 
   getMaiBotConfigDir(): string {
-    return join(this.paths.modulesRoot, "MaiBot", "config");
+    return join(this.paths.maibotRoot, "config");
   }
 
   /**
-   * 把用户提供的 bot_config.toml / model_config.toml 覆盖到 MaiBot/config 下，
-   * 自动准备好可写的 MaiBot 模块目录与 config 子目录，并对原文件做时间戳备份。
+   * 鎶婄敤鎴锋彁渚涚殑 bot_config.toml / model_config.toml 瑕嗙洊鍒?MaiBot/config 涓嬶紝
+   * 鑷姩鍑嗗濂藉彲鍐欑殑 MaiBot 妯″潡鐩綍涓?config 瀛愮洰褰曪紝骞跺鍘熸枃浠跺仛鏃堕棿鎴冲浠姐€?
    */
   async importMaiBotConfig(
     fileName: MaiBotConfigFileName,
     sourcePath: string,
   ): Promise<MaiBotConfigImportResult> {
     if (fileName !== "bot_config.toml" && fileName !== "model_config.toml") {
-      throw new Error(`不支持的配置文件名: ${fileName}`);
+      throw new Error(`涓嶆敮鎸佺殑閰嶇疆鏂囦欢鍚? ${fileName}`);
     }
     if (!sourcePath) {
-      throw new Error("未选择配置文件");
+      throw new Error("鏈€夋嫨閰嶇疆鏂囦欢");
     }
     if (!existsSync(sourcePath)) {
-      throw new Error(`配置文件不存在: ${sourcePath}`);
+      throw new Error(`閰嶇疆鏂囦欢涓嶅瓨鍦? ${sourcePath}`);
     }
     const sourceStat = await stat(sourcePath);
     if (!sourceStat.isFile()) {
       throw new Error("选择的路径不是文件");
     }
 
-    await this.ensureServiceReady("maibot");
     const configDir = this.getMaiBotConfigDir();
     await mkdir(configDir, { recursive: true });
     const destPath = join(configDir, fileName);
@@ -526,22 +715,21 @@ export class InitManager {
   }
 
   /**
-   * 把用户提供的 MaiBot.db 覆盖到 MaiBot/data/MaiBot.db，
-   * 自动准备好可写的 MaiBot 模块目录与 data 子目录。
+   * 鎶婄敤鎴锋彁渚涚殑 MaiBot.db 瑕嗙洊鍒?MaiBot/data/MaiBot.db锛?
+   * 鑷姩鍑嗗濂藉彲鍐欑殑 MaiBot 妯″潡鐩綍涓?data 瀛愮洰褰曘€?
    */
   async importMaiBotDatabase(sourcePath: string): Promise<MaiBotDataImportResult> {
     if (!sourcePath) {
       throw new Error("未选择数据库文件");
     }
     if (!existsSync(sourcePath)) {
-      throw new Error(`数据库文件不存在: ${sourcePath}`);
+      throw new Error(`鏁版嵁搴撴枃浠朵笉瀛樺湪: ${sourcePath}`);
     }
     const sourceStat = await stat(sourcePath);
     if (!sourceStat.isFile()) {
       throw new Error("选择的路径不是文件");
     }
 
-    await this.ensureServiceReady("maibot");
     const dataDir = this.getMaiBotDataDir();
     await mkdir(dataDir, { recursive: true });
     const destPath = join(dataDir, "MaiBot.db");
@@ -564,11 +752,11 @@ export class InitManager {
   }
 
   /**
-   * 清空 MaiBot/data 目录下的所有内容（不会删除 data 目录本身）。
-   * 仅作用于可写模块目录，开发态指向 bundled 模板时会拒绝执行。
+   * 娓呯┖ MaiBot/data 鐩綍涓嬬殑鎵€鏈夊唴瀹癸紙涓嶄細鍒犻櫎 data 鐩綍鏈韩锛夈€?
+   * 浠呬綔鐢ㄤ簬鍙啓妯″潡鐩綍锛屽紑鍙戞€佹寚鍚?bundled 妯℃澘鏃朵細鎷掔粷鎵ц銆?
    */
   async resetMaiBotData(): Promise<MaiBotDataResetResult> {
-    if (this.paths.modulesRoot === this.paths.bundledModulesRoot) {
+    if (samePath(this.paths.maibotRoot, join(this.paths.bundledModulesRoot, "MaiBot"))) {
       throw new Error("当前指向内置模板目录，拒绝清空数据；请在打包后的环境执行。");
     }
 
@@ -622,8 +810,6 @@ export class InitManager {
       throw new Error("QQ 号必须是纯数字");
     }
 
-    await this.ensureServiceReady("maibot");
-
     const botConfigPath = this.botConfigPath();
     let content = await this.readOrCreateBotConfigContent();
 
@@ -644,20 +830,19 @@ export class InitManager {
   }
 
   napcatAdapterConfigPath(): string {
-    return join(this.paths.modulesRoot, NAPCAT_ADAPTER_DIR, "config.toml");
+    return join(this.paths.maibotRoot, NAPCAT_ADAPTER_DIR, "config.toml");
   }
 
   /**
-   * 读取最新一份 onebot11_<qq>.json 中已写入的 WebSocket Token，
-   * 用于在 napcat-adapter 配置中复用同一个 token，避免麦麦端连不上。
+   * 璇诲彇鏈€鏂颁竴浠?onebot11_<qq>.json 涓凡鍐欏叆鐨?WebSocket Token锛?
+   * 鐢ㄤ簬鍦?napcat-adapter 閰嶇疆涓鐢ㄥ悓涓€涓?token锛岄伩鍏嶉害楹︾杩炰笉涓娿€?
    */
   async readNapcatWebsocketToken(): Promise<string> {
     try {
       const versions = await this.findNapCatConfigVersions();
       for (const version of versions) {
         const configDir = join(
-          this.paths.modulesRoot,
-          "napcat",
+          this.paths.napcatRoot,
           "versions",
           version,
           "resources",
@@ -679,88 +864,14 @@ export class InitManager {
         }
       }
     } catch {
-      // ignore — fall through to empty token
+      // ignore 鈥?fall through to empty token
     }
     return "";
   }
 
-  async getNapcatAdapterConfig(): Promise<NapcatAdapterConfigState> {
-    const configPath = this.napcatAdapterConfigPath();
-    const token = await this.readNapcatWebsocketToken();
-    const defaults = buildDefaultNapcatAdapterConfig(token);
-
-    if (!existsSync(configPath)) {
-      return { configPath, exists: false, config: defaults, defaults };
-    }
-
-    let raw: Record<string, unknown> = {};
-    try {
-      const text = await readFile(configPath, "utf8");
-      const parsed = parseToml(text);
-      if (parsed && typeof parsed === "object") {
-        raw = parsed as Record<string, unknown>;
-      }
-    } catch (error) {
-      throw new Error(
-        `读取 napcat-adapter 配置失败: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    const config = normalizeNapcatAdapterConfig(raw, defaults);
-    if (!config.server.token && token) {
-      config.server.token = token;
-    }
-    return { configPath, exists: true, config, defaults };
-  }
-
-  async saveNapcatAdapterConfig(
-    payload: NapcatAdapterConfig,
-  ): Promise<NapcatAdapterConfigSaveResult> {
-    await this.ensureServiceReady("maibot");
-    const fallbackToken = await this.readNapcatWebsocketToken();
-    const defaults = buildDefaultNapcatAdapterConfig(fallbackToken);
-    const normalized = normalizeNapcatAdapterConfig(
-      {
-        plugin: {
-          enabled: payload.plugin.enabled,
-          config_version: payload.plugin.configVersion,
-        },
-        napcat_server: {
-          host: payload.server.host,
-          port: payload.server.port,
-          token: payload.server.token,
-          heartbeat_interval: payload.server.heartbeatInterval,
-          reconnect_delay_sec: payload.server.reconnectDelaySec,
-          action_timeout_sec: payload.server.actionTimeoutSec,
-          connection_id: payload.server.connectionId,
-        },
-        chat: {
-          enable_chat_list_filter: payload.chat.enableChatListFilter,
-          show_dropped_chat_list_messages: payload.chat.showDroppedChatListMessages,
-          group_list_type: payload.chat.groupListType,
-          group_list: payload.chat.groupList,
-          private_list_type: payload.chat.privateListType,
-          private_list: payload.chat.privateList,
-          ban_user_id: payload.chat.banUserId,
-          ban_qq_bot: payload.chat.banQqBot,
-        },
-        filters: {
-          ignore_self_message: payload.filters.ignoreSelfMessage,
-        },
-      },
-      defaults,
-    );
-
-    const configPath = this.napcatAdapterConfigPath();
-    await mkdir(dirname(configPath), { recursive: true });
-    await writeFile(configPath, napcatAdapterConfigToToml(normalized), "utf8");
-    return { configPath, config: normalized, savedAt: Date.now() };
-  }
-
   /**
-   * 创建/更新 napcat-adapter 的 config.toml；
-   * token 直接来自当前 setQqAccount 流程生成的 websocket token，
-   * chat 设置则取用户在引导界面填写的覆盖值（缺省即默认）。
+   * 鍒涘缓/鏇存柊 napcat-adapter 鐨?config.toml锛?   * token 鐩存帴鏉ヨ嚜褰撳墠 setQqAccount 娴佺▼鐢熸垚鐨?websocket token锛?
+   * chat 璁剧疆鍒欏彇鐢ㄦ埛鍦ㄥ紩瀵肩晫闈㈠～鍐欑殑瑕嗙洊鍊硷紙缂虹渷鍗抽粯璁わ級銆?
    */
   private async writeNapcatAdapterConfigForToken(
     websocketToken: string,
@@ -769,6 +880,11 @@ export class InitManager {
     const defaults = buildDefaultNapcatAdapterConfig(websocketToken);
     let existing: NapcatAdapterConfig = defaults;
     const configPath = this.napcatAdapterConfigPath();
+    const adapterRoot = dirname(configPath);
+
+    if (!existsSync(adapterRoot)) {
+      return;
+    }
 
     if (existsSync(configPath)) {
       try {
@@ -778,7 +894,7 @@ export class InitManager {
           existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
         }
       } catch {
-        // 解析失败则直接以默认值覆盖
+        // 瑙ｆ瀽澶辫触鍒欑洿鎺ヤ互榛樿鍊艰鐩?
       }
     }
 
@@ -797,7 +913,6 @@ export class InitManager {
       chat: applyChatOverrides(existing.chat, chatOverrides),
     };
 
-    await mkdir(dirname(configPath), { recursive: true });
     await writeFile(configPath, napcatAdapterConfigToToml(merged), "utf8");
   }
 
@@ -811,23 +926,14 @@ export class InitManager {
   async ensureServiceReady(serviceId: ServiceId): Promise<string[]> {
     await mkdir(this.paths.logsRoot, { recursive: true });
 
-    if (this.paths.modulesRoot === this.paths.bundledModulesRoot) {
-      if (serviceId === "napcat") {
-        const launcher = await this.ensureNapCatLauncher();
-        return launcher ? [launcher] : [];
-      }
-      return [];
-    }
-
     if (!existsSync(this.paths.bundledModulesRoot)) {
-      throw new Error(`内置 modules 模板缺失: ${this.paths.bundledModulesRoot}`);
+      throw new Error(`鍐呯疆 modules 妯℃澘缂哄け: ${this.paths.bundledModulesRoot}`);
     }
 
     if (serviceId === "maibot") {
-      const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", [
-        "bot.py",
-        join("plugins", "napcat-adapter"),
-      ]);
+      const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"], {
+        excludeRelativePaths: [NAPCAT_ADAPTER_DIR],
+      });
       const repairedConfig = await this.repairBotConfigVersionInfo();
       return repairedConfig ? [...changedFiles, repairedConfig] : changedFiles;
     }
@@ -848,12 +954,12 @@ export class InitManager {
   }
 
   /**
-   * 在 napcat 目录下生成一个固定的引导 .cmd，启动时先 chcp 65001 再调 exe，
-   * 避免在源码里拼接 `cmd /C` 字符串带来的引号问题，同时保留控制台 UTF-8
-   * 以免中文输出乱码。
+   * 鍦?napcat 鐩綍涓嬬敓鎴愪竴涓浐瀹氱殑寮曞 .cmd锛屽惎鍔ㄦ椂鍏?chcp 65001 鍐嶈皟 exe锛?
+   * 閬垮厤鍦ㄦ簮鐮侀噷鎷兼帴 `cmd /C` 瀛楃涓插甫鏉ョ殑寮曞彿闂锛屽悓鏃朵繚鐣欐帶鍒跺彴 UTF-8
+   * 浠ュ厤涓枃杈撳嚭涔辩爜銆?
    */
   private async ensureNapCatLauncher(): Promise<string | undefined> {
-    const napcatRoot = join(this.paths.modulesRoot, "napcat");
+    const napcatRoot = this.paths.napcatRoot;
     if (!existsSync(napcatRoot)) {
       return undefined;
     }
@@ -868,7 +974,7 @@ export class InitManager {
           return undefined;
         }
       } catch {
-        // 读不到就重写
+        // 璇讳笉鍒板氨閲嶅啓
       }
     }
 
@@ -888,76 +994,189 @@ export class InitManager {
   }
 
   getPythonPath(): string {
-    const root = this.getPythonRoot();
-    const candidates = [
-      join(root, "python.exe"),
-      join(root, "bin", "python.exe"),
-      join(root, "python"),
-      join(root, "bin", "python3"),
-      join(root, "bin", "python"),
-    ];
+    const bundledPython = this.getBundledPythonPath();
+    if (bundledPython) {
+      return bundledPython;
+    }
 
-    return candidates.find((path) => existsSync(path)) ?? candidates[0];
+    return this.findSystemPythonPath() ?? this.getBundledPythonCandidates()[0];
   }
 
-  getPipPath(): string {
-    const root = this.getPythonRoot();
-    const candidates = [
-      join(root, "Scripts", "pip.exe"),
-      join(root, "Scripts", "pip3.exe"),
-      join(root, "bin", "pip3"),
-      join(root, "bin", "pip"),
-    ];
+  async listSystemPythonRuntimeCandidates(): Promise<PythonRuntimeCandidate[]> {
+    const candidates = systemPythonCandidateDetails();
+    if (process.platform !== "win32") {
+      return candidates;
+    }
 
-    return candidates.find((path) => existsSync(path)) ?? candidates[0];
+    try {
+      const output = await runProcess("py", ["-0p"], this.paths.installRoot, 3_000);
+      return uniquePythonCandidates([...parsePyLauncherPaths(output), ...candidates]);
+    } catch {
+      return candidates;
+    }
   }
 
   getGitPath(): string {
-    const root = this.getGitRoot();
-    const candidates = [
-      join(root, "bin", "git.exe"),
-      join(root, "cmd", "git.exe"),
-      join(root, "git.exe"),
-      join(root, "bin", "git"),
-    ];
+    const bundledGit = this.getBundledGitPath();
+    if (bundledGit) {
+      return bundledGit;
+    }
 
-    return candidates.find((path) => existsSync(path)) ?? candidates[0];
+    return this.findSystemGitPath() ?? this.getBundledGitCandidates()[0];
   }
 
   private getPythonRoot(): string {
     return join(this.paths.runtimeRoot, PYTHON_RUNTIME_DIR);
   }
 
-  private getPythonLibPath(): string {
-    return join(this.getPythonRoot(), "Lib");
+  private getBundledPythonCandidates(): string[] {
+    const root = this.getPythonRoot();
+    return [
+      join(root, "python.exe"),
+      join(root, "bin", "python.exe"),
+      join(root, "python"),
+      join(root, "bin", "python3"),
+      join(root, "bin", "python"),
+    ];
   }
 
-  private getPythonDllsPath(): string {
-    return join(this.getPythonRoot(), "DLLs");
+  private getBundledPythonPath(): string | undefined {
+    return uniqueExistingPaths(this.getBundledPythonCandidates())[0];
   }
 
-  private getPipPackagePath(): string {
-    return join(this.getPythonRoot(), "Lib", "site-packages", "pip");
+  private findSystemPythonPath(): string | undefined {
+    return uniqueExistingPaths(systemPythonCandidates())[0];
   }
 
   private getGitRoot(): string {
     return join(this.paths.runtimeRoot, GIT_RUNTIME_DIR);
   }
 
+  private getBundledGitCandidates(): string[] {
+    const root = this.getGitRoot();
+    return [
+      join(root, "bin", "git.exe"),
+      join(root, "cmd", "git.exe"),
+      join(root, "git.exe"),
+      join(root, "bin", "git"),
+    ];
+  }
+
+  private getBundledGitPath(): string | undefined {
+    return uniqueExistingPaths(this.getBundledGitCandidates())[0];
+  }
+
+  private findSystemGitPath(): string | undefined {
+    return uniqueExistingPaths(systemGitCandidates())[0];
+  }
+
+  private checkRuntimeRoot(): InitCheck {
+    if (existsSync(this.paths.runtimeRoot)) {
+      return {
+        id: "runtime",
+        label: "内置 runtime",
+        status: "ok",
+        detail: "已找到",
+        path: this.paths.runtimeRoot,
+      };
+    }
+
+    return {
+      id: "runtime",
+      label: "内置 runtime",
+      status: "warning",
+      detail: "未找到内置 runtime，将使用系统 Python 与 Git",
+      path: this.paths.runtimeRoot,
+    };
+  }
+
+  private checkPythonRuntime(): InitCheck {
+    const bundledPython = this.getBundledPythonPath();
+    if (bundledPython) {
+      return {
+        id: "python-runtime",
+        label: "Python 运行时",
+        status: "ok",
+        detail: "使用内置 Python",
+        path: bundledPython,
+      };
+    }
+
+    const systemPython = this.findSystemPythonPath();
+    if (systemPython) {
+      return {
+        id: "python-runtime",
+        label: "Python 运行时",
+        status: "ok",
+        detail: `使用系统 Python，后台检查版本是否 >= ${PYTHON_MINIMUM_VERSION}`,
+        path: systemPython,
+      };
+    }
+
+    return {
+      id: "python-runtime",
+      label: "Python 运行时",
+      status: "error",
+      detail: `未找到内置 Python 或系统 Python ${PYTHON_MINIMUM_VERSION}+`,
+      path: this.getBundledPythonCandidates()[0],
+      actionLabel: "下载 Python",
+      actionUrl: PYTHON_DOWNLOAD_URL,
+    };
+  }
+
+  private checkGitRuntime(): InitCheck {
+    const bundledGit = this.getBundledGitPath();
+    if (bundledGit) {
+      return {
+        id: "git-runtime",
+        label: "Git 运行时",
+        status: "ok",
+        detail: "使用内置 Git",
+        path: bundledGit,
+      };
+    }
+
+    const systemGit = this.findSystemGitPath();
+    if (systemGit) {
+      return {
+        id: "git-runtime",
+        label: "Git 运行时",
+        status: "ok",
+        detail: "使用系统 Git",
+        path: systemGit,
+      };
+    }
+
+    return {
+      id: "git-runtime",
+      label: "Git 运行时",
+      status: "error",
+      detail: "未找到内置 Git 或系统 Git",
+      path: this.getBundledGitCandidates()[0],
+      actionLabel: "下载 Git",
+      actionUrl: GIT_DOWNLOAD_URL,
+    };
+  }
+
   private async ensureBundledModuleSubtree(
     moduleName: string,
     requiredRelativePaths: string[],
-    optional = false,
+    optionalOrOptions: boolean | { optional?: boolean; excludeRelativePaths?: string[] } = false,
   ): Promise<string[]> {
+    const options = typeof optionalOrOptions === "boolean" ? { optional: optionalOrOptions } : optionalOrOptions;
     const source = join(this.paths.bundledModulesRoot, moduleName);
-    const target = join(this.paths.modulesRoot, moduleName);
+    const target = this.moduleTargetRoot(moduleName);
 
     if (!existsSync(source)) {
-      if (optional) {
+      if (options.optional) {
         return [];
       }
 
-      throw new Error(`内置 ${moduleName} 模板缺失: ${source}`);
+      throw new Error(`鍐呯疆 ${moduleName} 妯℃澘缂哄け: ${source}`);
+    }
+
+    if (samePath(source, target)) {
+      return [];
     }
 
     const isReady = requiredRelativePaths.every((relativePath) => existsSync(join(target, relativePath)));
@@ -966,15 +1185,34 @@ export class InitManager {
     }
 
     await mkdir(dirname(target), { recursive: true });
+    const excludedSources = (options.excludeRelativePaths ?? []).map((relativePath) => join(source, relativePath));
     await runWithoutAsar(() =>
       cp(source, target, {
         recursive: true,
         force: false,
         errorOnExist: false,
+        filter: (sourcePath) => !excludedSources.some((excludedSource) => sameOrInsidePath(excludedSource, sourcePath)),
       }),
     );
 
     return [target];
+  }
+
+  private moduleTargetRoot(moduleName: string): string {
+    if (moduleName === "MaiBot") {
+      return this.paths.maibotRoot;
+    }
+    if (moduleName === "napcat") {
+      return this.paths.napcatRoot;
+    }
+    if (moduleName === "napcatframework") {
+      return this.napcatFrameworkRoot();
+    }
+    return join(this.paths.modulesRoot, moduleName);
+  }
+
+  private napcatFrameworkRoot(): string {
+    return join(dirname(this.paths.napcatRoot), "napcatframework");
   }
 
   async ensureNapCatWebUiConfig(): Promise<string | undefined> {
@@ -984,7 +1222,7 @@ export class InitManager {
     }
 
     if (existing.exists) {
-      throw new Error(existing.error ?? "NapCat WebUI 配置存在但缺少 token，请手动检查 webui.json");
+      throw new Error(existing.error ?? "NapCat WebUI 閰嶇疆瀛樺湪浣嗙己灏?token锛岃鎵嬪姩妫€鏌?webui.json");
     }
 
     const configDirs = await this.findNapCatWebUiConfigDirs();
@@ -1033,9 +1271,9 @@ export class InitManager {
         if (typeof raw.token === "string" && raw.token.length > 0) {
           return { token: raw.token, exists: true };
         }
-        firstError ??= `缺少 token: ${candidate}`;
+        firstError ??= `缂哄皯 token: ${candidate}`;
       } catch (error) {
-        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
+        firstError ??= `JSON 鏍煎紡閿欒: ${candidate}: ${toDetail(error)}`;
       }
     }
 
@@ -1043,13 +1281,13 @@ export class InitManager {
   }
 
   /**
-   * 读取 MaiBot Core WebUI 的 access_token，用于在 WebUI 入口拼接
-   * `?token=<access_token>` 实现自动登录。
-   * 文件不存在或缺字段时返回空 token，调用方应回退为不带参数的地址。
+   * 璇诲彇 MaiBot Core WebUI 鐨?access_token锛岀敤浜庡湪 WebUI 鍏ュ彛鎷兼帴
+   * `?token=<access_token>` 瀹炵幇鑷姩鐧诲綍銆?
+   * 鏂囦欢涓嶅瓨鍦ㄦ垨缂哄瓧娈垫椂杩斿洖绌?token锛岃皟鐢ㄦ柟搴斿洖閫€涓轰笉甯﹀弬鏁扮殑鍦板潃銆?
    */
   async readMaiBotWebUiToken(): Promise<{ token?: string; exists: boolean; error?: string }> {
     const candidates = [
-      join(this.paths.modulesRoot, "MaiBot", "data", "webui.json"),
+      join(this.paths.maibotRoot, "data", "webui.json"),
       join(this.paths.bundledModulesRoot, "MaiBot", "data", "webui.json"),
     ];
 
@@ -1067,9 +1305,9 @@ export class InitManager {
         if (typeof raw.access_token === "string" && raw.access_token.length > 0) {
           return { token: raw.access_token, exists: true };
         }
-        firstError ??= `缺少 access_token: ${candidate}`;
+        firstError ??= `缂哄皯 access_token: ${candidate}`;
       } catch (error) {
-        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
+        firstError ??= `JSON 鏍煎紡閿欒: ${candidate}: ${toDetail(error)}`;
       }
     }
 
@@ -1077,11 +1315,11 @@ export class InitManager {
   }
 
   private botConfigPath(): string {
-    return join(this.paths.modulesRoot, "MaiBot", "config", "bot_config.toml");
+    return join(this.paths.maibotRoot, "config", "bot_config.toml");
   }
 
   private agreementSourcePath(fileName: string): string {
-    const writablePath = join(this.paths.modulesRoot, "MaiBot", fileName);
+    const writablePath = join(this.paths.maibotRoot, fileName);
     if (existsSync(writablePath)) {
       return writablePath;
     }
@@ -1115,7 +1353,7 @@ export class InitManager {
         hash: "",
         exists: false,
         confirmed: false,
-        error: `${fileName} 文件缺失`,
+        error: `${fileName} 鏂囦欢缂哄け`,
       };
     }
 
@@ -1184,26 +1422,39 @@ export class InitManager {
 
     const checks: InitCheck[] = [];
     const python = this.getPythonPath();
+    const bundledPython = this.getBundledPythonPath();
+    const pythonSource = bundledPython && samePath(bundledPython, python) ? "内置 Python" : "系统 Python";
     if (!existsSync(python)) {
       checks.push({
         id: "python-dependencies",
         label: "Python 依赖完整性",
         status: "error",
-        detail: "内置 Python 缺失，无法检查依赖",
+        detail: `未找到内置 Python 或系统 Python ${PYTHON_MINIMUM_VERSION}+，无法检查依赖`,
         path: python,
+        actionLabel: "下载 Python",
+        actionUrl: PYTHON_DOWNLOAD_URL,
       });
     } else {
       try {
-        await runProcess(
+        const output = await runProcess(
           python,
-          ["-c", "import sys, ssl, sqlite3, tomllib; print(sys.version)"],
+          [
+            "-c",
+            [
+              "import sys, ssl, sqlite3, tomllib",
+              `minimum = (${PYTHON_MINIMUM_VERSION.split(".").join(", ")})`,
+              "version = f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'",
+              `if sys.version_info < minimum: raise SystemExit(f'Python {version} is too old; need >= ${PYTHON_MINIMUM_VERSION}')`,
+              "print(f'Python {version}')",
+            ].join("\n"),
+          ],
           this.paths.installRoot,
         );
         checks.push({
           id: "python-runtime-smoke",
           label: "Python 标准库",
           status: "ok",
-          detail: "可启动，ssl/sqlite3/tomllib 可导入",
+          detail: output ? `${output} (${pythonSource})` : `${pythonSource} 可启动，ssl/sqlite3/tomllib 可导入`,
           path: python,
         });
       } catch (error) {
@@ -1211,8 +1462,10 @@ export class InitManager {
           id: "python-runtime-smoke",
           label: "Python 标准库",
           status: "error",
-          detail: `依赖损坏: ${toDetail(error)}`,
+          detail: `Python 版本或标准库不符合要求: ${toDetail(error)}`,
           path: python,
+          actionLabel: "下载 Python",
+          actionUrl: PYTHON_DOWNLOAD_URL,
         });
       }
 
@@ -1230,44 +1483,82 @@ export class InitManager {
           id: "python-pip-check",
           label: "Python 包依赖",
           status: "error",
-          detail: `依赖损坏: ${toDetail(error)}`,
+          detail: `pip 检查失败: ${toDetail(error)}`,
           path: python,
+          actionLabel: "下载 Python",
+          actionUrl: PYTHON_DOWNLOAD_URL,
         });
       }
     }
 
     const git = this.getGitPath();
+    const bundledGit = this.getBundledGitPath();
+    const gitSource = bundledGit && samePath(bundledGit, git) ? "内置 Git" : "系统 Git";
     if (!existsSync(git)) {
       checks.push({
-        id: "git-runtime-smoke",
-        label: "Git 可执行文件",
+        id: "git-runtime",
+        label: "Git",
         status: "error",
-        detail: "内置 Git 缺失，无法检查 Git",
+        detail: "未找到可用 Git",
         path: git,
+        actionLabel: "下载 Git",
+        actionUrl: GIT_DOWNLOAD_URL,
       });
     } else {
       try {
         const output = await runProcess(git, ["--version"], this.paths.installRoot);
         checks.push({
-          id: "git-runtime-smoke",
-          label: "Git 可执行文件",
+          id: "git-runtime",
+          label: "Git",
           status: "ok",
-          detail: output || "Git 可启动",
+          detail: output ? `${output} (${gitSource})` : `${gitSource} 可启动`,
           path: git,
         });
       } catch (error) {
         checks.push({
-          id: "git-runtime-smoke",
-          label: "Git 可执行文件",
-          status: "error",
-          detail: `依赖损坏: ${toDetail(error)}`,
-          path: git,
-        });
+        id: "git-runtime",
+        label: "Git",
+        status: "error",
+        detail: `Git 损坏或不可启动: ${toDetail(error)}`,
+        path: git,
+        actionLabel: "下载 Git",
+        actionUrl: GIT_DOWNLOAD_URL,
+      });
       }
     }
 
     this.dependencyCache = { expiresAt: Date.now() + DEPENDENCY_CACHE_MS, checks };
     return checks;
+  }
+
+  private getCachedDependencyChecks(): InitCheck[] {
+    if (this.dependencyCache) {
+      return this.dependencyCache.checks;
+    }
+
+    return [
+      {
+        id: "python-runtime-smoke",
+        label: "Python 标准库",
+        status: "warning",
+        detail: "后台检查中",
+        path: this.getPythonPath(),
+      },
+      {
+        id: "python-pip-check",
+        label: "Python 包依赖",
+        status: "warning",
+        detail: "后台检查中",
+        path: this.getPythonPath(),
+      },
+      {
+        id: "git-runtime",
+        label: "Git",
+        status: "warning",
+        detail: "后台检查中",
+        path: this.getGitPath(),
+      },
+    ];
   }
 
   private async checkNapCatWebUi(): Promise<InitCheck> {
@@ -1277,7 +1568,7 @@ export class InitManager {
         id: "napcat-webui-token",
         label: "NapCat WebUI token",
         status: "ok",
-        detail: "已找到 token",
+        detail: "宸叉壘鍒?token",
       };
     }
 
@@ -1392,29 +1683,28 @@ export class InitManager {
   private async findNapCatRuntimeConfigDirs(): Promise<string[]> {
     const versions = await this.findNapCatVersions();
     return [
-      join(this.paths.modulesRoot, "napcat", "napcat", "config"),
+      join(this.paths.napcatRoot, "napcat", "config"),
       ...versions.flatMap((version) => [
-      join(this.paths.modulesRoot, "napcat", "versions", version, "resources", "app", "napcat", "config"),
-      join(
-        this.paths.modulesRoot,
-        "napcatframework",
-        "versions",
-        version,
-        "resources",
-        "app",
-        "LiteLoader",
-        "plugins",
-        "NapCat",
-        "config",
-      ),
+        join(this.paths.napcatRoot, "versions", version, "resources", "app", "napcat", "config"),
+        join(
+          this.napcatFrameworkRoot(),
+          "versions",
+          version,
+          "resources",
+          "app",
+          "LiteLoader",
+          "plugins",
+          "NapCat",
+          "config",
+        ),
       ]),
     ];
   }
 
   private async findNapCatVersions(): Promise<string[]> {
     const roots = [
-      join(this.paths.modulesRoot, "napcat", "versions"),
-      join(this.paths.modulesRoot, "napcatframework", "versions"),
+      join(this.paths.napcatRoot, "versions"),
+      join(this.napcatFrameworkRoot(), "versions"),
       join(this.paths.bundledModulesRoot, "napcat", "versions"),
       join(this.paths.bundledModulesRoot, "napcatframework", "versions"),
     ];

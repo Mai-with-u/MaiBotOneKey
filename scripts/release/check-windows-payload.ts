@@ -17,6 +17,24 @@ type Requirement = {
 };
 
 const root = process.cwd();
+const lite = process.argv.includes("--lite");
+const pythonBootstrapPackages = new Set([
+  "pip",
+  "pip.dist-info",
+  "setuptools",
+  "setuptools.dist-info",
+  "wheel",
+  "wheel.dist-info",
+  "pkg_resources",
+  "_distutils_hack",
+  "distutils-precedence.pth",
+]);
+const pythonBootstrapScripts = new Set([
+  "pip.exe",
+  "pip3.exe",
+  "pip3.12.exe",
+  "__pycache__",
+]);
 
 function file(path: string): Candidate {
   return { path: join(root, path), kind: "file" };
@@ -68,12 +86,12 @@ const requirements: Requirement[] = [
   },
   {
     label: "embedded Git directory",
-    required: true,
+    required: !lite,
     candidates: [dir("runtime/git")],
   },
   {
     label: "embedded Git executable",
-    required: true,
+    required: !lite,
     candidates: [file("runtime/git/bin/git.exe"), file("runtime/git/cmd/git.exe"), file("runtime/git/git.exe")],
   },
   {
@@ -175,6 +193,64 @@ async function directoryHasAny(directory: string, relativePaths: string[]): Prom
   return false;
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizePythonPackageEntry(name: string): string {
+  return name
+    .replace(/-\d.+(?:\.dist-info|\.egg-info)$/iu, ".dist-info")
+    .replace(/[-_]+/gu, "-")
+    .toLowerCase();
+}
+
+async function findPythonSitePackages(): Promise<string | undefined> {
+  const candidates = [
+    join(root, "runtime", "python", "Lib", "site-packages"),
+    join(root, "runtime", "python", "lib", "site-packages"),
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+async function checkLeanPythonRuntime(): Promise<string[]> {
+  const sitePackages = await findPythonSitePackages();
+  if (!sitePackages) {
+    return [];
+  }
+
+  const entries = await readdir(sitePackages, { withFileTypes: true });
+  return entries
+    .map((entry) => entry.name)
+    .filter((name) => name !== "__pycache__")
+    .filter((name) => !pythonBootstrapPackages.has(normalizePythonPackageEntry(name)))
+    .sort((left, right) => left.localeCompare(right, "en-US", { numeric: true, sensitivity: "base" }));
+}
+
+async function checkLeanPythonScripts(): Promise<string[]> {
+  const scriptsPath = join(root, "runtime", "python", "Scripts");
+  if (!(await pathExists(scriptsPath))) {
+    return [];
+  }
+
+  const entries = await readdir(scriptsPath, { withFileTypes: true });
+  return entries
+    .map((entry) => entry.name)
+    .filter((name) => !pythonBootstrapScripts.has(name))
+    .sort((left, right) => left.localeCompare(right, "en-US", { numeric: true, sensitivity: "base" }));
+}
+
 function describeCandidates(candidates: Candidate[]): string {
   return candidates.map((candidate) => relative(root, candidate.path)).join(" or ");
 }
@@ -208,12 +284,45 @@ async function main(): Promise<void> {
   if (failures.length > 0) {
     console.log("");
     console.log(`Release payload is incomplete (${failures.length} required item(s) missing).`);
-    console.log("Put runtime/ and modules/ in the repository root before running bun run release:win.");
+    if (lite) {
+      console.log("The --lite mode requires runtime/python, modules, and NapCat payload files; only runtime/git may be omitted.");
+    } else {
+      console.log("Put runtime/ and modules/ in the repository root before running bun run release:win.");
+    }
     process.exitCode = 1;
     return;
   }
 
-  console.log("Windows release payload looks complete.");
+  const bundledPythonPackages = await checkLeanPythonRuntime();
+  const bundledPythonScripts = await checkLeanPythonScripts();
+  if (bundledPythonPackages.length > 0 || bundledPythonScripts.length > 0) {
+    console.log("");
+    console.log("[missing] portable Python should not contain application dependencies.");
+    console.log("Keep runtime/python lean: only Python itself plus pip/setuptools/wheel are allowed.");
+    console.log("Install MaiBot/dashboard dependencies into python-overrides at first run instead.");
+    if (bundledPythonPackages.length > 0) {
+      console.log(`Unexpected site-packages entries (${bundledPythonPackages.length}):`);
+      for (const name of bundledPythonPackages.slice(0, 30)) {
+        console.log(`  - ${name}`);
+      }
+      if (bundledPythonPackages.length > 30) {
+        console.log(`  ... and ${bundledPythonPackages.length - 30} more`);
+      }
+    }
+    if (bundledPythonScripts.length > 0) {
+      console.log(`Unexpected Scripts entries (${bundledPythonScripts.length}):`);
+      for (const name of bundledPythonScripts.slice(0, 30)) {
+        console.log(`  - ${name}`);
+      }
+      if (bundledPythonScripts.length > 30) {
+        console.log(`  ... and ${bundledPythonScripts.length - 30} more`);
+      }
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(lite ? "Windows lite release payload looks complete." : "Windows full release payload looks complete.");
 }
 
 await main();

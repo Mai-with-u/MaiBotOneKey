@@ -14,6 +14,9 @@ import type {
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   MaiBotInstalledPlugin,
+  MaiBotPluginConfigSaveResult,
+  MaiBotPluginConfigState,
+  MaiBotPluginConfigValue,
   MaiBotPluginListResult,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
@@ -23,10 +26,8 @@ import type {
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
-  NapcatAdapterConfig,
-  NapcatAdapterConfigSaveResult,
-  NapcatAdapterConfigState,
   PythonOverridesState,
+  PythonRuntimeCandidate,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -35,11 +36,14 @@ import type {
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
+  RuntimeResourcePathChangeResult,
+  RuntimeResourcePathKey,
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
   StartupAgreementConfirmResult,
   StartupAgreementState,
+  TerminalSettings,
   WindowState,
 } from "../../shared/contracts";
 import { InitManager } from "../services/init-manager";
@@ -47,6 +51,7 @@ import { LogStore } from "../services/log-store";
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
+import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
 
 interface RegisterAppIpcOptions {
@@ -54,6 +59,7 @@ interface RegisterAppIpcOptions {
   initManager: InitManager;
   moduleUpdater: ModuleUpdater;
   pythonDependencyManager: PythonDependencyManager;
+  resourceLocationManager: ResourceLocationManager;
   serviceManager: ServiceManager;
   logStore: LogStore;
   getMainWindow: () => BrowserWindow | null;
@@ -270,6 +276,7 @@ export function registerAppIpc({
   initManager,
   moduleUpdater,
   pythonDependencyManager,
+  resourceLocationManager,
   serviceManager,
   logStore,
   getMainWindow,
@@ -278,10 +285,11 @@ export function registerAppIpc({
 }: RegisterAppIpcOptions): void {
   let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
+  let initDependencyRefreshPromise: Promise<void> | null = null;
 
   const readLocalModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
-    const maibotRoot = join(paths.modulesRoot, "MaiBot");
+    const maibotRoot = paths.maibotRoot;
 
     const pyprojectVersion = await readPyprojectVersion(join(maibotRoot, "pyproject.toml"));
     if (pyprojectVersion) {
@@ -342,16 +350,18 @@ export function registerAppIpc({
     ...(await readLocalModuleVersions()),
   });
 
-  const buildSnapshot = async (): Promise<DesktopSnapshot> => ({
+  const buildSnapshot = async (options: { refreshDependencies?: boolean } = {}): Promise<DesktopSnapshot> => ({
     paths,
     services: serviceManager.snapshot(),
     serviceCommands: await serviceManager.getCommandConfigs(),
     runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
+    runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
+    terminalSettings: serviceManager.getTerminalSettings(),
     appVersion: app.getVersion(),
     moduleVersions: await readModuleVersions(),
     platform: process.platform,
     windowState: readWindowState(getMainWindow()),
-    initState: await initManager.getState(),
+    initState: await initManager.getState({ refreshDependencies: options.refreshDependencies ?? false }),
     startupAgreement: await initManager.getAgreementState(),
     recentLogs: logStore.list(),
   });
@@ -382,10 +392,58 @@ export function registerAppIpc({
       });
   };
 
-  const maibotPluginClient = new MaiBotPluginClient({
-    maibotRoot: join(paths.modulesRoot, "MaiBot"),
-    gitPath: initManager.getGitPath(),
-  });
+  const scheduleInitDependencyRefresh = (): void => {
+    if (initDependencyRefreshPromise) {
+      return;
+    }
+    initDependencyRefreshPromise = initManager.refreshDependencyChecks()
+      .then(async () => {
+        await broadcastSnapshot();
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        logStore.append("desktop", "system", `环境依赖检查失败: ${message}`);
+      })
+      .finally(() => {
+        initDependencyRefreshPromise = null;
+      });
+  };
+
+  const createMaibotPluginClient = (): MaiBotPluginClient =>
+    new MaiBotPluginClient({
+      maibotRoot: paths.maibotRoot,
+      gitPath: initManager.getGitPath(),
+    });
+  let maibotPluginClient = createMaibotPluginClient();
+
+  const assertServicesStoppedForResourceMove = (): void => {
+    const active = serviceManager
+      .snapshot()
+      .filter(
+        (service) =>
+          service.managed ||
+          service.status === "starting" ||
+          service.status === "running" ||
+          service.status === "stopping",
+    );
+    if (active.length > 0) {
+      throw new Error(`请先停止服务，再调整覆盖路径组: ${active.map((service) => service.name).join(", ")}`);
+    }
+  };
+
+  const applyResourceMigrationResult = async (
+    result: RuntimeResourcePathChangeResult,
+  ): Promise<RuntimeResourcePathChangeResult> => {
+    serviceManager.reloadRuntimePaths();
+    maibotPluginClient = createMaibotPluginClient();
+    logStore.append(
+      "desktop",
+      "system",
+      `运行时资源路径已更新: ${result.previousPath} -> ${result.path}`,
+    );
+    await broadcastSnapshot();
+    return result;
+  };
 
   serviceManager.on("snapshot", (services: ServiceDescriptor[]) => {
     const window = getMainWindow();
@@ -400,6 +458,7 @@ export function registerAppIpc({
   ipcMain.handle("desktop:getSnapshot", async (): Promise<DesktopSnapshot> => {
     await serviceManager.refresh();
     const snapshot = await buildSnapshot();
+    scheduleInitDependencyRefresh();
     scheduleRemoteModuleVersionsRefresh();
     return snapshot;
   });
@@ -413,7 +472,7 @@ export function registerAppIpc({
   });
 
   ipcMain.handle("init:getState", async (): Promise<InitState> => {
-    return initManager.getState();
+    return initManager.getState({ refreshDependencies: true });
   });
 
   ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
@@ -454,8 +513,7 @@ export function registerAppIpc({
       throw new Error("请先停止 MaiBot Core，再更新 MaiBot 模块。");
     }
 
-    logStore.append("desktop", "system", "开始更新 MaiBot 模块：使用内置 Git 强制拉取远端代码");
-    await initManager.ensureServiceReady("maibot");
+    logStore.append("desktop", "system", "开始更新 MaiBot 模块：使用可用 Git 强制拉取远端代码");
     const result = await moduleUpdater.updateMaiBot(tag);
     logStore.append(
       "desktop",
@@ -573,24 +631,6 @@ export function registerAppIpc({
     return resetResult;
   });
 
-  ipcMain.handle("napcatAdapter:getConfig", async (): Promise<NapcatAdapterConfigState> => {
-    return initManager.getNapcatAdapterConfig();
-  });
-
-  ipcMain.handle(
-    "napcatAdapter:saveConfig",
-    async (_event, payload: NapcatAdapterConfig): Promise<NapcatAdapterConfigSaveResult> => {
-      const result = await initManager.saveNapcatAdapterConfig(payload);
-      logStore.append(
-        "desktop",
-        "system",
-        `napcat-adapter 配置已保存: ${result.configPath}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
   ipcMain.handle("plugins:listMarket", async (): Promise<MaiBotPluginListResult> => {
     return maibotPluginClient.listMarket();
   });
@@ -636,6 +676,24 @@ export function registerAppIpc({
       }
       const result = await maibotPluginClient.uninstall(pluginId);
       logStore.append("desktop", "system", `MaiBot plugin uninstalled: ${pluginId}`);
+      return result;
+    },
+  );
+
+  ipcMain.handle("plugins:getConfig", async (_event, pluginId: string): Promise<MaiBotPluginConfigState> => {
+    return maibotPluginClient.getConfig(pluginId);
+  });
+
+  ipcMain.handle(
+    "plugins:saveConfig",
+    async (
+      _event,
+      pluginId: string,
+      config: Record<string, MaiBotPluginConfigValue>,
+    ): Promise<MaiBotPluginConfigSaveResult> => {
+      const result = await maibotPluginClient.saveConfig(pluginId, config);
+      logStore.append("desktop", "system", `MaiBot plugin config saved: ${pluginId}`);
+      await broadcastSnapshot();
       return result;
     },
   );
@@ -723,6 +781,87 @@ export function registerAppIpc({
     const configs = await serviceManager.resetRuntimePathConfig(key);
     await broadcastSnapshot();
     return configs;
+  });
+
+  ipcMain.handle("services:listPythonRuntimeCandidates", async (): Promise<PythonRuntimeCandidate[]> => {
+    return initManager.listSystemPythonRuntimeCandidates();
+  });
+
+  ipcMain.handle("services:selectPythonRuntimePath", async (): Promise<string | null> => {
+    const mainWindow = getMainWindow();
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: "选择 Python 可执行文件",
+      properties: ["openFile"],
+      filters: [
+        { name: "Python", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
+        { name: "全部文件", extensions: ["*"] },
+      ],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+  });
+
+  ipcMain.handle("services:saveTerminalSettings", async (_event, settings: TerminalSettings): Promise<TerminalSettings> => {
+    const config = await serviceManager.saveTerminalSettings(settings);
+    await broadcastSnapshot();
+    return config;
+  });
+
+  const chooseResourcePath = async (title: string): Promise<string | undefined> => {
+    const mainWindow = getMainWindow();
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title,
+      properties: ["openDirectory", "createDirectory"],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    return result.canceled || result.filePaths.length === 0 ? undefined : result.filePaths[0];
+  };
+
+  ipcMain.handle(
+    "resources:migratePath",
+    async (_event, key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult | null> => {
+      assertServicesStoppedForResourceMove();
+      const targetPath = await chooseResourcePath("选择迁移目标目录");
+      if (!targetPath) {
+        return null;
+      }
+
+      const migration = await resourceLocationManager.migratePath(key, targetPath);
+      return applyResourceMigrationResult(migration);
+    },
+  );
+
+  ipcMain.handle(
+    "resources:selectPath",
+    async (_event, key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult | null> => {
+      assertServicesStoppedForResourceMove();
+      const targetPath = await chooseResourcePath("选择已有目录");
+      if (!targetPath) {
+        return null;
+      }
+
+      const selection = await resourceLocationManager.selectPath(key, targetPath);
+      return applyResourceMigrationResult(selection);
+    },
+  );
+
+  ipcMain.handle(
+    "resources:savePath",
+    async (_event, key: RuntimeResourcePathKey, targetPath: string): Promise<RuntimeResourcePathChangeResult> => {
+      assertServicesStoppedForResourceMove();
+      const selection = await resourceLocationManager.selectPath(key, targetPath);
+      return applyResourceMigrationResult(selection);
+    },
+  );
+
+  ipcMain.handle("resources:resetPath", async (_event, key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult> => {
+    assertServicesStoppedForResourceMove();
+    const migration = await resourceLocationManager.resetPath(key);
+    return applyResourceMigrationResult(migration);
   });
 
   ipcMain.handle("logs:list", (): LogEntry[] => logStore.list());

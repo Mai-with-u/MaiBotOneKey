@@ -1,5 +1,8 @@
 import type {
   MaiBotInstalledPlugin,
+  MaiBotPluginConfigSaveResult,
+  MaiBotPluginConfigState,
+  MaiBotPluginConfigValue,
   MaiBotMarketPlugin,
   MaiBotPluginListResult,
   MaiBotPluginManifest,
@@ -11,6 +14,9 @@ export type PluginManifest = MaiBotPluginManifest;
 export type MarketPlugin = MaiBotMarketPlugin;
 export type InstalledPlugin = MaiBotInstalledPlugin;
 export type PluginOperationResponse = MaiBotPluginOperationResult;
+export type PluginConfigState = MaiBotPluginConfigState;
+export type PluginConfigValue = MaiBotPluginConfigValue;
+export type PluginConfigSaveResponse = MaiBotPluginConfigSaveResult;
 
 function requirePluginBridge(): NonNullable<typeof window.maibotDesktop>["plugins"] {
   const bridge = window.maibotDesktop?.plugins;
@@ -161,4 +167,15 @@ export function updateMaiBotPlugin(
     branch: branch || "main",
     latestVersion,
   });
+}
+
+export function fetchPluginConfig(pluginId: string): Promise<PluginConfigState> {
+  return requirePluginBridge().getConfig(pluginId);
+}
+
+export function savePluginConfig(
+  pluginId: string,
+  config: Record<string, PluginConfigValue>,
+): Promise<PluginConfigSaveResponse> {
+  return requirePluginBridge().saveConfig(pluginId, config);
 }

@@ -18,13 +18,15 @@ export type LogSource = ServiceId | "desktop";
 
 export type LogStream = "stdout" | "stderr" | "system";
 
-export type RuntimePathKey = "python" | "git" | "maibot" | "napcat";
+export type RuntimePathKey = "python" | "git";
 
 export type RuntimePathKind = "file" | "dir";
 
 export type InitCheckStatus = "ok" | "warning" | "error";
 
 export type CloseAction = "minimize" | "quit";
+
+export type TerminalMode = "embedded" | "external";
 
 export type PtySessionStatus =
   | "starting"
@@ -55,6 +57,7 @@ export interface ServiceDescriptor {
   desired?: boolean;
   restartAttempts?: number;
   pid?: number;
+  terminalMode?: TerminalMode;
   detail?: string;
   cwd?: string;
   command?: string[];
@@ -94,12 +97,48 @@ export interface RuntimePathUpdate {
   value: string;
 }
 
+export interface PythonRuntimeCandidate {
+  path: string;
+  source: string;
+}
+
+export type RuntimeResourcePathKey = "maibot" | "napcat" | "pythonOverrides";
+
+export interface RuntimeResourcePathConfig {
+  key: RuntimeResourcePathKey;
+  label: string;
+  value: string;
+  defaultValue: string;
+  customized: boolean;
+}
+
+export interface RuntimeResourcePathChangeResult {
+  key: RuntimeResourcePathKey;
+  previousPath: string;
+  path: string;
+  defaultPath: string;
+  copiedEntries: string[];
+  changedAt: number;
+}
+
+export interface TerminalSettings {
+  useEmbeddedTerminal: boolean;
+}
+
 export interface RuntimePaths {
   installRoot: string;
   userDataRoot: string;
+  defaultResourceRoot: string;
+  resourceRoot: string;
   modulesRoot: string;
+  defaultMaibotRoot: string;
+  maibotRoot: string;
+  defaultNapcatRoot: string;
+  napcatRoot: string;
   bundledModulesRoot: string;
   runtimeRoot: string;
+  defaultPythonOverridesRoot: string;
+  pythonOverridesRoot: string;
   logsRoot: string;
 }
 
@@ -123,6 +162,8 @@ export interface DesktopSnapshot {
   services: ServiceDescriptor[];
   serviceCommands: ServiceCommandConfig[];
   runtimePathConfigs: RuntimePathConfig[];
+  runtimeResourcePathConfigs: RuntimeResourcePathConfig[];
+  terminalSettings: TerminalSettings;
   appVersion: string;
   moduleVersions: ModuleRuntimeVersions;
   platform: NodeJS.Platform;
@@ -144,6 +185,8 @@ export interface InitCheck {
   status: InitCheckStatus;
   detail: string;
   path?: string;
+  actionLabel?: string;
+  actionUrl?: string;
 }
 
 export interface InitState {
@@ -247,19 +290,6 @@ export interface NapcatAdapterConfig {
   filters: NapcatAdapterFilterConfig;
 }
 
-export interface NapcatAdapterConfigState {
-  configPath: string;
-  exists: boolean;
-  config: NapcatAdapterConfig;
-  defaults: NapcatAdapterConfig;
-}
-
-export interface NapcatAdapterConfigSaveResult {
-  configPath: string;
-  config: NapcatAdapterConfig;
-  savedAt: number;
-}
-
 export interface MaiBotPluginManifest {
   id?: string;
   name?: string;
@@ -310,6 +340,51 @@ export interface MaiBotPluginOperationResult {
   plugin_name?: string;
   old_version?: string;
   new_version?: string;
+}
+
+export type MaiBotPluginConfigPrimitive = string | number | boolean | null;
+
+export type MaiBotPluginConfigValue =
+  | MaiBotPluginConfigPrimitive
+  | MaiBotPluginConfigValue[]
+  | { [key: string]: MaiBotPluginConfigValue };
+
+export interface MaiBotPluginConfigField {
+  name: string;
+  label: string;
+  path: string[];
+  type: "string" | "number" | "boolean" | "array" | "object" | "null";
+  value: MaiBotPluginConfigValue;
+}
+
+export interface MaiBotPluginConfigSection {
+  name: string;
+  title: string;
+  fields: MaiBotPluginConfigField[];
+}
+
+export interface MaiBotPluginConfigSchema {
+  sections: MaiBotPluginConfigSection[];
+}
+
+export interface MaiBotPluginConfigState {
+  pluginId: string;
+  pluginPath: string;
+  configPath: string;
+  exists: boolean;
+  config: Record<string, MaiBotPluginConfigValue>;
+  schema: MaiBotPluginConfigSchema;
+  raw: string;
+}
+
+export interface MaiBotPluginConfigSaveResult {
+  pluginId: string;
+  configPath: string;
+  config: Record<string, MaiBotPluginConfigValue>;
+  schema: MaiBotPluginConfigSchema;
+  raw: string;
+  backupPath?: string;
+  savedAt: number;
 }
 
 export interface QqAccountSetupRequest {
@@ -516,16 +591,17 @@ export interface DesktopBridge {
     importMaiBotConfig: (fileName: MaiBotConfigFileName) => Promise<MaiBotConfigImportResult | null>;
     resetMaiBotData: () => Promise<MaiBotDataResetResult>;
   };
-  napcatAdapter: {
-    getConfig: () => Promise<NapcatAdapterConfigState>;
-    saveConfig: (config: NapcatAdapterConfig) => Promise<NapcatAdapterConfigSaveResult>;
-  };
   plugins: {
     listMarket: () => Promise<MaiBotPluginListResult>;
     listInstalled: () => Promise<MaiBotInstalledPlugin[]>;
     install: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     update: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     uninstall: (pluginId: string) => Promise<MaiBotPluginOperationResult>;
+    getConfig: (pluginId: string) => Promise<MaiBotPluginConfigState>;
+    saveConfig: (
+      pluginId: string,
+      config: Record<string, MaiBotPluginConfigValue>,
+    ) => Promise<MaiBotPluginConfigSaveResult>;
   };
   pythonDeps: {
     getState: () => Promise<PythonOverridesState>;
@@ -543,7 +619,16 @@ export interface DesktopBridge {
     resetCommandConfig: (serviceId: ServiceId) => Promise<ServiceCommandConfig[]>;
     saveRuntimePathConfig: (config: RuntimePathUpdate) => Promise<RuntimePathConfig[]>;
     resetRuntimePathConfig: (key: RuntimePathKey) => Promise<RuntimePathConfig[]>;
+    listPythonRuntimeCandidates: () => Promise<PythonRuntimeCandidate[]>;
+    selectPythonRuntimePath: () => Promise<string | null>;
+    saveTerminalSettings: (settings: TerminalSettings) => Promise<TerminalSettings>;
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;
+  };
+  resources: {
+    migratePath: (key: RuntimeResourcePathKey) => Promise<RuntimeResourcePathChangeResult | null>;
+    selectPath: (key: RuntimeResourcePathKey) => Promise<RuntimeResourcePathChangeResult | null>;
+    savePath: (key: RuntimeResourcePathKey, path: string) => Promise<RuntimeResourcePathChangeResult>;
+    resetPath: (key: RuntimeResourcePathKey) => Promise<RuntimeResourcePathChangeResult>;
   };
   logs: {
     list: () => Promise<LogEntry[]>;

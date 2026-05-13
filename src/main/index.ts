@@ -9,10 +9,15 @@ import { LogStore } from "./services/log-store";
 import { ModuleUpdater } from "./services/module-updater";
 import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
+import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
 
 const runtimePaths = configureRuntimePaths();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
+const resourceLocationManager = new ResourceLocationManager(runtimePaths, app.isPackaged);
+const resourceLock = instanceLock.acquired
+  ? resourceLocationManager.acquireInitialLock()
+  : { acquired: true };
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
@@ -182,7 +187,15 @@ function createTray(): Tray {
   return nextTray;
 }
 
-if (!instanceLock.acquired) {
+if (!instanceLock.acquired || !resourceLock.acquired) {
+  if (!resourceLock.acquired) {
+    logStore.append(
+      "desktop",
+      "system",
+      `runtime resource path is locked by pid ${resourceLock.existing?.pid ?? "unknown"}`,
+    );
+  }
+  resourceLocationManager.release();
   serviceManager.dispose();
   ptySessionManager.dispose();
   app.quit();
@@ -196,6 +209,7 @@ if (!instanceLock.acquired) {
       initManager,
       moduleUpdater,
       pythonDependencyManager,
+      resourceLocationManager,
       serviceManager,
       logStore,
       getMainWindow: () => mainWindow,
@@ -234,6 +248,7 @@ if (!instanceLock.acquired) {
   });
 
   app.on("will-quit", () => {
+    resourceLocationManager.release();
     instanceLock.release();
   });
 }
