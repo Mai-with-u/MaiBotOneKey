@@ -1469,7 +1469,6 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   用户数据目录保存一键包设置；一套数据只绑定一套覆盖路径，MaiBot、NapCat 与 python可写环境可以分别放在独立目录。
                 </p>
-                <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
@@ -1509,9 +1508,6 @@ export function SettingsStatusPanel({
                     </div>
                   ) : null}
                 </div>
-                <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
-                <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
-                <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
                 <div className="grid gap-2 pt-2">
                   {runtimePathConfigs.map((config) => (
                     <RuntimePathEditor
@@ -1528,15 +1524,11 @@ export function SettingsStatusPanel({
                     />
                   ))}
                 </div>
-                <Button
-                  className="mt-1 w-full justify-center"
-                  onClick={() => window.maibotDesktop?.openLogsDirectory()}
-                  variant="outline"
-                >
-                  <FolderOpen />
-                  打开日志目录
-                  <Kbd className="ml-1" keys="Mod+L" size="xs" tone="muted" />
-                </Button>
+                <PathField label="日志目录" onOpen={openPath} value={snapshot.paths.logsRoot} />
+                <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
+                <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
+                <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
+                <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
               </TabsContent>
 
               <TabsContent className="space-y-3" value="logs">

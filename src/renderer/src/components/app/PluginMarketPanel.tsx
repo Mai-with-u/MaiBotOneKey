@@ -1,4 +1,4 @@
-import { AlertTriangle, Download, Loader2, Puzzle, RefreshCw, Save, Search, SlidersHorizontal, Store, Trash2, Upload, Wrench } from "lucide-react";
+import { AlertTriangle, Download, Loader2, Plus, Puzzle, RefreshCw, Save, Search, SlidersHorizontal, Store, Trash2, Upload, Wrench, X } from "lucide-react";
 import type { ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -794,12 +794,101 @@ function PluginConfigField({
     );
   }
 
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return (
+      <StringArrayConfigField
+        field={field}
+        onChange={(nextValue) => onChange(field.path, nextValue)}
+        value={value}
+      />
+    );
+  }
+
   return (
     <JsonConfigField
       field={field}
       onChange={(nextValue) => onChange(field.path, nextValue)}
       value={value}
     />
+  );
+}
+
+function StringArrayConfigField({
+  field,
+  value,
+  onChange,
+}: {
+  field: PluginConfigState["schema"]["sections"][number]["fields"][number];
+  value: string[];
+  onChange: (value: PluginConfigValue) => void;
+}): React.JSX.Element {
+  const [draft, setDraft] = useState("");
+
+  const addItem = useCallback(() => {
+    const nextItem = draft.trim();
+    if (!nextItem) {
+      return;
+    }
+    onChange([...value, nextItem]);
+    setDraft("");
+  }, [draft, onChange, value]);
+
+  const updateItem = useCallback((index: number, nextValue: string) => {
+    onChange(value.map((item, itemIndex) => (itemIndex === index ? nextValue : item)));
+  }, [onChange, value]);
+
+  const removeItem = useCallback((index: number) => {
+    onChange(value.filter((_item, itemIndex) => itemIndex !== index));
+  }, [onChange, value]);
+
+  return (
+    <div className="grid min-w-0 gap-2 text-xs font-medium md:col-span-2">
+      <span className="truncate">{field.label}</span>
+      <div className="grid gap-2 rounded-md border border-border bg-muted/25 p-2">
+        {value.length > 0 ? (
+          value.map((item, index) => (
+            <div className="grid grid-cols-[1fr_auto] gap-2" key={`${field.path.join(".")}-${index}`}>
+              <Input
+                monospace
+                onChange={(event) => updateItem(index, event.target.value)}
+                value={item}
+              />
+              <Button
+                aria-label={`移除 ${field.label} 第 ${index + 1} 项`}
+                onClick={() => removeItem(index)}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-md border border-dashed border-border px-3 py-3 text-center text-[11px] text-muted-foreground">
+            暂无条目
+          </div>
+        )}
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <Input
+            monospace
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addItem();
+              }
+            }}
+            placeholder="输入后回车添加"
+            value={draft}
+          />
+          <Button disabled={!draft.trim()} onClick={addItem} size="icon-sm" type="button" variant="secondary">
+            <Plus className="size-4" />
+          </Button>
+        </div>
+      </div>
+      <span className="font-mono text-[10px] text-muted-foreground">{field.name}</span>
+    </div>
   );
 }
 

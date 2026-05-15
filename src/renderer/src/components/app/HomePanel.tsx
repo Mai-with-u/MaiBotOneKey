@@ -2,6 +2,7 @@
   Activity,
   ArrowRight,
   Download,
+  ExternalLink,
   Gauge,
   Loader2,
   PackageCheck,
@@ -12,8 +13,9 @@
   Store,
 } from "lucide-react";
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import maiMascotImage from "@/assets/mai2.png";
 import type {
   DesktopSnapshot,
   ServiceDescriptor,
@@ -30,6 +32,7 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { WebviewPanel } from "./WebviewPanel";
 
 type MaiBotUpdateChannel = "stable" | "test" | "legacy";
 type DashboardUpdateChannel = "stable" | "test";
@@ -130,15 +133,20 @@ function ChoiceSwitch<T extends string>({
 function ServiceSummary({
   icon,
   service,
+  action,
 }: {
   icon: React.ReactNode;
   service: ServiceDescriptor | undefined;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }): React.JSX.Element {
   return (
-    <div className="grid min-h-36 gap-4 rounded-lg border border-border bg-card p-4">
+    <div className="grid min-h-32 gap-3 rounded-lg border border-border bg-card p-3.5">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
             {icon}
           </span>
           <div className="min-w-0">
@@ -154,20 +162,26 @@ function ServiceSummary({
           </Badge>
         ) : null}
       </div>
-      <div className="grid grid-cols-3 gap-2 text-xs">
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
-          <p className="text-muted-foreground">端口</p>
-          <p className="mt-1 font-mono text-sm">{service?.port ?? "-"}</p>
+      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+        <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
+          <p className="text-[10px] text-muted-foreground">端口</p>
+          <p className="mt-0.5 font-mono text-xs">{service?.port ?? "-"}</p>
         </div>
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
-          <p className="text-muted-foreground">健康</p>
-          <p className="mt-1 text-sm">{service ? healthText[service.health] : "未知"}</p>
+        <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
+          <p className="text-[10px] text-muted-foreground">健康</p>
+          <p className="mt-0.5 text-xs">{service ? healthText[service.health] : "未知"}</p>
         </div>
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
-          <p className="text-muted-foreground">PID</p>
-          <p className="mt-1 font-mono text-sm">{service?.pid ?? "-"}</p>
+        <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
+          <p className="text-[10px] text-muted-foreground">PID</p>
+          <p className="mt-0.5 font-mono text-xs">{service?.pid ?? "-"}</p>
         </div>
       </div>
+      {action ? (
+        <Button className="h-7 justify-self-end px-2.5 text-[11px]" onClick={action.onClick} size="sm" variant="secondary">
+          <ExternalLink />
+          {action.label}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -263,6 +277,138 @@ function ShortcutTile({
   );
 }
 
+function ElasticMascot(): React.JSX.Element {
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const bodyRef = useRef({
+    x: 0,
+    y: 0,
+    rotate: 0,
+    stretch: 0,
+    squash: 0,
+    vx: 0,
+    vy: 0,
+    vr: 0,
+    vs: 0,
+    vq: 0,
+  });
+  const pointerRef = useRef({ x: 0, y: 0, t: 0 });
+  const [pose, setPose] = useState({
+    x: 0,
+    y: 0,
+    rotate: 0,
+    stretch: 0,
+    squash: 0,
+  });
+
+  const kick = useCallback((x: number, y: number, force = 1) => {
+    const body = bodyRef.current;
+    body.vx += x * force;
+    body.vy += y * force;
+    body.vr += x * 0.18 * force;
+    body.vs += Math.abs(x) * 0.015 * force + Math.abs(y) * 0.01 * force;
+    body.vq += y * 0.018 * force;
+  }, []);
+
+  useEffect(() => {
+    const tick = () => {
+      const body = bodyRef.current;
+      body.vx += -body.x * 0.09;
+      body.vy += -body.y * 0.09;
+      body.vr += -body.rotate * 0.08;
+      body.vs += -body.stretch * 0.1;
+      body.vq += -body.squash * 0.1;
+
+      body.vx *= 0.82;
+      body.vy *= 0.82;
+      body.vr *= 0.8;
+      body.vs *= 0.78;
+      body.vq *= 0.78;
+
+      body.x += body.vx;
+      body.y += body.vy;
+      body.rotate += body.vr;
+      body.stretch += body.vs;
+      body.squash += body.vq;
+
+      setPose({
+        x: body.x,
+        y: body.y,
+        rotate: body.rotate,
+        stretch: body.stretch,
+        squash: body.squash,
+      });
+      frameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    frameRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+      }
+    };
+  }, []);
+
+  const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+
+    const rect = stage.getBoundingClientRect();
+    const now = performance.now();
+    const previous = pointerRef.current;
+    const hasPrevious = previous.t > 0;
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    const dx = hasPrevious ? localX - previous.x : 0;
+    const dy = hasPrevious ? localY - previous.y : 0;
+    const headBias = 1 - Math.min(1, localY / Math.max(1, rect.height));
+    const speed = Math.min(18, Math.hypot(dx, dy));
+
+    pointerRef.current = { x: localX, y: localY, t: now };
+    kick(dx * 0.18 * headBias, dy * 0.16 * headBias - speed * 0.03, 1);
+  }, [kick]);
+
+  const onPointerEnter = useCallback(() => {
+    kick(-5, -4, 1.2);
+  }, [kick]);
+
+  const onPointerLeave = useCallback(() => {
+    pointerRef.current.t = 0;
+    kick(4, 2, 0.8);
+  }, [kick]);
+
+  const stretch = Math.max(-0.1, Math.min(0.16, pose.stretch));
+  const squash = Math.max(-0.12, Math.min(0.12, pose.squash));
+  const rotate = Math.max(-9, Math.min(9, pose.rotate));
+  const x = Math.max(-22, Math.min(22, pose.x));
+  const y = Math.max(-18, Math.min(18, pose.y));
+
+  return (
+    <div
+      aria-hidden="true"
+      className="relative hidden min-h-32 overflow-hidden rounded-lg border border-transparent md:block"
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      onPointerMove={onPointerMove}
+      ref={stageRef}
+    >
+      <img
+        alt=""
+        className="pointer-events-none absolute bottom-[-58px] right-[-82px] w-[min(150px,54vw)] select-none"
+        draggable={false}
+        src={maiMascotImage}
+        style={{
+          transform: `translate3d(${x}px, ${y}px, 0) rotate(${rotate}deg) skew(${squash * 12}deg, ${-squash * 7}deg) scale(${1 + stretch}, ${1 - stretch * 0.55})`,
+          transformOrigin: "82% 86%",
+          transition: "filter 160ms ease",
+        }}
+      />
+    </div>
+  );
+}
+
 export function HomePanel({
   active,
   snapshot,
@@ -279,6 +425,7 @@ export function HomePanel({
   const [error, setError] = useState<string | null>(null);
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
   const [dashboardChannel, setDashboardChannel] = useState<DashboardUpdateChannel>("stable");
+  const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
@@ -411,8 +558,15 @@ export function HomePanel({
           </div>
 
           <div className="grid gap-3 lg:grid-cols-2">
-            <ServiceSummary icon={<Radar className="size-5" />} service={maibot} />
-            <ServiceSummary icon={<Server className="size-5" />} service={napcat} />
+            <ServiceSummary icon={<Radar className="size-4.5" />} service={maibot} />
+            <ServiceSummary
+              action={{
+                label: "打开 WebUI",
+                onClick: () => setNapcatWebuiOpen(true),
+              }}
+              icon={<Server className="size-4.5" />}
+              service={napcat}
+            />
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -431,6 +585,7 @@ export function HomePanel({
                 onClick: openMaiBotUpdate,
               }}
             />
+            <ElasticMascot />
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -563,6 +718,25 @@ export function HomePanel({
               安装选中版本
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={napcatWebuiOpen} onOpenChange={setNapcatWebuiOpen}>
+        <DialogContent className="h-[calc(100vh-4rem)] sm:max-w-[1180px]" size="xl">
+          <DialogHeader
+            description="从首页打开，关闭后不会影响 NapCat 服务运行。"
+            icon={<Server className="size-4" />}
+            title="NapCat WebUI"
+            tone="primary"
+          />
+          <DialogBody className="overflow-hidden p-0">
+            <WebviewPanel
+              active={napcatWebuiOpen}
+              emptyText="NapCat 启动后会在这里打开它自己的 WebUI。"
+              title="NapCat WebUI"
+              url={napcat?.url ?? "http://127.0.0.1:6099/webui"}
+            />
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </>
