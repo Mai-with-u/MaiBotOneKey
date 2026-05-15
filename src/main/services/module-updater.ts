@@ -15,7 +15,7 @@ import { InitManager } from "./init-manager";
 
 const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
 /** 单次 git fetch origin 的最长等待时间。失败/超时后会恢复到更新前状态。 */
-const FETCH_ORIGIN_TIMEOUT_MS = 3 * 60 * 1000;
+const FETCH_ORIGIN_TIMEOUT_MS = 15 * 60 * 1000;
 const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
 const OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
 const GHPROXY_MAIBOT_REMOTE_URL = "https://gh.llkk.cc/https://github.com/Mai-with-u/MaiBot.git";

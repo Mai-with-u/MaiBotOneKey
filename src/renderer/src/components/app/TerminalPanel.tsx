@@ -399,7 +399,11 @@ export function TerminalPanel({
       return;
     }
 
-    const observer = new ResizeObserver(() => fitTerminal(activeTerminal.sessionId));
+    const observer = new ResizeObserver(() => {
+      for (const item of serviceTerminals) {
+        fitTerminal(item.sessionId);
+      }
+    });
     observer.observe(pane);
     return () => observer.disconnect();
   }, [activeTerminal.sessionId, fitTerminal]);
@@ -494,12 +498,18 @@ export function TerminalPanel({
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
         <div
-          className="size-full overflow-hidden rounded-md border border-border shadow-inner"
+          className="relative size-full overflow-hidden rounded-md border border-border shadow-inner"
           style={{ backgroundColor: XTERM_THEME.background }}
         >
           {serviceTerminals.map((item) => (
             <div
-              className={item.serviceId === activeServiceId ? "size-full" : "hidden"}
+              aria-hidden={item.serviceId !== activeServiceId}
+              className={[
+                "absolute inset-0 size-full",
+                item.serviceId === activeServiceId
+                  ? "z-10 opacity-100"
+                  : "z-0 opacity-0 pointer-events-none",
+              ].join(" ")}
               key={item.sessionId}
               ref={setTerminalPane(item.sessionId)}
             />

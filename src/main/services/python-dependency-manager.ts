@@ -17,6 +17,12 @@ import { InitManager } from "./init-manager";
 const TUNA_PYPI_ROOT = "https://pypi.tuna.tsinghua.edu.cn";
 const TUNA_SIMPLE_INDEX = `${TUNA_PYPI_ROOT}/simple`;
 const PYPI_SIMPLE_INDEX = "https://pypi.org/simple";
+const ALIYUN_SIMPLE_INDEX = "https://mirrors.aliyun.com/pypi/simple";
+const PIP_INDEXES: Array<{ label: string; url: string; trustedHost?: string }> = [
+  { label: "清华源", url: TUNA_SIMPLE_INDEX, trustedHost: "pypi.tuna.tsinghua.edu.cn" },
+  { label: "官方 PyPI", url: PYPI_SIMPLE_INDEX },
+  { label: "阿里源", url: ALIYUN_SIMPLE_INDEX, trustedHost: "mirrors.aliyun.com" },
+] as const;
 const MANAGED_PACKAGES: ManagedPythonPackage[] = [
   { name: "maibot-dashboard", label: "MaiBot Dashboard" },
   { name: "maim-message", label: "Maim Message" },
@@ -55,6 +61,11 @@ type PythonOutputHandler = (line: string) => void;
 interface UnsatisfiedDependency {
   requirement: string;
   reason: string;
+}
+
+interface PipInstallAttemptResult {
+  output: string[];
+  sourceUrl: string;
 }
 
 function splitOutput(output: string): string[] {
@@ -428,7 +439,7 @@ export class PythonDependencyManager {
     await this.removeOverlayPackage(request.packageName, targetDir);
 
     const requirement = `${request.packageName}==${request.version.trim()}`;
-    const args = [
+    const baseArgs = [
       "-m",
       "pip",
       "install",
@@ -436,10 +447,6 @@ export class PythonDependencyManager {
       "--upgrade",
       "--target",
       targetDir,
-      "--index-url",
-      TUNA_SIMPLE_INDEX,
-      "--trusted-host",
-      "pypi.tuna.tsinghua.edu.cn",
       "--timeout",
       "120",
       "--retries",
@@ -447,16 +454,15 @@ export class PythonDependencyManager {
       "--no-deps",
       "--no-compile",
       "--no-warn-script-location",
-      requirement,
     ];
-    const output = await this.runPython(args);
+    const result = await this.runPipInstallWithFallback(baseArgs, [requirement]);
 
     return {
       packageName: request.packageName,
       version: request.version.trim(),
-      sourceUrl: TUNA_SIMPLE_INDEX,
+      sourceUrl: result.sourceUrl,
       targetDir,
-      output,
+      output: result.output,
       installedAt: Date.now(),
     };
   }
@@ -558,7 +564,7 @@ export class PythonDependencyManager {
     const sourceArgs = unsatisfied.map((item) => item.requirement);
     await this.removeOverlayPackages(sourceArgs, targetDir);
 
-    const args = [
+    const baseArgs = [
       "-m",
       "pip",
       "install",
@@ -567,10 +573,6 @@ export class PythonDependencyManager {
       "only-if-needed",
       "--target",
       targetDir,
-      "--index-url",
-      TUNA_SIMPLE_INDEX,
-      "--trusted-host",
-      "pypi.tuna.tsinghua.edu.cn",
       "--timeout",
       "120",
       "--retries",
@@ -580,15 +582,20 @@ export class PythonDependencyManager {
       "--no-warn-script-location",
       "--progress-bar",
       "off",
-      ...sourceArgs,
     ];
-    const output = await this.runPython(args, signal, onOutput, this.buildPythonPathEnv());
+    const result = await this.runPipInstallWithFallback(
+      baseArgs,
+      sourceArgs,
+      signal,
+      onOutput,
+      this.buildPythonPathEnv(),
+    );
 
     return {
       sourceFile,
-      sourceUrl: TUNA_SIMPLE_INDEX,
+      sourceUrl: result.sourceUrl,
       targetDir,
-      output,
+      output: result.output,
       installedAt: Date.now(),
     };
   }
@@ -751,6 +758,51 @@ print(json.dumps(missing, ensure_ascii=False))
 
       return [];
     });
+  }
+
+  private async runPipInstallWithFallback(
+    baseArgs: string[],
+    requirements: string[],
+    signal?: AbortSignal,
+    onOutput?: PythonOutputHandler,
+    extraEnv?: Record<string, string>,
+  ): Promise<PipInstallAttemptResult> {
+    const failures: string[] = [];
+
+    for (const index of PIP_INDEXES) {
+      if (signal?.aborted) {
+        throw new Error("Python dependency install was cancelled");
+      }
+
+      const args = [
+        ...baseArgs,
+        "--index-url",
+        index.url,
+        ...(index.trustedHost ? ["--trusted-host", index.trustedHost] : []),
+        ...requirements,
+      ];
+      onOutput?.(`pip install using ${index.label}: ${index.url}`);
+
+      try {
+        const output = await this.runPython(args, signal, onOutput, extraEnv);
+        return {
+          output,
+          sourceUrl: index.url,
+        };
+      } catch (error) {
+        const detail = toDetail(error);
+        failures.push(`[${index.label}] ${detail}`);
+        onOutput?.(`pip install failed with ${index.label}; ${this.nextIndexHint(index.url)}`);
+      }
+    }
+
+    throw new Error(`All Python package indexes failed:\n${failures.join("\n\n")}`);
+  }
+
+  private nextIndexHint(failedUrl: string): string {
+    const currentIndex = PIP_INDEXES.findIndex((item) => item.url === failedUrl);
+    const next = PIP_INDEXES[currentIndex + 1];
+    return next ? `retrying with ${next.label}` : "no fallback index remains";
   }
 
   private runPython(
