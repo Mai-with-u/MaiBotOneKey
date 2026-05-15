@@ -574,7 +574,7 @@ export class ServiceManager extends EventEmitter {
 
     let resolved: ResolvedServiceCommand;
     try {
-      const changedFiles = serviceId === "maibot" ? [] : await this.initManager.ensureServiceReady(serviceId);
+      const changedFiles = await this.initManager.ensureServiceReady(serviceId);
       if (changedFiles.length > 0) {
         this.logs.append(serviceId, "system", `prepared writable modules: ${changedFiles.join(", ")}`);
       }
@@ -1003,33 +1003,33 @@ export class ServiceManager extends EventEmitter {
         readyPorts: [6099],
         displayDefaultCommandLine: async () => {
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
-            return `${quoteCommandPart(napcatNode)} index.js`;
+            return `${quoteCommandPart(napcatNode)} index.js -q <QQ>`;
           }
-          return `${quoteCommandPart(napcatExe)} <QQ>`;
+          return `${quoteCommandPart(napcatExe)} -q <QQ>`;
         },
         buildDefaultCommand: async () => {
           const qq = await this.initManager.readQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
-            return [napcatNode, napcatNodeEntry];
+            return qq ? [napcatNode, napcatNodeEntry, "-q", qq] : [napcatNode, napcatNodeEntry];
           }
           if (process.platform === "win32" && existsSync(napcatLauncherPath)) {
             // 閫氳繃 cmd.exe 璋冪敤纾佺洏涓婄殑 napcat-launch.cmd锛堝凡鍥哄畾 chcp 65001锛夛紝
             // argv 鍚勫厓绱犵嫭绔嬩紶閫掞紝涓嶄細瑙﹀彂 cmd /C 瀛楃涓叉嫾鎺ョ殑寮曞彿姝т箟銆?
             const args = ["/D", "/S", "/C", napcatLauncherName];
             if (qq) {
-              args.push(qq);
+              args.push("-q", qq);
             }
             return [cmdShell, ...args];
           }
-          return qq ? [napcatExe, qq] : [napcatExe];
+          return qq ? [napcatExe, "-q", qq] : [napcatExe];
         },
         buildDefaultCommandLine: async () => {
           await this.initManager.ensureNapCatWebUiConfig();
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
-            return `${quoteCommandPart(napcatNode)} index.js`;
+            return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatNode)} index.js -q <QQ>`);
           }
-          return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatExe)} <QQ>`);
+          return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatExe)} -q <QQ>`);
         },
       },
     ];
@@ -1336,7 +1336,7 @@ export class ServiceManager extends EventEmitter {
   private async resolveNapCatUrl(fallback: string): Promise<string> {
     try {
       const { token } = await this.initManager.readNapCatWebUiToken();
-      return token ? `http://127.0.0.1:6099/webui/web_login?token=${encodeURIComponent(token)}` : fallback;
+      return token ? `http://127.0.0.1:6099/webui?token=${encodeURIComponent(token)}` : fallback;
     } catch {
       // 浠讳綍璇诲彇寮傚父閮界洿鎺ュ洖閫€鍒版櫘閫氱櫥褰曢〉锛岄伩鍏嶉樆濉炰富闈㈡澘銆?
       return fallback;

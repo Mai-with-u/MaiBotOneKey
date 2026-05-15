@@ -155,7 +155,7 @@ export class ResourceLocationManager {
   }
 
   async resetPath(key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult> {
-    return this.changePath(key, this.getDefaultPath(key), true);
+    return this.changePath(key, this.getDefaultPath(key), false);
   }
 
   private async changePath(

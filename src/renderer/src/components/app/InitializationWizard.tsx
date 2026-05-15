@@ -25,7 +25,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { createSecureToken } from "@/lib/secure-token";
 import { useShortcut } from "@/lib/use-shortcut";
 import { cn } from "@/lib/utils";
 import { IdListEditor } from "./IdListEditor";
@@ -143,7 +142,6 @@ export function InitializationWizard({
     try {
       await window.maibotDesktop?.init.setQqAccount({
         qqAccount: trimmed,
-        websocketToken: createSecureToken(),
         chat,
       });
       await refreshSnapshot();
@@ -225,6 +223,35 @@ export function InitializationWizard({
                 </span>
               </label>
 
+              <div className="grid gap-3 rounded-md border border-border bg-muted/30 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  过滤附加项
+                </p>
+                <IdListEditor
+                  emptyHint="未配置全局屏蔽用户"
+                  label="全局屏蔽用户"
+                  onChange={(next) => updateChat("banUserId", next)}
+                  placeholder="输入要屏蔽的 QQ 号后回车添加"
+                  values={chat.banUserId}
+                />
+
+                <label className="flex items-start gap-2">
+                  <Checkbox
+                    checked={chat.showDroppedChatListMessages}
+                    id="wiz-show-dropped"
+                    onCheckedChange={(next) =>
+                      updateChat("showDroppedChatListMessages", Boolean(next))
+                    }
+                  />
+                  <span className="flex flex-col text-[12px] text-foreground">
+                    显示被名单过滤丢弃的消息日志
+                    <span className="text-[11px] text-muted-foreground">
+                      默认关闭以减少终端刷屏，调试名单时可以打开。
+                    </span>
+                  </span>
+                </label>
+              </div>
+
               <div
                 className={cn(
                   "grid gap-3 rounded-md border border-dashed border-border bg-background/40 p-3",
@@ -259,14 +286,6 @@ export function InitializationWizard({
                 />
               </div>
 
-              <IdListEditor
-                emptyHint="未配置全局屏蔽用户"
-                label="全局屏蔽用户"
-                onChange={(next) => updateChat("banUserId", next)}
-                placeholder="输入要屏蔽的 QQ 号后回车添加"
-                values={chat.banUserId}
-              />
-
               <label className="flex items-start gap-2">
                 <Checkbox
                   checked={chat.banQqBot}
@@ -277,22 +296,6 @@ export function InitializationWizard({
                   屏蔽 QQ 官方机器人 / 频道机器人
                   <span className="text-[11px] text-muted-foreground">
                     开启后会忽略来自官方机器人的消息事件。
-                  </span>
-                </span>
-              </label>
-
-              <label className="flex items-start gap-2">
-                <Checkbox
-                  checked={chat.showDroppedChatListMessages}
-                  id="wiz-show-dropped"
-                  onCheckedChange={(next) =>
-                    updateChat("showDroppedChatListMessages", Boolean(next))
-                  }
-                />
-                <span className="flex flex-col text-[12px] text-foreground">
-                  显示被名单过滤丢弃的消息日志
-                  <span className="text-[11px] text-muted-foreground">
-                    默认关闭以减少终端刷屏，调试名单时可以打开。
                   </span>
                 </span>
               </label>

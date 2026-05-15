@@ -32,7 +32,7 @@ const PYTHON_MINIMUM_VERSION = "3.12";
 const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
-const MAIBOT_LEGACY_CONFIG_VERSION = "1.0.0";
+const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
 
 function uniqueExistingPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -244,8 +244,15 @@ const NAPCAT_ADAPTER_DIR = join("plugins", "napcat-adapter");
 const NAPCAT_ADAPTER_CONFIG_VERSION = "0.1.0";
 const NAPCAT_ADAPTER_HOST = "127.0.0.1";
 const NAPCAT_ADAPTER_PORT = 7998;
+const LOCAL_CHAT_PLATFORM = "onekey-local-chat";
 
-function buildDefaultNapcatAdapterConfig(token = ""): NapcatAdapterConfig {
+interface NapcatWebsocketServerConfig {
+  host: string;
+  port: number;
+  token: string;
+}
+
+function buildDefaultNapcatAdapterConfig(token = "", port = NAPCAT_ADAPTER_PORT): NapcatAdapterConfig {
   return {
     plugin: {
       enabled: true,
@@ -253,7 +260,7 @@ function buildDefaultNapcatAdapterConfig(token = ""): NapcatAdapterConfig {
     },
     server: {
       host: NAPCAT_ADAPTER_HOST,
-      port: NAPCAT_ADAPTER_PORT,
+      port,
       token,
       heartbeatInterval: 30,
       reconnectDelaySec: 5,
@@ -439,6 +446,41 @@ function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function ensureBotPlatformAccount(content: string, platform: string, account: string): string {
+  const entry = `${platform}:${account}`;
+  const botSectionMatch = content.match(/(^|\n)(\s*\[bot\]\s*)(?:\n|$)/u);
+  if (!botSectionMatch) {
+    return `${content.trimEnd()}\n\n[bot]\nplatforms = [\n    "${entry}",\n]\n`;
+  }
+
+  const botSectionStart = (botSectionMatch.index ?? 0) + botSectionMatch[0].length;
+  const nextSectionOffset = content.slice(botSectionStart).search(/\n\s*\[[^\]]+\]\s*(?:\n|$)/u);
+  const botSectionEnd =
+    nextSectionOffset === -1 ? content.length : botSectionStart + nextSectionOffset;
+  const beforeBotSection = content.slice(0, botSectionStart);
+  const botSection = content.slice(botSectionStart, botSectionEnd);
+  const afterBotSection = content.slice(botSectionEnd);
+  const platformsMatch = botSection.match(/(^|\n)(\s*platforms\s*=\s*\[)([\s\S]*?)(\n\s*\])/u);
+
+  if (!platformsMatch) {
+    return `${beforeBotSection}${botSection.trimEnd()}\nplatforms = [\n    "${entry}",\n]\n${afterBotSection}`;
+  }
+
+  const listBody = platformsMatch[3] ?? "";
+  const platformPattern = new RegExp(`(["'])${escapeRegExp(platform)}:[^"']*\\1`, "u");
+  const nextListBody = platformPattern.test(listBody)
+    ? listBody.replace(platformPattern, `"${entry}"`)
+    : `${listBody.trimEnd()}\n    "${entry}",`;
+  const nextBotSection = `${botSection.slice(0, platformsMatch.index)}${platformsMatch[1] ?? ""}${
+    platformsMatch[2]
+  }${nextListBody}${platformsMatch[4]}${botSection.slice((platformsMatch.index ?? 0) + platformsMatch[0].length)}`;
+  return `${beforeBotSection}${nextBotSection}${afterBotSection}`;
+}
+
 function checkFile(path: string, label: string, id: string): InitCheck {
   if (existsSync(path)) {
     return { id, label, status: "ok", detail: "已找到", path };
@@ -481,6 +523,10 @@ function runProcess(file: string, args: string[], cwd: string, timeoutMs = 8_000
       },
     );
   });
+}
+
+function isCleanPipCheckOutput(output: string): boolean {
+  return /(?:^|\n)\s*No broken requirements found\.\s*$/iu.test(output.trim());
 }
 
 function toDetail(error: unknown): string {
@@ -803,7 +849,7 @@ export class InitManager {
 
   async setQqAccount(
     qqAccount: string,
-    websocketToken = createWebsocketToken(),
+    websocketToken?: string,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
   ): Promise<InitState> {
     if (!isDigits(qqAccount)) {
@@ -820,12 +866,19 @@ export class InitManager {
     } else {
       content += `\n[bot]\nqq_account = ${qqAccount}\n`;
     }
+    content = ensureBotPlatformAccount(content, LOCAL_CHAT_PLATFORM, qqAccount);
 
     await mkdir(dirname(botConfigPath), { recursive: true });
     await writeFile(botConfigPath, content, "utf8");
-    await this.createNapCatConfigs(qqAccount, websocketToken);
+    const existingWebsocketServer = await this.readNapcatWebsocketServer(qqAccount);
+    const resolvedWebsocketServer: NapcatWebsocketServerConfig = existingWebsocketServer ?? {
+      host: NAPCAT_ADAPTER_HOST,
+      port: NAPCAT_ADAPTER_PORT,
+      token: websocketToken || createWebsocketToken(),
+    };
+    await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
     await this.ensureNapCatWebUiConfig();
-    await this.writeNapcatAdapterConfigForToken(websocketToken, chatOverrides);
+    await this.writeNapcatAdapterConfigForServer(resolvedWebsocketServer, chatOverrides);
     return this.getState();
   }
 
@@ -837,47 +890,51 @@ export class InitManager {
    * 璇诲彇鏈€鏂颁竴浠?onebot11_<qq>.json 涓凡鍐欏叆鐨?WebSocket Token锛?
    * 鐢ㄤ簬鍦?napcat-adapter 閰嶇疆涓鐢ㄥ悓涓€涓?token锛岄伩鍏嶉害楹︾杩炰笉涓娿€?
    */
-  async readNapcatWebsocketToken(): Promise<string> {
+  async readNapcatWebsocketServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig | undefined> {
     try {
-      const versions = await this.findNapCatConfigVersions();
-      for (const version of versions) {
-        const configDir = join(
-          this.paths.napcatRoot,
-          "versions",
-          version,
-          "resources",
-          "app",
-          "napcat",
-          "config",
-        );
+      const configDirs = await this.findNapCatRuntimeConfigDirs();
+      const onebotPattern = qqAccount
+        ? new RegExp(`^onebot11_${escapeRegExp(qqAccount)}\\.json$`, "i")
+        : /^onebot11_\d+\.json$/i;
+      for (const configDir of configDirs) {
         if (!existsSync(configDir)) continue;
         const entries = await readdir(configDir);
-        const onebotFile = entries.find((name) => /^onebot11_\d+\.json$/i.test(name));
+        const onebotFile = entries.find((name) => onebotPattern.test(name));
         if (!onebotFile) continue;
         const raw = await readFile(join(configDir, onebotFile), "utf8");
         const parsed = JSON.parse(raw) as {
-          network?: { websocketServers?: Array<{ token?: string; port?: number }> };
+          network?: { websocketServers?: Array<{ host?: string; token?: string; port?: number }> };
         };
-        const server = parsed?.network?.websocketServers?.find((entry) => entry?.token);
+        const server =
+          parsed?.network?.websocketServers?.find((entry) => entry?.port === NAPCAT_ADAPTER_PORT && entry?.token) ??
+          parsed?.network?.websocketServers?.find((entry) => entry?.token);
         if (server?.token) {
-          return String(server.token);
+          return {
+            host: server.host ? String(server.host) : NAPCAT_ADAPTER_HOST,
+            port: Number.isFinite(server.port) && server.port ? Math.floor(server.port) : NAPCAT_ADAPTER_PORT,
+            token: String(server.token),
+          };
         }
       }
     } catch {
       // ignore 鈥?fall through to empty token
     }
-    return "";
+    return undefined;
+  }
+
+  async readNapcatWebsocketToken(qqAccount?: string): Promise<string> {
+    return (await this.readNapcatWebsocketServer(qqAccount))?.token ?? "";
   }
 
   /**
    * 鍒涘缓/鏇存柊 napcat-adapter 鐨?config.toml锛?   * token 鐩存帴鏉ヨ嚜褰撳墠 setQqAccount 娴佺▼鐢熸垚鐨?websocket token锛?
    * chat 璁剧疆鍒欏彇鐢ㄦ埛鍦ㄥ紩瀵肩晫闈㈠～鍐欑殑瑕嗙洊鍊硷紙缂虹渷鍗抽粯璁わ級銆?
    */
-  private async writeNapcatAdapterConfigForToken(
-    websocketToken: string,
+  private async writeNapcatAdapterConfigForServer(
+    websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
   ): Promise<void> {
-    const defaults = buildDefaultNapcatAdapterConfig(websocketToken);
+    const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
     let existing: NapcatAdapterConfig = defaults;
     const configPath = this.napcatAdapterConfigPath();
     const adapterRoot = dirname(configPath);
@@ -906,9 +963,9 @@ export class InitManager {
       },
       server: {
         ...existing.server,
-        host: NAPCAT_ADAPTER_HOST,
-        port: NAPCAT_ADAPTER_PORT,
-        token: websocketToken,
+        host: websocketServer.host,
+        port: websocketServer.port,
+        token: websocketServer.token,
       },
       chat: applyChatOverrides(existing.chat, chatOverrides),
     };
@@ -1390,12 +1447,13 @@ export class InitManager {
 
   private async readOrCreateBotConfigContent(): Promise<string> {
     const botConfigPath = this.botConfigPath();
+    const configVersion = await this.readMaiBotConfigVersion();
     if (!existsSync(botConfigPath)) {
-      return `[inner]\nversion = "${MAIBOT_LEGACY_CONFIG_VERSION}"\n\n[bot]\n`;
+      return `[inner]\nversion = "${configVersion}"\n\n[bot]\n`;
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    return ensureInnerVersion(content, MAIBOT_LEGACY_CONFIG_VERSION);
+    return ensureInnerVersion(content, configVersion);
   }
 
   private async repairBotConfigVersionInfo(): Promise<string | undefined> {
@@ -1405,13 +1463,40 @@ export class InitManager {
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    const repaired = ensureInnerVersion(content, MAIBOT_LEGACY_CONFIG_VERSION);
+    const repaired = ensureInnerVersion(content, await this.readMaiBotConfigVersion());
     if (repaired === content) {
       return undefined;
     }
 
     await writeFile(botConfigPath, repaired, "utf8");
     return botConfigPath;
+  }
+
+  private async readMaiBotConfigVersion(): Promise<string> {
+    const candidates = [
+      join(this.paths.maibotRoot, "src", "config", "config.py"),
+      join(this.paths.bundledModulesRoot, "MaiBot", "src", "config", "config.py"),
+    ];
+
+    for (const candidate of candidates) {
+      if (!existsSync(candidate)) {
+        continue;
+      }
+
+      try {
+        const content = await readFile(candidate, "utf8");
+        const match = content.match(/^\s*CONFIG_VERSION\s*:\s*str\s*=\s*["']([^"']+)["']/mu)
+          ?? content.match(/^\s*CONFIG_VERSION\s*=\s*["']([^"']+)["']/mu);
+        const version = match?.[1]?.trim();
+        if (version) {
+          return version;
+        }
+      } catch {
+        // Try the next source, then fall back to the bundled-safe version.
+      }
+    }
+
+    return MAIBOT_FALLBACK_CONFIG_VERSION;
   }
 
   private async checkDependencies(): Promise<InitCheck[]> {
@@ -1479,15 +1564,26 @@ export class InitManager {
           path: python,
         });
       } catch (error) {
-        checks.push({
-          id: "python-pip-check",
-          label: "Python 包依赖",
-          status: "error",
-          detail: `pip 检查失败: ${toDetail(error)}`,
-          path: python,
-          actionLabel: "下载 Python",
-          actionUrl: PYTHON_DOWNLOAD_URL,
-        });
+        const detail = toDetail(error);
+        checks.push(
+          isCleanPipCheckOutput(detail)
+            ? {
+                id: "python-pip-check",
+                label: "Python 包依赖",
+                status: "ok",
+                detail,
+                path: python,
+              }
+            : {
+                id: "python-pip-check",
+                label: "Python 包依赖",
+                status: "error",
+                detail: `pip 检查失败: ${detail}`,
+                path: python,
+                actionLabel: "下载 Python",
+                actionUrl: PYTHON_DOWNLOAD_URL,
+              },
+        );
       }
     }
 
@@ -1529,6 +1625,10 @@ export class InitManager {
 
     this.dependencyCache = { expiresAt: Date.now() + DEPENDENCY_CACHE_MS, checks };
     return checks;
+  }
+
+  clearDependencyCache(): void {
+    this.dependencyCache = undefined;
   }
 
   private getCachedDependencyChecks(): InitCheck[] {
@@ -1589,7 +1689,11 @@ export class InitManager {
     };
   }
 
-  private async createNapCatConfigs(qqAccount: string, websocketToken: string): Promise<void> {
+  private async createNapCatConfigs(
+    qqAccount: string,
+    websocketToken: string,
+    websocketPort = NAPCAT_ADAPTER_PORT,
+  ): Promise<void> {
     const versions = await this.findNapCatConfigVersions();
     const napcatProtocolConfig = {
       enable: false,
@@ -1627,7 +1731,7 @@ export class InitManager {
             enable: true,
             name: "MaiBot Main",
             host: "127.0.0.1",
-            port: 7998,
+            port: websocketPort,
             reportSelfMessage: false,
             enableForcePushEvent: true,
             messagePostFormat: "array",
