@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -14,11 +14,8 @@
     "check": "bun run typecheck && bun run build",
     "preview": "electron-vite preview",
     "release:check": "bun run scripts/release/check-windows-payload.ts",
-    "release:check:lite": "bun run scripts/release/check-windows-payload.ts --lite",
     "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
     "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
-    "release:win:full": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts --variant full",
-    "release:win:lite": "bun run release:check:lite && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts --variant lite",
     "pack:win": "bun run release:win"
   },
   "dependencies": {
@@ -38,7 +35,8 @@
     "react-dom": "^19.1.1",
     "smol-toml": "^1.6.1",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.3.1",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.13",
@@ -46,6 +44,7 @@
     "@types/node": "^22.15.34",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.3",
     "electron": "^38.1.2",
     "electron-builder": "^26.0.12",
@@ -84,6 +83,7 @@
         "to": "runtime",
         "filter": [
           "**/*",
+          "!python/Doc/**",
           "!**/.git/**",
           "!**/__pycache__/**",
           "!**/*.pyc"
@@ -104,6 +104,9 @@
           "!MaiBot/plugins/sengokucola_better-image/**",
           "!MaiBot/plugins/__init__.py",
           "!napcat/napcat/config/webui.json",
+          "!napcat/**/*linux*",
+          "!napcat/**/*darwin*",
+          "!napcat/**/*arm64*",
           "!napcat/versions/**/resources/app/napcat/config/webui.json",
           "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json",
           "!napcat/.git/**"

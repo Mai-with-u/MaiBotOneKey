@@ -17,7 +17,6 @@ type Requirement = {
 };
 
 const root = process.cwd();
-const lite = process.argv.includes("--lite");
 const pythonBootstrapPackages = new Set([
   "pip",
   "pip.dist-info",
@@ -86,12 +85,12 @@ const requirements: Requirement[] = [
   },
   {
     label: "embedded Git directory",
-    required: !lite,
+    required: true,
     candidates: [dir("runtime/git")],
   },
   {
     label: "embedded Git executable",
-    required: !lite,
+    required: true,
     candidates: [file("runtime/git/bin/git.exe"), file("runtime/git/cmd/git.exe"), file("runtime/git/git.exe")],
   },
   {
@@ -284,11 +283,7 @@ async function main(): Promise<void> {
   if (failures.length > 0) {
     console.log("");
     console.log(`Release payload is incomplete (${failures.length} required item(s) missing).`);
-    if (lite) {
-      console.log("The --lite mode requires runtime/python, modules, and NapCat payload files; only runtime/git may be omitted.");
-    } else {
-      console.log("Put runtime/ and modules/ in the repository root before running bun run release:win.");
-    }
+    console.log("Put runtime/ and modules/ in the repository root before running bun run release:win.");
     process.exitCode = 1;
     return;
   }
@@ -322,7 +317,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log(lite ? "Windows lite release payload looks complete." : "Windows full release payload looks complete.");
+  console.log("Windows standard release payload looks complete.");
 }
 
 await main();
