@@ -17,6 +17,8 @@ export type ServiceHealth =
 export type LogSource = ServiceId | "desktop";
 
 export type LogStream = "stdout" | "stderr" | "system";
+export type LocalChatConnectionState = "idle" | "connecting" | "connected" | "error";
+export type LocalChatMessageRole = "user" | "bot" | "system" | "error";
 
 export type RuntimePathKey = "python" | "git";
 
@@ -141,6 +143,41 @@ export interface RuntimePaths {
   pythonOverridesRoot: string;
   logsRoot: string;
 }
+
+export interface LocalChatSendRequest {
+  content: string;
+  userName?: string;
+  port?: number;
+  images?: LocalChatImageAttachment[];
+}
+
+export interface LocalChatConnectRequest {
+  port?: number;
+}
+
+export interface LocalChatMessageEvent {
+  id: string;
+  role: LocalChatMessageRole;
+  content: string;
+  timestamp: number;
+  sender?: string;
+  images?: LocalChatImageAttachment[];
+}
+
+export interface LocalChatImageAttachment {
+  name?: string;
+  mimeType: string;
+  base64: string;
+  dataUrl?: string;
+}
+
+export interface LocalChatStateEvent {
+  type: "state";
+  state: LocalChatConnectionState;
+  url?: string;
+}
+
+export type LocalChatEvent = LocalChatMessageEvent | LocalChatStateEvent;
 
 export interface ModuleRuntimeVersions {
   maibotLocal?: string;
@@ -634,6 +671,12 @@ export interface DesktopBridge {
     list: () => Promise<LogEntry[]>;
     clear: () => Promise<void>;
     onEntry: (callback: (entry: LogEntry) => void) => () => void;
+  };
+  localChat: {
+    connect: (request?: LocalChatConnectRequest) => Promise<LocalChatConnectionState>;
+    disconnect: () => Promise<void>;
+    send: (request: LocalChatSendRequest) => Promise<LocalChatMessageEvent>;
+    onEvent: (callback: (event: LocalChatEvent) => void) => () => void;
   };
   pty: {
     start: (request: PtyStartRequest) => Promise<PtySessionSnapshot>;

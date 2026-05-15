@@ -9,6 +9,10 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  LocalChatConnectionState,
+  LocalChatConnectRequest,
+  LocalChatMessageEvent,
+  LocalChatSendRequest,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
@@ -48,6 +52,7 @@ import type {
 } from "../../shared/contracts";
 import { InitManager } from "../services/init-manager";
 import { LogStore } from "../services/log-store";
+import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
@@ -415,6 +420,7 @@ export function registerAppIpc({
       gitPath: initManager.getGitPath(),
     });
   let maibotPluginClient = createMaibotPluginClient();
+  const localChatAdapter = new LocalChatAdapter(paths);
 
   const assertServicesStoppedForResourceMove = (): void => {
     const active = serviceManager
@@ -434,6 +440,7 @@ export function registerAppIpc({
   const applyResourceMigrationResult = async (
     result: RuntimeResourcePathChangeResult,
   ): Promise<RuntimeResourcePathChangeResult> => {
+    initManager.clearDependencyCache();
     serviceManager.reloadRuntimePaths();
     maibotPluginClient = createMaibotPluginClient();
     logStore.append(
@@ -453,6 +460,10 @@ export function registerAppIpc({
   logStore.onEntry((entry) => {
     const window = getMainWindow();
     window?.webContents.send("logs:entry", entry);
+  });
+  localChatAdapter.onEvent((event) => {
+    const window = getMainWindow();
+    window?.webContents.send("localChat:event", event);
   });
 
   ipcMain.handle("desktop:getSnapshot", async (): Promise<DesktopSnapshot> => {
@@ -869,6 +880,18 @@ export function registerAppIpc({
   ipcMain.handle("logs:clear", (): void => {
     logStore.clear();
     void broadcastSnapshot();
+  });
+
+  ipcMain.handle("localChat:connect", async (_event, request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> => {
+    return localChatAdapter.connect(request);
+  });
+
+  ipcMain.handle("localChat:disconnect", async (): Promise<void> => {
+    localChatAdapter.disconnect();
+  });
+
+  ipcMain.handle("localChat:send", async (_event, request: LocalChatSendRequest): Promise<LocalChatMessageEvent> => {
+    return localChatAdapter.send(request);
   });
 
   ipcMain.handle("desktop:openLogsDirectory", async (): Promise<void> => {

@@ -6,6 +6,11 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  LocalChatConnectionState,
+  LocalChatConnectRequest,
+  LocalChatEvent,
+  LocalChatMessageEvent,
+  LocalChatSendRequest,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
@@ -174,6 +179,14 @@ const desktopBridge: DesktopBridge = {
     list: () => ipcRenderer.invoke("logs:list") as Promise<LogEntry[]>,
     clear: () => ipcRenderer.invoke("logs:clear") as Promise<void>,
     onEntry: (callback: (entry: LogEntry) => void) => onIpc("logs:entry", callback),
+  },
+  localChat: {
+    connect: (request?: LocalChatConnectRequest) =>
+      ipcRenderer.invoke("localChat:connect", request) as Promise<LocalChatConnectionState>,
+    disconnect: () => ipcRenderer.invoke("localChat:disconnect") as Promise<void>,
+    send: (request: LocalChatSendRequest) =>
+      ipcRenderer.invoke("localChat:send", request) as Promise<LocalChatMessageEvent>,
+    onEvent: (callback: (event: LocalChatEvent) => void) => onIpc("localChat:event", callback),
   },
   pty: {
     start: (request: PtyStartRequest) =>

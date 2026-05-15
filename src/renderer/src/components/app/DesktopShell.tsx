@@ -1,9 +1,9 @@
 ﻿import {
   Activity,
-  Bot,
   FolderOpen,
   Home,
   Loader2,
+  MessageSquare,
   Play,
   Power,
   Puzzle,
@@ -37,6 +37,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
+import { LocalChatPanel } from "./LocalChatPanel";
 import { PluginMarketPanel } from "./PluginMarketPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
@@ -204,9 +205,8 @@ export function DesktopShell(): React.JSX.Element {
     [services],
   );
   const maibotService = serviceById.get("maibot");
-  const napcatService = serviceById.get("napcat");
   const runningCount = services.filter((s) => s.status === "running").length;
-  const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal !== true;
+  const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const canInterruptStartup =
     actionBusy === "all:start" ||
     services.some((service) => service.status === "starting");
@@ -314,7 +314,7 @@ export function DesktopShell(): React.JSX.Element {
   // Shortcuts
   useShortcut("Mod+1", () => selectTab("home"));
   useShortcut("Mod+2", () => selectTab("maibot"));
-  useShortcut("Mod+3", () => selectTab("napcat"));
+  useShortcut("Mod+3", () => selectTab("localchat"));
   useShortcut("Mod+4", () => selectTab("terminal"), { enabled: showTerminalTab });
   useShortcut("Mod+5", () => selectTab("quickactions"));
   useShortcut("Mod+6", () => selectTab("pluginmarket"));
@@ -471,9 +471,9 @@ export function DesktopShell(): React.JSX.Element {
                   MaiBot
                   <Kbd keys="Mod+2" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
-                <TabsTrigger value="napcat" className="gap-1.5">
-                  <Bot />
-                  NapCat
+                <TabsTrigger value="localchat" className="gap-1.5">
+                  <MessageSquare />
+                  聊天室
                   <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
                 {showTerminalTab ? (
@@ -549,40 +549,28 @@ export function DesktopShell(): React.JSX.Element {
 
             <TabsContent
               forceMount
-              value="napcat"
+              value="localchat"
               className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
             >
-              <WebviewPanel
-                active={activeTab === "napcat"}
-                emptyText="NapCat 启动后会在这里打开它自己的 WebUI。"
-                title="NapCat WebUI"
-                url={napcatService?.url ?? "http://127.0.0.1:6099/webui"}
+              <LocalChatPanel
+                active={activeTab === "localchat"}
+                maibotService={maibotService}
               />
             </TabsContent>
 
-            <TabsContent
-              forceMount
-              value="terminal"
-              className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
-            >
-              {snapshot?.terminalSettings.useEmbeddedTerminal === false ? (
-                <div className="grid h-full place-items-center bg-background p-6 text-center">
-                  <div className="max-w-sm rounded-lg border border-border bg-card p-4">
-                    <TerminalSquare className="mx-auto size-6 text-primary" />
-                    <p className="mt-2 text-sm font-medium">外部 Windows 终端模式</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      服务启动时会打开独立终端窗口。
-                    </p>
-                  </div>
-                </div>
-              ) : (
+            {showTerminalTab ? (
+              <TabsContent
+                forceMount
+                value="terminal"
+                className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+              >
                 <TerminalPanel
                   active={activeTab === "terminal"}
                   recentLogs={snapshot?.recentLogs ?? []}
                   services={services}
                 />
-              )}
-            </TabsContent>
+              </TabsContent>
+            ) : null}
 
             <TabsContent
               value="quickactions"
