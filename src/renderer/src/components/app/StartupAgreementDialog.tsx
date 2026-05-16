@@ -10,7 +10,6 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface StartupAgreementDialogProps {
@@ -22,25 +21,34 @@ function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function hasScrolledToBottom(element: HTMLDivElement): boolean {
+  return element.scrollTop + element.clientHeight >= element.scrollHeight - 8;
+}
+
 export function StartupAgreementDialog({
   snapshot,
   onSnapshot,
 }: StartupAgreementDialogProps): React.JSX.Element | null {
   const agreement = snapshot.startupAgreement;
   const [accepted, setAccepted] = useState(false);
+  const [hasReadAll, setHasReadAll] = useState(false);
   const [busy, setBusy] = useState<"accept" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const documents = agreement.documents;
-  const activeTab = documents[0]?.id ?? "eula";
   const missingDocuments = useMemo(
     () => documents.filter((document) => !document.exists || document.error),
     [documents],
   );
-  const canAccept = busy === null && missingDocuments.length === 0 && documents.length > 0 && accepted;
-  const agreementTitleText =
-    documents.length > 0
-      ? documents.map((document) => `《${document.title}》`).join("和")
-      : "《最终用户许可协议》和《隐私政策》";
+  const orderedDocuments = useMemo(
+    () =>
+      [...documents].sort((left, right) => {
+        const order = { privacy: 0, eula: 1 };
+        return order[left.id] - order[right.id];
+      }),
+    [documents],
+  );
+  const canCheck = busy === null && hasReadAll && missingDocuments.length === 0 && documents.length > 0;
+  const canAccept = canCheck && accepted;
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();
@@ -77,6 +85,18 @@ export function StartupAgreementDialog({
     }
   }, []);
 
+  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    if (hasScrolledToBottom(event.currentTarget)) {
+      setHasReadAll(true);
+    }
+  }, []);
+
+  const handleViewportReady = useCallback((element: HTMLDivElement | null) => {
+    if (element && element.scrollHeight <= element.clientHeight + 8) {
+      setHasReadAll(true);
+    }
+  }, []);
+
   if (agreement.isConfirmed) {
     return null;
   }
@@ -97,19 +117,18 @@ export function StartupAgreementDialog({
         />
 
         <DialogBody className="space-y-4">
-          <Tabs className="space-y-3" defaultValue={activeTab}>
-            <TabsList className="h-8 rounded-md border border-border bg-muted/40 p-1">
-              {documents.map((document) => (
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" key={document.id} value={document.id}>
-                  <ShieldCheck className="size-3" />
-                  {document.title}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-
-            {documents.map((document) => (
-              <TabsContent className="space-y-3" key={document.id} value={document.id}>
-                <ScrollArea className="h-[min(52vh,520px)] rounded-lg border border-border bg-muted/30 px-4 py-3">
+          <ScrollArea
+            className="h-[min(56vh,560px)] rounded-lg border border-border bg-muted/30 px-4 py-3"
+            onScroll={handleScroll}
+            ref={handleViewportReady}
+          >
+            <div className="space-y-8">
+              {orderedDocuments.map((document) => (
+                <section className="space-y-3" key={document.id}>
+                  <div className="flex items-center gap-2 border-b border-border pb-2 text-sm font-semibold text-foreground">
+                    <ShieldCheck className="size-4 text-primary" />
+                    {document.title}
+                  </div>
                   {document.exists ? (
                     <MarkdownRenderer content={document.content} />
                   ) : (
@@ -117,20 +136,23 @@ export function StartupAgreementDialog({
                       {document.error ?? `${document.fileName} 文件缺失`}
                     </div>
                   )}
-                </ScrollArea>
-              </TabsContent>
-            ))}
-          </Tabs>
+                </section>
+              ))}
+            </div>
+          </ScrollArea>
 
           <label className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground/85">
             <input
               checked={accepted}
-              className="mt-0.5 size-3.5 accent-primary"
-              disabled={busy !== null || missingDocuments.length > 0}
+              className="mt-0.5 size-3.5 accent-primary disabled:opacity-40"
+              disabled={!canCheck}
               onChange={(event) => setAccepted(event.target.checked)}
               type="checkbox"
             />
-            <span>我已阅读并同意{agreementTitleText}。</span>
+            <span>
+              我已阅读并同意《隐私政策》和《最终用户许可协议》。
+              {!hasReadAll && <span className="ml-2 text-muted-foreground">请滚动到底部后勾选。</span>}
+            </span>
           </label>
 
           {error ? (
