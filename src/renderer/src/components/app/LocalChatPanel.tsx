@@ -6,7 +6,7 @@ import {
   MessageSquare,
   RefreshCw,
   Send,
-  Trash2,
+  Settings,
   UserRound,
   X,
 } from "lucide-react";
@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocalChatEvent, LocalChatImageAttachment, LocalChatMessageEvent, ServiceDescriptor } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -151,6 +152,7 @@ export function LocalChatPanel({
   const [botAvatar, setBotAvatar] = useState(() => localStorage.getItem(BOT_AVATAR_STORAGE_KEY) ?? "");
   const [pendingImages, setPendingImages] = useState<LocalChatImageAttachment[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(ADAPTER_PORT_STORAGE_KEY, adapterPort);
@@ -193,6 +195,10 @@ export function LocalChatPanel({
 
       const nextState = await window.maibotDesktop?.localChat.connect({ port });
       setState(nextState ?? "error");
+      const history = await window.maibotDesktop?.localChat.listMessages();
+      if (history) {
+        setMessages(history.map(toChatMessage));
+      }
       if (nextState !== "connected") {
         setError("本地适配器未连接，请确认 MaiBot Core 的 maim_message 服务已启动");
       }
@@ -288,11 +294,12 @@ export function LocalChatPanel({
   const canSend = connected && (draft.trim() || pendingImages.length > 0);
 
   return (
-    <section className={cn("h-full min-h-0 flex-col bg-background", active ? "flex" : "hidden")}>
+    <>
+      <section className={cn("h-full min-h-0 flex-col bg-background", active ? "flex" : "hidden")}>
       <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-4">
         <div className="flex min-w-0 items-center gap-2">
           <MessageSquare className="size-4 text-primary" />
-          <h2 className="text-sm font-semibold">本地聊天室</h2>
+          <h2 className="text-sm font-semibold">随便聊聊</h2>
           <Badge
             dot
             variant={connected ? "success" : state === "connecting" ? "warning" : state === "error" ? "danger" : "secondary"}
@@ -304,39 +311,12 @@ export function LocalChatPanel({
           </code>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <AvatarButton
-            avatar={botAvatar}
-            fallback={<Bot className="size-4" />}
-            icon={<Bot />}
-            onPick={(file) => void pickAvatar(file, "bot")}
-            title="设置 Bot 头像"
-          />
-          <Input
-            className="h-7 w-32 text-[12px]"
-            onChange={(event) => setUserName(event.target.value)}
-            value={userName}
-          />
-          <AvatarButton
-            avatar={userAvatar}
-            fallback={<UserRound className="size-4" />}
-            icon={<UserRound />}
-            onPick={(file) => void pickAvatar(file, "user")}
-            title="设置用户头像"
-          />
-          <Input
-            className="h-7 w-20 font-mono text-[12px]"
-            inputMode="numeric"
-            onChange={(event) => setAdapterPort(event.target.value.replace(/\D/gu, "").slice(0, 5))}
-            title="maim_message 端口"
-            value={adapterPort}
-          />
-          <Button className="h-7 px-2 text-[11px]" onClick={() => void connect()} size="sm" variant="outline">
+          <Button className="size-7" onClick={() => void connect()} size="icon" title="重连" variant="outline">
             {state === "connecting" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            重连
           </Button>
-          <Button className="h-7 px-2 text-[11px]" onClick={() => setMessages([])} size="sm" variant="ghost">
-            <Trash2 />
-            清屏
+          <Button className="h-7 px-2 text-[11px]" onClick={() => setSettingsOpen(true)} size="sm" variant="secondary">
+            <Settings />
+            设置
           </Button>
         </div>
       </div>
@@ -473,6 +453,93 @@ export function LocalChatPanel({
           </div>
         </div>
       </div>
-    </section>
+      </section>
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <DialogContent size="md">
+        <DialogHeader
+          description="设置本地聊天的显示名称、头像和 maim_message 连接端口。"
+          icon={<Settings className="size-4" />}
+          title="随便聊聊设置"
+          tone="primary"
+        />
+        <DialogBody className="space-y-4">
+          <div className="rounded-lg border border-border bg-background p-3">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <UserRound className="size-4 text-primary" />
+              本地用户
+            </div>
+            <div className="flex items-center gap-3">
+              <AvatarButton
+                avatar={userAvatar}
+                fallback={<UserRound className="size-4" />}
+                icon={<UserRound />}
+                onPick={(file) => void pickAvatar(file, "user")}
+                title="设置用户头像"
+              />
+              <label className="grid min-w-0 flex-1 gap-1.5 text-xs font-medium text-muted-foreground">
+                <span>本地用户名</span>
+                <Input
+                  className="h-9 text-sm text-foreground"
+                  onChange={(event) => setUserName(event.target.value)}
+                  value={userName}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-background p-3">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <Bot className="size-4 text-primary" />
+              Bot
+            </div>
+            <div className="flex items-center gap-3">
+              <AvatarButton
+                avatar={botAvatar}
+                fallback={<Bot className="size-4" />}
+                icon={<Bot />}
+                onPick={(file) => void pickAvatar(file, "bot")}
+                title="设置 Bot 头像"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-muted-foreground">Bot 头像</p>
+                <p className="mt-1 text-xs text-muted-foreground">用于随便聊聊中的 MaiBot 消息头像。</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-background p-3">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <MessageSquare className="size-4 text-primary" />
+              连接
+            </div>
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              <span>maim_message 端口</span>
+              <Input
+                className="h-9 font-mono text-sm text-foreground"
+                inputMode="numeric"
+                onChange={(event) => setAdapterPort(event.target.value.replace(/\D/gu, "").slice(0, 5))}
+                value={adapterPort}
+              />
+            </label>
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button onClick={() => setSettingsOpen(false)} size="sm" variant="ghost">
+            关闭
+          </Button>
+          <Button
+            onClick={() => {
+              setSettingsOpen(false);
+              void connect();
+            }}
+            size="sm"
+          >
+            {state === "connecting" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            重连
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
   );
 }

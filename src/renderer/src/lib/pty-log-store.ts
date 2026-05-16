@@ -37,7 +37,6 @@ class PtyLogStore {
   private readonly lines = new Map<string, PtyLogLine[]>();
   private readonly partials = new Map<string, string>();
   private readonly sessions = new Map<string, PtySessionSnapshot>();
-  private bridge: DesktopBridge | null = null;
   private version = 0;
   private nextId = 1;
   private connecting = false;
@@ -93,7 +92,6 @@ class PtyLogStore {
       return;
     }
 
-    this.bridge = bridge;
     this.connected = true;
     this.appendSystemLine("desktop", "Electron preload bridge connected");
 

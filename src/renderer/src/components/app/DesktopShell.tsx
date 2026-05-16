@@ -473,7 +473,7 @@ export function DesktopShell(): React.JSX.Element {
                 </TabsTrigger>
                 <TabsTrigger value="localchat" className="gap-1.5">
                   <MessageSquare />
-                  聊天室
+                  随便聊聊
                   <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
                 {showTerminalTab ? (

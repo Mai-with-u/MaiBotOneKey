@@ -17,11 +17,8 @@ const PLATFORM = "onekey-local-chat";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8000;
 const DEFAULT_USER_ID = "onekey-local-user";
+const MESSAGE_HISTORY_LIMIT = 120;
 const DEFAULT_USER_NAME = "本地用户";
-
-type LocalChatAdapterEventMap = {
-  event: [LocalChatEvent];
-};
 
 interface MaimMessageConfig {
   host: string;
@@ -231,6 +228,7 @@ export class LocalChatAdapter extends EventEmitter {
   private state: LocalChatConnectionState = "idle";
   private currentUrl = "";
   private connectingPromise: Promise<void> | null = null;
+  private messages: LocalChatMessageEvent[] = [];
 
   constructor(private readonly paths: RuntimePaths) {
     super();
@@ -238,6 +236,10 @@ export class LocalChatAdapter extends EventEmitter {
 
   getState(): LocalChatConnectionState {
     return this.state;
+  }
+
+  listMessages(): LocalChatMessageEvent[] {
+    return [...this.messages];
   }
 
   async connect(request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> {
@@ -267,7 +269,10 @@ export class LocalChatAdapter extends EventEmitter {
     this.socket = null;
     if (socket) {
       socket.removeAllListeners();
-      socket.close();
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      socket.terminate();
     }
     this.setState("idle");
   }
@@ -294,7 +299,7 @@ export class LocalChatAdapter extends EventEmitter {
       images,
     };
     socket.send(JSON.stringify(this.buildMessagePayload(message)));
-    this.emitEvent(message);
+    this.emitMessage(message);
     return message;
   }
 
@@ -425,7 +430,7 @@ export class LocalChatAdapter extends EventEmitter {
     const record = asRecord(payload);
     const info = asRecord(record?.message_info) ?? asRecord(asRecord(record?.message)?.message_info);
     const userInfo = asRecord(info?.user_info) ?? asRecord(record?.sender);
-    this.emitEvent({
+    this.emitMessage({
       id: asString(info?.message_id) ?? `remote-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       role: "bot",
       content,
@@ -433,6 +438,13 @@ export class LocalChatAdapter extends EventEmitter {
       sender: asString(userInfo?.user_nickname) ?? asString(userInfo?.name) ?? "MaiBot",
       images,
     });
+  }
+
+  private emitMessage(message: LocalChatMessageEvent): void {
+    if (!this.messages.some((item) => item.id === message.id)) {
+      this.messages = [...this.messages, message].slice(-MESSAGE_HISTORY_LIMIT);
+    }
+    this.emitEvent(message);
   }
 
   private setState(state: LocalChatConnectionState): void {
