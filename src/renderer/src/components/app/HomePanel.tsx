@@ -15,11 +15,13 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import emojiDropImage from "../../../../../emoji2.png";
+import maiDropImage from "../../../../../mai.png";
+import mai2DropImage from "../../../../../mai2.png";
 import maiMascotImage from "@/assets/mai2.png";
 import type {
   DesktopSnapshot,
   ServiceDescriptor,
-  ServiceHealth,
   ServiceStatus,
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
@@ -43,14 +45,6 @@ const statusText: Record<ServiceStatus, string> = {
   running: "运行中",
   stopping: "停止中",
   error: "异常",
-};
-
-const healthText: Record<ServiceHealth, string> = {
-  unknown: "未检测",
-  checking: "检测中",
-  ready: "可访问",
-  unreachable: "不可访问",
-  conflict: "端口冲突",
 };
 
 const statusVariant: Record<ServiceStatus, React.ComponentProps<typeof Badge>["variant"]> = {
@@ -143,7 +137,7 @@ function ServiceSummary({
   };
 }): React.JSX.Element {
   return (
-    <div className="grid min-h-32 gap-3 rounded-lg border border-border bg-card p-3.5">
+    <div className="grid min-h-24 gap-3 rounded-lg border border-border bg-card p-3.5">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -161,20 +155,6 @@ function ServiceSummary({
             {statusText[service.status]}
           </Badge>
         ) : null}
-      </div>
-      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
-        <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
-          <p className="text-[10px] text-muted-foreground">端口</p>
-          <p className="mt-0.5 font-mono text-xs">{service?.port ?? "-"}</p>
-        </div>
-        <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
-          <p className="text-[10px] text-muted-foreground">健康</p>
-          <p className="mt-0.5 text-xs">{service ? healthText[service.health] : "未知"}</p>
-        </div>
-        <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
-          <p className="text-[10px] text-muted-foreground">PID</p>
-          <p className="mt-0.5 font-mono text-xs">{service?.pid ?? "-"}</p>
-        </div>
       </div>
       {action ? (
         <Button className="h-7 justify-self-end px-2.5 text-[11px]" onClick={action.onClick} size="sm" variant="secondary">
@@ -277,9 +257,126 @@ function ShortcutTile({
   );
 }
 
+interface DroppedMascot {
+  id: number;
+  src: string;
+  collider: ImageAlphaBounds;
+  targetRect?: CollisionRect;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  rotate: number;
+  vr: number;
+  lastCollisionAt: number;
+  bornAt: number;
+}
+
+interface ImageAlphaBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+interface CollisionRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const DROP_MAX_ROTATION_SPEED = 4.2;
+const DROP_COLLISION_COOLDOWN_MS = 90;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampDropRotation(drop: DroppedMascot): void {
+  drop.vr = clamp(drop.vr, -DROP_MAX_ROTATION_SPEED, DROP_MAX_ROTATION_SPEED);
+}
+
+function randomDropImage(): string {
+  const roll = Math.random() * 100;
+  if (roll < 49) return maiDropImage;
+  if (roll < 98) return mai2DropImage;
+  return emojiDropImage;
+}
+
+function randomCollisionTarget(): CollisionRect | undefined {
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>(".rounded-lg.border"))
+    .filter((element) => !element.closest("[data-drop-layer='true']"))
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.width > 36 && rect.height > 28 && rect.top < window.innerHeight && rect.bottom > 0);
+  const rect = candidates[Math.floor(Math.random() * candidates.length)];
+  return rect
+    ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+    : undefined;
+}
+
+function droppedCollisionRect(drop: DroppedMascot): CollisionRect {
+  return {
+    left: drop.x + drop.collider.left * drop.size,
+    top: drop.y + drop.collider.top * drop.size,
+    right: drop.x + drop.collider.right * drop.size,
+    bottom: drop.y + drop.collider.bottom * drop.size,
+  };
+}
+
+function alphaBoundsForImage(src: string): Promise<ImageAlphaBounds> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context || canvas.width === 0 || canvas.height === 0) {
+        resolve({ left: 0.12, top: 0.12, right: 0.88, bottom: 0.88 });
+        return;
+      }
+
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let left = canvas.width;
+      let top = canvas.height;
+      let right = 0;
+      let bottom = 0;
+      for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          if (pixels[(y * canvas.width + x) * 4 + 3] <= 18) continue;
+          left = Math.min(left, x);
+          top = Math.min(top, y);
+          right = Math.max(right, x + 1);
+          bottom = Math.max(bottom, y + 1);
+        }
+      }
+
+      if (left >= right || top >= bottom) {
+        resolve({ left: 0.12, top: 0.12, right: 0.88, bottom: 0.88 });
+        return;
+      }
+
+      resolve({
+        left: left / canvas.width,
+        top: top / canvas.height,
+        right: right / canvas.width,
+        bottom: bottom / canvas.height,
+      });
+    };
+    image.onerror = () => resolve({ left: 0.12, top: 0.12, right: 0.88, bottom: 0.88 });
+    image.src = src;
+  });
+}
+
 function ElasticMascot(): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
+  const dropIdRef = useRef(0);
+  const dropsRef = useRef<DroppedMascot[]>([]);
+  const alphaBoundsRef = useRef<Record<string, ImageAlphaBounds>>({});
   const bodyRef = useRef({
     x: 0,
     y: 0,
@@ -300,6 +397,7 @@ function ElasticMascot(): React.JSX.Element {
     stretch: 0,
     squash: 0,
   });
+  const [drops, setDrops] = useState<DroppedMascot[]>([]);
 
   const kick = useCallback((x: number, y: number, force = 1) => {
     const body = bodyRef.current;
@@ -310,8 +408,47 @@ function ElasticMascot(): React.JSX.Element {
     body.vq += y * 0.018 * force;
   }, []);
 
+  const spawnDrop = useCallback((clientX?: number) => {
+    const src = randomDropImage();
+    const size = 58 + Math.random() * 34;
+    const viewportWidth = window.innerWidth || 1024;
+    const x = Math.max(8, Math.min(viewportWidth - size - 8, (clientX ?? Math.random() * viewportWidth) - size / 2 + (Math.random() - 0.5) * 90));
+    const diagonalDirection = Math.random() < 0.5 ? -1 : 1;
+    const nextDrop: DroppedMascot = {
+      id: dropIdRef.current++,
+      src,
+      collider: alphaBoundsRef.current[src] ?? { left: 0.12, top: 0.12, right: 0.88, bottom: 0.88 },
+      targetRect: randomCollisionTarget(),
+      x,
+      y: -size - 12,
+      vx: diagonalDirection * (1.5 + Math.random() * 2.2),
+      vy: 1 + Math.random() * 2,
+      size,
+      rotate: (Math.random() - 0.5) * 32,
+      vr: (Math.random() - 0.5) * 3.6,
+      lastCollisionAt: 0,
+      bornAt: performance.now(),
+    };
+    dropsRef.current = [...dropsRef.current, nextDrop];
+    setDrops(dropsRef.current);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([maiDropImage, mai2DropImage, emojiDropImage].map(async (src) => [src, await alphaBoundsForImage(src)] as const))
+      .then((entries) => {
+        if (!cancelled) {
+          alphaBoundsRef.current = Object.fromEntries(entries);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const tick = () => {
+      const now = performance.now();
       const body = bodyRef.current;
       body.vx += -body.x * 0.09;
       body.vy += -body.y * 0.09;
@@ -338,6 +475,114 @@ function ElasticMascot(): React.JSX.Element {
         stretch: body.stretch,
         squash: body.squash,
       });
+
+      const currentDrops = dropsRef.current;
+      if (currentDrops.length > 0) {
+        const width = window.innerWidth || 1024;
+        const height = window.innerHeight || 768;
+        const nextDrops = currentDrops
+          .map((drop) => ({ ...drop }))
+          .filter((drop) => now - drop.bornAt < 10_000 && drop.y < height + drop.size * 2 && drop.x > -drop.size * 2 && drop.x < width + drop.size * 2);
+
+        for (const drop of nextDrops) {
+          drop.vy += 0.42;
+          drop.vx *= 0.992;
+          drop.vy *= 0.995;
+          drop.vr *= 0.965;
+          clampDropRotation(drop);
+          drop.x += drop.vx;
+          drop.y += drop.vy;
+          drop.rotate += drop.vr;
+
+          if (drop.x < 0) {
+            drop.x = 0;
+            drop.vx = Math.abs(drop.vx) * 0.72;
+            drop.vr += drop.vx * 0.12;
+            clampDropRotation(drop);
+          } else if (drop.x + drop.size > width) {
+            drop.x = width - drop.size;
+            drop.vx = -Math.abs(drop.vx) * 0.72;
+            drop.vr += drop.vx * 0.12;
+            clampDropRotation(drop);
+          }
+
+          const rect = drop.targetRect;
+          if (rect) {
+            if (now - drop.lastCollisionAt < DROP_COLLISION_COOLDOWN_MS) continue;
+            const collision = droppedCollisionRect(drop);
+            const overlaps =
+              collision.left < rect.right
+              && collision.right > rect.left
+              && collision.top < rect.bottom
+              && collision.bottom > rect.top;
+            if (!overlaps) continue;
+
+            const fromTop = Math.abs(collision.bottom - rect.top);
+            const fromBottom = Math.abs(rect.bottom - collision.top);
+            const fromLeft = Math.abs(collision.right - rect.left);
+            const fromRight = Math.abs(rect.right - collision.left);
+            const min = Math.min(fromTop, fromBottom, fromLeft, fromRight);
+            if (min === fromTop && drop.vy > 0) {
+              drop.y = rect.top - drop.collider.bottom * drop.size;
+              drop.vy = -Math.abs(drop.vy) * (0.42 + Math.random() * 0.18);
+              drop.vx += (Math.random() - 0.5) * 3;
+            } else if (min === fromBottom && drop.vy < 0) {
+              drop.y = rect.bottom - drop.collider.top * drop.size;
+              drop.vy = Math.abs(drop.vy) * 0.35;
+            } else if (min === fromLeft) {
+              drop.x = rect.left - drop.collider.right * drop.size;
+              drop.vx = -Math.abs(drop.vx) * 0.62;
+            } else {
+              drop.x = rect.right - drop.collider.left * drop.size;
+              drop.vx = Math.abs(drop.vx) * 0.62;
+            }
+            drop.vr = drop.vr * 0.68 + drop.vx * 0.08;
+            drop.lastCollisionAt = now;
+            clampDropRotation(drop);
+          }
+        }
+
+        for (let index = 0; index < nextDrops.length; index++) {
+          for (let otherIndex = index + 1; otherIndex < nextDrops.length; otherIndex++) {
+            const left = nextDrops[index];
+            const right = nextDrops[otherIndex];
+            const leftRect = droppedCollisionRect(left);
+            const rightRect = droppedCollisionRect(right);
+            if (
+              leftRect.left < rightRect.right
+              && leftRect.right > rightRect.left
+              && leftRect.top < rightRect.bottom
+              && leftRect.bottom > rightRect.top
+            ) {
+              const leftCenterX = (leftRect.left + leftRect.right) / 2;
+              const leftCenterY = (leftRect.top + leftRect.bottom) / 2;
+              const rightCenterX = (rightRect.left + rightRect.right) / 2;
+              const rightCenterY = (rightRect.top + rightRect.bottom) / 2;
+              const dx = leftCenterX - rightCenterX || 1;
+              const dy = leftCenterY - rightCenterY || 1;
+              const distance = Math.max(1, Math.hypot(dx, dy));
+              const push = 0.8;
+              left.vx += (dx / distance) * push;
+              left.vy += (dy / distance) * push;
+              right.vx -= (dx / distance) * push;
+              right.vy -= (dy / distance) * push;
+              if (now - left.lastCollisionAt >= DROP_COLLISION_COOLDOWN_MS) {
+                left.vr = left.vr * 0.72 + left.vx * 0.06;
+                left.lastCollisionAt = now;
+                clampDropRotation(left);
+              }
+              if (now - right.lastCollisionAt >= DROP_COLLISION_COOLDOWN_MS) {
+                right.vr = right.vr * 0.72 + right.vx * 0.06;
+                right.lastCollisionAt = now;
+                clampDropRotation(right);
+              }
+            }
+          }
+        }
+
+        dropsRef.current = nextDrops;
+        setDrops(nextDrops);
+      }
       frameRef.current = window.requestAnimationFrame(tick);
     };
 
@@ -379,6 +624,11 @@ function ElasticMascot(): React.JSX.Element {
     kick(4, 2, 0.8);
   }, [kick]);
 
+  const onClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    spawnDrop(event.clientX);
+    kick((Math.random() - 0.5) * 8, -7, 1.1);
+  }, [kick, spawnDrop]);
+
   const stretch = Math.max(-0.1, Math.min(0.16, pose.stretch));
   const squash = Math.max(-0.12, Math.min(0.12, pose.squash));
   const rotate = Math.max(-9, Math.min(9, pose.rotate));
@@ -389,6 +639,7 @@ function ElasticMascot(): React.JSX.Element {
     <div
       aria-hidden="true"
       className="relative hidden min-h-32 overflow-hidden rounded-lg border border-transparent md:block"
+      onClick={onClick}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
       onPointerMove={onPointerMove}
@@ -405,6 +656,26 @@ function ElasticMascot(): React.JSX.Element {
           transition: "filter 160ms ease",
         }}
       />
+      {drops.length > 0 ? (
+        <div className="pointer-events-none fixed inset-0 z-50 overflow-visible" data-drop-layer="true">
+          {drops.map((drop) => (
+            <img
+              alt=""
+              className="absolute select-none drop-shadow-lg"
+              draggable={false}
+              key={drop.id}
+              src={drop.src}
+              style={{
+                height: drop.size,
+                left: 0,
+                top: 0,
+                transform: `translate3d(${drop.x}px, ${drop.y}px, 0) rotate(${drop.rotate}deg)`,
+                width: drop.size,
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -462,12 +733,6 @@ export function HomePanel({
     );
     setUpdateDialog("maibot");
   }, [snapshot.moduleVersions.maibotLatestPrereleaseTag, snapshot.moduleVersions.maibotLatestStableTag]);
-
-  const openDashboardUpdate = useCallback(() => {
-    setError(null);
-    setDashboardChannel((snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi) ? "stable" : "test");
-    setUpdateDialog("dashboard");
-  }, [snapshot.moduleVersions.dashboardLatestPypi, snapshot.moduleVersions.dashboardLatestStablePypi]);
 
   const openPluginStore = useCallback(() => {
     onOpenTab("pluginmarket");
@@ -724,16 +989,16 @@ export function HomePanel({
       <Dialog open={napcatWebuiOpen} onOpenChange={setNapcatWebuiOpen}>
         <DialogContent className="h-[calc(100vh-4rem)] sm:max-w-[1180px]" size="xl">
           <DialogHeader
-            description="从首页打开，关闭后不会影响 NapCat 服务运行。"
+            description={`从首页打开，关闭后不会影响 ${napcat?.name ?? "QQ 后端"} 服务运行。`}
             icon={<Server className="size-4" />}
-            title="NapCat WebUI"
+            title={`${napcat?.name ?? "QQ 后端"} WebUI`}
             tone="primary"
           />
           <DialogBody className="overflow-hidden p-0">
             <WebviewPanel
               active={napcatWebuiOpen}
-              emptyText="NapCat 启动后会在这里打开它自己的 WebUI。"
-              title="NapCat WebUI"
+              emptyText={`${napcat?.name ?? "QQ 后端"} 启动后会在这里打开它自己的 WebUI。`}
+              title={`${napcat?.name ?? "QQ 后端"} WebUI`}
               url={napcat?.url ?? "http://127.0.0.1:6099/webui"}
             />
           </DialogBody>

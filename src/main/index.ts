@@ -27,6 +27,7 @@ const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, p
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let appIpcDisposables: ReturnType<typeof registerAppIpc> | null = null;
 let allowQuit = false;
 let quitRequested = false;
 
@@ -204,7 +205,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
     mainWindow = createMainWindow();
     tray = createTray();
 
-    registerAppIpc({
+    appIpcDisposables = registerAppIpc({
       paths: runtimePaths,
       initManager,
       moduleUpdater,
@@ -243,6 +244,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
 
     allowQuit = true;
     tray?.destroy();
+    appIpcDisposables?.dispose();
     serviceManager.dispose();
     ptySessionManager.dispose();
   });

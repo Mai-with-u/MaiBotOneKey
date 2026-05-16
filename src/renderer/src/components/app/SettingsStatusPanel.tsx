@@ -34,6 +34,7 @@ import type {
   PythonPackageInstallResult,
   PythonPackageVersionList,
   PythonRuntimeCandidate,
+  QqBackend,
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
@@ -60,7 +61,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createSecureToken } from "@/lib/secure-token";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useShortcut } from "@/lib/use-shortcut";
 
@@ -672,7 +672,7 @@ export function SettingsStatusPanel({
   snapshot,
   onSnapshot,
 }: SettingsStatusPanelProps): React.JSX.Element {
-  const [qqAccount, setQqAccount] = useState(snapshot.initState.qqAccount ?? "");
+  const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmUpdateOpen, setConfirmUpdateOpen] = useState(false);
@@ -714,9 +714,15 @@ export function SettingsStatusPanel({
       service.status === "running" ||
       service.status === "stopping",
   );
+  const qqBackendSwitchBlocked = services.some(
+    (service) =>
+      service.status === "starting" ||
+      service.status === "running" ||
+      service.status === "stopping",
+  );
   useEffect(() => {
-    setQqAccount(initState.qqAccount ?? "");
-  }, [initState.qqAccount]);
+    setQqBackend(initState.qqBackend ?? "napcat");
+  }, [initState.qqBackend]);
 
   useEffect(() => {
     let mounted = true;
@@ -827,25 +833,26 @@ export function SettingsStatusPanel({
     }
   }, [refreshSnapshot]);
 
-  const saveQqAccount = useCallback(async () => {
-    const trimmed = qqAccount.trim();
-    if (trimmed.length === 0) {
+  const saveQqBackend = useCallback(async () => {
+    if (qqBackend !== initState.qqBackend && qqBackendSwitchBlocked) {
+      setError("MaiBot Core 或 QQ 后端正在运行时不能切换 NapCat / SnowLuma，请先停止全部服务。");
       return;
     }
     setBusy("qq");
     setError(null);
     try {
-      await window.maibotDesktop?.init.setQqAccount({
-        qqAccount: trimmed,
-        websocketToken: createSecureToken(),
-      });
+      if (qqBackend !== initState.qqBackend) {
+        await window.maibotDesktop?.init.setQqBackend(qqBackend);
+      } else {
+        return;
+      }
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [qqAccount, refreshSnapshot]);
+  }, [initState.qqBackend, qqBackend, qqBackendSwitchBlocked, refreshSnapshot]);
 
   const clearLogs = useCallback(async () => {
     setBusy("logs");
@@ -1127,8 +1134,11 @@ export function SettingsStatusPanel({
     }
   }, [refreshSnapshot]);
 
-  const canSaveQq = busy === null && qqAccount.trim().length > 0;
-  useShortcut("Mod+Enter", saveQqAccount, { enabled: canSaveQq, allowInEditable: true });
+  const canSaveQqBackend =
+    busy === null &&
+    qqBackend !== initState.qqBackend &&
+    (qqBackend === initState.qqBackend || !qqBackendSwitchBlocked);
+  useShortcut("Mod+Enter", saveQqBackend, { enabled: canSaveQqBackend, allowInEditable: true });
   useShortcut("Mod+Shift+R", repair, { enabled: busy === null });
 
   return (
@@ -1175,7 +1185,7 @@ export function SettingsStatusPanel({
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="account">
                   <UserRound className="size-3" />
-                  账号配置
+                  协议端选择
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="services">
                   <Network className="size-3" />
@@ -1245,19 +1255,42 @@ export function SettingsStatusPanel({
 
               <TabsContent className="space-y-4" value="account">
                 <p className="text-xs text-muted-foreground">
-                  机器人 QQ 号配置将用于 NapCat 登录与联动，请确保填写的是目标机器人账号。
+                  选择当前使用的 QQ 后端。MaiBot Core 或 QQ 后端运行中不能切换。
                 </p>
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                  <Input
-                    inputMode="numeric"
-                    monospace
-                    onChange={(event) => setQqAccount(event.target.value)}
-                    placeholder="机器人 QQ 号"
-                    value={qqAccount}
-                  />
-                  <Button disabled={!canSaveQq} onClick={saveQqAccount}>
+                <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2">
+                  {([
+                    { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接，WebUI 端口 6099。" },
+                    { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程，WebUI 端口 5099，OneBot 端口 7988。" },
+                  ] as const).map((option) => (
+                    <button
+                      className={[
+                        "rounded-md border p-3 text-left transition-colors",
+                        qqBackendSwitchBlocked && qqBackend !== option.value
+                          ? "cursor-not-allowed opacity-55"
+                          : "",
+                        qqBackend === option.value
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                      ].join(" ")}
+                      disabled={qqBackendSwitchBlocked && qqBackend !== option.value}
+                      key={option.value}
+                      onClick={() => setQqBackend(option.value)}
+                      type="button"
+                    >
+                      <span className="text-sm font-semibold">{option.label}</span>
+                      <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                    </button>
+                  ))}
+                </div>
+                {qqBackendSwitchBlocked ? (
+                  <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+                    MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
+                  </div>
+                ) : null}
+                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
+                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
                     {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
-                    保存 QQ
+                    保存后端
                     <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
                   </Button>
                 </div>

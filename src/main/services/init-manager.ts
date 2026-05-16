@@ -1,7 +1,7 @@
 ﻿import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
@@ -17,6 +17,7 @@ import type {
   NapcatAdapterChatConfig,
   NapcatAdapterConfig,
   NapcatChatListMode,
+  QqBackend,
   RuntimePaths,
   PythonRuntimeCandidate,
   ServiceId,
@@ -33,6 +34,7 @@ const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
+const QQ_BACKEND_FILE = "qq-backend.json";
 
 function uniqueExistingPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -242,8 +244,14 @@ const NAPCAT_LAUNCHER_CONTENT = [
 
 const NAPCAT_ADAPTER_DIR = join("plugins", "napcat-adapter");
 const NAPCAT_ADAPTER_CONFIG_VERSION = "0.1.0";
+const NAPCAT_ADAPTER_PLUGIN_ID = "maibot-team.napcat-adapter";
+const SNOWLUMA_ADAPTER_DIR = join("plugins", "snowluma-adapter");
+const SNOWLUMA_ADAPTER_CONFIG_VERSION = "1.0.0";
+const SNOWLUMA_ADAPTER_PLUGIN_ID = "maibot-team.snowluma-adapter";
 const NAPCAT_ADAPTER_HOST = "127.0.0.1";
 const NAPCAT_ADAPTER_PORT = 7998;
+const SNOWLUMA_ONEBOT_PORT = 7988;
+const SNOWLUMA_WEBUI_PORT = 5099;
 const LOCAL_CHAT_PLATFORM = "onekey-local-chat";
 
 interface NapcatWebsocketServerConfig {
@@ -337,7 +345,8 @@ function normalizeNapcatAdapterConfig(
   defaults: NapcatAdapterConfig,
 ): NapcatAdapterConfig {
   const pluginRaw = (raw["plugin"] as Record<string, unknown> | undefined) ?? {};
-  const serverRaw = ((raw["napcat_server"] ?? raw["connection"]) as Record<string, unknown> | undefined) ?? {};
+  const serverRaw =
+    ((raw["napcat_server"] ?? raw["luma_client"] ?? raw["connection"]) as Record<string, unknown> | undefined) ?? {};
   const chatRaw = (raw["chat"] as Record<string, unknown> | undefined) ?? {};
   const filtersRaw = (raw["filters"] as Record<string, unknown> | undefined) ?? {};
 
@@ -418,6 +427,37 @@ function napcatAdapterConfigToToml(config: NapcatAdapterConfig): string {
   return stringifyToml(document);
 }
 
+function snowlumaAdapterConfigToToml(config: NapcatAdapterConfig): string {
+  const document = {
+    plugin: {
+      enabled: config.plugin.enabled,
+      config_version: config.plugin.configVersion,
+    },
+    luma_client: {
+      server: config.server.host,
+      port: config.server.port,
+      token: config.server.token,
+      connection_id: config.server.connectionId,
+      reconnect_delay_sec: config.server.reconnectDelaySec,
+      action_timeout_sec: config.server.actionTimeoutSec,
+    },
+    chat: {
+      enable_chat_list_filter: config.chat.enableChatListFilter,
+      show_dropped_chat_list_messages: config.chat.showDroppedChatListMessages,
+      group_list_type: config.chat.groupListType,
+      group_list: config.chat.groupList,
+      private_list_type: config.chat.privateListType,
+      private_list: config.chat.privateList,
+      ban_user_id: config.chat.banUserId,
+      ban_qq_bot: config.chat.banQqBot,
+    },
+    filters: {
+      ignore_self_message: config.filters.ignoreSelfMessage,
+    },
+  } as const;
+  return stringifyToml(document);
+}
+
 function applyChatOverrides(
   base: NapcatAdapterChatConfig,
   override?: Partial<NapcatAdapterChatConfig>,
@@ -428,10 +468,10 @@ function applyChatOverrides(
     showDroppedChatListMessages:
       override.showDroppedChatListMessages ?? base.showDroppedChatListMessages,
     groupListType: override.groupListType ?? base.groupListType,
-    groupList: override.groupList ? asStringList(override.groupList) : base.groupList,
+    groupList: override.groupList !== undefined ? asStringList(override.groupList) : base.groupList,
     privateListType: override.privateListType ?? base.privateListType,
-    privateList: override.privateList ? asStringList(override.privateList) : base.privateList,
-    banUserId: override.banUserId ? asStringList(override.banUserId) : base.banUserId,
+    privateList: override.privateList !== undefined ? asStringList(override.privateList) : base.privateList,
+    banUserId: override.banUserId !== undefined ? asStringList(override.banUserId) : base.banUserId,
     banQqBot: override.banQqBot ?? base.banQqBot,
   };
 }
@@ -450,34 +490,54 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function ensureBotPlatformAccount(content: string, platform: string, account: string): string {
-  const entry = `${platform}:${account}`;
-  const botSectionMatch = content.match(/(^|\n)(\s*\[bot\]\s*)(?:\n|$)/u);
+function ensureBotQqConfig(content: string, account: string): string {
+  const botSectionMatch = content.match(/(^|\r?\n)(\s*\[bot\]\s*(?:#.*)?)(?:\r?\n|$)/u);
   if (!botSectionMatch) {
-    return `${content.trimEnd()}\n\n[bot]\nplatforms = [\n    "${entry}",\n]\n`;
+    return `${content.trimEnd()}\n\n[bot]\nplatform = "qq"\nqq_account = ${account}\nplatforms = [\n    "${LOCAL_CHAT_PLATFORM}:${account}",\n]\n`;
   }
 
   const botSectionStart = (botSectionMatch.index ?? 0) + botSectionMatch[0].length;
-  const nextSectionOffset = content.slice(botSectionStart).search(/\n\s*\[[^\]]+\]\s*(?:\n|$)/u);
+  const nextSectionOffset = content
+    .slice(botSectionStart)
+    .search(/\r?\n\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?(?:\r?\n|$)/u);
   const botSectionEnd =
     nextSectionOffset === -1 ? content.length : botSectionStart + nextSectionOffset;
   const beforeBotSection = content.slice(0, botSectionStart);
   const botSection = content.slice(botSectionStart, botSectionEnd);
   const afterBotSection = content.slice(botSectionEnd);
-  const platformsMatch = botSection.match(/(^|\n)(\s*platforms\s*=\s*\[)([\s\S]*?)(\n\s*\])/u);
+  let nextBotSection = botSection;
 
-  if (!platformsMatch) {
-    return `${beforeBotSection}${botSection.trimEnd()}\nplatforms = [\n    "${entry}",\n]\n${afterBotSection}`;
+  if (/^\s*platform\s*=/mu.test(nextBotSection)) {
+    nextBotSection = nextBotSection.replace(/^\s*platform\s*=\s*["'][^"']*["'](\s*#.*)?$/mu, 'platform = "qq"$1');
+  } else {
+    nextBotSection = `platform = "qq"\n${nextBotSection}`;
   }
 
-  const listBody = platformsMatch[3] ?? "";
-  const platformPattern = new RegExp(`(["'])${escapeRegExp(platform)}:[^"']*\\1`, "u");
-  const nextListBody = platformPattern.test(listBody)
-    ? listBody.replace(platformPattern, `"${entry}"`)
-    : `${listBody.trimEnd()}\n    "${entry}",`;
-  const nextBotSection = `${botSection.slice(0, platformsMatch.index)}${platformsMatch[1] ?? ""}${
-    platformsMatch[2]
-  }${nextListBody}${platformsMatch[4]}${botSection.slice((platformsMatch.index ?? 0) + platformsMatch[0].length)}`;
+  if (/^\s*qq_account\s*=/mu.test(nextBotSection)) {
+    nextBotSection = nextBotSection.replace(/^\s*qq_account\s*=\s*["']?\d+["']?(\s*#.*)?$/mu, `qq_account = ${account}$1`);
+  } else {
+    nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${account}\n`;
+  }
+
+  const platformsEntry = `${LOCAL_CHAT_PLATFORM}:${account}`;
+  const platformsMatch = nextBotSection.match(/(^|\r?\n)(\s*platforms\s*=\s*)(\[[\s\S]*?\])(\s*(?:#.*)?)(?=\r?\n|$)/u);
+  const platformEntries = platformsMatch
+    ? Array.from(platformsMatch[3].matchAll(/["']([^"']+)["']/gu), (match) => match[1])
+    : [];
+  const nextPlatformEntries = [
+    ...platformEntries.filter((entry) => {
+      const [platformName] = entry.split(":", 1);
+      return platformName.trim().toLowerCase() !== LOCAL_CHAT_PLATFORM;
+    }),
+    platformsEntry,
+  ];
+  if (platformsMatch) {
+    const nextListBody = nextPlatformEntries.map((entry) => `    "${entry}",`).join("\n");
+    nextBotSection = `${nextBotSection.slice(0, platformsMatch.index)}${platformsMatch[1] ?? ""}${platformsMatch[2]}[\n${nextListBody}\n]${platformsMatch[4]}${nextBotSection.slice((platformsMatch.index ?? 0) + platformsMatch[0].length)}`;
+  } else {
+    nextBotSection = `${nextBotSection.trimEnd()}\nplatforms = [\n    "${platformsEntry}",\n]\n`;
+  }
+
   return `${beforeBotSection}${nextBotSection}${afterBotSection}`;
 }
 
@@ -486,7 +546,7 @@ function checkFile(path: string, label: string, id: string): InitCheck {
     return { id, label, status: "ok", detail: "已找到", path };
   }
 
-  return { id, label, status: "error", detail: "缂哄け", path };
+  return { id, label, status: "error", detail: "缺失", path };
 }
 
 function checkDir(path: string, label: string, id: string): InitCheck {
@@ -494,7 +554,7 @@ function checkDir(path: string, label: string, id: string): InitCheck {
     return { id, label, status: "ok", detail: "已找到", path };
   }
 
-  return { id, label, status: "error", detail: "缂哄け", path };
+  return { id, label, status: "error", detail: "缺失", path };
 }
 
 function runProcess(file: string, args: string[], cwd: string, timeoutMs = 8_000): Promise<string> {
@@ -586,6 +646,20 @@ function ensureInnerVersion(content: string, version: string): string {
   return `${content.slice(0, insertAt)}version = "${version}"\n${content.slice(insertAt)}`;
 }
 
+function maibotInitialConfigVersion(templateVersion: string): string {
+  const match = templateVersion.match(/^(.*?)(\d+)([^\d]*)$/u);
+  if (!match) {
+    return templateVersion;
+  }
+
+  const current = Number(match[2]);
+  if (!Number.isSafeInteger(current) || current <= 0) {
+    return templateVersion;
+  }
+
+  return `${match[1]}${current - 1}${match[3]}`;
+}
+
 async function runWithoutAsar<T>(operation: () => Promise<T>): Promise<T> {
   const electronProcess = process as NodeJS.Process & { noAsar?: boolean };
   const previousNoAsar = electronProcess.noAsar;
@@ -603,28 +677,62 @@ export class InitManager {
 
   constructor(private readonly paths: RuntimePaths) {}
 
+  getQqBackendSync(): QqBackend {
+    try {
+      const parsed = JSON.parse(readFileSync(this.qqBackendPath(), "utf8")) as { backend?: unknown };
+      return parsed.backend === "snowluma" ? "snowluma" : "napcat";
+    } catch {
+      return "napcat";
+    }
+  }
+
+  async readQqBackend(): Promise<QqBackend> {
+    return this.getQqBackendSync();
+  }
+
+  async setQqBackend(backend: QqBackend, options: { syncAdapters?: boolean } = {}): Promise<void> {
+    await mkdir(dirname(this.qqBackendPath()), { recursive: true });
+    await writeFile(
+      this.qqBackendPath(),
+      `${JSON.stringify({ version: 1, backend, updatedAt: Date.now() }, null, 2)}\n`,
+      "utf8",
+    );
+    if (options.syncAdapters !== false) {
+      await this.syncSelectedQqAdapterConfigs();
+    }
+  }
+
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
     const qqAccount = await this.readQqAccount();
+    const qqBackend = await this.readQqBackend();
     const dependencyChecks = options.refreshDependencies === false
       ? this.getCachedDependencyChecks()
       : await this.checkDependencies();
     const napCatWebUiCheck = await this.checkNapCatWebUi();
+    const qqModuleChecks = qqBackend === "snowluma"
+      ? [
+          checkDir(this.paths.snowlumaRoot, "SnowLuma 模块", "snowluma-module"),
+          checkFile(join(this.paths.snowlumaRoot, "index.mjs"), "SnowLuma 启动文件", "snowluma-entry"),
+        ]
+      : [
+          checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
+          checkFile(
+            join(this.paths.napcatRoot, "NapCatWinBootMain.exe"),
+            "NapCat 启动文件",
+            "napcat-entry",
+          ),
+          napCatWebUiCheck,
+        ];
     const checks: InitCheck[] = [
       this.checkRuntimeRoot(),
       this.checkPythonRuntime(),
       checkDir(this.paths.maibotRoot, "MaiBot 主模块", "maibot-module"),
       checkFile(join(this.paths.maibotRoot, "bot.py"), "MaiBot 启动文件", "maibot-entry"),
-      checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
-      checkFile(
-        join(this.paths.napcatRoot, "NapCatWinBootMain.exe"),
-        "NapCat 启动文件",
-        "napcat-entry",
-      ),
-      napCatWebUiCheck,
+      ...qqModuleChecks,
       ...dependencyChecks,
     ];
     const isReady = checks.every((check) => check.status !== "error");
-    return { isReady, qqAccount, checks };
+    return { isReady, qqAccount, qqBackend, checks };
   }
 
   async refreshDependencyChecks(): Promise<InitCheck[]> {
@@ -851,6 +959,7 @@ export class InitManager {
     qqAccount: string,
     websocketToken?: string,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
+    qqBackend: QqBackend = "napcat",
   ): Promise<InitState> {
     if (!isDigits(qqAccount)) {
       throw new Error("QQ 号必须是纯数字");
@@ -858,32 +967,45 @@ export class InitManager {
 
     const botConfigPath = this.botConfigPath();
     let content = await this.readOrCreateBotConfigContent();
-
-    if (QQ_PATTERN.test(content)) {
-      content = content.replace(QQ_PATTERN, `qq_account = ${qqAccount}`);
-    } else if (/\[bot\]/.test(content)) {
-      content = content.replace(/\[bot\]/, `[bot]\nqq_account = ${qqAccount}`);
-    } else {
-      content += `\n[bot]\nqq_account = ${qqAccount}\n`;
-    }
-    content = ensureBotPlatformAccount(content, LOCAL_CHAT_PLATFORM, qqAccount);
+    content = ensureBotQqConfig(content, qqAccount);
 
     await mkdir(dirname(botConfigPath), { recursive: true });
     await writeFile(botConfigPath, content, "utf8");
-    const existingWebsocketServer = await this.readNapcatWebsocketServer(qqAccount);
-    const resolvedWebsocketServer: NapcatWebsocketServerConfig = existingWebsocketServer ?? {
+    await this.setQqBackend(qqBackend, { syncAdapters: false });
+    const existingWebsocketServer = qqBackend === "snowluma"
+      ? await this.readSnowLumaWebsocketServer(qqAccount)
+      : await this.readNapcatWebsocketServer(qqAccount);
+    const resolvedWebsocketServer: NapcatWebsocketServerConfig = {
+      ...(existingWebsocketServer ?? {
+        host: NAPCAT_ADAPTER_HOST,
+        token: websocketToken || createWebsocketToken(),
+      }),
       host: NAPCAT_ADAPTER_HOST,
-      port: NAPCAT_ADAPTER_PORT,
-      token: websocketToken || createWebsocketToken(),
+      port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
+      token: existingWebsocketServer?.token || websocketToken || createWebsocketToken(),
     };
-    await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
-    await this.ensureNapCatWebUiConfig();
-    await this.writeNapcatAdapterConfigForServer(resolvedWebsocketServer, chatOverrides);
+    if (qqBackend === "snowluma") {
+      await this.createSnowLumaConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
+    } else {
+      await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
+      await this.ensureNapCatWebUiConfig();
+    }
+    await this.writeQqAdapterConfigsForBackend(qqBackend, resolvedWebsocketServer, qqAccount, chatOverrides);
     return this.getState();
   }
 
   napcatAdapterConfigPath(): string {
-    return join(this.paths.maibotRoot, NAPCAT_ADAPTER_DIR, "config.toml");
+    return join(
+      this.findMaiBotPluginDirByManifestId(NAPCAT_ADAPTER_PLUGIN_ID) ?? join(this.paths.maibotRoot, NAPCAT_ADAPTER_DIR),
+      "config.toml",
+    );
+  }
+
+  snowlumaAdapterConfigPath(): string {
+    return join(
+      this.findMaiBotPluginDirByManifestId(SNOWLUMA_ADAPTER_PLUGIN_ID) ?? join(this.paths.maibotRoot, SNOWLUMA_ADAPTER_DIR),
+      "config.toml",
+    );
   }
 
   /**
@@ -926,13 +1048,114 @@ export class InitManager {
     return (await this.readNapcatWebsocketServer(qqAccount))?.token ?? "";
   }
 
+  async readSnowLumaWebsocketServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig | undefined> {
+    if (!qqAccount) {
+      return undefined;
+    }
+
+    try {
+      const raw = await readFile(join(this.paths.snowlumaRoot, "config", `onebot_${qqAccount}.json`), "utf8");
+      const parsed = JSON.parse(raw) as {
+        networks?: {
+          wsServers?: Array<{ host?: string; port?: number; accessToken?: string }>;
+        };
+      };
+      const server =
+        parsed.networks?.wsServers?.find((entry) => entry?.port === SNOWLUMA_ONEBOT_PORT && entry?.accessToken) ??
+        parsed.networks?.wsServers?.find((entry) => entry?.accessToken) ??
+        parsed.networks?.wsServers?.[0];
+      if (!server?.port) {
+        return undefined;
+      }
+      return {
+        host: server.host ? String(server.host) : NAPCAT_ADAPTER_HOST,
+        port: Number.isFinite(server.port) ? Math.floor(server.port) : SNOWLUMA_ONEBOT_PORT,
+        token: server.accessToken ? String(server.accessToken) : "",
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * 鍒涘缓/鏇存柊 napcat-adapter 鐨?config.toml锛?   * token 鐩存帴鏉ヨ嚜褰撳墠 setQqAccount 娴佺▼鐢熸垚鐨?websocket token锛?
    * chat 璁剧疆鍒欏彇鐢ㄦ埛鍦ㄥ紩瀵肩晫闈㈠～鍐欑殑瑕嗙洊鍊硷紙缂虹渷鍗抽粯璁わ級銆?
    */
+  private async writeQqAdapterConfigsForBackend(
+    qqBackend: QqBackend,
+    selectedWebsocketServer: NapcatWebsocketServerConfig,
+    qqAccount?: string,
+    chatOverrides?: Partial<NapcatAdapterChatConfig>,
+  ): Promise<void> {
+    const napcatServer = qqBackend === "napcat"
+      ? selectedWebsocketServer
+      : await this.resolveNapcatAdapterServer(qqAccount);
+    const snowlumaServer = qqBackend === "snowluma"
+      ? selectedWebsocketServer
+      : await this.resolveSnowLumaAdapterServer(qqAccount);
+
+    if (qqBackend === "snowluma") {
+      await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false);
+      await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true);
+      return;
+    }
+
+    await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, true);
+    await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false);
+  }
+
+  private async resolveNapcatAdapterServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig> {
+    const existing = await this.readNapcatWebsocketServer(qqAccount);
+    return {
+      host: NAPCAT_ADAPTER_HOST,
+      port: NAPCAT_ADAPTER_PORT,
+      token: existing?.token || createWebsocketToken(),
+    };
+  }
+
+  private async resolveSnowLumaAdapterServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig> {
+    const existing = await this.readSnowLumaWebsocketServer(qqAccount);
+    return {
+      host: NAPCAT_ADAPTER_HOST,
+      port: SNOWLUMA_ONEBOT_PORT,
+      token: existing?.token || createWebsocketToken(),
+    };
+  }
+
+  private async syncSelectedQqAdapterConfigs(): Promise<string[]> {
+    const qqAccount = await this.readQqAccount();
+    if (!qqAccount) {
+      return [];
+    }
+
+    const qqBackend = await this.readQqBackend();
+    let websocketServer = qqBackend === "snowluma"
+      ? await this.readSnowLumaWebsocketServer(qqAccount)
+      : await this.readNapcatWebsocketServer(qqAccount);
+
+    websocketServer = {
+      host: NAPCAT_ADAPTER_HOST,
+      port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
+      token: websocketServer?.token || createWebsocketToken(),
+    };
+    if (qqBackend === "snowluma") {
+      await this.createSnowLumaConfigs(qqAccount, websocketServer.token, websocketServer.port);
+    } else {
+      await this.createNapCatConfigs(qqAccount, websocketServer.token, websocketServer.port);
+      await this.ensureNapCatWebUiConfig();
+    }
+
+    await this.writeQqAdapterConfigsForBackend(qqBackend, websocketServer, qqAccount);
+    return [
+      this.napcatAdapterConfigPath(),
+      this.snowlumaAdapterConfigPath(),
+    ].filter((path) => existsSync(path));
+  }
+
   private async writeNapcatAdapterConfigForServer(
     websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
+    enabled = true,
   ): Promise<void> {
     const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
     let existing: NapcatAdapterConfig = defaults;
@@ -958,7 +1181,7 @@ export class InitManager {
     const merged: NapcatAdapterConfig = {
       ...existing,
       plugin: {
-        enabled: true,
+        enabled,
         configVersion: NAPCAT_ADAPTER_CONFIG_VERSION,
       },
       server: {
@@ -971,6 +1194,53 @@ export class InitManager {
     };
 
     await writeFile(configPath, napcatAdapterConfigToToml(merged), "utf8");
+  }
+
+  private async writeSnowLumaAdapterConfigForServer(
+    websocketServer: NapcatWebsocketServerConfig,
+    chatOverrides?: Partial<NapcatAdapterChatConfig>,
+    enabled = true,
+  ): Promise<void> {
+    const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
+    defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
+    defaults.server.actionTimeoutSec = 10;
+
+    let existing: NapcatAdapterConfig = defaults;
+    const configPath = this.snowlumaAdapterConfigPath();
+    const adapterRoot = dirname(configPath);
+
+    if (!existsSync(adapterRoot)) {
+      return;
+    }
+
+    if (existsSync(configPath)) {
+      try {
+        const text = await readFile(configPath, "utf8");
+        const parsed = parseToml(text);
+        if (parsed && typeof parsed === "object") {
+          existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
+        }
+      } catch {
+        // 解析失败则直接以默认值覆盖
+      }
+    }
+
+    const merged: NapcatAdapterConfig = {
+      ...existing,
+      plugin: {
+        enabled,
+        configVersion: SNOWLUMA_ADAPTER_CONFIG_VERSION,
+      },
+      server: {
+        ...existing.server,
+        host: websocketServer.host,
+        port: websocketServer.port,
+        token: websocketServer.token,
+      },
+      chat: applyChatOverrides(existing.chat, chatOverrides),
+    };
+
+    await writeFile(configPath, snowlumaAdapterConfigToToml(merged), "utf8");
   }
 
   async ensureModulesReady(): Promise<string[]> {
@@ -989,10 +1259,22 @@ export class InitManager {
 
     if (serviceId === "maibot") {
       const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"], {
-        excludeRelativePaths: [NAPCAT_ADAPTER_DIR],
+        excludeRelativePaths: [NAPCAT_ADAPTER_DIR, SNOWLUMA_ADAPTER_DIR],
       });
+      changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(NAPCAT_ADAPTER_DIR, ["plugin.py"], NAPCAT_ADAPTER_PLUGIN_ID)));
+      changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(SNOWLUMA_ADAPTER_DIR, ["plugin.py"], SNOWLUMA_ADAPTER_PLUGIN_ID)));
+      const syncedAdapterConfigs = await this.syncSelectedQqAdapterConfigs();
       const repairedConfig = await this.repairBotConfigVersionInfo();
-      return repairedConfig ? [...changedFiles, repairedConfig] : changedFiles;
+      return [...changedFiles, ...syncedAdapterConfigs, ...(repairedConfig ? [repairedConfig] : [])];
+    }
+
+    const qqBackend = await this.readQqBackend();
+    if (qqBackend === "snowluma") {
+      return this.ensureBundledModuleSubtree("SnowLuma", [
+        "node.exe",
+        "index.mjs",
+        "launcher.bat",
+      ]);
     }
 
     const changedFiles = [
@@ -1181,40 +1463,6 @@ export class InitManager {
     };
   }
 
-  private checkGitRuntime(): InitCheck {
-    const bundledGit = this.getBundledGitPath();
-    if (bundledGit) {
-      return {
-        id: "git-runtime",
-        label: "Git 运行时",
-        status: "ok",
-        detail: "使用内置 Git",
-        path: bundledGit,
-      };
-    }
-
-    const systemGit = this.findSystemGitPath();
-    if (systemGit) {
-      return {
-        id: "git-runtime",
-        label: "Git 运行时",
-        status: "ok",
-        detail: "使用系统 Git",
-        path: systemGit,
-      };
-    }
-
-    return {
-      id: "git-runtime",
-      label: "Git 运行时",
-      status: "error",
-      detail: "未找到内置 Git 或系统 Git",
-      path: this.getBundledGitCandidates()[0],
-      actionLabel: "下载 Git",
-      actionUrl: GIT_DOWNLOAD_URL,
-    };
-  }
-
   private async ensureBundledModuleSubtree(
     moduleName: string,
     requiredRelativePaths: string[],
@@ -1255,6 +1503,76 @@ export class InitManager {
     return [target];
   }
 
+  private async ensureBundledMaiBotPluginSubtree(
+    pluginRelativePath: string,
+    requiredRelativePaths: string[],
+    expectedPluginId?: string,
+  ): Promise<string[]> {
+    const source = join(this.paths.bundledModulesRoot, "MaiBot", pluginRelativePath);
+    const target = join(this.paths.maibotRoot, pluginRelativePath);
+
+    if (!existsSync(source) || samePath(source, target)) {
+      return [];
+    }
+
+    const sourcePluginId = expectedPluginId ?? this.readPluginManifestId(source);
+    if (sourcePluginId && this.findMaiBotPluginDirByManifestId(sourcePluginId)) {
+      return [];
+    }
+
+    const isReady = requiredRelativePaths.every((relativePath) => existsSync(join(target, relativePath)));
+    if (isReady) {
+      return [];
+    }
+
+    await mkdir(dirname(target), { recursive: true });
+    await runWithoutAsar(() =>
+      cp(source, target, {
+        recursive: true,
+        force: false,
+        errorOnExist: false,
+      }),
+    );
+    return [target];
+  }
+
+  private findMaiBotPluginDirByManifestId(pluginId: string): string | undefined {
+    const pluginsRoot = join(this.paths.maibotRoot, "plugins");
+    if (!existsSync(pluginsRoot)) {
+      return undefined;
+    }
+
+    try {
+      for (const entry of readdirSync(pluginsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        const pluginDir = join(pluginsRoot, entry.name);
+        if (this.readPluginManifestId(pluginDir) === pluginId) {
+          return pluginDir;
+        }
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
+  }
+
+  private readPluginManifestId(pluginDir: string): string | undefined {
+    const manifestPath = join(pluginDir, "_manifest.json");
+    if (!existsSync(manifestPath)) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { id?: unknown };
+      return typeof parsed.id === "string" && parsed.id.trim() ? parsed.id.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private moduleTargetRoot(moduleName: string): string {
     if (moduleName === "MaiBot") {
       return this.paths.maibotRoot;
@@ -1264,6 +1582,9 @@ export class InitManager {
     }
     if (moduleName === "napcatframework") {
       return this.napcatFrameworkRoot();
+    }
+    if (moduleName === "SnowLuma") {
+      return this.paths.snowlumaRoot;
     }
     return join(this.paths.modulesRoot, moduleName);
   }
@@ -1375,6 +1696,10 @@ export class InitManager {
     return join(this.paths.maibotRoot, "config", "bot_config.toml");
   }
 
+  private qqBackendPath(): string {
+    return join(this.paths.userDataRoot, QQ_BACKEND_FILE);
+  }
+
   private agreementSourcePath(fileName: string): string {
     const writablePath = join(this.paths.maibotRoot, fileName);
     if (existsSync(writablePath)) {
@@ -1447,9 +1772,9 @@ export class InitManager {
 
   private async readOrCreateBotConfigContent(): Promise<string> {
     const botConfigPath = this.botConfigPath();
-    const configVersion = await this.readMaiBotConfigVersion();
+    const configVersion = maibotInitialConfigVersion(await this.readMaiBotConfigVersion());
     if (!existsSync(botConfigPath)) {
-      return `[inner]\nversion = "${configVersion}"\n\n[bot]\n`;
+      return `[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`;
     }
 
     const content = await readFile(botConfigPath, "utf8");
@@ -1463,7 +1788,7 @@ export class InitManager {
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    const repaired = ensureInnerVersion(content, await this.readMaiBotConfigVersion());
+    const repaired = ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion()));
     if (repaired === content) {
       return undefined;
     }
@@ -1694,7 +2019,6 @@ export class InitManager {
     websocketToken: string,
     websocketPort = NAPCAT_ADAPTER_PORT,
   ): Promise<void> {
-    const versions = await this.findNapCatConfigVersions();
     const napcatProtocolConfig = {
       enable: false,
       network: {
@@ -1775,6 +2099,43 @@ export class InitManager {
     }
   }
 
+  private async createSnowLumaConfigs(
+    qqAccount: string,
+    websocketToken: string,
+    websocketPort = SNOWLUMA_ONEBOT_PORT,
+  ): Promise<void> {
+    const configDir = join(this.paths.snowlumaRoot, "config");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "runtime.json"),
+      JSON.stringify({ webuiPort: SNOWLUMA_WEBUI_PORT, hookAutoLoad: false }, null, 2),
+      "utf8",
+    );
+    const onebotConfig = {
+      networks: {
+        httpServers: [],
+        httpClients: [],
+        wsServers: [
+          {
+            name: "MaiBot Main",
+            host: "127.0.0.1",
+            port: websocketPort,
+            path: "/",
+            role: "Universal",
+            accessToken: websocketToken,
+            messageFormat: "array",
+            reportSelfMessage: false,
+          },
+        ],
+        wsClients: [],
+      },
+      musicSignUrl: "",
+    };
+    const serialized = JSON.stringify(onebotConfig, null, 2);
+    await writeFile(join(configDir, "onebot.json"), serialized, "utf8");
+    await writeFile(join(configDir, `onebot_${qqAccount}.json`), serialized, "utf8");
+  }
+
   private async findNapCatWebUiFiles(): Promise<string[]> {
     const configDirs = await this.findNapCatWebUiConfigDirs();
     return configDirs.map((configDir) => join(configDir, "webui.json"));
@@ -1830,42 +2191,4 @@ export class InitManager {
     return versions.size > 0 ? [...versions] : [NAPCAT_FALLBACK_VERSION];
   }
 
-  private async findNapCatConfigVersions(): Promise<string[]> {
-    const versions = await this.findNapCatVersions();
-    const comparable = versions.map((version) => ({
-      version,
-      parts: this.parseNapCatVersion(version),
-    }));
-
-    if (comparable.some((item) => !item.parts)) {
-      return versions;
-    }
-
-    const sorted = comparable.toSorted((left, right) => this.compareVersionParts(left.parts ?? [], right.parts ?? []));
-    return [sorted[sorted.length - 1]?.version ?? NAPCAT_FALLBACK_VERSION];
-  }
-
-  private parseNapCatVersion(version: string): number[] | undefined {
-    const match = version.match(/^(\d+(?:\.\d+)*)(?:-(\d+))?$/u);
-    if (!match) {
-      return undefined;
-    }
-
-    return [
-      ...match[1].split(".").map((part) => Number(part)),
-      match[2] ? Number(match[2]) : 0,
-    ];
-  }
-
-  private compareVersionParts(left: number[], right: number[]): number {
-    const length = Math.max(left.length, right.length);
-    for (let index = 0; index < length; index += 1) {
-      const diff = (left[index] ?? 0) - (right[index] ?? 0);
-      if (diff !== 0) {
-        return diff;
-      }
-    }
-
-    return 0;
-  }
 }

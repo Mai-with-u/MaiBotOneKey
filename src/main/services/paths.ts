@@ -44,7 +44,7 @@ function defaultResourcePaths(defaultResourceRoot: string): RuntimeResourcePathM
   };
 }
 
-function readStoredResourcePaths(userDataRoot: string, defaultResourceRoot: string): Partial<RuntimeResourcePathMap> {
+function readStoredResourcePaths(userDataRoot: string): Partial<RuntimeResourcePathMap> {
   const storePath = join(userDataRoot, RESOURCE_PATHS_FILE);
   if (existsSync(storePath)) {
     try {
@@ -94,7 +94,7 @@ export function configureRuntimePaths(): RuntimePaths {
   const userDataRoot = join(app.getPath("appData"), "MaiBotOneKeyDesktop", installScope);
   const defaultResourceRoot = app.isPackaged ? userDataRoot : installRoot;
   const defaults = defaultResourcePaths(defaultResourceRoot);
-  const stored = readStoredResourcePaths(userDataRoot, defaultResourceRoot);
+  const stored = readStoredResourcePaths(userDataRoot);
   const bundledModulesRoot = join(payloadRoot, "modules");
 
   app.setPath("userData", userDataRoot);
@@ -109,6 +109,8 @@ export function configureRuntimePaths(): RuntimePaths {
     maibotRoot: defaults.maibot,
     defaultNapcatRoot: defaults.napcat,
     napcatRoot: defaults.napcat,
+    defaultSnowlumaRoot: join(defaultResourceRoot, "modules", "SnowLuma"),
+    snowlumaRoot: join(defaultResourceRoot, "modules", "SnowLuma"),
     bundledModulesRoot,
     runtimeRoot: join(payloadRoot, "runtime"),
     defaultPythonOverridesRoot: defaults.pythonOverrides,

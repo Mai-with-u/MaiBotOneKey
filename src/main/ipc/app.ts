@@ -21,9 +21,12 @@ import type {
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
+  MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
+  MaiBotPluginReadmeResult,
+  MaiBotPluginStats,
   ManagedPythonPackageName,
   ModuleRuntimeVersions,
   ModuleUpdateResult,
@@ -35,6 +38,7 @@ import type {
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersionList,
+  QqBackend,
   QqAccountSetupRequest,
   RuntimePaths,
   RuntimePathConfig,
@@ -70,6 +74,11 @@ interface RegisterAppIpcOptions {
   getMainWindow: () => BrowserWindow | null;
   requestQuit: () => void;
   showMainWindow: () => void;
+}
+
+export interface RegisteredAppIpcDisposables {
+  localChatAdapter: LocalChatAdapter;
+  dispose: () => void;
 }
 
 function readWindowState(window: BrowserWindow | null): WindowState {
@@ -110,6 +119,10 @@ function runProcess(file: string, args: string[], cwd: string, env?: Record<stri
       },
     );
   });
+}
+
+function isRuntimeBusy(service: ServiceDescriptor): boolean {
+  return service.status === "starting" || service.status === "running" || service.status === "stopping";
 }
 
 interface ParsedVersionTag {
@@ -287,7 +300,7 @@ export function registerAppIpc({
   getMainWindow,
   requestQuit,
   showMainWindow,
-}: RegisterAppIpcOptions): void {
+}: RegisterAppIpcOptions): RegisteredAppIpcDisposables {
   let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
   let initDependencyRefreshPromise: Promise<void> | null = null;
@@ -493,14 +506,40 @@ export function registerAppIpc({
     return result;
   });
 
+  ipcMain.handle("init:setQqBackend", async (_event, backend: QqBackend): Promise<InitState> => {
+    const currentInitState = await initManager.getState();
+    if (backend !== "napcat" && backend !== "snowluma") {
+      throw new Error("未知 QQ 后端");
+    }
+    if (backend !== currentInitState.qqBackend && serviceManager.snapshot().some(isRuntimeBusy)) {
+      throw new Error("MaiBot Core 或 QQ 后端正在运行时不能切换 NapCat / SnowLuma，请先停止全部服务。");
+    }
+    await initManager.setQqBackend(backend);
+    serviceManager.reloadRuntimePaths();
+    const state = await initManager.getState();
+    logStore.append("desktop", "system", `QQ 后端已切换为: ${backend === "snowluma" ? "SnowLuma" : "NapCat"}`);
+    await broadcastSnapshot();
+    return state;
+  });
+
   ipcMain.handle(
     "init:setQqAccount",
     async (_event, request: QqAccountSetupRequest): Promise<InitState> => {
+      const currentInitState = await initManager.getState();
+      const requestedBackend = request.qqBackend ?? currentInitState.qqBackend;
+      if (
+        requestedBackend !== currentInitState.qqBackend &&
+        serviceManager.snapshot().some(isRuntimeBusy)
+      ) {
+        throw new Error("MaiBot Core 或 QQ 后端正在运行时不能切换 NapCat / SnowLuma，请先停止全部服务。");
+      }
       const state = await initManager.setQqAccount(
         request.qqAccount,
         request.websocketToken,
         request.chat,
+        request.qqBackend,
       );
+      serviceManager.reloadRuntimePaths();
       logStore.append("desktop", "system", `机器人 QQ 号已配置: ${request.qqAccount}`);
       await broadcastSnapshot();
       return state;
@@ -642,12 +681,16 @@ export function registerAppIpc({
     return resetResult;
   });
 
-  ipcMain.handle("plugins:listMarket", async (): Promise<MaiBotPluginListResult> => {
-    return maibotPluginClient.listMarket();
+  ipcMain.handle("plugins:listMarket", async (
+    _event,
+    serviceUrl?: string,
+    options?: MaiBotPluginListOptions,
+  ): Promise<MaiBotPluginListResult> => {
+    return maibotPluginClient.listMarket(serviceUrl, options);
   });
 
-  ipcMain.handle("plugins:listInstalled", async (): Promise<MaiBotInstalledPlugin[]> => {
-    return maibotPluginClient.listInstalled();
+  ipcMain.handle("plugins:listInstalled", async (_event, serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> => {
+    return maibotPluginClient.listInstalled(serviceUrl);
   });
 
   ipcMain.handle(
@@ -708,6 +751,14 @@ export function registerAppIpc({
       return result;
     },
   );
+
+  ipcMain.handle("plugins:getReadme", async (_event, pluginId: string, repositoryUrl?: string): Promise<MaiBotPluginReadmeResult> => {
+    return maibotPluginClient.getReadme(pluginId, repositoryUrl);
+  });
+
+  ipcMain.handle("plugins:getStats", async (_event, pluginId: string): Promise<MaiBotPluginStats | null> => {
+    return maibotPluginClient.getStats(pluginId);
+  });
 
   ipcMain.handle("pythonDeps:getState", (): PythonOverridesState => {
     return pythonDependencyManager.getState();
@@ -894,6 +945,10 @@ export function registerAppIpc({
     return localChatAdapter.send(request);
   });
 
+  ipcMain.handle("localChat:listMessages", async (): Promise<LocalChatMessageEvent[]> => {
+    return localChatAdapter.listMessages();
+  });
+
   ipcMain.handle("desktop:openLogsDirectory", async (): Promise<void> => {
     await mkdir(paths.logsRoot, { recursive: true });
     await shell.openPath(paths.logsRoot);
@@ -931,4 +986,11 @@ export function registerAppIpc({
   });
 
   ipcMain.handle("desktop:window:getState", (): WindowState => readWindowState(getMainWindow()));
+
+  return {
+    localChatAdapter,
+    dispose: () => {
+      localChatAdapter.dispose();
+    },
+  };
 }

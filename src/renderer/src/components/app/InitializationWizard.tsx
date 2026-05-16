@@ -12,6 +12,7 @@ import type {
   DesktopSnapshot,
   NapcatAdapterChatConfig,
   NapcatChatListMode,
+  QqBackend,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -101,13 +102,22 @@ export function InitializationWizard({
 }: InitializationWizardProps): React.JSX.Element | null {
   const [seen, setSeen] = useState(readStartupWizardSeen);
   const [qqAccount, setQqAccount] = useState(snapshot.initState.qqAccount ?? "");
+  const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chat, setChat] = useState<NapcatAdapterChatConfig>(DEFAULT_CHAT_CONFIG);
+  const services = snapshot.services ?? [];
+  const runtimeSwitchBlocked = services.some(
+    (service) =>
+      service.status === "starting" ||
+      service.status === "running" ||
+      service.status === "stopping",
+  );
 
   useEffect(() => {
     setQqAccount(snapshot.initState.qqAccount ?? "");
-  }, [snapshot.initState.qqAccount]);
+    setQqBackend(snapshot.initState.qqBackend ?? "napcat");
+  }, [snapshot.initState.qqAccount, snapshot.initState.qqBackend]);
 
   const agreementPending = !snapshot.startupAgreement.isConfirmed;
   const open = !agreementPending && !seen && !snapshot.initState.qqAccount;
@@ -142,6 +152,7 @@ export function InitializationWizard({
     try {
       await window.maibotDesktop?.init.setQqAccount({
         qqAccount: trimmed,
+        qqBackend,
         chat,
       });
       await refreshSnapshot();
@@ -151,7 +162,7 @@ export function InitializationWizard({
     } finally {
       setBusy(false);
     }
-  }, [chat, close, qqAccount, refreshSnapshot]);
+  }, [chat, close, qqAccount, qqBackend, refreshSnapshot]);
 
   const canSave = !busy && qqAccount.trim().length > 0;
 
@@ -167,7 +178,10 @@ export function InitializationWizard({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
-      <DialogContent size="lg">
+      <DialogContent
+        onPointerDownOutside={(event) => event.preventDefault()}
+        size="lg"
+      >
         <DialogHeader
           description={description}
           icon={<Bot className="size-4" />}
@@ -184,6 +198,31 @@ export function InitializationWizard({
               <KeyRound className="size-3.5" />
               机器人 QQ 号
             </label>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {([
+                { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接。" },
+                { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程。" },
+              ] as const).map((option) => (
+                <button
+                  className={cn(
+                    "rounded-md border p-3 text-left transition-colors",
+                    runtimeSwitchBlocked &&
+                      qqBackend !== option.value &&
+                      "cursor-not-allowed opacity-55",
+                    qqBackend === option.value
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                  )}
+                  disabled={runtimeSwitchBlocked && qqBackend !== option.value}
+                  key={option.value}
+                  onClick={() => setQqBackend(option.value)}
+                  type="button"
+                >
+                  <span className="text-sm font-semibold">{option.label}</span>
+                  <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                </button>
+              ))}
+            </div>
             <Input
               className="mt-3"
               id="startup-qq-input"
@@ -197,6 +236,11 @@ export function InitializationWizard({
               保存后会向 NapCat 写入端口 7998 的正向 WebSocket 服务；如果当前 MaiBot 已安装
               napcat-adapter，会同步写入同一个 token。
             </p>
+            {runtimeSwitchBlocked ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-warning">
+                MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
+              </p>
+            ) : null}
           </section>
 
           <section className="rounded-lg border border-border bg-card p-4">
@@ -222,35 +266,6 @@ export function InitializationWizard({
                   </span>
                 </span>
               </label>
-
-              <div className="grid gap-3 rounded-md border border-border bg-muted/30 p-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  过滤附加项
-                </p>
-                <IdListEditor
-                  emptyHint="未配置全局屏蔽用户"
-                  label="全局屏蔽用户"
-                  onChange={(next) => updateChat("banUserId", next)}
-                  placeholder="输入要屏蔽的 QQ 号后回车添加"
-                  values={chat.banUserId}
-                />
-
-                <label className="flex items-start gap-2">
-                  <Checkbox
-                    checked={chat.showDroppedChatListMessages}
-                    id="wiz-show-dropped"
-                    onCheckedChange={(next) =>
-                      updateChat("showDroppedChatListMessages", Boolean(next))
-                    }
-                  />
-                  <span className="flex flex-col text-[12px] text-foreground">
-                    显示被名单过滤丢弃的消息日志
-                    <span className="text-[11px] text-muted-foreground">
-                      默认关闭以减少终端刷屏，调试名单时可以打开。
-                    </span>
-                  </span>
-                </label>
-              </div>
 
               <div
                 className={cn(

@@ -114,6 +114,16 @@ const requirements: Requirement[] = [
     candidates: [dir("modules/MaiBot/plugins/napcat-adapter")],
   },
   {
+    label: "MaiBot snowluma-adapter plugin",
+    required: true,
+    candidates: [dir("modules/MaiBot/plugins/snowluma-adapter")],
+  },
+  {
+    label: "MaiBot snowluma-adapter entry",
+    required: true,
+    candidates: [file("modules/MaiBot/plugins/snowluma-adapter/plugin.py")],
+  },
+  {
     label: "NapCat module",
     required: true,
     candidates: [dir("modules/napcat")],
@@ -122,6 +132,29 @@ const requirements: Requirement[] = [
     label: "NapCat Windows runtime",
     required: true,
     candidates: [file("modules/napcat/node.exe"), file("modules/napcat/NapCatWinBootMain.exe")],
+  },
+  {
+    label: "SnowLuma module",
+    required: true,
+    candidates: [dir("modules/SnowLuma")],
+  },
+  {
+    label: "SnowLuma entry",
+    required: true,
+    candidates: [file("modules/SnowLuma/index.mjs")],
+  },
+  {
+    label: "SnowLuma Windows runtime",
+    required: true,
+    candidates: [file("modules/SnowLuma/node.exe")],
+  },
+  {
+    label: "SnowLuma native binding",
+    required: true,
+    candidates: [
+      file("modules/SnowLuma/native/snowluma-win32-x64.node"),
+      file("modules/SnowLuma/native/snowluma-win32-x64.dll"),
+    ],
   },
   {
     label: "node-pty Windows pty binding",

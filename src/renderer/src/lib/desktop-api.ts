@@ -20,6 +20,8 @@ const fallbackSnapshot: DesktopSnapshot = {
     maibotRoot: "开发预览/modules/MaiBot",
     defaultNapcatRoot: "开发预览/modules/napcat",
     napcatRoot: "开发预览/modules/napcat",
+    defaultSnowlumaRoot: "开发预览/modules/SnowLuma",
+    snowlumaRoot: "开发预览/modules/SnowLuma",
     bundledModulesRoot: "开发预览/modules",
     runtimeRoot: "开发预览/runtime",
     defaultPythonOverridesRoot: "开发预览/python-overrides",
@@ -118,6 +120,7 @@ const fallbackSnapshot: DesktopSnapshot = {
   },
   initState: {
     isReady: false,
+    qqBackend: "napcat",
     checks: [
       {
         id: "preview",
@@ -184,6 +187,7 @@ export async function getDesktopSnapshot(): Promise<DesktopSnapshot> {
       })),
       initState: {
         isReady: false,
+        qqBackend: fallbackSnapshot.initState.qqBackend,
         checks: [
           {
             id: "desktop-snapshot",

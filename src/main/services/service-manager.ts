@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   PtyDataEvent,
   PtyErrorEvent,
@@ -185,6 +185,7 @@ function relocateBundledModulePath(value: string, paths: RuntimePaths): string {
   const mappings = [
     { source: join(paths.bundledModulesRoot, "MaiBot"), target: paths.maibotRoot },
     { source: join(paths.bundledModulesRoot, "napcat"), target: paths.napcatRoot },
+    { source: join(paths.bundledModulesRoot, "SnowLuma"), target: paths.snowlumaRoot },
     { source: join(paths.bundledModulesRoot, "napcatframework"), target: join(dirname(paths.napcatRoot), "napcatframework") },
   ];
 
@@ -209,6 +210,7 @@ function relocateBundledModuleReferences(value: string, paths: RuntimePaths): st
   return [
     [join(paths.bundledModulesRoot, "MaiBot"), paths.maibotRoot],
     [join(paths.bundledModulesRoot, "napcat"), paths.napcatRoot],
+    [join(paths.bundledModulesRoot, "SnowLuma"), paths.snowlumaRoot],
     [join(paths.bundledModulesRoot, "napcatframework"), join(dirname(paths.napcatRoot), "napcatframework")],
   ].reduce((nextValue, [search, replacement]) => replaceAllPathVariants(nextValue, search, replacement), value);
 }
@@ -567,7 +569,7 @@ export class ServiceManager extends EventEmitter {
         pid: existingSession.pid,
         terminalMode: "embedded",
         ptySessionId: existingSession.id,
-        detail: `宸查檮鍔犲埌鍚庡彴 PTY锛孭ID ${existingSession.pid ?? "鏈煡"}`,
+        detail: `已接管现有 PTY 会话，PID ${existingSession.pid ?? "未知"}`,
       });
       return this.toDescriptor(definition, this.getState(serviceId));
     }
@@ -608,7 +610,7 @@ export class ServiceManager extends EventEmitter {
       restartAttempts: resetRestartAttempts ? 0 : (state.restartAttempts ?? 0),
       healthFailures: 0,
       error: undefined,
-      detail: `姝ｅ湪鍚姩 ${definition.name} PTY`,
+      detail: `正在启动 ${definition.name} PTY`,
       stoppedAt: undefined,
       terminalMode: this.shouldUseEmbeddedTerminal() ? "embedded" : "external",
       pid: undefined,
@@ -633,7 +635,7 @@ export class ServiceManager extends EventEmitter {
       if (usePythonOverlay && this.pythonDependencyManager) {
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "姝ｅ湪鏇存柊 MaiBot 渚濊禆锛屽畬鎴愬悗浼氬惎鍔ㄥ悗鍙?PTY",
+          detail: "正在检查 MaiBot 启动依赖，完成后会启动 PTY",
         });
         this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependency files");
         const dependencyUpgradeStartedAt = Date.now();
@@ -656,7 +658,7 @@ export class ServiceManager extends EventEmitter {
         }
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "渚濊禆鏇存柊瀹屾垚锛屾鍦ㄥ惎鍔?MaiBot Core PTY",
+          detail: "依赖检查完成，正在启动 MaiBot Core PTY",
         });
       }
       if (!this.shouldUseEmbeddedTerminal()) {
@@ -970,6 +972,10 @@ export class ServiceManager extends EventEmitter {
     const python = this.getRuntimePath("python");
     const maibotRoot = this.paths.maibotRoot;
     const napcatRoot = this.paths.napcatRoot;
+    const qqBackend = this.initManager.getQqBackendSync();
+    const snowlumaRoot = this.paths.snowlumaRoot;
+    const snowlumaNode = join(snowlumaRoot, "node.exe");
+    const snowlumaEntry = join(snowlumaRoot, "index.mjs");
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
     const napcatNode = join(napcatRoot, "node.exe");
     const napcatNodeEntry = join(napcatRoot, "index.js");
@@ -993,21 +999,29 @@ export class ServiceManager extends EventEmitter {
       },
       {
         id: "napcat",
-        name: "NapCat",
-        port: 6099,
-        ports: [6099],
-        url: "http://127.0.0.1:6099/webui",
-        cwd: napcatRoot,
-        defaultRequiredPaths: [napcatRoot],
-        conflictPorts: [6099],
-        readyPorts: [6099],
+        name: qqBackend === "snowluma" ? "SnowLuma" : "NapCat",
+        port: qqBackend === "snowluma" ? 5099 : 6099,
+        ports: qqBackend === "snowluma" ? [5099, 7988] : [6099],
+        url: qqBackend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui",
+        cwd: qqBackend === "snowluma" ? snowlumaRoot : napcatRoot,
+        defaultRequiredPaths: qqBackend === "snowluma" ? [snowlumaRoot, snowlumaEntry] : [napcatRoot],
+        conflictPorts: qqBackend === "snowluma" ? [5099, 7988] : [6099],
+        readyPorts: qqBackend === "snowluma" ? [5099] : [6099],
         displayDefaultCommandLine: async () => {
+          if (qqBackend === "snowluma") {
+            return existsSync(snowlumaNode)
+              ? `${quoteCommandPart(snowlumaNode)} index.mjs`
+              : "node index.mjs";
+          }
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
             return `${quoteCommandPart(napcatNode)} index.js -q <QQ>`;
           }
           return `${quoteCommandPart(napcatExe)} -q <QQ>`;
         },
         buildDefaultCommand: async () => {
+          if (qqBackend === "snowluma") {
+            return existsSync(snowlumaNode) ? [snowlumaNode, snowlumaEntry] : ["node", snowlumaEntry];
+          }
           const qq = await this.initManager.readQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
@@ -1025,6 +1039,11 @@ export class ServiceManager extends EventEmitter {
           return qq ? [napcatExe, "-q", qq] : [napcatExe];
         },
         buildDefaultCommandLine: async () => {
+          if (qqBackend === "snowluma") {
+            return existsSync(snowlumaNode)
+              ? `${quoteCommandPart(snowlumaNode)} index.mjs`
+              : "node index.mjs";
+          }
           await this.initManager.ensureNapCatWebUiConfig();
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
             return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatNode)} index.js -q <QQ>`);
@@ -1199,10 +1218,10 @@ export class ServiceManager extends EventEmitter {
           ...this.getState(definition.id),
           health: "conflict",
           status: "error",
-          error: `绔彛 ${port} 宸茶鍗犵敤`,
-          detail: `绔彛 ${port} 宸茶澶栭儴杩涚▼鍗犵敤锛岃鎵嬪姩澶勭悊`,
+          error: `端口 ${port} 已被占用`,
+          detail: `端口 ${port} 已被外部进程占用，请停止占用进程后重试`,
         });
-        throw new Error(`绔彛 ${port} 宸茶鍗犵敤锛岃鎵嬪姩澶勭悊`);
+        throw new Error(`端口 ${port} 已被占用，请停止占用进程后重试`);
       }
     }
   }
@@ -1217,10 +1236,10 @@ export class ServiceManager extends EventEmitter {
       ...this.getState(definition.id),
       status: "error",
       health: "unreachable",
-      error: `缂哄け璺緞: ${missing}`,
-      detail: `缂哄け璺緞: ${missing}`,
+      error: `缺少必要路径: ${missing}`,
+      detail: `缺少必要路径: ${missing}`,
     });
-    throw new Error(`缂哄け璺緞: ${missing}`);
+    throw new Error(`缺少必要路径: ${missing}`);
   }
 
   private async resolveStartCommand(definition: ServiceDefinition): Promise<ResolvedServiceCommand> {
@@ -1325,6 +1344,9 @@ export class ServiceManager extends EventEmitter {
 
   private async resolveServiceUrl(serviceId: ServiceId, fallback: string): Promise<string> {
     if (serviceId === "napcat") {
+      if (this.initManager.getQqBackendSync() === "snowluma") {
+        return fallback;
+      }
       return this.resolveNapCatUrl(fallback);
     }
     if (serviceId === "maibot") {

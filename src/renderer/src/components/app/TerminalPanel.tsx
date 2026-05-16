@@ -38,6 +38,10 @@ const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: 
   { serviceId: "napcat", sessionId: "service:napcat", title: "NapCat" },
 ];
 
+const MIN_SERVICE_TERMINAL_COLS = 120;
+const MIN_VISIBLE_TERMINAL_WIDTH = 240;
+const MIN_VISIBLE_TERMINAL_HEIGHT = 120;
+
 const statusText: Record<PtySessionSnapshot["status"], string> = {
   starting: "启动中",
   running: "运行中",
@@ -143,6 +147,16 @@ export function TerminalPanel({
       return;
     }
 
+    const pane = panesRef.current.get(sessionId);
+    const rect = pane?.getBoundingClientRect();
+    if (
+      !rect ||
+      rect.width < MIN_VISIBLE_TERMINAL_WIDTH ||
+      rect.height < MIN_VISIBLE_TERMINAL_HEIGHT
+    ) {
+      return;
+    }
+
     try {
       instance.fitAddon.fit();
     } catch {
@@ -184,7 +198,20 @@ export function TerminalPanel({
           });
         }),
         terminal.onResize(({ cols, rows }) => {
-          void bridgeRef.current?.pty.resize({ sessionId, cols, rows }).catch(() => undefined);
+          const pane = panesRef.current.get(sessionId);
+          const rect = pane?.getBoundingClientRect();
+          if (
+            !rect ||
+            rect.width < MIN_VISIBLE_TERMINAL_WIDTH ||
+            rect.height < MIN_VISIBLE_TERMINAL_HEIGHT
+          ) {
+            return;
+          }
+
+          const nextCols = sessionId.startsWith("service:")
+            ? Math.max(cols, MIN_SERVICE_TERMINAL_COLS)
+            : cols;
+          void bridgeRef.current?.pty.resize({ sessionId, cols: nextCols, rows }).catch(() => undefined);
         }),
       ];
 
@@ -400,9 +427,7 @@ export function TerminalPanel({
     }
 
     const observer = new ResizeObserver(() => {
-      for (const item of serviceTerminals) {
-        fitTerminal(item.sessionId);
-      }
+      fitTerminal(activeTerminal.sessionId);
     });
     observer.observe(pane);
     return () => observer.disconnect();
@@ -482,7 +507,7 @@ export function TerminalPanel({
               onClick={() => selectService(item.serviceId)}
               type="button"
             >
-              <span className="min-w-0 truncate text-xs font-semibold">{item.title}</span>
+              <span className="min-w-0 truncate text-xs font-semibold">{service?.name ?? item.title}</span>
               <span className="flex shrink-0 items-center gap-1.5">
                 <Badge className="h-5 px-1.5 text-[10px]" variant={serviceBadgeVariant(service)}>
                   {service?.status === "running" ? "服务运行" : service?.status === "error" ? "异常" : "未运行"}

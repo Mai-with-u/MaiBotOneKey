@@ -19,9 +19,12 @@ import type {
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
+  MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
+  MaiBotPluginReadmeResult,
+  MaiBotPluginStats,
   ManagedPythonPackageName,
   ModuleUpdateResult,
   ModuleSourceConfig,
@@ -40,6 +43,7 @@ import type {
   PtySessionSnapshot,
   PtyStartRequest,
   PtyStopRequest,
+  QqBackend,
   QqAccountSetupRequest,
   RuntimePathConfig,
   RuntimePathKey,
@@ -92,6 +96,8 @@ const desktopBridge: DesktopBridge = {
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
     repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
+    setQqBackend: (backend: QqBackend) =>
+      ipcRenderer.invoke("init:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
       ipcRenderer.invoke("init:setQqAccount", request) as Promise<InitState>,
   },
@@ -118,8 +124,10 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },
   plugins: {
-    listMarket: () => ipcRenderer.invoke("plugins:listMarket") as Promise<MaiBotPluginListResult>,
-    listInstalled: () => ipcRenderer.invoke("plugins:listInstalled") as Promise<MaiBotInstalledPlugin[]>,
+    listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) =>
+      ipcRenderer.invoke("plugins:listMarket", serviceUrl, options) as Promise<MaiBotPluginListResult>,
+    listInstalled: (serviceUrl?: string) =>
+      ipcRenderer.invoke("plugins:listInstalled", serviceUrl) as Promise<MaiBotInstalledPlugin[]>,
     install: (request: MaiBotPluginOperationRequest) =>
       ipcRenderer.invoke("plugins:install", request) as Promise<MaiBotPluginOperationResult>,
     update: (request: MaiBotPluginOperationRequest) =>
@@ -130,6 +138,10 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:getConfig", pluginId) as Promise<MaiBotPluginConfigState>,
     saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>) =>
       ipcRenderer.invoke("plugins:saveConfig", pluginId, config) as Promise<MaiBotPluginConfigSaveResult>,
+    getReadme: (pluginId: string, repositoryUrl?: string) =>
+      ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl) as Promise<MaiBotPluginReadmeResult>,
+    getStats: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
   },
   pythonDeps: {
     getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,
@@ -186,6 +198,8 @@ const desktopBridge: DesktopBridge = {
     disconnect: () => ipcRenderer.invoke("localChat:disconnect") as Promise<void>,
     send: (request: LocalChatSendRequest) =>
       ipcRenderer.invoke("localChat:send", request) as Promise<LocalChatMessageEvent>,
+    listMessages: () =>
+      ipcRenderer.invoke("localChat:listMessages") as Promise<LocalChatMessageEvent[]>,
     onEvent: (callback: (event: LocalChatEvent) => void) => onIpc("localChat:event", callback),
   },
   pty: {

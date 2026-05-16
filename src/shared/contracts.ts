@@ -1,4 +1,5 @@
 export type ServiceId = "maibot" | "napcat";
+export type QqBackend = "napcat" | "snowluma";
 
 export type ServiceStatus =
   | "stopped"
@@ -137,6 +138,8 @@ export interface RuntimePaths {
   maibotRoot: string;
   defaultNapcatRoot: string;
   napcatRoot: string;
+  defaultSnowlumaRoot: string;
+  snowlumaRoot: string;
   bundledModulesRoot: string;
   runtimeRoot: string;
   defaultPythonOverridesRoot: string;
@@ -229,6 +232,7 @@ export interface InitCheck {
 export interface InitState {
   isReady: boolean;
   qqAccount?: string;
+  qqBackend: QqBackend;
   checks: InitCheck[];
   repairedAt?: number;
 }
@@ -333,7 +337,9 @@ export interface MaiBotPluginManifest {
   version?: string;
   description?: string;
   author?: string | { name?: string; url?: string };
+  homepage_url?: string;
   repository_url?: string;
+  license?: string;
   urls?: { repository?: string; homepage?: string };
   keywords?: string[];
   categories?: string[];
@@ -347,6 +353,9 @@ export interface MaiBotMarketPlugin {
   installed?: boolean;
   installedVersion?: string;
   source?: string;
+  downloads?: number;
+  rating?: number;
+  likes?: number;
 }
 
 export interface MaiBotInstalledPlugin {
@@ -361,6 +370,34 @@ export interface MaiBotInstalledPlugin {
 export interface MaiBotPluginListResult {
   installed: MaiBotInstalledPlugin[];
   market: MaiBotMarketPlugin[];
+  stats?: Record<string, MaiBotPluginStats>;
+}
+
+export interface MaiBotPluginListOptions {
+  forceRefresh?: boolean;
+}
+
+export interface MaiBotPluginStats {
+  plugin_id: string;
+  likes: number;
+  dislikes: number;
+  downloads: number;
+  rating: number;
+  rating_count: number;
+  recent_ratings?: MaiBotPluginRating[];
+}
+
+export interface MaiBotPluginRating {
+  user_id: string;
+  rating: number;
+  comment?: string;
+  created_at: string;
+}
+
+export interface MaiBotPluginReadmeResult {
+  success: boolean;
+  content?: string;
+  error?: string;
 }
 
 export interface MaiBotPluginOperationRequest {
@@ -426,6 +463,7 @@ export interface MaiBotPluginConfigSaveResult {
 
 export interface QqAccountSetupRequest {
   qqAccount: string;
+  qqBackend?: QqBackend;
   websocketToken?: string;
   chat?: Partial<NapcatAdapterChatConfig>;
 }
@@ -611,6 +649,7 @@ export interface DesktopBridge {
   init: {
     getState: () => Promise<InitState>;
     repair: () => Promise<InitRepairResult>;
+    setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };
   agreements: {
@@ -629,8 +668,8 @@ export interface DesktopBridge {
     resetMaiBotData: () => Promise<MaiBotDataResetResult>;
   };
   plugins: {
-    listMarket: () => Promise<MaiBotPluginListResult>;
-    listInstalled: () => Promise<MaiBotInstalledPlugin[]>;
+    listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) => Promise<MaiBotPluginListResult>;
+    listInstalled: (serviceUrl?: string) => Promise<MaiBotInstalledPlugin[]>;
     install: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     update: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     uninstall: (pluginId: string) => Promise<MaiBotPluginOperationResult>;
@@ -639,6 +678,8 @@ export interface DesktopBridge {
       pluginId: string,
       config: Record<string, MaiBotPluginConfigValue>,
     ) => Promise<MaiBotPluginConfigSaveResult>;
+    getReadme: (pluginId: string, repositoryUrl?: string) => Promise<MaiBotPluginReadmeResult>;
+    getStats: (pluginId: string) => Promise<MaiBotPluginStats | null>;
   };
   pythonDeps: {
     getState: () => Promise<PythonOverridesState>;
@@ -676,6 +717,7 @@ export interface DesktopBridge {
     connect: (request?: LocalChatConnectRequest) => Promise<LocalChatConnectionState>;
     disconnect: () => Promise<void>;
     send: (request: LocalChatSendRequest) => Promise<LocalChatMessageEvent>;
+    listMessages: () => Promise<LocalChatMessageEvent[]>;
     onEvent: (callback: (event: LocalChatEvent) => void) => () => void;
   };
   pty: {
