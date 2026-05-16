@@ -202,6 +202,9 @@ export function IdListEditor({
           disabled={disabled}
           inputMode={inputMode}
           monospace
+          onBlur={() => {
+            if (commitDraft(draft)) setDraft("");
+          }}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}

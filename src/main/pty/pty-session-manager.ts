@@ -19,6 +19,7 @@ import type {
 import { decodePtyData, encodePtyInput, getNodePtyEncoding, getWindowsCodePage } from "./encoding";
 
 const MIN_COLS = 5;
+const MIN_SERVICE_COLS = 120;
 const MIN_ROWS = 5;
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 32;
@@ -39,6 +40,10 @@ function clampDimension(value: number | undefined, fallback: number): number {
   }
 
   return Math.max(Math.floor(value), value === fallback ? fallback : MIN_COLS);
+}
+
+function clampColsForSession(sessionId: string | undefined, cols: number): number {
+  return sessionId?.startsWith("service:") ? Math.max(cols, MIN_SERVICE_COLS) : cols;
 }
 
 function normalizeRows(value: number | undefined): number {
@@ -238,7 +243,7 @@ class PtySession {
       title: command.title,
       cwd,
       command: command.displayCommand,
-      cols: clampDimension(request.cols, DEFAULT_COLS),
+      cols: clampColsForSession(request.id, clampDimension(request.cols, DEFAULT_COLS)),
       rows: normalizeRows(request.rows),
       encoding,
       status: "starting",
@@ -328,7 +333,7 @@ class PtySession {
   }
 
   resize(request: Omit<PtyResizeRequest, "sessionId">): void {
-    const cols = clampDimension(request.cols, this.snapshot.cols);
+    const cols = clampColsForSession(this.snapshot.id, clampDimension(request.cols, this.snapshot.cols));
     const rows = normalizeRows(request.rows);
 
     this.snapshot = {

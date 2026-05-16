@@ -5,10 +5,6 @@ import type { LogEntry, LogSource, LogStream, RuntimePaths } from "../../shared/
 
 const MAX_BUFFERED_LOGS = 1000;
 
-type LogStoreEventMap = {
-  entry: [LogEntry];
-};
-
 function formatLogLine(entry: LogEntry): string {
   const timestamp = new Date(entry.timestamp).toISOString();
   return `[${timestamp}] [${entry.stream}] ${entry.message}\n`;
