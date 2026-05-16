@@ -1,4 +1,4 @@
-import { AlertTriangle, Download, Loader2, Plus, Puzzle, RefreshCw, Save, Search, SlidersHorizontal, Store, Trash2, Upload, Wrench, X } from "lucide-react";
+import { AlertTriangle, ArrowDownWideNarrow, Download, ExternalLink, Info, Loader2, Plus, Puzzle, RefreshCw, Save, Search, Settings, Star, Store, ThumbsUp, Trash2, Upload, Wrench, X } from "lucide-react";
 import type { ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -24,10 +24,14 @@ import {
   isPluginCompatible,
   type MarketPlugin,
   fetchPluginConfig,
+  fetchPluginReadme,
+  fetchPluginStats,
   type PluginConfigState,
   type PluginConfigValue,
+  type PluginStats,
   pluginAuthor,
   pluginDescription,
+  pluginHomepageUrl,
   pluginName,
   pluginNeedsUpdate,
   pluginRepositoryUrl,
@@ -36,11 +40,14 @@ import {
   uninstallMaiBotPlugin,
   updateMaiBotPlugin,
 } from "@/lib/maibot-plugin-api";
+import { cn } from "@/lib/utils";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 type PluginPanelMode = "market" | "manage";
 type LoadState = "idle" | "loading" | "ready" | "error";
 type OperationKind = "install" | "update" | "uninstall";
 type ConfigBusyState = "load" | "save" | null;
+type MarketSortKey = "default" | "downloads" | "likes" | "rating";
 
 type PendingOperation = {
   kind: OperationKind;
@@ -56,10 +63,16 @@ type InstalledPluginView = InstalledPlugin & {
   updateAvailable?: boolean;
 };
 
+type DetailPlugin = MarketPlugin | InstalledPluginView;
+
+type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive";
+
 interface CardAction {
   label: string;
   icon: React.ReactNode;
   disabled?: boolean;
+  iconOnly?: boolean;
+  placement?: "top" | "bottom";
   variant?: React.ComponentProps<typeof Button>["variant"];
   onClick: () => void;
 }
@@ -77,8 +90,10 @@ export function PluginMarketPanel({
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [preferCompatible, setPreferCompatible] = useState(true);
+  const [marketSortBy, setMarketSortBy] = useState<MarketSortKey>("default");
   const [marketPlugins, setMarketPlugins] = useState<MarketPlugin[]>([]);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
+  const [pluginStats, setPluginStats] = useState<Record<string, PluginStats>>({});
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
@@ -88,26 +103,31 @@ export function PluginMarketPanel({
   const [configDraft, setConfigDraft] = useState<Record<string, PluginConfigValue> | null>(null);
   const [configBusy, setConfigBusy] = useState<ConfigBusyState>(null);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [detailPlugin, setDetailPlugin] = useState<DetailPlugin | null>(null);
+  const [toggleBusyPluginId, setToggleBusyPluginId] = useState<string | null>(null);
 
-  const loadPlugins = useCallback(async () => {
+  const loadPlugins = useCallback(async (forceRefresh = false) => {
     setLoadState("loading");
     setError(null);
 
     try {
       if (mode === "market") {
-        const result = await fetchMarketPlugins(maibotService);
+        const result = await fetchMarketPlugins(maibotService, { forceRefresh });
         setInstalledPlugins(result.installed);
         setMarketPlugins(result.market);
+        setPluginStats(result.stats ?? {});
       } else {
         const installed = await fetchInstalledPlugins(maibotService);
         setInstalledPlugins(installed);
         setLoadState("ready");
-        void fetchMarketPlugins(maibotService)
+        void fetchMarketPlugins(maibotService, { forceRefresh })
           .then((marketResult) => {
             setMarketPlugins(marketResult.market);
+            setPluginStats(marketResult.stats ?? {});
           })
           .catch(() => {
             setMarketPlugins([]);
+            setPluginStats({});
           });
         return;
       }
@@ -173,6 +193,21 @@ export function PluginMarketPanel({
       setConfigBusy(null);
     }
   }, [configDraft, configPlugin, loadPlugins]);
+
+  const togglePluginEnabled = useCallback(async (plugin: InstalledPlugin, enabled: boolean) => {
+    setToggleBusyPluginId(plugin.id);
+    try {
+      const state = await fetchPluginConfig(plugin.id);
+      const nextConfig = setPluginConfigValue(clonePluginConfig(state.config), ["plugin", "enabled"], enabled);
+      await savePluginConfig(plugin.id, nextConfig);
+      toast.success(`${enabled ? "已启用" : "已禁用"}：${pluginName(plugin)}`);
+      await loadPlugins();
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setToggleBusyPluginId(null);
+    }
+  }, [loadPlugins]);
 
   const updateConfigDraft = useCallback((path: string[], value: PluginConfigValue) => {
     setConfigDraft((draft) => (draft ? setPluginConfigValue(draft, path, value) : draft));
@@ -247,11 +282,17 @@ export function PluginMarketPanel({
     [installedPlugins, marketById],
   );
   const filteredMarket = useMemo(
-    () => sortMarketPlugins(filterPlugins(marketPlugins, query), preferCompatible, maibotVersion),
-    [maibotVersion, marketPlugins, preferCompatible, query],
+    () => sortMarketPlugins(filterPlugins(marketPlugins, query), {
+      maibotVersion,
+      pluginStats,
+      preferCompatible,
+      sortBy: marketSortBy,
+    }),
+    [maibotVersion, marketPlugins, marketSortBy, pluginStats, preferCompatible, query],
   );
   const filteredInstalled = useMemo(() => filterPlugins(installedViews, query), [installedViews, query]);
   const isMarket = mode === "market";
+  const maibotRunning = maibotService?.status === "running";
   const title = isMarket ? "插件商店" : "插件管理";
   const description = isMarket ? "浏览 MaiBot 插件市场，安装或更新插件。" : "查看已安装插件，执行更新与卸载。";
 
@@ -295,7 +336,7 @@ export function PluginMarketPanel({
                   </button>
                 </div>
               ) : null}
-              <Button disabled={loadState === "loading"} onClick={() => void loadPlugins()} size="sm" variant="secondary">
+              <Button disabled={loadState === "loading"} onClick={() => void loadPlugins(true)} size="sm" variant="secondary">
                 {loadState === "loading" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                 刷新
               </Button>
@@ -325,6 +366,19 @@ export function PluginMarketPanel({
               <span className="text-muted-foreground">
                 当前版本：<span className="font-mono text-foreground">{maibotVersion ?? "未知"}</span>
               </span>
+              <label className="ml-auto inline-flex items-center gap-2 text-muted-foreground">
+                <ArrowDownWideNarrow className="size-3.5" />
+                <select
+                  className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
+                  onChange={(event) => setMarketSortBy(event.target.value as MarketSortKey)}
+                  value={marketSortBy}
+                >
+                  <option value="default">推荐排序</option>
+                  <option value="downloads">下载最多</option>
+                  <option value="likes">点赞最多</option>
+                  <option value="rating">评分最高</option>
+                </select>
+              </label>
             </div>
           ) : null}
 
@@ -338,12 +392,23 @@ export function PluginMarketPanel({
               </span>
             </div>
           ) : isMarket ? (
-            <PluginGrid maibotVersion={maibotVersion} onOperate={beginOperation} plugins={filteredMarket} />
+            <PluginGrid
+              maibotVersion={maibotVersion}
+              onDetail={setDetailPlugin}
+              onOperate={beginOperation}
+              pluginStats={pluginStats}
+              plugins={filteredMarket}
+            />
           ) : (
             <InstalledGrid
+              maibotRunning={maibotRunning}
               maibotVersion={maibotVersion}
               onConfigure={openPluginConfig}
+              onDetail={setDetailPlugin}
               onOperate={beginOperation}
+              onToggleEnabled={togglePluginEnabled}
+              pluginStats={pluginStats}
+              toggleBusyPluginId={toggleBusyPluginId}
               plugins={filteredInstalled}
             />
           )}
@@ -376,6 +441,14 @@ export function PluginMarketPanel({
         plugin={configPlugin}
         state={configState}
       />
+      <PluginDetailDialog
+        maibotVersion={maibotVersion}
+        onOpenChange={(open) => {
+          if (!open) setDetailPlugin(null);
+        }}
+        plugin={detailPlugin}
+        stats={detailPlugin ? resolvePluginStats(detailPlugin, pluginStats) : undefined}
+      />
     </>
   );
 }
@@ -403,21 +476,56 @@ function filterPlugins<T extends { id: string; manifest: MarketPlugin["manifest"
 
 function sortMarketPlugins(
   plugins: MarketPlugin[],
-  preferCompatible: boolean,
-  maibotVersion: string | undefined,
+  options: {
+    preferCompatible: boolean;
+    maibotVersion: string | undefined;
+    sortBy: MarketSortKey;
+    pluginStats: Record<string, PluginStats>;
+  },
 ): MarketPlugin[] {
-  if (!preferCompatible || !maibotVersion) {
-    return plugins;
-  }
-
   return [...plugins].sort((left, right) => {
-    const leftCompatible = isPluginCompatible(left.manifest, maibotVersion);
-    const rightCompatible = isPluginCompatible(right.manifest, maibotVersion);
-    if (leftCompatible !== rightCompatible) {
-      return leftCompatible ? -1 : 1;
+    if (options.preferCompatible && options.maibotVersion) {
+      const leftCompatible = isPluginCompatible(left.manifest, options.maibotVersion);
+      const rightCompatible = isPluginCompatible(right.manifest, options.maibotVersion);
+      if (leftCompatible !== rightCompatible) {
+        return leftCompatible ? -1 : 1;
+      }
     }
+
+    const valueDiff = marketSortValue(right, options.sortBy, options.pluginStats)
+      - marketSortValue(left, options.sortBy, options.pluginStats);
+    if (valueDiff !== 0) {
+      return valueDiff;
+    }
+
     return pluginName(left).localeCompare(pluginName(right), "zh-CN");
   });
+}
+
+function marketSortValue(
+  plugin: MarketPlugin,
+  sortBy: MarketSortKey,
+  pluginStats: Record<string, PluginStats>,
+): number {
+  const stats = resolvePluginStats(plugin, pluginStats);
+  const downloads = stats?.downloads ?? pluginInlineStat(plugin, "downloads") ?? 0;
+  const likes = stats?.likes ?? pluginInlineStat(plugin, "likes") ?? 0;
+  const rating = stats?.rating ?? pluginInlineStat(plugin, "rating") ?? 0;
+
+  if (sortBy === "downloads") {
+    return downloads;
+  }
+  if (sortBy === "likes") {
+    return likes;
+  }
+  if (sortBy === "rating") {
+    return rating;
+  }
+
+  const ratingCount = stats?.rating_count ?? 0;
+  return Math.log10(downloads + 1) * 4
+    + Math.log10(likes + 1) * 3
+    + rating * Math.log10(ratingCount + 2) * 2;
 }
 
 function ErrorPanel({
@@ -446,11 +554,15 @@ function ErrorPanel({
 function PluginGrid({
   plugins,
   onOperate,
+  onDetail,
   maibotVersion,
+  pluginStats,
 }: {
   plugins: MarketPlugin[];
   onOperate: (operation: PendingOperation) => void;
+  onDetail: (plugin: MarketPlugin) => void;
   maibotVersion?: string;
+  pluginStats: Record<string, PluginStats>;
 }): React.JSX.Element {
   if (plugins.length === 0) {
     return <EmptyState icon={<Download />} title="没有匹配的插件" />;
@@ -461,12 +573,20 @@ function PluginGrid({
       {plugins.map((plugin) => {
         const repositoryUrl = pluginRepositoryUrl(plugin.manifest);
         const incompatibleReason = getPluginCompatibilityReason(plugin.manifest, maibotVersion);
+        const detailAction: CardAction = {
+          label: "详情",
+          icon: <Info />,
+          variant: "ghost",
+          onClick: () => onDetail(plugin),
+        };
         const actions: CardAction[] = plugin.installed
           ? [
+              detailAction,
               {
                 label: pluginNeedsUpdate(plugin) ? "更新" : "已安装",
                 icon: <Upload />,
                 disabled: !pluginNeedsUpdate(plugin) || !repositoryUrl,
+                placement: "top",
                 onClick: () =>
                   onOperate({
                     kind: "update",
@@ -479,6 +599,7 @@ function PluginGrid({
               },
             ]
           : [
+              detailAction,
               {
                 label: "安装",
                 icon: <Download />,
@@ -493,6 +614,7 @@ function PluginGrid({
             compatibilityReason={incompatibleReason}
             key={plugin.id}
             plugin={plugin}
+            stats={resolvePluginStats(plugin, pluginStats)}
             status={plugin.installed ? `本地 ${plugin.installedVersion ?? "-"}` : undefined}
           />
         );
@@ -505,12 +627,22 @@ function InstalledGrid({
   plugins,
   onOperate,
   onConfigure,
+  onDetail,
+  onToggleEnabled,
   maibotVersion,
+  maibotRunning,
+  pluginStats,
+  toggleBusyPluginId,
 }: {
   plugins: InstalledPluginView[];
   onOperate: (operation: PendingOperation) => void;
   onConfigure: (plugin: InstalledPlugin) => void;
+  onDetail: (plugin: InstalledPluginView) => void;
+  onToggleEnabled: (plugin: InstalledPlugin, enabled: boolean) => void;
   maibotVersion?: string;
+  maibotRunning: boolean;
+  pluginStats: Record<string, PluginStats>;
+  toggleBusyPluginId: string | null;
 }): React.JSX.Element {
   if (plugins.length === 0) {
     return <EmptyState icon={<Puzzle />} title="没有已安装插件" />;
@@ -533,15 +665,23 @@ function InstalledGrid({
           <PluginCard
             actions={[
               {
+                label: "详情",
+                icon: <Info />,
+                variant: "ghost",
+                onClick: () => onDetail(plugin),
+              },
+              {
                 label: "配置",
-                icon: <SlidersHorizontal />,
-                variant: "secondary",
+                icon: <Settings />,
+                iconOnly: true,
+                variant: "ghost",
                 onClick: () => onConfigure(plugin),
               },
               {
                 label: updateLabel,
                 icon: <Upload />,
                 disabled: !plugin.updateAvailable || !repositoryUrl,
+                placement: "top",
                 onClick: () =>
                   onOperate({
                     kind: "update",
@@ -554,19 +694,27 @@ function InstalledGrid({
               },
               {
                 label: "卸载",
-                icon: <Trash2 />,
-                variant: "outline",
+                icon: <Trash2 className="text-destructive" />,
+                iconOnly: true,
+                variant: "ghost",
                 onClick: () => onOperate({ kind: "uninstall", plugin, branch: "main" }),
               },
             ]}
             compatibilityReason={incompatibleReason}
             key={`${plugin.id}:${plugin.path}`}
             plugin={plugin}
+            runtimeState={pluginRuntimeState(plugin, maibotRunning)}
+            stats={resolvePluginStats(updatePlugin ?? plugin, pluginStats)}
             status={
               plugin.updateAvailable && updatePlugin
                 ? `${pluginVersion(plugin.manifest)} -> ${pluginVersion(updatePlugin.manifest)}`
-                : (plugin.load_status ?? (plugin.enabled === false ? "disabled" : "unknown"))
+                : undefined
             }
+            toggleEnabled={{
+              checked: plugin.enabled !== false,
+              busy: toggleBusyPluginId === plugin.id,
+              onChange: (next) => onToggleEnabled(plugin, next),
+            }}
           />
         );
       })}
@@ -579,17 +727,36 @@ function PluginCard({
   status,
   actions,
   compatibilityReason,
+  runtimeState,
+  stats,
+  toggleEnabled,
 }: {
   plugin: { id: string; manifest: MarketPlugin["manifest"] };
   status?: string;
   actions: CardAction[];
   compatibilityReason?: string | null;
+  runtimeState?: PluginRuntimeState;
+  stats?: PluginStats;
+  toggleEnabled?: {
+    checked: boolean;
+    busy: boolean;
+    onChange: (checked: boolean) => void;
+  };
 }): React.JSX.Element {
+  const titleMuted = runtimeState === "disabled";
+  const downloads = stats?.downloads ?? pluginInlineStat(plugin, "downloads") ?? 0;
+  const rating = stats?.rating ?? pluginInlineStat(plugin, "rating") ?? 0;
+  const likes = stats?.likes ?? pluginInlineStat(plugin, "likes") ?? 0;
+  const topActions = actions.filter((action) => action.placement === "top");
+  const bottomActions = actions.filter((action) => action.placement !== "top");
   return (
     <div className="flex min-h-44 flex-col rounded-lg border border-border bg-card p-4">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold" title={pluginName(plugin)}>
+          <p
+            className={["truncate text-sm font-semibold", titleMuted ? "text-muted-foreground" : ""].filter(Boolean).join(" ")}
+            title={pluginName(plugin)}
+          >
             {pluginName(plugin)}
           </p>
           <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -597,8 +764,26 @@ function PluginCard({
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
+          {topActions.length ? (
+            <div className="flex items-center gap-1">
+              {topActions.map((action) => (
+                <Button
+                  disabled={action.disabled}
+                  key={action.label}
+                  onClick={action.onClick}
+                  size="sm"
+                  title={action.label}
+                  variant={action.variant ?? "secondary"}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              ))}
+            </div>
+          ) : null}
           {status ? <Badge variant="outline">{status}</Badge> : null}
-          {compatibilityReason ? <Badge variant="warning">不兼容</Badge> : <Badge variant="success">兼容</Badge>}
+          {runtimeState ? <PluginRuntimeLight state={runtimeState} /> : null}
+          {compatibilityReason ? <Badge variant="warning">不兼容</Badge> : null}
         </div>
       </div>
       {compatibilityReason ? (
@@ -609,6 +794,20 @@ function PluginCard({
       <p className="mt-3 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
         {pluginDescription(plugin.manifest)}
       </p>
+      <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1">
+          <Download className="size-3.5" />
+          {downloads.toLocaleString()}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <Star className="size-3.5 fill-yellow-400 text-yellow-400" />
+          {rating.toFixed(1)}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <ThumbsUp className="size-3.5" />
+          {likes.toLocaleString()}
+        </span>
+      </div>
       <div className="mt-3 flex flex-wrap gap-1">
         {(plugin.manifest.categories ?? plugin.manifest.keywords ?? []).slice(0, 3).map((tag) => (
           <Badge key={tag} variant="secondary">
@@ -617,18 +816,347 @@ function PluginCard({
         ))}
       </div>
       <div className="mt-auto flex items-center justify-between gap-3 pt-4">
-        <code className="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
-          {plugin.id}
-        </code>
+        <div className="flex min-w-0 items-center gap-2">
+          {toggleEnabled ? (
+            <label className="inline-flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground" title={toggleEnabled.checked ? "禁用插件" : "启用插件"}>
+              <button
+                aria-checked={toggleEnabled.checked}
+                className={cn(
+                  "relative h-5 w-9 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                  toggleEnabled.checked ? "border-primary bg-primary" : "border-border bg-muted",
+                  toggleEnabled.busy && "cursor-wait opacity-70",
+                )}
+                disabled={toggleEnabled.busy}
+                onClick={() => toggleEnabled.onChange(!toggleEnabled.checked)}
+                role="switch"
+                type="button"
+              >
+                <span
+                  className={cn(
+                    "absolute top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-full bg-background shadow-sm transition-transform",
+                    toggleEnabled.checked ? "translate-x-4" : "translate-x-0.5",
+                  )}
+                >
+                  {toggleEnabled.busy ? <Loader2 className="size-2.5 animate-spin" /> : null}
+                </span>
+              </button>
+              {toggleEnabled.checked ? "启用" : "禁用"}
+            </label>
+          ) : null}
+        </div>
         <div className="flex shrink-0 items-center gap-1">
-          {actions.map((action) => (
-            <Button disabled={action.disabled} key={action.label} onClick={action.onClick} size="sm" variant={action.variant ?? "secondary"}>
+          {bottomActions.map((action) => (
+            <Button
+              disabled={action.disabled}
+              key={action.label}
+              onClick={action.onClick}
+              size={action.iconOnly ? "icon-sm" : "sm"}
+              title={action.label}
+              variant={action.variant ?? "secondary"}
+            >
               {action.icon}
-              {action.label}
+              {action.iconOnly ? <span className="sr-only">{action.label}</span> : action.label}
             </Button>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function resolvePluginStats(
+  plugin: { id: string; manifest: MarketPlugin["manifest"] },
+  stats: Record<string, PluginStats>,
+): PluginStats | undefined {
+  const statsIds = [plugin.manifest.id, plugin.id].filter((id): id is string => Boolean(id));
+  return statsIds.map((id) => stats[id]).find(Boolean);
+}
+
+function pluginInlineStat(
+  plugin: { id: string; manifest: MarketPlugin["manifest"] },
+  key: "downloads" | "rating" | "likes",
+): number | undefined {
+  const value = (plugin as Partial<Record<typeof key, unknown>>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function pluginRuntimeState(plugin: InstalledPluginView, maibotRunning: boolean): PluginRuntimeState {
+  if (plugin.enabled === false) {
+    return "disabled";
+  }
+  if (!maibotRunning) {
+    return "inactive";
+  }
+  if (plugin.loaded === true) {
+    return "loaded";
+  }
+  if (plugin.load_status === "success") {
+    return "loaded";
+  }
+  if (plugin.loaded === false || plugin.load_status === "failed") {
+    return "failed";
+  }
+  return "inactive";
+}
+
+function PluginRuntimeLight({ state }: { state: PluginRuntimeState }): React.JSX.Element {
+  const meta = {
+    disabled: { label: "未启用", className: "bg-muted-foreground/55" },
+    inactive: { label: "未加载", className: "bg-muted-foreground/55" },
+    failed: { label: "加载失败", className: "bg-destructive" },
+    loaded: { label: "加载成功", className: "bg-emerald-500" },
+  }[state];
+
+  return (
+    <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 text-[11px] text-muted-foreground">
+      <span className={["size-2 rounded-full", meta.className].join(" ")} />
+      {meta.label}
+    </span>
+  );
+}
+
+function PluginDetailDialog({
+  plugin,
+  stats,
+  maibotVersion,
+  onOpenChange,
+}: {
+  plugin: DetailPlugin | null;
+  stats?: PluginStats;
+  maibotVersion?: string;
+  onOpenChange: (open: boolean) => void;
+}): React.JSX.Element {
+  const repositoryUrl = plugin ? pluginRepositoryUrl(plugin.manifest) : undefined;
+  const homepageUrl = plugin ? pluginHomepageUrl(plugin.manifest) : undefined;
+  const compatibilityReason = plugin ? getPluginCompatibilityReason(plugin.manifest, maibotVersion) : null;
+  const downloads = stats?.downloads ?? (plugin ? pluginInlineStat(plugin, "downloads") : undefined) ?? 0;
+  const rating = stats?.rating ?? (plugin ? pluginInlineStat(plugin, "rating") : undefined) ?? 0;
+  const likes = stats?.likes ?? (plugin ? pluginInlineStat(plugin, "likes") : undefined) ?? 0;
+  const [readme, setReadme] = useState("");
+  const [readmeLoading, setReadmeLoading] = useState(false);
+  const [detailStats, setDetailStats] = useState<PluginStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const resolvedStats = detailStats ?? stats;
+  const resolvedDownloads = resolvedStats?.downloads ?? downloads;
+  const resolvedRating = resolvedStats?.rating ?? rating;
+  const resolvedLikes = resolvedStats?.likes ?? likes;
+  const comments = resolvedStats?.recent_ratings?.filter((item) => item.comment?.trim()) ?? [];
+  const keywords = plugin?.manifest.keywords ?? [];
+  const categories = plugin?.manifest.categories ?? [];
+
+  useEffect(() => {
+    if (!plugin) {
+      setReadme("");
+      setDetailStats(null);
+      return;
+    }
+
+    let cancelled = false;
+    setReadmeLoading(true);
+    setStatsLoading(true);
+    setReadme("");
+    setDetailStats(null);
+
+    void fetchPluginReadme(plugin.id, pluginRepositoryUrl(plugin.manifest))
+      .then((result) => {
+        if (!cancelled) {
+          setReadme(result.success && result.content ? result.content : result.error ?? "该插件暂无 README 文档");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setReadme(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setReadmeLoading(false);
+        }
+      });
+
+    void fetchPluginStats(plugin.id)
+      .then((nextStats) => {
+        if (!cancelled) {
+          setDetailStats(nextStats);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setStatsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [plugin]);
+
+  return (
+    <Dialog open={plugin !== null} onOpenChange={onOpenChange}>
+      <DialogContent size="xl">
+        <DialogHeader
+          description={plugin ? plugin.id : undefined}
+          icon={<Info className="size-4" />}
+          title={plugin ? pluginName(plugin) : "插件详情"}
+          tone="primary"
+        />
+        <DialogBody className="space-y-4">
+          {plugin ? (
+            <>
+              <div className="grid gap-3 md:grid-cols-[1.25fr_0.75fr]">
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-base font-semibold">{pluginName(plugin)}</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
+                      </p>
+                    </div>
+                    {compatibilityReason ? <Badge variant="warning">不兼容</Badge> : null}
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                    {pluginDescription(plugin.manifest)}
+                  </p>
+                  {compatibilityReason ? (
+                    <p className="mt-3 rounded-md bg-warning/15 px-3 py-2 text-xs leading-relaxed text-warning-foreground">
+                      {compatibilityReason}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-2 rounded-lg border border-border bg-card p-4 text-sm">
+                  <PluginDetailStat icon={<Download className="size-4" />} label="下载" value={resolvedDownloads.toLocaleString()} />
+                  <PluginDetailStat icon={<Star className="size-4 fill-yellow-400 text-yellow-400" />} label="评分" value={resolvedRating.toFixed(1)} />
+                  <PluginDetailStat icon={<ThumbsUp className="size-4" />} label="点赞" value={resolvedLikes.toLocaleString()} />
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <PluginDetailRow label="插件 ID" value={plugin.id} code />
+                <PluginDetailRow label="许可证" value={plugin.manifest.license ?? "未知"} />
+                <PluginDetailRow
+                  label="支持版本"
+                  value={
+                    plugin.manifest.host_application
+                      ? `${plugin.manifest.host_application.min_version ?? "任意"} - ${plugin.manifest.host_application.max_version ?? "最新"}`
+                      : "未声明"
+                  }
+                />
+                <PluginDetailRow label="Manifest" value={`v${plugin.manifest.manifest_version ?? 1}`} />
+              </div>
+
+              {[...categories, ...keywords].length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {categories.map((item) => <Badge key={`category:${item}`} variant="secondary">{item}</Badge>)}
+                  {keywords.map((item) => <Badge key={`keyword:${item}`} variant="outline">{item}</Badge>)}
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2">
+                {homepageUrl ? (
+                  <Button onClick={() => void window.maibotDesktop?.openExternal(homepageUrl)} size="sm" variant="secondary">
+                    <ExternalLink />
+                    打开主页
+                  </Button>
+                ) : null}
+                {repositoryUrl ? (
+                  <Button onClick={() => void window.maibotDesktop?.openExternal(repositoryUrl)} size="sm" variant="secondary">
+                    <ExternalLink />
+                    打开仓库
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <section className="min-w-0 rounded-lg border border-border bg-card">
+                  <div className="border-b border-border px-4 py-3 text-sm font-semibold">README</div>
+                  <div className="max-h-96 overflow-y-auto p-4">
+                    {readmeLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin" />
+                        正在加载 README
+                      </div>
+                    ) : (
+                      <MarkdownRenderer content={readme || "该插件暂无 README 文档"} />
+                    )}
+                  </div>
+                </section>
+
+                <section className="min-w-0 rounded-lg border border-border bg-card">
+                  <div className="flex items-center justify-between border-b border-border px-4 py-3 text-sm font-semibold">
+                    评论
+                    {statsLoading ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" /> : null}
+                  </div>
+                  <div className="max-h-96 space-y-3 overflow-y-auto p-4">
+                    {comments.length ? (
+                      comments.slice(0, 8).map((comment, index) => (
+                        <div className="rounded-md bg-muted/35 p-3 text-xs" key={`${comment.user_id}-${comment.created_at}-${index}`}>
+                          <div className="mb-1 flex items-center justify-between gap-2 text-muted-foreground">
+                            <span className="truncate">{comment.user_id}</span>
+                            <span className="inline-flex items-center gap-1">
+                              <Star className="size-3 fill-yellow-400 text-yellow-400" />
+                              {comment.rating.toFixed(1)}
+                            </span>
+                          </div>
+                          <p className="whitespace-pre-wrap break-words leading-relaxed">{comment.comment}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">{statsLoading ? "正在拉取评论" : "暂无评论"}</p>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button onClick={() => onOpenChange(false)} size="sm" variant="ghost">
+            关闭
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PluginDetailStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+      <span className="inline-flex items-center gap-2 text-muted-foreground">
+        {icon}
+        {label}
+      </span>
+      <span className="font-semibold">{value}</span>
+    </div>
+  );
+}
+
+function PluginDetailRow({
+  label,
+  value,
+  code,
+}: {
+  label: string;
+  value: string;
+  code?: boolean;
+}): React.JSX.Element {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-card p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      {code ? (
+        <code className="mt-1 block truncate text-xs">{value}</code>
+      ) : (
+        <p className="mt-1 truncate text-sm font-medium">{value}</p>
+      )}
     </div>
   );
 }
@@ -659,7 +1187,7 @@ function PluginConfigDialog({
       <DialogContent size="xl">
         <DialogHeader
           description={plugin ? `${plugin.id} · ${state?.configPath ?? "config.toml"}` : undefined}
-          icon={<SlidersHorizontal className="size-4" />}
+          icon={<Settings className="size-4" />}
           title={plugin ? `${pluginName(plugin)} 配置` : "插件配置"}
           tone="primary"
         />

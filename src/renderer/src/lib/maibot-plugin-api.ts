@@ -4,9 +4,12 @@ import type {
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
   MaiBotMarketPlugin,
+  MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginManifest,
   MaiBotPluginOperationResult,
+  MaiBotPluginReadmeResult,
+  MaiBotPluginStats,
   ServiceDescriptor,
 } from "@shared/contracts";
 
@@ -14,6 +17,8 @@ export type PluginManifest = MaiBotPluginManifest;
 export type MarketPlugin = MaiBotMarketPlugin;
 export type InstalledPlugin = MaiBotInstalledPlugin;
 export type PluginOperationResponse = MaiBotPluginOperationResult;
+export type PluginStats = MaiBotPluginStats;
+export type PluginReadmeResult = MaiBotPluginReadmeResult;
 export type PluginConfigState = MaiBotPluginConfigState;
 export type PluginConfigValue = MaiBotPluginConfigValue;
 export type PluginConfigSaveResponse = MaiBotPluginConfigSaveResult;
@@ -53,6 +58,10 @@ export function pluginVersion(manifest: PluginManifest): string {
 
 export function pluginRepositoryUrl(manifest: PluginManifest): string | undefined {
   return manifest.repository_url?.trim() || manifest.urls?.repository?.trim();
+}
+
+export function pluginHomepageUrl(manifest: PluginManifest): string | undefined {
+  return manifest.homepage_url?.trim() || manifest.urls?.homepage?.trim();
 }
 
 export function pluginNeedsUpdate(plugin: MarketPlugin): boolean {
@@ -127,11 +136,14 @@ function normalizeVersion(version: string | undefined): number[] {
 }
 
 export function fetchInstalledPlugins(_service?: ServiceDescriptor): Promise<InstalledPlugin[]> {
-  return requirePluginBridge().listInstalled();
+  return requirePluginBridge().listInstalled(_service?.url);
 }
 
-export function fetchMarketPlugins(_service?: ServiceDescriptor): Promise<MaiBotPluginListResult> {
-  return requirePluginBridge().listMarket();
+export function fetchMarketPlugins(
+  _service?: ServiceDescriptor,
+  options?: MaiBotPluginListOptions,
+): Promise<MaiBotPluginListResult> {
+  return requirePluginBridge().listMarket(_service?.url, options);
 }
 
 export function installMaiBotPlugin(
@@ -178,4 +190,12 @@ export function savePluginConfig(
   config: Record<string, PluginConfigValue>,
 ): Promise<PluginConfigSaveResponse> {
   return requirePluginBridge().saveConfig(pluginId, config);
+}
+
+export function fetchPluginReadme(pluginId: string, repositoryUrl?: string): Promise<PluginReadmeResult> {
+  return requirePluginBridge().getReadme(pluginId, repositoryUrl);
+}
+
+export function fetchPluginStats(pluginId: string): Promise<PluginStats | null> {
+  return requirePluginBridge().getStats(pluginId);
 }

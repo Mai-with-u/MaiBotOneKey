@@ -8,15 +8,24 @@ import type {
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
   MaiBotInstalledPlugin,
+  MaiBotPluginListOptions,
   MaiBotMarketPlugin,
   MaiBotPluginListResult,
   MaiBotPluginManifest,
   MaiBotPluginOperationResult,
+  MaiBotPluginReadmeResult,
+  MaiBotPluginStats,
 } from "../../shared/contracts";
 
 const MARKET_URL =
   "https://raw.githubusercontent.com/Mai-with-u/plugin-repo/main/plugin_details.json";
+const PLUGIN_STATS_URL = process.env.MAIBOT_PLUGIN_STATS_BASE_URL
+  ? `${process.env.MAIBOT_PLUGIN_STATS_BASE_URL.replace(/\/+$/u, "")}/stats/summary`
+  : "http://hyybuth.xyz:10059/stats/summary";
+const PLUGIN_STATS_BASE_URL = process.env.MAIBOT_PLUGIN_STATS_BASE_URL?.replace(/\/+$/u, "") ?? "http://hyybuth.xyz:10059";
 const MARKET_TIMEOUT_MS = 10_000;
+const MAIBOT_API_TIMEOUT_MS = 3_000;
+const PLUGIN_MARKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const PLUGIN_CONFIG_FILE = "config.toml";
 
 export interface MaiBotPluginClientOptions {
@@ -29,6 +38,11 @@ interface GitRunResult {
   output: string;
 }
 
+interface CacheFile<T> {
+  timestamp: number;
+  data: T;
+}
+
 export class MaiBotPluginClient {
   private readonly maibotRoot: string;
 
@@ -36,13 +50,26 @@ export class MaiBotPluginClient {
 
   private readonly gitPath: string;
 
+  private marketCache: CacheFile<MaiBotMarketPlugin[]> | null = null;
+
+  private marketRequest: Promise<MaiBotMarketPlugin[]> | null = null;
+
+  private statsCache: CacheFile<Record<string, MaiBotPluginStats>> | null = null;
+
+  private statsRequest: Promise<Record<string, MaiBotPluginStats>> | null = null;
+
   constructor(options: MaiBotPluginClientOptions) {
     this.maibotRoot = resolve(options.maibotRoot);
     this.pluginsRoot = resolve(this.maibotRoot, "plugins");
     this.gitPath = options.gitPath;
   }
 
-  async listInstalled(): Promise<MaiBotInstalledPlugin[]> {
+  async listInstalled(serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> {
+    const runtimePlugins = await this.listRuntimeInstalled(serviceUrl);
+    if (runtimePlugins) {
+      return runtimePlugins;
+    }
+
     await mkdir(this.pluginsRoot, { recursive: true });
     const entries = await import("node:fs/promises").then(({ readdir }) =>
       readdir(this.pluginsRoot, { withFileTypes: true }),
@@ -74,37 +101,36 @@ export class MaiBotPluginClient {
         manifest: { ...manifest, id },
         path: pluginPath,
         enabled,
-        loaded: false,
-        load_status: enabled ? "offline" : "disabled",
+        loaded: undefined,
+        load_status: enabled ? "inactive" : "disabled",
       });
     }
 
     return plugins.sort((left, right) => pluginName(left).localeCompare(pluginName(right), "zh-CN"));
   }
 
-  async listMarket(): Promise<MaiBotPluginListResult> {
-    const installed = await this.listInstalled();
-    const response = await fetchWithTimeout(MARKET_URL);
-    if (!response.ok) {
-      throw new Error(`Plugin market list failed: HTTP ${response.status}`);
-    }
-
-    const rawList = (await response.json()) as unknown;
+  async listMarket(serviceUrl?: string, options: MaiBotPluginListOptions = {}): Promise<MaiBotPluginListResult> {
+    const installed = await this.listInstalled(serviceUrl);
     const installedById = new Map(installed.map((plugin) => [plugin.id, plugin]));
-    const sourceList = Array.isArray(rawList) ? rawList : [];
+    const [sourceList, stats] = await Promise.all([
+      this.getMarketPlugins(options),
+      this.getPluginStatsSummary(options).catch(() => ({})),
+    ]);
     const market = sourceList
-      .map(normalizeMarketPlugin)
-      .filter((plugin): plugin is MaiBotMarketPlugin => plugin !== null)
       .map((plugin) => {
         const installedPlugin = installedById.get(plugin.id);
+        const statsItem = resolvePluginStats(plugin, stats);
         return {
           ...plugin,
           installed: Boolean(installedPlugin),
           installedVersion: installedPlugin ? pluginVersion(installedPlugin.manifest) : undefined,
+          downloads: statsItem?.downloads ?? plugin.downloads,
+          rating: statsItem?.rating ?? plugin.rating,
+          likes: statsItem?.likes ?? plugin.likes,
         };
       });
 
-    return { installed, market };
+    return { installed, market, stats };
   }
 
   async install(pluginId: string, repositoryUrl: string, branch = "main"): Promise<MaiBotPluginOperationResult> {
@@ -224,6 +250,45 @@ export class MaiBotPluginClient {
     };
   }
 
+  async getReadme(pluginId: string, repositoryUrl?: string): Promise<MaiBotPluginReadmeResult> {
+    const pluginPath = await this.resolveInstalledPluginPath(pluginId);
+    if (pluginPath) {
+      for (const readmeName of ["README.md", "readme.md", "Readme.md", "README.MD"]) {
+        const readmePath = resolve(pluginPath, readmeName);
+        if (!isPathInside(pluginPath, readmePath) || !(await pathExists(readmePath))) {
+          continue;
+        }
+        try {
+          return { success: true, content: await readFile(readmePath, "utf8") };
+        } catch {
+          // Try the next known README casing.
+        }
+      }
+    }
+
+    const remoteUrl = repositoryUrl ? githubRawReadmeUrl(repositoryUrl) : undefined;
+    if (!remoteUrl) {
+      return { success: false, error: "未找到插件 README" };
+    }
+
+    for (const branch of ["main", "master"]) {
+      const response = await fetchWithTimeout(remoteUrl(branch)).catch(() => null);
+      if (response?.ok) {
+        return { success: true, content: await response.text() };
+      }
+    }
+    return { success: false, error: "未找到插件 README" };
+  }
+
+  async getStats(pluginId: string): Promise<MaiBotPluginStats | null> {
+    const response = await fetchWithTimeout(`${PLUGIN_STATS_BASE_URL}/stats/${encodeURIComponent(pluginId)}`).catch(() => null);
+    if (!response?.ok) {
+      return null;
+    }
+    const data = (await response.json()) as unknown;
+    return normalizePluginStatsDetail(pluginId, data);
+  }
+
   private installTargetPath(pluginId: string): string {
     return this.safePluginPath(validatePluginId(pluginId).replace(/\./gu, "_"), false);
   }
@@ -259,6 +324,107 @@ export class MaiBotPluginClient {
       return {};
     }
     return parsePluginConfig(await readFile(configPath, "utf8"), configPath);
+  }
+
+  private async getMarketPlugins(options: MaiBotPluginListOptions): Promise<MaiBotMarketPlugin[]> {
+    const cached = await this.readCache(
+      "onekey-plugin-market-list-cache.json",
+      this.marketCache,
+      isMarketPluginList,
+    );
+    if (!options.forceRefresh && cached && Date.now() - cached.timestamp < PLUGIN_MARKET_CACHE_TTL_MS) {
+      this.marketCache = cached;
+      return cached.data;
+    }
+
+    if (!this.marketRequest || options.forceRefresh) {
+      this.marketRequest = fetchMarketPluginsUncached()
+        .then(async (plugins) => {
+          const nextCache = { timestamp: Date.now(), data: plugins };
+          this.marketCache = nextCache;
+          await this.writeCache("onekey-plugin-market-list-cache.json", nextCache);
+          return plugins;
+        })
+        .catch((error) => {
+          if (cached) {
+            return cached.data;
+          }
+          throw error;
+        })
+        .finally(() => {
+          this.marketRequest = null;
+        });
+    }
+
+    return this.marketRequest;
+  }
+
+  private async getPluginStatsSummary(options: MaiBotPluginListOptions): Promise<Record<string, MaiBotPluginStats>> {
+    const cached = await this.readCache(
+      "onekey-plugin-market-stats-cache.json",
+      this.statsCache,
+      isPluginStatsMap,
+    );
+    if (!options.forceRefresh && cached && Date.now() - cached.timestamp < PLUGIN_MARKET_CACHE_TTL_MS) {
+      this.statsCache = cached;
+      return cached.data;
+    }
+
+    if (!this.statsRequest || options.forceRefresh) {
+      this.statsRequest = fetchPluginStatsSummary()
+        .then(async (stats) => {
+          const nextCache = { timestamp: Date.now(), data: stats };
+          this.statsCache = nextCache;
+          await this.writeCache("onekey-plugin-market-stats-cache.json", nextCache);
+          return stats;
+        })
+        .catch((error) => {
+          if (cached) {
+            return cached.data;
+          }
+          throw error;
+        })
+        .finally(() => {
+          this.statsRequest = null;
+        });
+    }
+
+    return this.statsRequest;
+  }
+
+  private async readCache<T>(
+    fileName: string,
+    memoryCache: CacheFile<T> | null,
+    validate: (value: unknown) => value is T,
+  ): Promise<CacheFile<T> | null> {
+    if (memoryCache) {
+      return memoryCache;
+    }
+
+    const cachePath = this.cachePath(fileName);
+    try {
+      const raw = JSON.parse(await readFile(cachePath, "utf8")) as Partial<CacheFile<unknown>>;
+      if (typeof raw.timestamp !== "number" || !validate(raw.data)) {
+        return null;
+      }
+      return { timestamp: raw.timestamp, data: raw.data };
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeCache<T>(fileName: string, cache: CacheFile<T>): Promise<void> {
+    const cachePath = this.cachePath(fileName);
+    await mkdir(resolve(this.maibotRoot, "data"), { recursive: true });
+    await writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8").catch(() => undefined);
+  }
+
+  private cachePath(fileName: string): string {
+    const cachePath = resolve(this.maibotRoot, "data", fileName);
+    if (!isPathInside(this.maibotRoot, cachePath)) {
+      throw new Error("插件市场缓存路径超出允许范围");
+    }
+    return cachePath;
   }
 
   private async cloneRepository(repositoryUrl: string, targetPath: string, branch: string): Promise<void> {
@@ -301,6 +467,53 @@ export class MaiBotPluginClient {
     }
   }
 
+  private async listRuntimeInstalled(serviceUrl?: string): Promise<MaiBotInstalledPlugin[] | null> {
+    const apiUrl = maibotApiUrl(serviceUrl, "/api/webui/plugins/installed");
+    if (!apiUrl) {
+      return null;
+    }
+
+    try {
+      const response = await fetchWithTimeout(apiUrl, MAIBOT_API_TIMEOUT_MS, {
+        headers: await this.maibotRuntimeAuthHeaders(serviceUrl),
+      });
+      if (!response.ok) {
+        return null;
+      }
+
+      const data = (await response.json()) as unknown;
+      if (!isUnknownRecord(data) || data.success !== true || !Array.isArray(data.plugins)) {
+        return null;
+      }
+
+      const plugins = data.plugins
+        .map(normalizeInstalledPlugin)
+        .filter((plugin): plugin is MaiBotInstalledPlugin => plugin !== null);
+      return plugins.sort((left, right) => pluginName(left).localeCompare(pluginName(right), "zh-CN"));
+    } catch {
+      return null;
+    }
+  }
+
+  private async maibotRuntimeAuthHeaders(serviceUrl?: string): Promise<HeadersInit> {
+    const token = tokenFromServiceUrl(serviceUrl) ?? (await this.readMaiBotWebUiToken());
+    return token ? { Cookie: `maibot_session=${encodeURIComponent(token)}` } : {};
+  }
+
+  private async readMaiBotWebUiToken(): Promise<string | null> {
+    const configPath = resolve(this.maibotRoot, "data", "webui.json");
+    if (!isPathInside(this.maibotRoot, configPath)) {
+      return null;
+    }
+
+    try {
+      const raw = JSON.parse(await readFile(configPath, "utf8")) as { access_token?: unknown };
+      return typeof raw.access_token === "string" && raw.access_token.length > 0 ? raw.access_token : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async removePluginPath(pluginPath: string): Promise<void> {
     const safePath = this.safePluginPath(basename(pluginPath), true);
     await rm(safePath, { recursive: true, force: true });
@@ -327,14 +540,157 @@ function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
     return null;
   }
 
-  const item = raw as { id?: string; manifest?: MaiBotPluginManifest; source?: string };
+  const item = raw as {
+    id?: string;
+    manifest?: MaiBotPluginManifest;
+    source?: string;
+    downloads?: unknown;
+    rating?: unknown;
+    likes?: unknown;
+  };
   const manifest = item.manifest;
   const id = manifest?.id?.trim() || item.id?.trim();
   if (!manifest || !id || !manifest.name || !manifest.version) {
     return null;
   }
 
-  return { id, manifest: { ...manifest, id }, source: item.source };
+  return {
+    id,
+    manifest: { ...manifest, id },
+    source: item.source,
+    downloads: normalizeStatsNumber(item.downloads),
+    rating: normalizeStatsNumber(item.rating),
+    likes: normalizeStatsNumber(item.likes),
+  };
+}
+
+function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
+  if (!isUnknownRecord(raw) || !isUnknownRecord(raw.manifest)) {
+    return null;
+  }
+
+  const manifest = raw.manifest as MaiBotPluginManifest;
+  const id = String(raw.id ?? manifest.id ?? "").trim();
+  if (!id || !manifest.name || !manifest.version) {
+    return null;
+  }
+
+  return {
+    id,
+    manifest: { ...manifest, id: manifest.id?.trim() || id },
+    path: typeof raw.path === "string" ? raw.path : "",
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : typeof raw.disabled === "boolean" ? !raw.disabled : true,
+    loaded: typeof raw.loaded === "boolean" ? raw.loaded : undefined,
+    load_status: typeof raw.load_status === "string" ? raw.load_status : undefined,
+  };
+}
+
+async function fetchMarketPluginsUncached(): Promise<MaiBotMarketPlugin[]> {
+  const response = await fetchWithTimeout(MARKET_URL);
+  if (!response.ok) {
+    throw new Error(`Plugin market list failed: HTTP ${response.status}`);
+  }
+
+  const rawList = (await response.json()) as unknown;
+  const sourceList = Array.isArray(rawList) ? rawList : [];
+  return sourceList
+    .map(normalizeMarketPlugin)
+    .filter((plugin): plugin is MaiBotMarketPlugin => plugin !== null);
+}
+
+async function fetchPluginStatsSummary(): Promise<Record<string, MaiBotPluginStats>> {
+  const response = await fetchWithTimeout(PLUGIN_STATS_URL);
+  if (!response.ok) {
+    return {};
+  }
+
+  const data = (await response.json()) as unknown;
+  if (!isUnknownRecord(data) || data.success !== true || !isUnknownRecord(data.stats)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(data.stats)
+      .map(([pluginId, rawStats]) => normalizePluginStats(pluginId, rawStats))
+      .filter((entry): entry is [string, MaiBotPluginStats] => entry !== null),
+  );
+}
+
+function isMarketPluginList(value: unknown): value is MaiBotMarketPlugin[] {
+  return Array.isArray(value) && value.every((item) => normalizeMarketPlugin(item) !== null);
+}
+
+function isPluginStatsMap(value: unknown): value is Record<string, MaiBotPluginStats> {
+  if (!isUnknownRecord(value)) {
+    return false;
+  }
+  return Object.entries(value).every(([pluginId, stats]) => normalizePluginStats(pluginId, stats) !== null);
+}
+
+function normalizePluginStats(pluginId: string, rawStats: unknown): [string, MaiBotPluginStats] | null {
+  if (!isUnknownRecord(rawStats)) {
+    return null;
+  }
+
+  const normalizedId = String(rawStats.plugin_id ?? pluginId);
+  return [
+    pluginId,
+    {
+      plugin_id: normalizedId,
+      likes: normalizeStatsNumber(rawStats.likes) ?? 0,
+      dislikes: normalizeStatsNumber(rawStats.dislikes) ?? 0,
+      downloads: normalizeStatsNumber(rawStats.downloads) ?? 0,
+      rating: normalizeStatsNumber(rawStats.rating) ?? 0,
+      rating_count: normalizeStatsNumber(rawStats.rating_count) ?? 0,
+      recent_ratings: normalizePluginRatings(rawStats.recent_ratings),
+    },
+  ];
+}
+
+function normalizePluginStatsDetail(pluginId: string, rawData: unknown): MaiBotPluginStats | null {
+  if (!isUnknownRecord(rawData)) {
+    return null;
+  }
+  const rawStats = isUnknownRecord(rawData.stats) ? rawData.stats : rawData;
+  const normalized = normalizePluginStats(pluginId, rawStats);
+  return normalized?.[1] ?? null;
+}
+
+function normalizePluginRatings(rawRatings: unknown): MaiBotPluginStats["recent_ratings"] {
+  if (!Array.isArray(rawRatings)) {
+    return undefined;
+  }
+  return rawRatings
+    .filter(isUnknownRecord)
+    .map((rating) => ({
+      user_id: String(rating.user_id ?? "匿名用户"),
+      rating: normalizeStatsNumber(rating.rating) ?? 0,
+      comment: typeof rating.comment === "string" ? rating.comment : undefined,
+      created_at: String(rating.created_at ?? ""),
+    }))
+    .filter((rating) => rating.rating > 0 || rating.comment);
+}
+
+function githubRawReadmeUrl(repositoryUrl: string): ((branch: string) => string) | undefined {
+  const match = repositoryUrl.match(/github\.com[/:]([^/\s]+)\/([^/\s#?]+?)(?:\.git)?(?:[/?#]|$)/iu);
+  if (!match) {
+    return undefined;
+  }
+  const [, owner, repo] = match;
+  return (branch: string) => `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`;
+}
+
+function resolvePluginStats(
+  plugin: { id: string; manifest: MaiBotPluginManifest },
+  stats: Record<string, MaiBotPluginStats>,
+): MaiBotPluginStats | undefined {
+  const statsIds = [plugin.manifest.id, plugin.id].filter((id): id is string => Boolean(id));
+  return statsIds.map((id) => stats[id]).find(Boolean);
+}
+
+function normalizeStatsNumber(value: unknown): number | undefined {
+  const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : undefined;
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
 function inferPluginId(folderName: string, manifest: MaiBotPluginManifest): string {
@@ -578,11 +934,31 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-async function fetchWithTimeout(url: string): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MARKET_TIMEOUT_MS);
+function maibotApiUrl(serviceUrl: string | undefined, path: string): string | null {
   try {
-    return await fetch(url, { signal: controller.signal });
+    const base = new URL(serviceUrl ?? "http://127.0.0.1:8001");
+    return new URL(path, base.origin).toString();
+  } catch {
+    return null;
+  }
+}
+
+function tokenFromServiceUrl(serviceUrl: string | undefined): string | null {
+  if (!serviceUrl) {
+    return null;
+  }
+  try {
+    return new URL(serviceUrl).searchParams.get("token");
+  } catch {
+    return null;
+  }
+}
+
+async function fetchWithTimeout(url: string, timeoutMs = MARKET_TIMEOUT_MS, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }
