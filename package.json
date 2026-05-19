@@ -1,0 +1,150 @@
+{
+  "name": "maibot-onekey-desktop",
+  "version": "0.3.3",
+  "description": "Electron desktop shell for MaiBot OneKey.",
+  "author": "MotricSeven",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:web": "vite --config vite.renderer.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
+    "check": "bun run typecheck && bun run build",
+    "preview": "electron-vite preview",
+    "release:check": "bun run scripts/release/check-windows-payload.ts",
+    "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
+    "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
+    "pack:win": "bun run release:win"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@tanstack/react-virtual": "^3.13.24",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "iconv-lite": "^0.7.2",
+    "lucide-react": "^0.468.0",
+    "next-themes": "^0.4.6",
+    "node-pty": "^1.1.0",
+    "radix-ui": "^1.4.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "smol-toml": "^1.6.1",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.3.1",
+    "ws": "^8.20.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/bun": "^1.2.23",
+    "@types/node": "^22.15.34",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.0.3",
+    "electron": "^38.1.2",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "tailwindcss": "^4.1.13",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.7"
+  },
+  "build": {
+    "appId": "org.maibot.onekey.desktop",
+    "productName": "MaiBot OneKey",
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "compression": "store",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "files": [
+      "out/**",
+      "package.json",
+      "node_modules/node-pty/**",
+      "node_modules/node-addon-api/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*",
+          "!python/Doc/**",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "release-assets/python-overrides",
+        "to": "python-overrides",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "modules",
+        "to": "modules",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.git/index.lock",
+          "!**/.git/objects/pack/.tmp-*",
+          "!MaiBot/config/**",
+          "!MaiBot/data/**",
+          "!MaiBot/maibot_statistics.html",
+          "!MaiBot/plugins/sengokucola_better-image/**",
+          "!MaiBot/plugins/__init__.py",
+          "!MaiBot/plugins/napcat-adapter/.git/**",
+          "!MaiBot/plugins/snowluma-adapter/.git/**",
+          "!napcat/napcat/config/webui.json",
+          "!napcat/**/*linux*",
+          "!napcat/**/*darwin*",
+          "!napcat/**/*arm64*",
+          "!napcat/versions/**/resources/app/napcat/config/webui.json",
+          "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json",
+          "!napcat/.git/**"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "mac": {
+      "icon": "resources/icon.icns"
+    },
+    "linux": {
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "include": "installer.nsh",
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "MaiBot OneKey"
+    }
+  }
+}
