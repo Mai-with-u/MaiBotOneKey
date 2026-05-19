@@ -1,11 +1,10 @@
 ﻿import {
-  Activity,
   FolderOpen,
+  GripHorizontal,
   Home,
   Loader2,
   MessageSquare,
   Play,
-  Power,
   Puzzle,
   Radar,
   RefreshCw,
@@ -35,6 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import maiMascotImage from "@/assets/mai2.png";
 import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
 import { LocalChatPanel } from "./LocalChatPanel";
@@ -96,9 +96,6 @@ function ServiceChip({
         className={cn("size-1.5 shrink-0 rounded-full", statusDotColor[service.status])}
       />
       <span className="min-w-0 truncate text-[12px] font-medium">{service.name}</span>
-      <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">
-        :{service.port}
-      </span>
       <span className="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">
         {statusText[service.status]}
       </span>
@@ -154,12 +151,66 @@ function ServiceChip({
   );
 }
 
+function FloatingShell({
+  expanded,
+  maibotService,
+  onExpand,
+  onCollapse,
+  onRestore,
+}: {
+  expanded: boolean;
+  maibotService: ServiceDescriptor | undefined;
+  onExpand: () => void;
+  onCollapse: () => void;
+  onRestore: () => void;
+}): React.JSX.Element {
+  if (!expanded) {
+    return (
+      <div className="grid h-screen place-items-center bg-transparent" data-floating-shell="true">
+        <button
+          className="relative grid size-20 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl transition-transform hover:scale-105"
+          data-app-region="no-drag"
+          onClick={onExpand}
+          title="打开悬浮菜单"
+          type="button"
+        >
+          <span className="absolute inset-x-3 bottom-1 h-7 rounded-full bg-primary/10 blur-md" />
+          <img alt="" className="relative mt-3 w-20 select-none" draggable={false} src={maiMascotImage} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl" data-floating-shell="true">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-2" data-app-region="drag">
+        <GripHorizontal className="size-4 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold">MaiBot 悬浮球</span>
+        <div className="flex shrink-0 items-center gap-1" data-app-region="no-drag">
+          <Button className="h-7 px-2 text-[11px]" onClick={onCollapse} size="sm" variant="secondary">
+            收起
+          </Button>
+          <Button className="h-7 px-2 text-[11px]" onClick={onRestore} size="sm" variant="default">
+            展开
+          </Button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1">
+        <LocalChatPanel active maibotService={maibotService} />
+      </div>
+    </div>
+  );
+}
+
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
-  const [pluginMode, setPluginMode] = useState<"market" | "manage">("market");
+  const [pluginMode, setPluginMode] = useState<"market" | "manage">("manage");
+  const [requestedConfigPluginId, setRequestedConfigPluginId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [floatingMode, setFloatingMode] = useState(false);
+  const [floatingExpanded, setFloatingExpanded] = useState(false);
   const theme = useTheme();
 
   const refreshSnapshot = useCallback(async () => {
@@ -190,22 +241,38 @@ export function DesktopShell(): React.JSX.Element {
           : current,
       );
     });
+    window.maibotDesktop?.window.getState().then((state) => {
+      if (mounted) {
+        setFloatingMode(state.isFloating === true);
+      }
+    });
+    const offWindowState = window.maibotDesktop?.window.onState((state) => {
+      if (typeof state.isFloating === "boolean") {
+        setFloatingMode(state.isFloating);
+      }
+    });
 
     return () => {
       mounted = false;
       offSnapshot?.();
       offServices?.();
       offLogs?.();
+      offWindowState?.();
     };
   }, [refreshSnapshot]);
 
   const services = snapshot?.services ?? [];
+  const messagePlatformReady =
+    snapshot?.initState.messagePlatformConfigured === true &&
+    Boolean(snapshot.initState.qqAccount?.trim());
+  const visibleServiceChips = services.filter(
+    (service) => service.id === "maibot" || messagePlatformReady,
+  );
   const serviceById = useMemo(
     () => new Map(services.map((s) => [s.id, s])),
     [services],
   );
   const maibotService = serviceById.get("maibot");
-  const runningCount = services.filter((s) => s.status === "running").length;
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const canInterruptStartup =
     actionBusy === "all:start" ||
@@ -287,6 +354,25 @@ export function DesktopShell(): React.JSX.Element {
     [runServiceAction],
   );
 
+  const enterFloatingMode = useCallback(() => {
+    setFloatingExpanded(false);
+    void window.maibotDesktop?.window.setFloatingMode(true).then((state) => {
+      setFloatingMode(state.isFloating === true);
+    });
+  }, []);
+
+  const setFloatingPanel = useCallback((expanded: boolean) => {
+    setFloatingExpanded(expanded);
+    void window.maibotDesktop?.window.setFloatingPanelExpanded(expanded);
+  }, []);
+
+  const restoreMainWindow = useCallback(() => {
+    setFloatingExpanded(false);
+    void window.maibotDesktop?.window.setFloatingMode(false).then((state) => {
+      setFloatingMode(state.isFloating === true);
+    });
+  }, []);
+
   const selectTab = useCallback((value: string) => {
     if (value === "terminal" && !showTerminalTab) {
       setActiveTab("home");
@@ -304,6 +390,12 @@ export function DesktopShell(): React.JSX.Element {
     }
     setActiveTab(value);
   }, [showTerminalTab]);
+
+  const openPluginConfig = useCallback((pluginId: string) => {
+    setPluginMode("manage");
+    setRequestedConfigPluginId(pluginId);
+    setActiveTab("plugins");
+  }, []);
 
   useEffect(() => {
     if (activeTab === "terminal" && !showTerminalTab) {
@@ -325,6 +417,21 @@ export function DesktopShell(): React.JSX.Element {
   useShortcut("Mod+Shift+X", stopAll);
   useShortcut("Mod+Shift+L", theme.toggle);
 
+  if (floatingMode) {
+    return (
+      <TooltipProvider delayDuration={250}>
+        <FloatingShell
+          expanded={floatingExpanded}
+          maibotService={maibotService}
+          onCollapse={() => setFloatingPanel(false)}
+          onExpand={() => setFloatingPanel(true)}
+          onRestore={restoreMainWindow}
+        />
+        <Toaster />
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
@@ -335,20 +442,13 @@ export function DesktopShell(): React.JSX.Element {
 
         {/* Service strip */}
         <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
-          <div className="flex shrink-0 items-center gap-1.5 pr-1 text-[11px] text-muted-foreground">
-            <Activity className="size-3.5" />
-            <span className="tabular-nums">
-              {runningCount}/{services.length}
-            </span>
-            <span>运行中</span>
-          </div>
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {services.length === 0 ? (
+            {visibleServiceChips.length === 0 ? (
               <span className="text-[11px] text-muted-foreground">
                 等待服务发现…
               </span>
             ) : (
-              services.map((service) => (
+              visibleServiceChips.map((service) => (
                 <ServiceChip
                   key={service.id}
                   service={service}
@@ -391,7 +491,7 @@ export function DesktopShell(): React.JSX.Element {
                   {actionBusy === "all:start" ? (
                     <Loader2 className="animate-spin" />
                   ) : (
-                    <Power />
+                    <Play />
                   )}
                   启动全部
                 </Button>
@@ -520,6 +620,8 @@ export function DesktopShell(): React.JSX.Element {
               {snapshot ? (
                 <HomePanel
                   active={activeTab === "home"}
+                  onEnterFloatingMode={enterFloatingMode}
+                  onOpenPluginConfig={openPluginConfig}
                   onOpenTab={selectTab}
                   onSnapshot={setSnapshot}
                   snapshot={snapshot}
@@ -568,6 +670,8 @@ export function DesktopShell(): React.JSX.Element {
                   active={activeTab === "terminal"}
                   recentLogs={snapshot?.recentLogs ?? []}
                   services={services}
+                  terminalSettings={snapshot?.terminalSettings}
+                  maibotRoot={snapshot?.paths.maibotRoot}
                 />
               </TabsContent>
             ) : null}
@@ -588,6 +692,8 @@ export function DesktopShell(): React.JSX.Element {
                 maibotVersion={snapshot?.moduleVersions.maibotLocal}
                 mode={pluginMode}
                 onModeChange={setPluginMode}
+                onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
+                requestedConfigPluginId={requestedConfigPluginId}
               />
             </TabsContent>
 
@@ -596,7 +702,11 @@ export function DesktopShell(): React.JSX.Element {
               className="min-h-0 flex-1 overflow-hidden outline-none"
             >
               {snapshot ? (
-                <SettingsStatusPanel onSnapshot={setSnapshot} snapshot={snapshot} />
+                <SettingsStatusPanel
+                  onOpenPluginConfig={openPluginConfig}
+                  onSnapshot={setSnapshot}
+                  snapshot={snapshot}
+                />
               ) : (
                 <div className="grid h-full place-items-center text-sm text-muted-foreground">
                   <span className="flex items-center gap-2">
@@ -613,7 +723,7 @@ export function DesktopShell(): React.JSX.Element {
           <StartupAgreementDialog onSnapshot={setSnapshot} snapshot={snapshot} />
         ) : null}
         {snapshot ? (
-          <InitializationWizard onSnapshot={setSnapshot} snapshot={snapshot} />
+          <InitializationWizard onOpenTab={setActiveTab} onSnapshot={setSnapshot} snapshot={snapshot} />
         ) : null}
         <Toaster />
       </div>

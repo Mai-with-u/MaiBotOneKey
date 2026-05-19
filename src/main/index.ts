@@ -73,7 +73,8 @@ function createMainWindow(): BrowserWindow {
     minWidth: 1080,
     minHeight: 720,
     show: false,
-    backgroundColor: "#f5f7f2",
+    backgroundColor: "#00000000",
+    transparent: true,
     frame: false,
     icon: createAppIcon(),
     titleBarStyle: process.platform === "darwin" ? "hidden" : "default",
@@ -175,13 +176,13 @@ function createTray(): Tray {
   nextTray.setToolTip("MaiBot OneKey");
   nextTray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "显示 MaiBot OneKey", click: showMainWindow },
+      { label: "\u663e\u793a MaiBot OneKey", click: showMainWindow },
       { type: "separator" },
-      { label: "启动全部服务", click: withLog(() => serviceManager.startAll()) },
-      { label: "停止全部服务", click: withLog(() => serviceManager.stopAll()) },
-      { label: "打开日志目录", click: withLog(() => shell.openPath(runtimePaths.logsRoot)) },
+      { label: "\u542f\u52a8\u5168\u90e8\u670d\u52a1", click: withLog(() => serviceManager.startAll()) },
+      { label: "\u505c\u6b62\u5168\u90e8\u670d\u52a1", click: withLog(() => serviceManager.stopAll()) },
+      { label: "\u6253\u5f00\u65e5\u5fd7\u76ee\u5f55", click: withLog(() => shell.openPath(runtimePaths.logsRoot)) },
       { type: "separator" },
-      { label: "全部退出", click: requestQuit },
+      { label: "\u5173\u95ed\u5e94\u7528", click: requestQuit },
     ]),
   );
   nextTray.on("double-click", showMainWindow);

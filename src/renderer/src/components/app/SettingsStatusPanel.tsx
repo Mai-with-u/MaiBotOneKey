@@ -1,4 +1,5 @@
 ﻿import {
+  AlertTriangle,
   CheckCircle2,
   CircleAlert,
   ClipboardCheck,
@@ -9,12 +10,15 @@
   Loader2,
   Network,
   Package,
+  Palette,
   RefreshCw,
   RotateCcw,
   Save,
+  Settings,
   ShieldCheck,
   TerminalSquare,
   Trash2,
+  Type,
   UserRound,
   Wrench,
 } from "lucide-react";
@@ -25,6 +29,7 @@ import type {
   DesktopSnapshot,
   InitCheckStatus,
   LogEntry,
+  MaiBotDataResetResult,
   ManagedPythonPackageName,
   ModuleSourceConfig,
   ModuleSourcePreset,
@@ -60,13 +65,30 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  CLOSE_PREFERENCE_CHANGE_EVENT,
+  getClosePreference,
+  isClosePreference,
+  setClosePreference,
+  type ClosePreference,
+} from "@/lib/close-preference";
+import { useAppearance, type AccentColor, type FontFamily, type InterfaceScale } from "@/lib/use-appearance";
 import { useShortcut } from "@/lib/use-shortcut";
+import { useTheme, type ThemePreference } from "@/lib/use-theme";
+import { cn } from "@/lib/utils";
+import {
+  adapterPluginIdForBackend,
+  markAdapterConfigPrompted,
+  shouldPromptAdapterConfig,
+} from "./HomePanel";
 
 interface SettingsStatusPanelProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
+  onOpenPluginConfig: (pluginId: string) => void;
 }
 
 const statusText: Record<ServiceStatus, string> = {
@@ -98,6 +120,40 @@ const initVariant: Record<InitCheckStatus, ComponentProps<typeof Badge>["variant
   warning: "warning",
   error: "danger",
 };
+
+const closePreferenceText: Record<ClosePreference, string> = {
+  ask: "每次询问",
+  minimize: "最小化到托盘",
+  quit: "关闭应用",
+};
+
+const themeOptions: Array<{ value: ThemePreference; label: string; description: string }> = [
+  { value: "system", label: "跟随系统", description: "根据系统浅色/深色模式自动切换。" },
+  { value: "light", label: "浅色", description: "保持明亮、低干扰的工作界面。" },
+  { value: "dark", label: "深色", description: "使用暗色背景，适合夜间或低光环境。" },
+];
+
+const accentOptions: Array<{ value: AccentColor; label: string; color: string }> = [
+  { value: "orange", label: "橙色", color: "oklch(0.71 0.175 52)" },
+  { value: "green", label: "绿色", color: "oklch(0.62 0.145 150)" },
+  { value: "blue", label: "蓝色", color: "oklch(0.62 0.145 250)" },
+  { value: "pink", label: "粉色", color: "oklch(0.66 0.17 18)" },
+  { value: "neutral", label: "中性", color: "oklch(0.5 0.02 70)" },
+];
+
+const fontOptions: Array<{ value: FontFamily; label: string; description: string }> = [
+  { value: "system", label: "系统 UI", description: "默认界面字体，兼顾中英文清晰度。" },
+  { value: "rounded", label: "圆润", description: "更柔和的显示风格，适合轻松使用。" },
+  { value: "serif", label: "衬线", description: "更接近阅读文本的字形风格。" },
+];
+
+const scaleOptions: Array<{ value: InterfaceScale; label: string; description: string }> = [
+  { value: "compact", label: "紧凑", description: "显示更多内容，控件和文字更小。" },
+  { value: "normal", label: "标准", description: "默认的信息密度与字号。" },
+  { value: "comfortable", label: "宽松", description: "字号更大，留白更多。" },
+];
+
+const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
 
 const managedPythonPackages: Array<{ name: ManagedPythonPackageName; label: string }> = [
   { name: "maibot-dashboard", label: "MaiBot Dashboard" },
@@ -671,11 +727,20 @@ function LogLine({ entry }: { entry: LogEntry }): React.JSX.Element {
 export function SettingsStatusPanel({
   snapshot,
   onSnapshot,
+  onOpenPluginConfig,
 }: SettingsStatusPanelProps): React.JSX.Element {
+  const theme = useTheme();
+  const appearance = useAppearance();
   const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmUpdateOpen, setConfirmUpdateOpen] = useState(false);
+  const [confirmSnowLumaResetOpen, setConfirmSnowLumaResetOpen] = useState(false);
+  const [confirmLauncherSettingsResetOpen, setConfirmLauncherSettingsResetOpen] = useState(false);
+  const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
+  const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
+  const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
+  const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
   const [moduleUpdateResult, setModuleUpdateResult] = useState<ModuleUpdateResult | null>(null);
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
   const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
@@ -690,14 +755,20 @@ export function SettingsStatusPanel({
   const [pythonInstallResult, setPythonInstallResult] = useState<PythonPackageInstallResult | null>(null);
   const [pythonRuntimeCandidates, setPythonRuntimeCandidates] = useState<PythonRuntimeCandidate[]>([]);
   const [pythonRuntimeCandidatesLoading, setPythonRuntimeCandidatesLoading] = useState(false);
-  const initState = snapshot.initState ?? { isReady: false, checks: [] };
+  const initState = snapshot.initState ?? {
+    isReady: false,
+    qqBackend: "napcat",
+    messagePlatformConfigured: false,
+    checks: [],
+  };
   const services = snapshot.services ?? [];
   const serviceCommands = snapshot.serviceCommands ?? [];
   const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
   const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
-  const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true };
+  const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
+  const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
   const recentLogEntries = snapshot.recentLogs ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
   const maibotUpdateBlocked = Boolean(
@@ -723,6 +794,24 @@ export function SettingsStatusPanel({
   useEffect(() => {
     setQqBackend(initState.qqBackend ?? "napcat");
   }, [initState.qqBackend]);
+
+  useEffect(() => {
+    const syncClosePreference = (event?: Event): void => {
+      if (event instanceof CustomEvent && isClosePreference(event.detail)) {
+        setClosePreferenceState(event.detail);
+        return;
+      }
+
+      setClosePreferenceState(getClosePreference());
+    };
+
+    window.addEventListener(CLOSE_PREFERENCE_CHANGE_EVENT, syncClosePreference);
+    window.addEventListener("storage", syncClosePreference);
+    return () => {
+      window.removeEventListener(CLOSE_PREFERENCE_CHANGE_EVENT, syncClosePreference);
+      window.removeEventListener("storage", syncClosePreference);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -820,6 +909,12 @@ export function SettingsStatusPanel({
     void window.maibotDesktop?.openExternal(url);
   }, []);
 
+  const saveClosePreference = useCallback((preference: ClosePreference) => {
+    setClosePreference(preference);
+    setClosePreferenceState(preference);
+    toast.success(`关闭行为已设为：${closePreferenceText[preference]}`);
+  }, []);
+
   const repair = useCallback(async () => {
     setBusy("repair");
     setError(null);
@@ -842,7 +937,12 @@ export function SettingsStatusPanel({
     setError(null);
     try {
       if (qqBackend !== initState.qqBackend) {
+        const shouldOpenAdapterConfig = shouldPromptAdapterConfig(qqBackend);
         await window.maibotDesktop?.init.setQqBackend(qqBackend);
+        if (shouldOpenAdapterConfig) {
+          markAdapterConfigPrompted(qqBackend);
+          window.setTimeout(() => onOpenPluginConfig(adapterPluginIdForBackend(qqBackend)), 250);
+        }
       } else {
         return;
       }
@@ -852,7 +952,112 @@ export function SettingsStatusPanel({
     } finally {
       setBusy(null);
     }
-  }, [initState.qqBackend, qqBackend, qqBackendSwitchBlocked, refreshSnapshot]);
+  }, [initState.qqBackend, onOpenPluginConfig, qqBackend, qqBackendSwitchBlocked, refreshSnapshot]);
+
+  const resetSnowLumaComponent = useCallback(async () => {
+    if (qqBackendSwitchBlocked) {
+      setError("请先停止 MaiBot Core 和 QQ 后端，再重置 SnowLuma 组件。");
+      return;
+    }
+
+    setBusy("snowluma:reset");
+    setError(null);
+    try {
+      await window.maibotDesktop?.init.resetSnowLuma();
+      setConfirmSnowLumaResetOpen(false);
+      toast.success("SnowLuma 组件已重置");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [qqBackendSwitchBlocked, refreshSnapshot]);
+
+  const resetLocalStartupState = useCallback(() => {
+    try {
+      window.localStorage.removeItem(STARTUP_WIZARD_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures; the main reset has already completed.
+    }
+    setClosePreference("ask");
+    setClosePreferenceState("ask");
+  }, []);
+
+  const reloadAfterLauncherReset = useCallback(() => {
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 250);
+  }, []);
+
+  const resetLauncherSettings = useCallback(async () => {
+    if (resourceMoveBlocked) {
+      setError("请先停止全部服务，再清空启动器设置。");
+      return;
+    }
+
+    setBusy("launcher:reset-settings");
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.launcher) {
+        throw new Error("桌面桥未就绪，无法清空启动器设置");
+      }
+      await window.maibotDesktop.launcher.resetSettings();
+      resetLocalStartupState();
+      setConfirmLauncherSettingsResetOpen(false);
+      toast.success("启动器设置已清空，即将重新进入启动引导");
+      reloadAfterLauncherReset();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [reloadAfterLauncherReset, resetLocalStartupState, resourceMoveBlocked]);
+
+  const resetLauncherAll = useCallback(async () => {
+    if (resourceMoveBlocked) {
+      setError("请先停止全部服务，再还原初始状态。");
+      return;
+    }
+
+    setBusy("launcher:reset-all");
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.launcher) {
+        throw new Error("桌面桥未就绪，无法还原初始状态");
+      }
+      await window.maibotDesktop.launcher.resetAll();
+      resetLocalStartupState();
+      setConfirmLauncherFullResetOpen(false);
+      toast.success("运行时资源目录已清空，即将回到初始状态");
+      reloadAfterLauncherReset();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [reloadAfterLauncherReset, resetLocalStartupState, resourceMoveBlocked]);
+
+  const resetMaiBotData = useCallback(async () => {
+    setBusy("maibot:data-reset");
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.data) {
+        throw new Error("桌面桥未就绪，无法重置 MaiBot 数据");
+      }
+      const result = await window.maibotDesktop.data.resetMaiBotData();
+      setLastMaiBotDataReset(result);
+      setConfirmMaiBotDataResetSecondOpen(false);
+      toast.success(`已清空 MaiBot 数据（共 ${result.removedEntries.length} 项）`, {
+        description: result.dataDir,
+      });
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
 
   const clearLogs = useCallback(async () => {
     setBusy("logs");
@@ -1155,9 +1360,6 @@ export function SettingsStatusPanel({
                   </span>
                   设置中心
                 </CardTitle>
-                <CardDescription className="mt-1">
-                  使用迷你标签页快速切换配置分区，避免信息拥挤与错位。
-                </CardDescription>
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <Badge dot variant={initState.isReady ? "success" : "danger"}>
@@ -1177,8 +1379,16 @@ export function SettingsStatusPanel({
           </CardHeader>
 
           <CardContent>
-            <Tabs className="space-y-4" defaultValue="checks">
-              <TabsList className="h-8 rounded-md border border-border bg-muted/40 p-1">
+            <Tabs className="space-y-4" defaultValue="general">
+              <TabsList className="flex h-auto flex-wrap rounded-md border border-border bg-muted/40 p-1">
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="general">
+                  <Settings className="size-3" />
+                  通用
+                </TabsTrigger>
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="appearance">
+                  <Palette className="size-3" />
+                  外观
+                </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="checks">
                   <ClipboardCheck className="size-3" />
                   环境检查
@@ -1204,6 +1414,340 @@ export function SettingsStatusPanel({
                   运行日志
                 </TabsTrigger>
               </TabsList>
+
+              <TabsContent className="space-y-4" value="general">
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                          <Settings className="size-4" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">窗口关闭行为</p>
+                          <p className="text-xs text-muted-foreground">
+                            选择点击关闭按钮时是询问、收进托盘继续运行，还是直接关闭应用。
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <Badge variant="secondary">{closePreferenceText[closePreference]}</Badge>
+                  </div>
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-3"
+                    onValueChange={(value) => {
+                      if (isClosePreference(value)) {
+                        saveClosePreference(value);
+                      }
+                    }}
+                    value={closePreference}
+                  >
+                    {([
+                      {
+                        value: "ask",
+                        label: "每次询问",
+                        description: "关闭窗口时弹出选择框，由你当次决定。",
+                      },
+                      {
+                        value: "minimize",
+                        label: "最小化到托盘",
+                        description: "关闭窗口时隐藏主界面，托管服务继续运行。",
+                      },
+                      {
+                        value: "quit",
+                        label: "关闭应用",
+                        description: "关闭窗口时停止托管进程并退出 MaiBot OneKey。",
+                      },
+                    ] as const).map((option) => (
+                      <label
+                        className={[
+                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          closePreference === option.value
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                        ].join(" ")}
+                        key={option.value}
+                      >
+                        <RadioGroupItem className="mt-0.5" value={option.value} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <TerminalSquare className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">终端模式</p>
+                      <p className="text-xs text-muted-foreground">
+                        {terminalSettings.useEmbeddedTerminal
+                          ? "服务会在应用内终端页运行"
+                          : "服务会在外部 Windows 终端窗口运行"}
+                      </p>
+                    </div>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                    <Checkbox
+                      checked={terminalSettings.useEmbeddedTerminal}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) =>
+                        void saveTerminalSettings({ ...terminalSettings, useEmbeddedTerminal: checked === true })
+                      }
+                    />
+                    使用内嵌终端
+                  </label>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <TerminalSquare className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">终端字体大小</p>
+                      <p className="text-xs text-muted-foreground">调整内嵌 PTY 终端字号，保存后会立即应用。</p>
+                    </div>
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                    <Input
+                      className="h-8 w-20 font-mono text-sm"
+                      inputMode="numeric"
+                      max={22}
+                      min={10}
+                      onChange={(event) =>
+                        void saveTerminalSettings({
+                          ...terminalSettings,
+                          fontSize: Number(event.target.value),
+                        })
+                      }
+                      type="number"
+                      value={terminalSettings.fontSize}
+                    />
+                    px
+                  </label>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
+                        <Trash2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">重置 MaiBot 数据</p>
+                        <p className="text-xs text-muted-foreground">
+                          清空 MaiBot Core 的 data 目录，包括数据库、记忆、日志缓存等。该操作不可恢复。
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      disabled={busy !== null}
+                      onClick={() => setConfirmMaiBotDataResetFirstOpen(true)}
+                      size="sm"
+                      variant="destructive"
+                    >
+                      <Trash2 className="size-4" />
+                      重置数据
+                    </Button>
+                  </div>
+                  {lastMaiBotDataReset ? (
+                    <div className="rounded-md border border-warning/40 bg-warning/15 p-3 text-[12px] text-foreground">
+                      <div className="flex items-center gap-1.5 font-medium">
+                        <AlertTriangle className="size-3.5" />
+                        最近一次重置
+                      </div>
+                      <dl className="mt-1.5 grid gap-0.5 text-muted-foreground">
+                        <div className="flex gap-2">
+                          <dt className="shrink-0">目录：</dt>
+                          <dd className="break-all">{lastMaiBotDataReset.dataDir}</dd>
+                        </div>
+                        <div className="flex gap-2">
+                          <dt className="shrink-0">移除项数：</dt>
+                          <dd>{lastMaiBotDataReset.removedEntries.length}</dd>
+                        </div>
+                        <div className="flex gap-2">
+                          <dt className="shrink-0">时间：</dt>
+                          <dd>{formatTime(lastMaiBotDataReset.clearedAt)}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
+                      <RotateCcw className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">重置启动器</p>
+                      <p className="text-xs text-muted-foreground">
+                        清空设置会重走启动引导；完全还原会删除运行时资源目录。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Button
+                      disabled={busy !== null || resourceMoveBlocked}
+                      onClick={() => setConfirmLauncherSettingsResetOpen(true)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <RotateCcw className="size-4" />
+                      清空启动器设置
+                    </Button>
+                    <Button
+                      disabled={busy !== null || resourceMoveBlocked}
+                      onClick={() => setConfirmLauncherFullResetOpen(true)}
+                      size="sm"
+                      variant="destructive"
+                    >
+                      <Trash2 className="size-4" />
+                      完全还原初始状态
+                    </Button>
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent className="space-y-4" value="appearance">
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Palette className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">主题模式</p>
+                        <p className="text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
+                  </div>
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-3"
+                    onValueChange={(value) => theme.setPreference(value as ThemePreference)}
+                    value={theme.preference}
+                  >
+                    {themeOptions.map((option) => (
+                      <label
+                        className={cn(
+                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          theme.preference === option.value
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                        )}
+                        key={option.value}
+                      >
+                        <RadioGroupItem className="mt-0.5" value={option.value} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Palette className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">主题色</p>
+                      <p className="text-xs text-muted-foreground">影响按钮、选中态、焦点环和强调色。</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {accentOptions.map((option) => (
+                      <button
+                        className={cn(
+                          "flex h-10 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:border-primary/50",
+                          appearance.accent === option.value ? "border-primary ring-2 ring-ring/35" : "border-border",
+                        )}
+                        key={option.value}
+                        onClick={() => appearance.setAccent(option.value)}
+                        type="button"
+                      >
+                        <span className="size-4 rounded-full border border-black/10" style={{ background: option.color }} />
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Type className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">字体</p>
+                        <p className="text-xs text-muted-foreground">调整界面文字的整体字形。</p>
+                      </div>
+                    </div>
+                    <RadioGroup onValueChange={(value) => appearance.setFont(value as FontFamily)} value={appearance.font}>
+                      {fontOptions.map((option) => (
+                        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 text-sm" key={option.value}>
+                          <RadioGroupItem className="mt-0.5" value={option.value} />
+                          <span>
+                            <span className="block font-medium">{option.label}</span>
+                            <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </RadioGroup>
+                  </div>
+
+                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Settings className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">界面密度</p>
+                        <p className="text-xs text-muted-foreground">调整全局字号基准，影响信息密度。</p>
+                      </div>
+                    </div>
+                    <RadioGroup onValueChange={(value) => appearance.setScale(value as InterfaceScale)} value={appearance.scale}>
+                      {scaleOptions.map((option) => (
+                        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 text-sm" key={option.value}>
+                          <RadioGroupItem className="mt-0.5" value={option.value} />
+                          <span>
+                            <span className="block font-medium">{option.label}</span>
+                            <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </RadioGroup>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">外观预览</p>
+                    <p className="mt-1 text-xs text-muted-foreground">设置会立即生效，并保存在本机浏览器存储中。</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button onClick={appearance.reset} size="sm" variant="secondary">
+                      <RotateCcw className="size-4" />
+                      恢复默认
+                    </Button>
+                    <Button size="sm">
+                      <Save className="size-4" />
+                      已自动保存
+                    </Button>
+                  </div>
+                </div>
+              </TabsContent>
 
               <TabsContent className="space-y-4" value="checks">
                 <div className="grid gap-2 md:grid-cols-2">
@@ -1287,6 +1831,22 @@ export function SettingsStatusPanel({
                     MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
                   </div>
                 ) : null}
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">重置 SnowLuma 组件</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      清空已安装的 SnowLuma 目录和配置，再从一键包内置模板复制一份新的。
+                    </p>
+                  </div>
+                  <Button
+                    disabled={busy !== null || qqBackendSwitchBlocked}
+                    onClick={() => setConfirmSnowLumaResetOpen(true)}
+                    variant="destructive"
+                  >
+                    {busy === "snowluma:reset" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                    重置 SnowLuma
+                  </Button>
+                </div>
                 <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
                   <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
                     {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
@@ -1300,31 +1860,6 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
                 </p>
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <TerminalSquare className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">终端模式</p>
-                      <p className="text-xs text-muted-foreground">
-                        {terminalSettings.useEmbeddedTerminal
-                          ? "服务会在应用内终端页运行"
-                          : "服务会在外部 Windows 终端窗口运行"}
-                      </p>
-                    </div>
-                  </div>
-                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                    <Checkbox
-                      checked={terminalSettings.useEmbeddedTerminal}
-                      disabled={busy !== null}
-                      onCheckedChange={(checked) =>
-                        void saveTerminalSettings({ useEmbeddedTerminal: checked === true })
-                      }
-                    />
-                    使用内嵌终端
-                  </label>
-                </div>
                 {services.map((service) => (
                   <ServiceDetail
                     commandBusy={busy === `command:${service.id}`}
@@ -1689,6 +2224,202 @@ export function SettingsStatusPanel({
         <Button disabled={busy === "module:maibot" || maibotUpdateBlocked} onClick={updateMaiBot} size="sm">
           {busy === "module:maibot" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           确认更新
+        </Button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
+      <Dialog
+        open={confirmMaiBotDataResetFirstOpen}
+        onOpenChange={(next) => {
+          if (!next && busy !== "maibot:data-reset") setConfirmMaiBotDataResetFirstOpen(false);
+        }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader
+            description="此操作会清空 MaiBot Core 的 data 目录，包括数据库、记忆等运行时数据。"
+            icon={<AlertTriangle className="size-4" />}
+            title="确认重置 MaiBot 数据？"
+            tone="warning"
+          />
+          <DialogBody>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              重置后无法恢复，建议先手动备份 data 目录。继续将进入二次确认。
+            </p>
+          </DialogBody>
+          <DialogFooter>
+            <Button onClick={() => setConfirmMaiBotDataResetFirstOpen(false)} size="sm" variant="ghost">
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmMaiBotDataResetFirstOpen(false);
+                setConfirmMaiBotDataResetSecondOpen(true);
+              }}
+              size="sm"
+              variant="destructive"
+            >
+              我已了解，下一步
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={confirmMaiBotDataResetSecondOpen}
+        onOpenChange={(next) => {
+          if (!next && busy !== "maibot:data-reset") setConfirmMaiBotDataResetSecondOpen(false);
+        }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader
+            description="所有 MaiBot 运行时数据将被永久删除。此操作不可撤销。"
+            icon={<Trash2 className="size-4" />}
+            title="再次确认：彻底清空 data 目录"
+            tone="danger"
+          />
+          <DialogBody>
+            <p className="text-[13px] leading-relaxed text-foreground">
+              真的要继续吗？请确认 MaiBot Core 已停止，且不再需要这些数据。
+            </p>
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              disabled={busy === "maibot:data-reset"}
+              onClick={() => setConfirmMaiBotDataResetSecondOpen(false)}
+              size="sm"
+              variant="ghost"
+            >
+              取消
+            </Button>
+            <Button
+              disabled={busy === "maibot:data-reset"}
+              onClick={resetMaiBotData}
+              size="sm"
+              variant="destructive"
+            >
+              {busy === "maibot:data-reset" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              确认清空
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={confirmLauncherSettingsResetOpen}
+        onOpenChange={(next) => {
+          if (!next && busy !== "launcher:reset-settings") setConfirmLauncherSettingsResetOpen(false);
+      }}
+    >
+      <DialogContent size="md">
+      <DialogHeader
+        description="这只会清空启动器自己的设置，并让启动引导重新出现；MaiBot、NapCat、SnowLuma 与 Python 覆盖依赖目录会保留。"
+        icon={<RotateCcw className="size-4" />}
+        title="清空启动器设置？"
+        tone="warning"
+      />
+      <DialogBody className="space-y-3 text-sm">
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+          会重置关闭行为、服务命令、运行时工具路径、依赖源、模块更新源、资源路径选择和 QQ 后端选择。完成后界面会刷新并重新进入启动引导。
+        </div>
+        {resourceMoveBlocked ? (
+          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+            当前仍有服务运行，请先停止全部服务。
+          </div>
+        ) : null}
+      </DialogBody>
+      <DialogFooter>
+        <Button disabled={busy === "launcher:reset-settings"} onClick={() => setConfirmLauncherSettingsResetOpen(false)} size="sm" variant="ghost">
+          取消
+        </Button>
+        <Button
+          disabled={busy === "launcher:reset-settings" || resourceMoveBlocked}
+          onClick={resetLauncherSettings}
+          size="sm"
+          variant="destructive"
+        >
+          {busy === "launcher:reset-settings" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+          确认清空
+        </Button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog
+      open={confirmLauncherFullResetOpen}
+      onOpenChange={(next) => {
+        if (!next && busy !== "launcher:reset-all") setConfirmLauncherFullResetOpen(false);
+      }}
+    >
+      <DialogContent size="md">
+      <DialogHeader
+        description="这会删除当前运行时资源目录，相当于回到新安装后的初始状态。"
+        icon={<Trash2 className="size-4" />}
+        title="完全还原初始状态？"
+        tone="danger"
+      />
+      <DialogBody className="space-y-3 text-sm">
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
+          MaiBot、NapCat、SnowLuma、Python 覆盖依赖、日志和启动器设置都会被清空。该操作不可撤销。
+        </div>
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+          运行时资源目录：<code className="rounded bg-card px-1 py-0.5 font-mono">{snapshot.paths.defaultResourceRoot}</code>
+        </div>
+        {resourceMoveBlocked ? (
+          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+            当前仍有服务运行，请先停止全部服务。
+          </div>
+        ) : null}
+      </DialogBody>
+      <DialogFooter>
+        <Button disabled={busy === "launcher:reset-all"} onClick={() => setConfirmLauncherFullResetOpen(false)} size="sm" variant="ghost">
+          取消
+        </Button>
+        <Button
+          disabled={busy === "launcher:reset-all" || resourceMoveBlocked}
+          onClick={resetLauncherAll}
+          size="sm"
+          variant="destructive"
+        >
+          {busy === "launcher:reset-all" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+          确认还原
+        </Button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog
+      open={confirmSnowLumaResetOpen}
+      onOpenChange={(next) => {
+        if (!next && busy !== "snowluma:reset") setConfirmSnowLumaResetOpen(false);
+      }}
+    >
+      <DialogContent size="md">
+      <DialogHeader
+        description="这会删除当前 SnowLuma 目录，包括配置、数据与日志，并从一键包内置模板重新复制。"
+        icon={<RotateCcw className="size-4" />}
+        title="确认重置 SnowLuma？"
+        tone="warning"
+      />
+      <DialogBody className="space-y-3 text-sm">
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
+          该操作不会保留 SnowLuma 的登录、连接和适配器运行配置。执行前请确认 MaiBot Core 与 QQ 后端都已停止。
+        </div>
+        {qqBackendSwitchBlocked ? (
+          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+            MaiBot Core 或 QQ 后端仍在运行，请先停止全部服务。
+          </div>
+        ) : null}
+      </DialogBody>
+      <DialogFooter>
+        <Button disabled={busy === "snowluma:reset"} onClick={() => setConfirmSnowLumaResetOpen(false)} size="sm" variant="ghost">
+          取消
+        </Button>
+        <Button
+          disabled={busy === "snowluma:reset" || qqBackendSwitchBlocked}
+          onClick={resetSnowLumaComponent}
+          size="sm"
+          variant="destructive"
+        >
+          {busy === "snowluma:reset" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+          清空并重置
         </Button>
       </DialogFooter>
       </DialogContent>

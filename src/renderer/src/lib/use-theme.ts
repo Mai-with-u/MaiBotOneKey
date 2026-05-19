@@ -4,6 +4,7 @@ export type ThemePreference = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
 const STORAGE_KEY = "maibot-theme";
+const CHANGE_EVENT = "maibot-theme-change";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 function readStored(): ThemePreference {
@@ -36,6 +37,15 @@ function applyClass(theme: ResolvedTheme): void {
   root.style.colorScheme = theme;
 }
 
+function persistPreference(preference: ThemePreference): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, preference);
+    window.dispatchEvent(new CustomEvent<ThemePreference>(CHANGE_EVENT, { detail: preference }));
+  } catch {
+    // ignore
+  }
+}
+
 export interface ThemeApi {
   preference: ThemePreference;
   resolved: ResolvedTheme;
@@ -64,24 +74,27 @@ export function useTheme(): ThemeApi {
     applyClass(resolved);
   }, [resolved]);
 
+  useEffect(() => {
+    const listener = (event: Event): void => {
+      const next = (event as CustomEvent<ThemePreference>).detail;
+      if (next === "light" || next === "dark" || next === "system") {
+        setPreferenceState(next);
+      }
+    };
+    window.addEventListener(CHANGE_EVENT, listener);
+    return () => window.removeEventListener(CHANGE_EVENT, listener);
+  }, []);
+
   const setPreference = useCallback((next: ThemePreference) => {
     setPreferenceState(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // ignore
-    }
+    persistPreference(next);
   }, []);
 
   const cycle = useCallback(() => {
     setPreferenceState((current) => {
       const next: ThemePreference =
         current === "light" ? "dark" : current === "dark" ? "system" : "light";
-      try {
-        window.localStorage.setItem(STORAGE_KEY, next);
-      } catch {
-        // ignore
-      }
+      persistPreference(next);
       return next;
     });
   }, []);
@@ -90,11 +103,7 @@ export function useTheme(): ThemeApi {
     setPreferenceState((current) => {
       const currentResolved = resolve(current);
       const next: ThemePreference = currentResolved === "dark" ? "light" : "dark";
-      try {
-        window.localStorage.setItem(STORAGE_KEY, next);
-      } catch {
-        // ignore
-      }
+      persistPreference(next);
       return next;
     });
   }, []);

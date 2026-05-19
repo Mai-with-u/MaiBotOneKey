@@ -1,10 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { bootstrapAppearance } from "./lib/use-appearance";
 import { bootstrapTheme } from "./lib/use-theme";
 import "./styles/globals.css";
 
 bootstrapTheme();
+bootstrapAppearance();
 
 function renderBootstrapError(error: unknown): void {
   const message = error instanceof Error ? (error.stack ?? error.message) : String(error);

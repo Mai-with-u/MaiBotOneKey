@@ -1,6 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { LogEntry, PtySessionSnapshot, ServiceDescriptor, ServiceId } from "@shared/contracts";
+import type { IBufferLine, ILink, ILinkProvider } from "@xterm/xterm";
+import type { LogEntry, PtySessionSnapshot, ServiceDescriptor, ServiceId, TerminalSettings } from "@shared/contracts";
 import { ArrowDownToLine, Copy, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
@@ -38,9 +39,9 @@ const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: 
   { serviceId: "napcat", sessionId: "service:napcat", title: "NapCat" },
 ];
 
-const MIN_SERVICE_TERMINAL_COLS = 120;
 const MIN_VISIBLE_TERMINAL_WIDTH = 240;
 const MIN_VISIBLE_TERMINAL_HEIGHT = 120;
+const TERMINAL_LINK_PATTERN = /\b(?:https?:\/\/[^\s<>"'，。；）\])]+|logs\/[^\s<>"'，。；）\])]+\.(?:html|txt|json|log))/giu;
 
 const statusText: Record<PtySessionSnapshot["status"], string> = {
   starting: "启动中",
@@ -86,6 +87,86 @@ function canWriteToSession(session?: PtySessionSnapshot): boolean {
   return session?.status === "running";
 }
 
+interface TerminalLinkMatch {
+  text: string;
+  startCell: number;
+  endCell: number;
+}
+
+function lineTextWithCellMap(line: IBufferLine): { text: string; cells: number[] } {
+  let text = "";
+  const cells: number[] = [];
+  for (let cellIndex = 0; cellIndex < line.length; cellIndex += 1) {
+    const cell = line.getCell(cellIndex);
+    if (!cell || cell.getWidth() === 0) {
+      continue;
+    }
+    const chars = cell.getChars() || " ";
+    for (let charIndex = 0; charIndex < chars.length; charIndex += 1) {
+      cells.push(cellIndex);
+    }
+    text += chars;
+  }
+  return { text: text.trimEnd(), cells };
+}
+
+function terminalLinkMatches(line: IBufferLine): TerminalLinkMatch[] {
+  const { text, cells } = lineTextWithCellMap(line);
+  const matches: TerminalLinkMatch[] = [];
+  for (const match of text.matchAll(TERMINAL_LINK_PATTERN)) {
+    const rawText = match[0].replace(/[，。；、,.]+$/u, "");
+    if (!rawText || match.index === undefined) {
+      continue;
+    }
+    const startIndex = match.index;
+    const endIndex = startIndex + rawText.length - 1;
+    const startCell = cells[startIndex];
+    const endCell = cells[endIndex];
+    if (startCell === undefined || endCell === undefined) {
+      continue;
+    }
+    matches.push({ text: rawText, startCell, endCell });
+  }
+  return matches;
+}
+
+function localTerminalPath(maibotRoot: string | undefined, text: string): string | null {
+  if (!maibotRoot || !text.startsWith("logs/")) {
+    return null;
+  }
+  return `${maibotRoot.replace(/[\\/]+$/u, "")}\\${text.replace(/\//gu, "\\")}`;
+}
+
+function createTerminalLinkProvider(terminal: Terminal, maibotRoot: string | undefined): ILinkProvider {
+  return {
+    provideLinks(bufferLineNumber, callback): void {
+      const line = terminal.buffer.active.getLine(bufferLineNumber - 1) ?? terminal.buffer.active.getLine(bufferLineNumber);
+      if (!line) {
+        callback(undefined);
+        return;
+      }
+      const links: ILink[] = terminalLinkMatches(line).map((match) => ({
+        range: {
+          start: { x: match.startCell + 1, y: bufferLineNumber },
+          end: { x: match.endCell + 1, y: bufferLineNumber },
+        },
+        text: match.text,
+        activate: (_event, text): void => {
+          const localPath = localTerminalPath(maibotRoot, text);
+          if (localPath) {
+            void window.maibotDesktop?.openPath(localPath);
+            return;
+          }
+          if (/^https?:\/\//iu.test(text)) {
+            void window.maibotDesktop?.openExternal(text);
+          }
+        },
+      }));
+      callback(links.length ? links : undefined);
+    },
+  };
+}
+
 function serviceIdFromLog(entry: LogEntry): ServiceId | undefined {
   return entry.source === "maibot" || entry.source === "napcat" ? entry.source : undefined;
 }
@@ -103,10 +184,14 @@ export function TerminalPanel({
   active = true,
   recentLogs = [],
   services = [],
+  terminalSettings,
+  maibotRoot,
 }: {
   active?: boolean;
   recentLogs?: LogEntry[];
   services?: ServiceDescriptor[];
+  terminalSettings?: TerminalSettings;
+  maibotRoot?: string;
 }): React.JSX.Element {
   const [activeServiceId, setActiveServiceId] = useState<ServiceId>("maibot");
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -119,6 +204,7 @@ export function TerminalPanel({
   const prePtyNoticeRef = useRef(new Map<ServiceId, string>());
   const recentLogsRef = useRef<LogEntry[]>(recentLogs);
   const writtenSystemLogIdsRef = useRef(new Set<string>());
+  const terminalFontSize = terminalSettings?.fontSize ?? 12;
 
   const servicesById = useMemo(
     () => new Map<ServiceId, ServiceDescriptor>(services.map((service) => [service.id, service])),
@@ -164,6 +250,16 @@ export function TerminalPanel({
     }
   }, []);
 
+  const scheduleFitTerminal = useCallback(
+    (sessionId: string) => {
+      requestAnimationFrame(() => {
+        fitTerminal(sessionId);
+        window.setTimeout(() => fitTerminal(sessionId), 80);
+      });
+    },
+    [fitTerminal],
+  );
+
   const getTerminal = useCallback(
     (sessionId: string): TerminalInstance => {
       const existing = terminalsRef.current.get(sessionId);
@@ -173,12 +269,12 @@ export function TerminalPanel({
 
       const terminal = new Terminal({
         allowProposedApi: false,
-        convertEol: false,
+        convertEol: true,
         cursorBlink: true,
         cursorStyle: "block",
         fontFamily:
           '"JetBrains Mono", "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-        fontSize: 12,
+        fontSize: terminalFontSize,
         lineHeight: 1.22,
         scrollback: 100_000,
         tabStopWidth: 8,
@@ -188,6 +284,7 @@ export function TerminalPanel({
       terminal.loadAddon(fitAddon);
 
       const disposables: Disposable[] = [
+        terminal.registerLinkProvider(createTerminalLinkProvider(terminal, maibotRoot)),
         terminal.onData((data) => {
           if (!canWriteToSession(sessionsRef.current.get(sessionId))) {
             return;
@@ -208,10 +305,7 @@ export function TerminalPanel({
             return;
           }
 
-          const nextCols = sessionId.startsWith("service:")
-            ? Math.max(cols, MIN_SERVICE_TERMINAL_COLS)
-            : cols;
-          void bridgeRef.current?.pty.resize({ sessionId, cols: nextCols, rows }).catch(() => undefined);
+          void bridgeRef.current?.pty.resize({ sessionId, cols, rows }).catch(() => undefined);
         }),
       ];
 
@@ -234,8 +328,15 @@ export function TerminalPanel({
       terminalsRef.current.set(sessionId, instance);
       return instance;
     },
-    [],
+    [maibotRoot, terminalFontSize],
   );
+
+  useEffect(() => {
+    for (const [sessionId, instance] of terminalsRef.current) {
+      instance.terminal.options.fontSize = terminalFontSize;
+      scheduleFitTerminal(sessionId);
+    }
+  }, [scheduleFitTerminal, terminalFontSize]);
 
   const openTerminal = useCallback(
     (sessionId: string, element: HTMLDivElement) => {
@@ -245,9 +346,9 @@ export function TerminalPanel({
         instance.opened = true;
       }
 
-      requestAnimationFrame(() => fitTerminal(sessionId));
+      scheduleFitTerminal(sessionId);
     },
-    [fitTerminal, getTerminal],
+    [getTerminal, scheduleFitTerminal],
   );
 
   const writeStoredSystemLogs = useCallback(
@@ -334,11 +435,11 @@ export function TerminalPanel({
       await Promise.all(serviceTerminals.map((item) => loadSessionBuffer(item.sessionId, true)));
       notifySessionsChanged();
       const currentService = serviceTerminals.find((item) => item.serviceId === activeServiceIdRef.current) ?? serviceTerminals[0];
-      requestAnimationFrame(() => fitTerminal(currentService.sessionId));
+      scheduleFitTerminal(currentService.sessionId);
     } finally {
       setIsRefreshing(false);
     }
-  }, [fitTerminal, loadSessionBuffer, notifySessionsChanged]);
+  }, [loadSessionBuffer, notifySessionsChanged, scheduleFitTerminal]);
 
   useEffect(() => {
     void refreshSessions();
@@ -415,10 +516,10 @@ export function TerminalPanel({
 
     const sessionId = activeTerminal.sessionId;
     requestAnimationFrame(() => {
-      fitTerminal(sessionId);
+      scheduleFitTerminal(sessionId);
       getTerminal(sessionId).terminal.focus();
     });
-  }, [active, activeTerminal.sessionId, fitTerminal, getTerminal, sessionVersion]);
+  }, [active, activeTerminal.sessionId, getTerminal, scheduleFitTerminal, sessionVersion]);
 
   useEffect(() => {
     const pane = panesRef.current.get(activeTerminal.sessionId);
@@ -427,11 +528,11 @@ export function TerminalPanel({
     }
 
     const observer = new ResizeObserver(() => {
-      fitTerminal(activeTerminal.sessionId);
+      scheduleFitTerminal(activeTerminal.sessionId);
     });
     observer.observe(pane);
     return () => observer.disconnect();
-  }, [activeTerminal.sessionId, fitTerminal]);
+  }, [activeTerminal.sessionId, scheduleFitTerminal]);
 
   useEffect(() => {
     return () => {
@@ -461,28 +562,28 @@ export function TerminalPanel({
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background text-foreground">
-      <div className="flex min-h-12 shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-4 py-2">
+      <div className="flex min-h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 py-1">
         <div className="flex min-w-0 items-center gap-2">
-          <TerminalSquare className="size-4 shrink-0 text-primary" />
+          <TerminalSquare className="size-3.5 shrink-0 text-primary" />
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+            <h2 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
               后台 PTY 终端
             </h2>
-            <p className="truncate text-[11px] text-muted-foreground">
+            <p className="truncate text-[10px] text-muted-foreground">
               {activeSession?.pid ? `PID ${activeSession.pid}` : "等待后台服务启动"} · Ctrl+C 复制选中内容
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button onClick={copySelection} size="sm" variant="outline">
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button className="h-7 px-2 text-xs" onClick={copySelection} size="sm" variant="outline">
             <Copy />
             复制
           </Button>
-          <Button onClick={scrollToTail} size="sm" variant="outline">
+          <Button className="h-7 px-2 text-xs" onClick={scrollToTail} size="sm" variant="outline">
             <ArrowDownToLine />
             底部
           </Button>
-          <Button disabled={isRefreshing} onClick={refreshSessions} size="sm" variant="outline">
+          <Button className="h-7 px-2 text-xs" disabled={isRefreshing} onClick={refreshSessions} size="sm" variant="outline">
             {isRefreshing ? <Loader2 className="animate-spin" /> : <RotateCcw />}
             附加
             <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
@@ -490,7 +591,7 @@ export function TerminalPanel({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card/60 px-3 py-2">
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-card/60 px-2.5 py-1">
         {serviceTerminals.map((item) => {
           const session = sessionsRef.current.get(item.sessionId);
           const service = servicesById.get(item.serviceId);
@@ -498,7 +599,7 @@ export function TerminalPanel({
           return (
             <button
               className={[
-                "flex h-9 min-w-[174px] items-center justify-between gap-3 rounded-md border px-3 text-left transition-colors",
+                "flex h-7 min-w-[154px] items-center justify-between gap-2 rounded-md border px-2.5 text-left transition-colors",
                 selected
                   ? "border-primary/60 bg-primary/10 text-foreground"
                   : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent/40 hover:text-foreground",
@@ -507,12 +608,12 @@ export function TerminalPanel({
               onClick={() => selectService(item.serviceId)}
               type="button"
             >
-              <span className="min-w-0 truncate text-xs font-semibold">{service?.name ?? item.title}</span>
-              <span className="flex shrink-0 items-center gap-1.5">
-                <Badge className="h-5 px-1.5 text-[10px]" variant={serviceBadgeVariant(service)}>
+              <span className="min-w-0 truncate text-[11px] font-semibold">{service?.name ?? item.title}</span>
+              <span className="flex shrink-0 items-center gap-1">
+                <Badge className="h-4 px-1.5 text-[9.5px]" variant={serviceBadgeVariant(service)}>
                   {service?.status === "running" ? "服务运行" : service?.status === "error" ? "异常" : "未运行"}
                 </Badge>
-                <Badge className="h-5 px-1.5 text-[10px]" variant="outline">
+                <Badge className="h-4 px-1.5 text-[9.5px]" variant="outline">
                   {session ? statusText[session.status] : "无 PTY"}
                 </Badge>
               </span>
@@ -521,7 +622,7 @@ export function TerminalPanel({
         })}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden p-3">
+      <div className="min-h-0 flex-1 overflow-hidden p-2">
         <div
           className="relative size-full overflow-hidden rounded-md border border-border shadow-inner"
           style={{ backgroundColor: XTERM_THEME.background }}
@@ -541,7 +642,7 @@ export function TerminalPanel({
           ))}
         </div>
       </div>
-      <div className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-card px-4 font-mono text-[11px] text-muted-foreground">
+      <div className="flex h-6 shrink-0 items-center justify-between border-t border-border bg-card px-3 font-mono text-[10px] text-muted-foreground">
         <span>{activeSession?.pid ? `pid ${activeSession.pid}` : "no pty"}</span>
         <span className="min-w-0 truncate pl-4 text-right">{activeService?.command?.[0] ?? "启动命令会在服务启动后显示"}</span>
       </div>
