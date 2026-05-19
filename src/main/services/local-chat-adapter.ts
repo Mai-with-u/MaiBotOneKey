@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import WebSocket from "ws";
 import type {
   LocalChatConnectionState,
@@ -9,46 +8,42 @@ import type {
   LocalChatEvent,
   LocalChatImageAttachment,
   LocalChatMessageEvent,
+  LocalChatMessageQuote,
+  LocalChatPlannerToolArgument,
+  LocalChatPlannerToolCall,
   LocalChatSendRequest,
   RuntimePaths,
 } from "../../shared/contracts";
 
-const PLATFORM = "onekey-local-chat";
-const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 8000;
+const DEFAULT_WEBUI_ORIGIN = "http://127.0.0.1:8001";
 const DEFAULT_USER_ID = "onekey-local-user";
-const MESSAGE_HISTORY_LIMIT = 120;
+const DEFAULT_WEBUI_USER_ID = `webui_user_${DEFAULT_USER_ID}`;
 const DEFAULT_USER_NAME = "本地用户";
+const MESSAGE_HISTORY_LIMIT = 120;
+const SESSION_ID = "desktop-simple-chat";
+const WS_REQUEST_TIMEOUT_MS = 8_000;
+const REPLY_MESSAGE_PREFIX = /^\s*\[回复消息\]\s*/u;
 
-interface MaimMessageConfig {
-  host: string;
-  port: number;
-  token?: string;
-}
-
-interface MaimMessagePayload {
-  content?: unknown;
-  text?: unknown;
-  message?: unknown;
-  message_info?: {
-    platform?: string;
-    message_id?: string;
-    time?: number;
-    user_info?: Record<string, unknown>;
-    [key: string]: unknown;
-  };
-  message_segment?: MaimSegment;
-  message_segments?: unknown;
-  segments?: unknown;
-  raw_message?: unknown;
-}
-
-interface MaimSegment {
-  type?: string;
+interface UnifiedWsEvent {
+  op?: unknown;
+  domain?: unknown;
+  event?: unknown;
+  session?: unknown;
   data?: unknown;
-  content?: unknown;
-  text?: unknown;
-  segments?: unknown;
+}
+
+interface UnifiedWsResponse {
+  op?: unknown;
+  id?: unknown;
+  ok?: unknown;
+  data?: unknown;
+  error?: unknown;
+}
+
+interface PendingRequest {
+  reject: (error: Error) => void;
+  resolve: (data: unknown) => void;
+  timeout: NodeJS.Timeout;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -61,153 +56,6 @@ function asString(value: unknown): string | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function normalizePort(value: number | undefined): number | undefined {
-  if (!Number.isInteger(value)) {
-    return undefined;
-  }
-
-  const port = value as number;
-  return port >= 1 && port <= 65535 ? port : undefined;
-}
-
-function buildWsUrl(config: MaimMessageConfig): string {
-  const url = new URL(`ws://${config.host}:${config.port}/ws`);
-  return url.toString();
-}
-
-function extractTextFromSegment(segment: unknown): string {
-  const record = asRecord(segment);
-  if (!record) {
-    return typeof segment === "string" ? segment : "";
-  }
-
-  const type = asString(record.type);
-  const data = record.data;
-  if (type === "text") {
-    return typeof data === "string" ? data : asString(record.content) ?? asString(record.text) ?? "";
-  }
-  if (type === "seglist" && Array.isArray(data)) {
-    return data.map(extractTextFromSegment).filter(Boolean).join("");
-  }
-  if (Array.isArray(record.segments)) {
-    return record.segments.map(extractTextFromSegment).filter(Boolean).join("");
-  }
-  if (type === "image") {
-    return "[图片]";
-  }
-  if (type === "emoji") {
-    return "[表情]";
-  }
-  if (type === "voice") {
-    return "[语音]";
-  }
-  return "";
-}
-
-function extractTextFromSegments(segments: unknown): string {
-  return Array.isArray(segments) ? segments.map(extractTextFromSegment).filter(Boolean).join("") : "";
-}
-
-function imageFromData(data: string): LocalChatImageAttachment | undefined {
-  const trimmed = data.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const dataUrlMatch = trimmed.match(/^data:(image\/[^;]+);base64,(.+)$/u);
-  if (dataUrlMatch) {
-    return {
-      mimeType: dataUrlMatch[1],
-      base64: dataUrlMatch[2],
-      dataUrl: trimmed,
-    };
-  }
-
-  return {
-    mimeType: "image/png",
-    base64: trimmed,
-    dataUrl: `data:image/png;base64,${trimmed}`,
-  };
-}
-
-function extractImagesFromSegment(segment: unknown): LocalChatImageAttachment[] {
-  const record = asRecord(segment);
-  if (!record) {
-    return [];
-  }
-
-  const type = asString(record.type);
-  if (type === "image" && typeof record.data === "string") {
-    const image = imageFromData(record.data);
-    return image ? [image] : [];
-  }
-  if (type === "seglist" && Array.isArray(record.data)) {
-    return record.data.flatMap(extractImagesFromSegment);
-  }
-  if (Array.isArray(record.segments)) {
-    return record.segments.flatMap(extractImagesFromSegment);
-  }
-  return [];
-}
-
-function extractImagesFromSegments(segments: unknown): LocalChatImageAttachment[] {
-  return Array.isArray(segments) ? segments.flatMap(extractImagesFromSegment) : [];
-}
-
-function extractTextFromPayload(payload: unknown): string {
-  const record = asRecord(payload);
-  if (!record) {
-    return "";
-  }
-
-  const direct =
-    asString(record.display_message)
-    ?? asString(record.processed_plain_text)
-    ?? asString(record.content)
-    ?? asString(record.text)
-    ?? asString(record.raw_message);
-  if (direct) {
-    return direct;
-  }
-
-  const nestedMessage = asRecord(record.message);
-  const nestedDirect =
-    asString(nestedMessage?.display_message)
-    ?? asString(nestedMessage?.processed_plain_text)
-    ?? asString(nestedMessage?.content)
-    ?? asString(nestedMessage?.text)
-    ?? asString(nestedMessage?.raw_message);
-  if (nestedDirect) {
-    return nestedDirect;
-  }
-
-  return (
-    extractTextFromSegment(record.message_segment)
-    || extractTextFromSegments(record.message_segments)
-    || extractTextFromSegments(record.segments)
-    || extractTextFromSegment(nestedMessage?.message_segment)
-    || extractTextFromSegments(nestedMessage?.message_segments)
-    || extractTextFromSegments(nestedMessage?.segments)
-  );
-}
-
-function extractImagesFromPayload(payload: unknown): LocalChatImageAttachment[] {
-  const record = asRecord(payload);
-  if (!record) {
-    return [];
-  }
-
-  const nestedMessage = asRecord(record.message);
-  return [
-    ...extractImagesFromSegment(record.message_segment),
-    ...extractImagesFromSegments(record.message_segments),
-    ...extractImagesFromSegments(record.segments),
-    ...extractImagesFromSegment(nestedMessage?.message_segment),
-    ...extractImagesFromSegments(nestedMessage?.message_segments),
-    ...extractImagesFromSegments(nestedMessage?.segments),
-  ];
 }
 
 function parseSocketPayload(data: WebSocket.RawData): unknown | undefined {
@@ -223,12 +71,205 @@ function parseSocketPayload(data: WebSocket.RawData): unknown | undefined {
   }
 }
 
+function normalizeTimestamp(value: unknown): number {
+  const timestamp = asNumber(value);
+  if (!timestamp) {
+    return Date.now();
+  }
+  return timestamp > 10_000_000_000 ? Math.round(timestamp) : Math.round(timestamp * 1000);
+}
+
+function imagePlaceholder(images: LocalChatImageAttachment[]): string {
+  if (images.length === 0) {
+    return "";
+  }
+  return images.length === 1 ? "[图片]" : `[图片 x${images.length}]`;
+}
+
+function plannerContent(data: Record<string, unknown>): string {
+  const planner = asRecord(data.planner);
+  const content = asString(data.content) ?? asString(planner?.content);
+  return content ?? "";
+}
+
+function stringifyToolArguments(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function stringifyToolValue(value: unknown): string {
+  if (value === undefined) {
+    return "";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseToolArguments(value: unknown): LocalChatPlannerToolArgument[] | undefined {
+  let parsed = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return [{ key: "参数", value: trimmed }];
+    }
+  }
+  const record = asRecord(parsed);
+  if (!record) {
+    return parsed === undefined || parsed === null
+      ? undefined
+      : [{ key: "参数", value: stringifyToolValue(parsed) }];
+  }
+  const entries = Object.entries(record)
+    .map(([key, entryValue]) => ({ key, value: stringifyToolValue(entryValue) }))
+    .filter((entry) => entry.value.length > 0);
+  return entries.length ? entries : undefined;
+}
+
+function plannerTools(data: Record<string, unknown>): LocalChatPlannerToolCall[] {
+  const planner = asRecord(data.planner);
+  const rawToolCalls = Array.isArray(data.tool_calls)
+    ? data.tool_calls
+    : Array.isArray(planner?.tool_calls)
+      ? planner.tool_calls
+      : [];
+  const calls = rawToolCalls
+    .map((item): LocalChatPlannerToolCall | undefined => {
+      const record = asRecord(item);
+      const name = asString(record?.name);
+      if (!record || !name) {
+        return undefined;
+      }
+      return {
+        id: asString(record.id),
+        name,
+        arguments: parseToolArguments(record.arguments ?? record.arguments_raw),
+        argumentsText: stringifyToolArguments(record.arguments ?? record.arguments_raw),
+      };
+    })
+    .filter((item): item is LocalChatPlannerToolCall => Boolean(item));
+
+  const rawResults = Array.isArray(data.tools) ? data.tools : [];
+  for (const item of rawResults) {
+    const record = asRecord(item);
+    const name = asString(record?.tool_name);
+    if (!record || !name) {
+      continue;
+    }
+    const id = asString(record.tool_call_id);
+    const existing = calls.find((call) => (id && call.id === id) || call.name === name);
+    const result = {
+      id,
+      name,
+      arguments: parseToolArguments(record.tool_args),
+      argumentsText: stringifyToolArguments(record.tool_args),
+      resultText: asString(record.summary) ?? stringifyToolArguments(record.detail),
+      success: typeof record.success === "boolean" ? record.success : undefined,
+      durationMs: asNumber(record.duration_ms),
+    };
+    if (existing) {
+      Object.assign(existing, result);
+    } else {
+      calls.push(result);
+    }
+  }
+
+  return calls;
+}
+
+function quoteFromRecord(record: Record<string, unknown> | undefined): LocalChatMessageQuote | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const quoteRecord = asRecord(record.quote)
+    ?? asRecord(record.reply)
+    ?? asRecord(record.replied_message)
+    ?? asRecord(record.quote_message)
+    ?? asRecord(record.reference);
+  const content = asString(quoteRecord?.content)
+    ?? asString(quoteRecord?.text)
+    ?? asString(quoteRecord?.message)
+    ?? asString(record.quote_content)
+    ?? asString(record.reply_content);
+  if (!content) {
+    return undefined;
+  }
+  const sender = asRecord(quoteRecord?.sender);
+  return {
+    messageId: asString(quoteRecord?.message_id) ?? asString(quoteRecord?.id) ?? asString(record.quote_message_id),
+    sender: asString(sender?.name)
+      ?? asString(quoteRecord?.sender_name)
+      ?? asString(quoteRecord?.sender)
+      ?? asString(record.quote_sender_name),
+    content,
+  };
+}
+
+function splitReplyMessage(content: string): { content: string; hasReplyPrefix: boolean } {
+  if (!REPLY_MESSAGE_PREFIX.test(content)) {
+    return { content, hasReplyPrefix: false };
+  }
+  return {
+    content: content.replace(REPLY_MESSAGE_PREFIX, "").trim(),
+    hasReplyPrefix: true,
+  };
+}
+
+function historyMessageToLocal(message: Record<string, unknown>): LocalChatMessageEvent | undefined {
+  const rawContent = asString(message.content);
+  if (!rawContent) {
+    return undefined;
+  }
+
+  const parsed = splitReplyMessage(rawContent);
+  const type = asString(message.type);
+  const isBot = message.is_bot === true || type === "bot";
+  return {
+    id: asString(message.id) ?? `history-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    role: isBot ? "bot" : "user",
+    content: parsed.content,
+    timestamp: normalizeTimestamp(message.timestamp),
+    sender: asString(message.sender_name) ?? (isBot ? "MaiBot" : DEFAULT_USER_NAME),
+    quote: quoteFromRecord(message),
+  };
+}
+
 export class LocalChatAdapter extends EventEmitter {
   private socket: WebSocket | null = null;
   private state: LocalChatConnectionState = "idle";
   private currentUrl = "";
   private connectingPromise: Promise<void> | null = null;
   private messages: LocalChatMessageEvent[] = [];
+  private pendingRequests = new Map<string, PendingRequest>();
+  private requestCounter = 0;
+  private lastUserName = DEFAULT_USER_NAME;
+  private runtimeSessionId: string | null = null;
+  private monitorSessionId: string | null = null;
 
   constructor(private readonly paths: RuntimePaths) {
     super();
@@ -242,22 +283,16 @@ export class LocalChatAdapter extends EventEmitter {
     return [...this.messages];
   }
 
-  async connect(request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> {
-    if (this.socket?.readyState === WebSocket.OPEN && !request?.port) {
+  async connect(_request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> {
+    if (this.socket?.readyState === WebSocket.OPEN) {
       return this.state;
-    }
-    if (this.socket?.readyState === WebSocket.OPEN && request?.port && this.currentUrl.includes(`:${request.port}/`)) {
-      return this.state;
-    }
-    if (request?.port) {
-      this.disconnect();
     }
     if (this.connectingPromise) {
       await this.connectingPromise;
       return this.state;
     }
 
-    this.connectingPromise = this.openSocket(request).finally(() => {
+    this.connectingPromise = this.openSocket().finally(() => {
       this.connectingPromise = null;
     });
     await this.connectingPromise;
@@ -267,6 +302,9 @@ export class LocalChatAdapter extends EventEmitter {
   disconnect(): void {
     const socket = this.socket;
     this.socket = null;
+    this.runtimeSessionId = null;
+    this.monitorSessionId = null;
+    this.rejectPendingRequests(new Error("简单聊聊连接已关闭"));
     if (socket) {
       socket.removeAllListeners();
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
@@ -278,10 +316,10 @@ export class LocalChatAdapter extends EventEmitter {
   }
 
   async send(request: LocalChatSendRequest): Promise<LocalChatMessageEvent> {
-    await this.connect({ port: request.port });
+    await this.connect();
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      throw new Error("本地适配器未连接");
+      throw new Error("简单聊聊未连接");
     }
 
     const content = request.content.trim();
@@ -290,15 +328,27 @@ export class LocalChatAdapter extends EventEmitter {
       throw new Error("消息内容为空");
     }
 
+    const displayContent = [content, imagePlaceholder(images)].filter(Boolean).join("\n");
+    this.lastUserName = request.userName?.trim() || DEFAULT_USER_NAME;
     const message: LocalChatMessageEvent = {
       id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       role: "user",
-      content,
+      content: displayContent,
       timestamp: Date.now(),
-      sender: request.userName?.trim() || DEFAULT_USER_NAME,
+      sender: this.lastUserName,
       images,
     };
-    socket.send(JSON.stringify(this.buildMessagePayload(message)));
+
+    await this.sendRequest({
+      op: "call",
+      domain: "chat",
+      method: "message.send",
+      session: SESSION_ID,
+      data: {
+        content: displayContent,
+        user_name: this.lastUserName,
+      },
+    });
     this.emitMessage(message);
     return message;
   }
@@ -313,22 +363,21 @@ export class LocalChatAdapter extends EventEmitter {
     return () => this.off("event", callback);
   }
 
-  private async openSocket(request?: LocalChatConnectRequest): Promise<void> {
-    const config = await this.readConfig(request);
-    const url = buildWsUrl(config);
-    this.currentUrl = url;
+  private async openSocket(): Promise<void> {
+    const origin = await this.readWebUiOrigin();
+    const token = await this.readWebUiToken();
+    const wsOrigin = origin.replace(/^http/u, "ws").replace(/\/+$/u, "");
+    this.currentUrl = `${wsOrigin}/api/webui/ws`;
     this.setState("connecting");
 
     await new Promise<void>((resolve, reject) => {
-      const headers: Record<string, string> = { platform: PLATFORM };
-      if (config.token) {
-        headers.authorization = config.token;
-      }
-      const socket = new WebSocket(url, { headers });
+      const socket = new WebSocket(this.currentUrl, {
+        headers: token ? { Cookie: `maibot_session=${encodeURIComponent(token)}` } : {},
+      });
       let settled = false;
       const timeout = setTimeout(() => {
-        finish(new Error(`连接本地适配器超时: ${url}`));
-      }, 8_000);
+        finish(new Error(`连接 MaiBot 简单聊聊超时：${origin}`));
+      }, WS_REQUEST_TIMEOUT_MS);
 
       const finish = (error?: Error): void => {
         if (settled) {
@@ -347,14 +396,15 @@ export class LocalChatAdapter extends EventEmitter {
       socket.on("open", () => {
         this.socket = socket;
         this.setState("connected");
-        finish();
+        void this.initializeSession().then(() => finish()).catch(finish);
       });
       socket.on("message", (data) => this.handleSocketMessage(data));
       socket.on("error", () => {
         this.setState("error");
-        finish(new Error(`无法连接本地适配器: ${url}`));
+        finish(new Error(`无法连接 MaiBot 简单聊聊：${origin}`));
       });
       socket.on("close", () => {
+        this.rejectPendingRequests(new Error("简单聊聊连接已断开"));
         if (this.socket === socket) {
           this.socket = null;
           this.setState(this.state === "idle" ? "idle" : "error");
@@ -363,85 +413,259 @@ export class LocalChatAdapter extends EventEmitter {
     });
   }
 
-  private async readConfig(request?: LocalChatConnectRequest): Promise<MaimMessageConfig> {
-    const portOverride = normalizePort(request?.port);
-    const path = join(this.paths.maibotRoot, "config", "bot_config.toml");
-    try {
-      const parsed = parseToml(await readFile(path, "utf8")) as Record<string, unknown>;
-      const maimMessage = asRecord(parsed.maim_message);
-      const host = asString(maimMessage?.ws_server_host) ?? DEFAULT_HOST;
-      const port = portOverride ?? asNumber(maimMessage?.ws_server_port) ?? DEFAULT_PORT;
-      const tokens = Array.isArray(maimMessage?.auth_token) ? maimMessage.auth_token : [];
-      const token = tokens.map(asString).find(Boolean);
-      return { host: host === "0.0.0.0" ? DEFAULT_HOST : host, port, token };
-    } catch {
-      return { host: DEFAULT_HOST, port: portOverride ?? DEFAULT_PORT };
-    }
+  private async initializeSession(): Promise<void> {
+    this.monitorSessionId = null;
+    const response = asRecord(await this.sendRequest({
+      op: "call",
+      domain: "chat",
+      method: "session.open",
+      session: SESSION_ID,
+      data: {
+        user_id: DEFAULT_USER_ID,
+        user_name: this.lastUserName,
+        platform: "webui",
+        restore: true,
+      },
+    }));
+    this.runtimeSessionId = asString(response?.session_id) ?? null;
+    await this.sendRequest({
+      op: "subscribe",
+      domain: "maisaka_monitor",
+      topic: "main",
+    });
   }
 
-  private buildMessagePayload(message: LocalChatMessageEvent): MaimMessagePayload {
-    const imageSegments = (message.images ?? []).map((image) => ({ type: "image", data: image.base64 }));
-    const segments = [
-      ...(message.content ? [{ type: "text", data: message.content }] : []),
-      ...imageSegments,
+  private async readWebUiOrigin(): Promise<string> {
+    const candidates = [
+      join(this.paths.maibotRoot, "data", "webui.json"),
+      join(this.paths.bundledModulesRoot, "MaiBot", "data", "webui.json"),
     ];
+    for (const configPath of candidates) {
+      try {
+        const raw = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+        const port = asNumber(raw.webui_port) ?? asNumber(raw.port);
+        if (port) {
+          return `http://127.0.0.1:${port}`;
+        }
+      } catch {
+        // Try the next known location.
+      }
+    }
+    return DEFAULT_WEBUI_ORIGIN;
+  }
 
-    return {
-      message_info: {
-        platform: PLATFORM,
-        message_id: message.id,
-        time: message.timestamp / 1000,
-        group_info: null,
-        user_info: {
-          platform: PLATFORM,
-          user_id: DEFAULT_USER_ID,
-          user_nickname: message.sender ?? DEFAULT_USER_NAME,
-          user_cardname: message.sender ?? DEFAULT_USER_NAME,
-        },
-        format_info: {
-          content_format: imageSegments.length > 0 ? ["text", "image"] : ["text"],
-          accept_format: ["text", "image", "emoji"],
-        },
-        template_info: null,
-        additional_config: {
-          platform_io_target_user_id: DEFAULT_USER_ID,
-        },
-      },
-      message_segment: {
-        type: "seglist",
-        data: segments,
-      },
-      raw_message: message.content,
-    };
+  private async readWebUiToken(): Promise<string | null> {
+    const candidates = [
+      join(this.paths.maibotRoot, "data", "webui.json"),
+      join(this.paths.bundledModulesRoot, "MaiBot", "data", "webui.json"),
+    ];
+    for (const configPath of candidates) {
+      try {
+        const raw = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+        const token = asString(raw.access_token);
+        if (token) {
+          return token;
+        }
+      } catch {
+        // Try the next known location.
+      }
+    }
+    return null;
+  }
+
+  private sendRequest(payload: Record<string, unknown>): Promise<unknown> {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("简单聊聊未连接"));
+    }
+
+    this.requestCounter += 1;
+    const id = `onekey-${Date.now()}-${this.requestCounter}`;
+    return new Promise<unknown>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error("简单聊聊插件请求超时"));
+      }, WS_REQUEST_TIMEOUT_MS);
+      this.pendingRequests.set(id, { resolve, reject, timeout });
+      socket.send(JSON.stringify({ ...payload, id }));
+    });
+  }
+
+  private rejectPendingRequests(error: Error): void {
+    this.pendingRequests.forEach((pending) => {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    });
+    this.pendingRequests.clear();
   }
 
   private handleSocketMessage(data: WebSocket.RawData): void {
     const payload = parseSocketPayload(data);
-    if (!payload) {
-      return;
-    }
-
-    const content = extractTextFromPayload(payload);
-    const images = extractImagesFromPayload(payload);
-    if (!content && images.length === 0) {
-      return;
-    }
-
     const record = asRecord(payload);
-    const info = asRecord(record?.message_info) ?? asRecord(asRecord(record?.message)?.message_info);
-    const userInfo = asRecord(info?.user_info) ?? asRecord(record?.sender);
+    if (!record) {
+      return;
+    }
+
+    if (record.op === "response") {
+      this.handleResponse(record as UnifiedWsResponse);
+      return;
+    }
+    if (record.op === "event") {
+      this.handleEvent(record as UnifiedWsEvent);
+    }
+  }
+
+  private handleResponse(response: UnifiedWsResponse): void {
+    const id = asString(response.id);
+    if (!id) {
+      return;
+    }
+    const pending = this.pendingRequests.get(id);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingRequests.delete(id);
+    if (response.ok === true) {
+      pending.resolve(response.data);
+      return;
+    }
+
+    const error = asRecord(response.error);
+    pending.reject(new Error(asString(error?.message) ?? "简单聊聊插件请求失败"));
+  }
+
+  private handleEvent(event: UnifiedWsEvent): void {
+    const domain = asString(event.domain);
+    const eventName = asString(event.event);
+    const data = asRecord(event.data);
+    if (!domain || !eventName || !data) {
+      return;
+    }
+
+    if (domain === "chat" && event.session === SESSION_ID) {
+      this.handleChatEvent(eventName, data);
+      return;
+    }
+    if (domain === "maisaka_monitor" && this.isLocalPlannerEvent(data)) {
+      this.handlePlannerEvent(eventName, data);
+    }
+  }
+
+  private isLocalPlannerEvent(data: Record<string, unknown>): boolean {
+    const sessionId = asString(data.session_id);
+    if (!sessionId) {
+      return false;
+    }
+    if (this.runtimeSessionId === sessionId || this.monitorSessionId === sessionId) {
+      return true;
+    }
+
+    const platform = asString(data.platform);
+    const userId = asString(data.user_id);
+    const groupId = asString(data.group_id);
+    const isGroupChat = data.is_group_chat === true;
+    if (platform === "webui" && userId === DEFAULT_WEBUI_USER_ID && !isGroupChat && !groupId) {
+      this.monitorSessionId = sessionId;
+      return true;
+    }
+
+    return false;
+  }
+
+  private handleChatEvent(eventName: string, data: Record<string, unknown>): void {
+    if (eventName === "typing" || eventName === "pong" || eventName === "virtual_identity_set") {
+      return;
+    }
+
+    if (eventName === "history") {
+      const history = Array.isArray(data.messages) ? data.messages : [];
+      for (const item of history) {
+        const message = historyMessageToLocal(asRecord(item) ?? {});
+        if (message) {
+          this.emitMessage(message);
+        }
+      }
+      return;
+    }
+
+    const rawContent = asString(data.content);
+    if (!rawContent) {
+      return;
+    }
+
+    const sender = asRecord(data.sender);
+    const isUser = eventName === "user_message" || sender?.is_bot === false;
+    const role = eventName === "error" ? "error" : isUser ? "user" : eventName === "system" ? "system" : "bot";
+    const parsed = splitReplyMessage(rawContent);
+    const content = parsed.content;
+    if (
+      role === "user"
+      && this.messages.some((message) =>
+        message.role === "user"
+        && message.content === content
+        && Date.now() - message.timestamp < 10_000
+      )
+    ) {
+      return;
+    }
     this.emitMessage({
-      id: asString(info?.message_id) ?? `remote-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      role: "bot",
+      id: asString(data.message_id) ?? `${eventName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      role,
       content,
-      timestamp: Math.round((asNumber(info?.time) ?? asNumber(record?.timestamp) ?? Date.now() / 1000) * 1000),
-      sender: asString(userInfo?.user_nickname) ?? asString(userInfo?.name) ?? "MaiBot",
-      images,
+      timestamp: normalizeTimestamp(data.timestamp),
+      sender: asString(sender?.name) ?? (role === "bot" ? "MaiBot" : undefined),
+      quote: this.localQuoteForMessage(data, parsed.hasReplyPrefix),
+    });
+  }
+
+  private localQuoteForMessage(data: Record<string, unknown>, hasReplyPrefix: boolean): LocalChatMessageQuote | undefined {
+    const explicitQuote = quoteFromRecord(data);
+    if (explicitQuote) {
+      return explicitQuote;
+    }
+    if (!hasReplyPrefix) {
+      return undefined;
+    }
+    const latestUserMessage = [...this.messages].reverse().find((message) => message.role === "user" && message.content.trim());
+    if (!latestUserMessage) {
+      return undefined;
+    }
+    return {
+      messageId: latestUserMessage.id,
+      sender: latestUserMessage.sender,
+      content: latestUserMessage.content,
+    };
+  }
+
+  private handlePlannerEvent(eventName: string, data: Record<string, unknown>): void {
+    if (eventName !== "planner.response" && eventName !== "planner.finalized") {
+      return;
+    }
+
+    const content = plannerContent(data);
+    if (!content) {
+      return;
+    }
+
+    this.emitMessage({
+      id: `planner-${asString(data.session_id) ?? "session"}-${asString(data.cycle_id) ?? Date.now().toString()}`,
+      role: "system",
+      content,
+      timestamp: normalizeTimestamp(data.timestamp),
+      sender: "MaiSaka Planner",
+      kind: "planner",
+      final: eventName === "planner.finalized",
+      plannerTools: plannerTools(data),
     });
   }
 
   private emitMessage(message: LocalChatMessageEvent): void {
-    if (!this.messages.some((item) => item.id === message.id)) {
+    const existingIndex = this.messages.findIndex((item) => item.id === message.id);
+    if (existingIndex >= 0) {
+      this.messages = this.messages.map((item, index) => index === existingIndex ? { ...item, ...message } : item);
+    } else {
       this.messages = [...this.messages, message].slice(-MESSAGE_HISTORY_LIMIT);
     }
     this.emitEvent(message);

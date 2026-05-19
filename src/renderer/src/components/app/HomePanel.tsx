@@ -1,15 +1,17 @@
 ﻿import {
-  Activity,
   ArrowRight,
   Download,
   ExternalLink,
-  Gauge,
   Loader2,
+  Maximize2,
+  MessageSquare,
   PackageCheck,
   Puzzle,
   Radar,
   RefreshCw,
   Server,
+  Settings,
+  Send,
   Store,
 } from "lucide-react";
 import type React from "react";
@@ -21,6 +23,12 @@ import mai2DropImage from "../../../../../mai2.png";
 import maiMascotImage from "@/assets/mai2.png";
 import type {
   DesktopSnapshot,
+  LocalChatEvent,
+  LocalChatMessageEvent,
+  MaiBotStatisticSummary,
+  ModuleSourceConfig,
+  ModuleSourcePreset,
+  QqBackend,
   ServiceDescriptor,
   ServiceStatus,
 } from "@shared/contracts";
@@ -33,11 +41,72 @@ import {
   DialogFooter,
   DialogHeader,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
 
 type MaiBotUpdateChannel = "stable" | "test" | "legacy";
 type DashboardUpdateChannel = "stable" | "test";
+type CompactChatState = "idle" | "connecting" | "connected" | "error";
+
+const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
+const QQ_WEBUI_PORT_STORAGE_PREFIX = "maibot.qqWebuiPort";
+const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
+
+export function adapterPluginIdForBackend(backend: QqBackend): string {
+  return backend === "snowluma" ? "maibot-team.snowluma-adapter" : "maibot-team.napcat-adapter";
+}
+
+export function markAdapterConfigPrompted(backend: QqBackend): void {
+  try {
+    localStorage.setItem(`${ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX}.${backend}`, "1");
+  } catch {
+    // Local storage may be unavailable in isolated previews.
+  }
+}
+
+export function shouldPromptAdapterConfig(backend: QqBackend): boolean {
+  try {
+    return localStorage.getItem(`${ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX}.${backend}`) !== "1";
+  } catch {
+    return true;
+  }
+}
+
+function qqWebuiPortStorageKey(backend: QqBackend): string {
+  return `${QQ_WEBUI_PORT_STORAGE_PREFIX}.${backend}`;
+}
+
+function defaultQqWebuiPort(backend: QqBackend): string {
+  return backend === "snowluma" ? "5099" : "6099";
+}
+
+function readQqWebuiPort(backend: QqBackend): string {
+  try {
+    return localStorage.getItem(qqWebuiPortStorageKey(backend)) ?? defaultQqWebuiPort(backend);
+  } catch {
+    return defaultQqWebuiPort(backend);
+  }
+}
+
+function isValidPortText(value: string): boolean {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function qqWebuiUrl(serviceUrl: string | undefined, backend: QqBackend, portText: string): string {
+  const fallback = backend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui";
+  const url = new URL(serviceUrl ?? fallback);
+  if (isValidPortText(portText)) {
+    url.hostname = "127.0.0.1";
+    url.port = String(Number(portText));
+  }
+  if (backend !== "snowluma" && (url.pathname === "/" || url.pathname.length === 0)) {
+    url.pathname = "/webui";
+  }
+  return url.toString();
+}
 
 const statusText: Record<ServiceStatus, string> = {
   stopped: "未启动",
@@ -59,8 +128,29 @@ function valueOrFallback(value: string | undefined): string {
   return value && value.trim().length > 0 ? value : "未读取";
 }
 
+function formatStatNumber(value: number | undefined): string | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : undefined;
+}
+
 function messageFromError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return localChatErrorMessage(error);
+}
+
+function localChatText(event: LocalChatMessageEvent): string {
+  if (event.content.trim()) {
+    return event.content.trim();
+  }
+  return event.images?.length ? `[图片 ${event.images.length}]` : "";
+}
+
+function mergeLocalChatMessage(
+  messages: LocalChatMessageEvent[],
+  message: LocalChatMessageEvent,
+): LocalChatMessageEvent[] {
+  if (messages.some((item) => item.id === message.id)) {
+    return messages.map((item) => item.id === message.id ? { ...item, ...message } : item);
+  }
+  return [...messages, message].slice(-6);
 }
 
 function DetailRow({
@@ -124,20 +214,204 @@ function ChoiceSwitch<T extends string>({
   );
 }
 
+function LocalChatQuickCard({
+  active,
+  maibotService,
+  onOpenFull,
+}: {
+  active: boolean;
+  maibotService: ServiceDescriptor | undefined;
+  onOpenFull: () => void;
+}): React.JSX.Element {
+  const [state, setState] = useState<CompactChatState>("idle");
+  const [messages, setMessages] = useState<LocalChatMessageEvent[]>([]);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const connected = state === "connected";
+
+  const connect = useCallback(async () => {
+    if (!window.maibotDesktop?.localChat) {
+      setState("error");
+      setError("桌面桥未就绪");
+      return;
+    }
+    if (maibotService?.status !== "running") {
+      setState("idle");
+      setError(null);
+      return;
+    }
+
+    setState("connecting");
+    setError(null);
+    try {
+      const nextState = await window.maibotDesktop.localChat.connect();
+      setState(nextState);
+      const history = await window.maibotDesktop.localChat.listMessages();
+      setMessages(history.filter((message) => message.kind !== "planner").slice(-12));
+      if (nextState !== "connected") {
+        setError("MaiBot Core 正在启动或 WebUI 聊天服务还在加载，请稍等片刻后重试。");
+      }
+    } catch (nextError) {
+      setState("error");
+      setError(messageFromError(nextError));
+    }
+  }, [maibotService?.status]);
+
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+
+    const unsubscribe = window.maibotDesktop?.localChat.onEvent((event: LocalChatEvent) => {
+      if ("type" in event) {
+        setState(event.state);
+        if (event.state === "connected") {
+          setError(null);
+        }
+        return;
+      }
+      if (event.kind !== "planner") {
+        setMessages((current) => mergeLocalChatMessage(current, event));
+      }
+    });
+
+    void connect();
+    return () => {
+      unsubscribe?.();
+    };
+  }, [active, connect]);
+
+  const sendQuickMessage = useCallback(async () => {
+    const content = draft.trim();
+    if (!content || !connected || sending || !window.maibotDesktop?.localChat) {
+      return;
+    }
+
+    setDraft("");
+    setSending(true);
+    setError(null);
+    try {
+      const userName = localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? "本地用户";
+      const sent = await window.maibotDesktop.localChat.send({ content, userName });
+      setMessages((current) => mergeLocalChatMessage(current, sent));
+    } catch (nextError) {
+      setDraft(content);
+      setState("error");
+      setError(messageFromError(nextError));
+    } finally {
+      setSending(false);
+    }
+  }, [connected, draft, sending]);
+
+  const statusLabel =
+    connected ? "已连接" : state === "connecting" ? "连接中" : maibotService?.status === "running" ? "未连接" : "MaiBot 未启动";
+  const visibleMessages = messages
+    .map((message) => ({ ...message, text: localChatText(message) }))
+    .filter((message) => message.text.length > 0)
+    .slice(-12);
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-3.5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <MessageSquare className="size-4.5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold">随便聊聊</h3>
+            <p className="mt-1 truncate text-[11px] text-muted-foreground">在首页发一句简单文字。</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
+            {statusLabel}
+          </Badge>
+          <Button className="h-7 px-2.5 text-[11px]" onClick={onOpenFull} size="sm" variant="secondary">
+            <Maximize2 className="size-3.5" />
+            展开
+          </Button>
+        </div>
+      </div>
+      <div className="mb-3 grid max-h-32 min-h-20 gap-2 overflow-y-auto rounded-md border border-border bg-muted/30 p-3 [scrollbar-width:thin]">
+        {visibleMessages.length > 0 ? (
+          visibleMessages.map((message) => (
+            <div
+              className={cn("flex min-w-0", message.role === "user" ? "justify-end" : "justify-start")}
+              key={message.id}
+            >
+              <p
+                className={cn(
+                  "max-w-[82%] truncate rounded-md px-2.5 py-1.5 text-xs",
+                  message.role === "user"
+                    ? "bg-primary text-primary-foreground"
+                    : message.role === "error"
+                      ? "bg-destructive/10 text-destructive"
+                      : "bg-card text-foreground",
+                )}
+                title={message.text}
+              >
+                {message.text}
+              </p>
+            </div>
+          ))
+        ) : (
+          <div className="grid place-items-center text-xs text-muted-foreground">
+            {error ?? "这里会显示最近几句简单文字。"}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          disabled={!connected || sending}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void sendQuickMessage();
+            }
+          }}
+          placeholder={connected ? "输入一句话..." : "启动 MaiBot Core 后可聊天"}
+          value={draft}
+        />
+        <Button
+          className="h-8 shrink-0 px-3 text-xs"
+          disabled={!connected || !draft.trim() || sending}
+          onClick={() => void sendQuickMessage()}
+          size="sm"
+        >
+          {sending ? <Loader2 className="animate-spin" /> : <Send />}
+          发送
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function ServiceSummary({
   icon,
   service,
-  action,
+  webuiAction,
+  adapterAction,
 }: {
   icon: React.ReactNode;
   service: ServiceDescriptor | undefined;
-  action?: {
+  webuiAction?: {
+    label: string;
+    port: string;
+    portValid: boolean;
+    onPortChange: (value: string) => void;
+    onClick: () => void;
+  };
+  adapterAction?: {
+    title: string;
+    description: string;
     label: string;
     onClick: () => void;
   };
 }): React.JSX.Element {
   return (
-    <div className="grid min-h-24 gap-3 rounded-lg border border-border bg-card p-3.5">
+    <div className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -145,9 +419,6 @@ function ServiceSummary({
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{service?.name ?? "未知服务"}</p>
-            <p className="truncate font-mono text-[11px] text-muted-foreground">
-              {service?.url ?? "未配置地址"}
-            </p>
           </div>
         </div>
         {service ? (
@@ -156,64 +427,149 @@ function ServiceSummary({
           </Badge>
         ) : null}
       </div>
-      {action ? (
-        <Button className="h-7 justify-self-end px-2.5 text-[11px]" onClick={action.onClick} size="sm" variant="secondary">
-          <ExternalLink />
-          {action.label}
-        </Button>
+      {(webuiAction || adapterAction) ? (
+        <div className="grid gap-3 sm:grid-cols-[auto_minmax(280px,1fr)] sm:items-center">
+          {webuiAction ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                className="h-8 justify-self-start px-3 text-xs"
+                disabled={!webuiAction.portValid}
+                onClick={webuiAction.onClick}
+                size="sm"
+                variant="secondary"
+              >
+                <ExternalLink className="size-4" />
+                {webuiAction.label}
+              </Button>
+              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                端口
+                <Input
+                  className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
+                  inputMode="numeric"
+                  onChange={(event) => webuiAction.onPortChange(event.target.value.replace(/\D/gu, "").slice(0, 5))}
+                  value={webuiAction.port}
+                />
+              </label>
+            </div>
+          ) : null}
+          {adapterAction ? (
+            <div className="grid gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold">{adapterAction.title}</p>
+                <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+                  {adapterAction.description}
+                </p>
+              </div>
+              <Button className="h-7 px-2.5 text-[11px]" onClick={adapterAction.onClick} size="sm" variant="secondary">
+                <Settings />
+                {adapterAction.label}
+              </Button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
 }
 
-function VersionTile({
-  icon,
-  label,
-  value,
-  latest,
-  action,
+function MessagePlatformConnectCard({
+  onClick,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string | undefined;
-  latest: Array<{ label: string; value: string | undefined }>;
-  action: {
-    label: string;
-    icon: React.ReactNode;
-    busy?: boolean;
-    onClick: () => void;
-  };
+  onClick: () => void;
 }): React.JSX.Element {
   return (
-    <div className="flex min-h-24 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4">
-      <span className="grid size-9 shrink-0 place-items-center rounded-md bg-secondary text-secondary-foreground">
-        {icon}
-      </span>
-      <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    <button
+      className="grid gap-3 rounded-lg border border-dashed border-primary/45 bg-card p-3.5 text-left transition-colors hover:border-primary hover:bg-primary/5"
+      onClick={onClick}
+      type="button"
+    >
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <Server className="size-4.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">连接到消息软件平台.......</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              新增 QQ-NapCat 或 QQ-SnowLuma，自动写入连接配置并启动后端。
+            </p>
+          </div>
+        </div>
+        <Badge variant="warning">待配置</Badge>
+      </div>
+      <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3">
+        <span className="text-xs text-muted-foreground">选择一个消息平台开始初始化</span>
+        <span className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground">
+          新增平台
+          <ArrowRight className="size-3.5" />
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function MaiBotOverviewCard({
+  service,
+  localVersion,
+  latestStable,
+  latestPrerelease,
+  updateBusy,
+  onUpdate,
+}: {
+  service: ServiceDescriptor | undefined;
+  localVersion: string | undefined;
+  latestStable: string | undefined;
+  latestPrerelease: string | undefined;
+  updateBusy?: boolean;
+  onUpdate: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <Radar className="size-4.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{service?.name ?? "MaiBot Core"}</p>
+          </div>
+        </div>
+        {service ? (
+          <Badge dot variant={statusVariant[service.status]}>
+            {statusText[service.status]}
+          </Badge>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 rounded-md border border-border bg-muted/30 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">{label}</p>
-          <p className="mt-1 truncate font-mono text-base font-semibold" title={value}>
-            {valueOrFallback(value)}
+          <p className="text-xs text-muted-foreground">MaiBot 本地版本</p>
+          <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
+            {valueOrFallback(localVersion)}
           </p>
         </div>
         <div className="grid min-w-0 gap-1 sm:min-w-44">
-          {latest.map((item) => (
-            <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]" key={item.label}>
-              <span className="shrink-0 text-muted-foreground">{item.label}</span>
-              <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={item.value}>
-                {valueOrFallback(item.value)}
-              </span>
-            </div>
-          ))}
+          <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
+            <span className="shrink-0 text-muted-foreground">最新正式版</span>
+            <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestStable}>
+              {valueOrFallback(latestStable)}
+            </span>
+          </div>
+          <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
+            <span className="shrink-0 text-muted-foreground">最新测试版</span>
+            <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestPrerelease}>
+              {valueOrFallback(latestPrerelease)}
+            </span>
+          </div>
           <Button
             className="mt-1 h-7 justify-self-end px-2.5 text-[11px]"
-            disabled={action.busy}
-            onClick={action.onClick}
+            disabled={updateBusy}
+            onClick={onUpdate}
             size="sm"
             variant="secondary"
           >
-            {action.busy ? <Loader2 className="animate-spin" /> : action.icon}
-            {action.label}
+            {updateBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            更新
           </Button>
         </div>
       </div>
@@ -221,25 +577,116 @@ function VersionTile({
   );
 }
 
+function HomeStatsPanel({
+  snapshot,
+  services,
+}: {
+  snapshot: DesktopSnapshot;
+  services: ServiceDescriptor[];
+}): React.JSX.Element {
+  const [maibotStats, setMaibotStats] = useState<MaiBotStatisticSummary | null>(null);
+  const runningCount = services.filter((service) => service.status === "running").length;
+  const readyCount = services.filter((service) => service.health === "ready").length;
+  const qqBackend = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat";
+  const topChats = maibotStats?.chatStats.slice(0, 2) ?? [];
+
+  useEffect(() => {
+    let disposed = false;
+
+    const loadStats = async (): Promise<void> => {
+      try {
+        const stats = await window.maibotDesktop?.statistics.getMaiBot();
+        if (!disposed) {
+          setMaibotStats(stats ?? null);
+        }
+      } catch {
+        if (!disposed) {
+          setMaibotStats(null);
+        }
+      }
+    };
+
+    void loadStats();
+    const timer = window.setInterval(() => {
+      void loadStats();
+    }, 30_000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [snapshot.paths.maibotRoot]);
+
+  return (
+    <aside className="grid gap-3 self-start rounded-lg border border-border bg-card p-3.5">
+      <div className="flex items-center gap-3">
+        <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <PackageCheck className="size-4.5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">统计信息</p>
+          <p className="text-[11px] text-muted-foreground">当前实例概览</p>
+        </div>
+      </div>
+
+      <div className="grid gap-2 text-xs">
+        <DetailRow label="服务运行" value={`${runningCount}/${services.length}`} />
+        <DetailRow label="端口可用" value={`${readyCount}/${services.length}`} />
+        <DetailRow label="一键包版本" value={`v${snapshot.appVersion}`} />
+        <DetailRow label="MaiBot 本地版本" value={snapshot.moduleVersions.maibotLocal} />
+        <DetailRow label="QQ 后端" value={qqBackend} />
+      </div>
+
+      <div className="grid gap-2 border-t border-border pt-3 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
+          {maibotStats?.periodLabel ? (
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+              {maibotStats.periodLabel}
+            </span>
+          ) : null}
+        </div>
+        <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} />
+        <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} />
+        <DetailRow label="总花费" value={maibotStats?.totalCost} />
+        <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} />
+      </div>
+
+      <div className="grid gap-2 border-t border-border pt-3 text-xs">
+        <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
+        <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} />
+        <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} />
+        <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} />
+        {topChats.map((chat) => (
+          <DetailRow
+            key={chat.name}
+            label={chat.name}
+            value={formatStatNumber(chat.messageCount)}
+          />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 function ShortcutTile({
   icon,
   title,
   description,
-  actionLabel,
-  onClick,
+  actions,
 }: {
   icon: React.ReactNode;
   title: string;
   description: string;
-  actionLabel: string;
-  onClick: () => void;
+  actions: Array<{
+    label: string;
+    onClick: () => void;
+    icon?: React.ReactNode;
+    variant?: "primary" | "secondary";
+  }>;
 }): React.JSX.Element {
   return (
-    <button
-      className="group flex min-h-28 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/35"
-      onClick={onClick}
-      type="button"
-    >
+    <div className="flex min-h-28 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4">
       <span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
         {icon}
       </span>
@@ -249,11 +696,26 @@ function ShortcutTile({
           {description}
         </span>
       </span>
-      <span className="flex shrink-0 items-center gap-1 rounded-md bg-secondary px-2.5 py-1.5 text-[11px] font-medium text-secondary-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
-        {actionLabel}
-        <ArrowRight className="size-3.5" />
+      <span className="grid shrink-0 gap-2">
+        {actions.map((action) => (
+          <button
+            className={cn(
+              "flex h-8 items-center justify-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+              action.variant === "primary"
+                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                : "bg-secondary text-secondary-foreground hover:bg-accent hover:text-foreground",
+            )}
+            key={action.label}
+            onClick={action.onClick}
+            type="button"
+          >
+            {action.icon}
+            {action.label}
+            <ArrowRight className="size-3.5" />
+          </button>
+        ))}
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -308,6 +770,7 @@ function randomDropImage(): string {
 function randomCollisionTarget(): CollisionRect | undefined {
   const candidates = Array.from(document.querySelectorAll<HTMLElement>(".rounded-lg.border"))
     .filter((element) => !element.closest("[data-drop-layer='true']"))
+    .filter((element) => !element.closest("[data-mascot-stage='true']"))
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.width > 36 && rect.height > 28 && rect.top < window.innerHeight && rect.bottom > 0);
   const rect = candidates[Math.floor(Math.random() * candidates.length)];
@@ -371,7 +834,7 @@ function alphaBoundsForImage(src: string): Promise<ImageAlphaBounds> {
   });
 }
 
-function ElasticMascot(): React.JSX.Element {
+function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
   const dropIdRef = useRef(0);
@@ -390,6 +853,8 @@ function ElasticMascot(): React.JSX.Element {
     vq: 0,
   });
   const pointerRef = useRef({ x: 0, y: 0, t: 0 });
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const [pose, setPose] = useState({
     x: 0,
     y: 0,
@@ -619,15 +1084,40 @@ function ElasticMascot(): React.JSX.Element {
     kick(-5, -4, 1.2);
   }, [kick]);
 
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
   const onPointerLeave = useCallback(() => {
+    clearLongPress();
     pointerRef.current.t = 0;
     kick(4, 2, 0.8);
-  }, [kick]);
+  }, [clearLongPress, kick]);
 
   const onClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
     spawnDrop(event.clientX);
     kick((Math.random() - 0.5) * 8, -7, 1.1);
   }, [kick, spawnDrop]);
+
+  const onPointerDown = useCallback(() => {
+    clearLongPress();
+    longPressTriggeredRef.current = false;
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      onLongPress();
+    }, 650);
+  }, [clearLongPress, onLongPress]);
+
+  const onPointerUp = useCallback(() => {
+    clearLongPress();
+  }, [clearLongPress]);
 
   const stretch = Math.max(-0.1, Math.min(0.16, pose.stretch));
   const squash = Math.max(-0.12, Math.min(0.12, pose.squash));
@@ -638,16 +1128,20 @@ function ElasticMascot(): React.JSX.Element {
   return (
     <div
       aria-hidden="true"
-      className="relative hidden min-h-32 overflow-hidden rounded-lg border border-transparent md:block"
+      className="fixed right-0 bottom-0 z-20 hidden h-40 w-48 overflow-hidden md:block"
+      data-mascot-stage="true"
       onClick={onClick}
+      onPointerCancel={onPointerUp}
+      onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
       onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       ref={stageRef}
     >
       <img
         alt=""
-        className="pointer-events-none absolute bottom-[-58px] right-[-82px] w-[min(150px,54vw)] select-none"
+        className="pointer-events-none absolute right-[-58px] bottom-[-48px] w-36 select-none"
         draggable={false}
         src={maiMascotImage}
         style={{
@@ -685,23 +1179,42 @@ export function HomePanel({
   snapshot,
   onSnapshot,
   onOpenTab,
+  onOpenPluginConfig,
+  onEnterFloatingMode,
 }: {
   active: boolean;
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenTab: (tab: string) => void;
+  onOpenPluginConfig: (pluginId: string) => void;
+  onEnterFloatingMode: () => void;
 }): React.JSX.Element {
   const [updateDialog, setUpdateDialog] = useState<"maibot" | "dashboard" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
+  const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend>("napcat");
+  const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
   const [dashboardChannel, setDashboardChannel] = useState<DashboardUpdateChannel>("stable");
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
+  const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
+  const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
+  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
+  const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
+  const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
-  const runningCount = services.filter((service) => service.status === "running").length;
-  const readyCount = services.filter((service) => service.health === "ready").length;
+  const adapterPluginId = adapterPluginIdForBackend(snapshot.initState.qqBackend ?? "napcat");
+  const adapterName = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma 适配器" : "NapCat 适配器";
+  const qqWebuiPortValid = isValidPortText(qqWebuiPort);
+  const qqBackend = snapshot.initState.qqBackend ?? "napcat";
+  const currentQqWebuiUrl = qqWebuiUrl(napcat?.url, qqBackend, qqWebuiPort);
+  const messagePlatformConfigured =
+    snapshot.initState.messagePlatformConfigured && Boolean(snapshot.initState.qqAccount?.trim());
+  const qqBackendBusy =
+    napcat?.status === "starting" || napcat?.status === "running" || napcat?.status === "stopping" || Boolean(napcat?.managed);
   const maibotUpdateBlocked =
     maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping";
 
@@ -722,6 +1235,33 @@ export function HomePanel({
     onSnapshot(await window.maibotDesktop.getSnapshot());
   }, [onSnapshot]);
 
+  useEffect(() => {
+    setQqWebuiPort(readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
+  }, [snapshot.initState.qqBackend]);
+
+  useEffect(() => {
+    if (!qqWebuiPortValid) {
+      return;
+    }
+    try {
+      localStorage.setItem(qqWebuiPortStorageKey(snapshot.initState.qqBackend ?? "napcat"), String(Number(qqWebuiPort)));
+    } catch {
+      // Local storage may be unavailable in isolated previews.
+    }
+  }, [qqWebuiPort, qqWebuiPortValid, snapshot.initState.qqBackend]);
+
+  const loadModuleSourceConfig = useCallback(async () => {
+    if (!window.maibotDesktop?.modules) {
+      return;
+    }
+
+    const config = await window.maibotDesktop.modules.getSourceConfig();
+    setModuleSourceConfig(config);
+    setModuleSourcePreset(config.preset);
+    setCustomMaiBotUrl(config.maibotUrl);
+    setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+  }, []);
+
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
     setMaibotChannel(
@@ -732,7 +1272,14 @@ export function HomePanel({
           : "legacy",
     );
     setUpdateDialog("maibot");
-  }, [snapshot.moduleVersions.maibotLatestPrereleaseTag, snapshot.moduleVersions.maibotLatestStableTag]);
+    void loadModuleSourceConfig().catch((nextError: unknown) => {
+      setError(messageFromError(nextError));
+    });
+  }, [
+    loadModuleSourceConfig,
+    snapshot.moduleVersions.maibotLatestPrereleaseTag,
+    snapshot.moduleVersions.maibotLatestStableTag,
+  ]);
 
   const openPluginStore = useCallback(() => {
     onOpenTab("pluginmarket");
@@ -741,6 +1288,46 @@ export function HomePanel({
   const openPluginManager = useCallback(() => {
     onOpenTab("pluginmanage");
   }, [onOpenTab]);
+
+  const openMessagePlatformDialog = useCallback(() => {
+    setError(null);
+    setMessagePlatformBackend(snapshot.initState.qqBackend ?? "napcat");
+    setMessagePlatformAccount(snapshot.initState.qqAccount ?? "");
+    setMessagePlatformDialogOpen(true);
+  }, [snapshot.initState.qqAccount, snapshot.initState.qqBackend]);
+
+  const setupMessagePlatform = useCallback(async () => {
+    const qqAccount = messagePlatformAccount.trim();
+    if (!/^\d+$/u.test(qqAccount)) {
+      setError("请输入正确的 QQ 号");
+      return;
+    }
+    if (!window.maibotDesktop) {
+      setError("桌面桥未就绪，无法初始化消息平台");
+      return;
+    }
+
+    setBusy("message-platform:setup");
+    setError(null);
+    try {
+      await window.maibotDesktop.init.setQqAccount({
+        qqAccount,
+        qqBackend: messagePlatformBackend,
+      });
+      await window.maibotDesktop.init.repair();
+      await window.maibotDesktop.services.start("napcat");
+      toast.success(`${messagePlatformBackend === "snowluma" ? "QQ-SnowLuma" : "QQ-NapCat"} 已配置并启动`);
+      setMessagePlatformDialogOpen(false);
+      await refreshSnapshot();
+      markAdapterConfigPrompted(messagePlatformBackend);
+      window.setTimeout(() => onOpenPluginConfig(adapterPluginIdForBackend(messagePlatformBackend)), 250);
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+      await refreshSnapshot().catch(() => undefined);
+    } finally {
+      setBusy(null);
+    }
+  }, [messagePlatformAccount, messagePlatformBackend, onOpenPluginConfig, refreshSnapshot]);
 
   const updateMaiBot = useCallback(async () => {
     const target = maibotTargets[maibotChannel];
@@ -752,6 +1339,15 @@ export function HomePanel({
     setBusy("maibot:update");
     setError(null);
     try {
+      const config = await window.maibotDesktop.modules.saveSourceConfig({
+        preset: moduleSourcePreset,
+        maibotUrl: customMaiBotUrl,
+        napcatAdapterUrl: customNapcatAdapterUrl,
+      });
+      setModuleSourceConfig(config);
+      setModuleSourcePreset(config.preset);
+      setCustomMaiBotUrl(config.maibotUrl);
+      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
       await window.maibotDesktop.modules.updateMaiBot(target);
       toast.success("MaiBot 更新完成");
       setUpdateDialog(null);
@@ -761,7 +1357,7 @@ export function HomePanel({
     } finally {
       setBusy(null);
     }
-  }, [maibotChannel, maibotTargets, refreshSnapshot]);
+  }, [customMaiBotUrl, customNapcatAdapterUrl, maibotChannel, maibotTargets, moduleSourcePreset, refreshSnapshot]);
 
   const updateDashboard = useCallback(async () => {
     const target = dashboardTargets[dashboardChannel];
@@ -791,86 +1387,150 @@ export function HomePanel({
     <>
       <div className={cn("h-full overflow-auto bg-background px-5 py-4", active ? "block" : "hidden")}>
         <div className="mx-auto grid max-w-6xl gap-4">
-          <div className="min-w-0">
-            <div className="min-w-0">
-              <h2 className="text-lg font-semibold">首页</h2>
-              <p className="text-sm text-muted-foreground">MaiBot OneKey 当前运行概览</p>
+          <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="grid min-w-0 gap-3">
+              <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+                <MaiBotOverviewCard
+                  latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
+                  latestStable={snapshot.moduleVersions.maibotLatestStableTag}
+                  localVersion={snapshot.moduleVersions.maibotLocal}
+                  onUpdate={openMaiBotUpdate}
+                  service={maibot}
+                  updateBusy={busy === "maibot:update"}
+                />
+                <ShortcutTile
+                  actions={[
+                    {
+                      label: "打开商店",
+                      onClick: openPluginStore,
+                      icon: <Store className="size-3.5" />,
+                      variant: "primary",
+                    },
+                    {
+                      label: "插件管理",
+                      onClick: openPluginManager,
+                      icon: <Puzzle className="size-3.5" />,
+                    },
+                  ]}
+                  description="安装或管理插件。"
+                  icon={<Puzzle className="size-5" />}
+                  title="插件"
+                />
+              </div>
+              <LocalChatQuickCard
+                active={active}
+                maibotService={maibot}
+                onOpenFull={() => onOpenTab("localchat")}
+              />
+              {messagePlatformConfigured ? (
+                <ServiceSummary
+                  adapterAction={{
+                    title: `${adapterName}插件设置`,
+                    description: "调整消息适配、连接与过滤相关配置。",
+                    label: "打开配置",
+                    onClick: () => onOpenPluginConfig(adapterPluginId),
+                  }}
+                  icon={<Server className="size-4.5" />}
+                  service={napcat}
+                  webuiAction={{
+                    label: "打开 WebUI",
+                    port: qqWebuiPort,
+                    portValid: qqWebuiPortValid,
+                    onPortChange: setQqWebuiPort,
+                    onClick: () => setNapcatWebuiOpen(true),
+                  }}
+                />
+              ) : (
+                <MessagePlatformConnectCard onClick={openMessagePlatformDialog} />
+              )}
             </div>
+            <HomeStatsPanel services={services} snapshot={snapshot} />
           </div>
-
-          <div className="grid gap-2 rounded-lg border border-border bg-card px-3 py-2.5 md:grid-cols-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <Activity className="size-4 shrink-0 text-primary" />
-              <span className="shrink-0 text-xs text-muted-foreground">服务运行</span>
-              <span className="ml-auto font-mono text-sm font-semibold tabular-nums">
-                {runningCount}/{services.length}
-              </span>
-            </div>
-            <div className="flex min-w-0 items-center gap-2 md:border-l md:border-border md:pl-3">
-              <Gauge className="size-4 shrink-0 text-primary" />
-              <span className="shrink-0 text-xs text-muted-foreground">端口可用</span>
-              <span className="ml-auto font-mono text-sm font-semibold tabular-nums">
-                {readyCount}/{services.length}
-              </span>
-            </div>
-            <div className="flex min-w-0 items-center gap-2 md:border-l md:border-border md:pl-3">
-              <PackageCheck className="size-4 shrink-0 text-primary" />
-              <span className="shrink-0 text-xs text-muted-foreground">一键包版本</span>
-              <span className="ml-auto truncate font-mono text-sm font-semibold" title={snapshot.appVersion}>
-                v{snapshot.appVersion}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid gap-3 lg:grid-cols-2">
-            <ServiceSummary icon={<Radar className="size-4.5" />} service={maibot} />
-            <ServiceSummary
-              action={{
-                label: "打开 WebUI",
-                onClick: () => setNapcatWebuiOpen(true),
-              }}
-              icon={<Server className="size-4.5" />}
-              service={napcat}
-            />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <VersionTile
-              icon={<Server className="size-5" />}
-              label="MaiBot 本地版本"
-              value={snapshot.moduleVersions.maibotLocal}
-              latest={[
-                { label: "最新正式版", value: snapshot.moduleVersions.maibotLatestStableTag },
-                { label: "最新测试版", value: snapshot.moduleVersions.maibotLatestPrereleaseTag },
-              ]}
-              action={{
-                label: "更新",
-                icon: <RefreshCw />,
-                busy: busy === "maibot:update",
-                onClick: openMaiBotUpdate,
-              }}
-            />
-            <ElasticMascot />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <ShortcutTile
-              icon={<Store className="size-5" />}
-              title="插件商店"
-              description="浏览 MaiBot 插件市场，安装兼容当前版本的插件。"
-              actionLabel="打开"
-              onClick={openPluginStore}
-            />
-            <ShortcutTile
-              icon={<Puzzle className="size-5" />}
-              title="插件管理"
-              description="查看已安装插件，执行更新、卸载与运行配置。"
-              actionLabel="管理"
-              onClick={openPluginManager}
-            />
-          </div>
+          <ElasticMascot onLongPress={onEnterFloatingMode} />
         </div>
       </div>
+
+      <Dialog
+        open={messagePlatformDialogOpen}
+        onOpenChange={(next) => {
+          if (!next && busy !== "message-platform:setup") setMessagePlatformDialogOpen(false);
+        }}
+      >
+        <DialogContent size="md">
+          <DialogHeader
+            description="选择要接入的消息软件平台，一键包会写入适配器配置和 WebSocket 服务连接，然后启动对应后端。"
+            icon={<Server className="size-4" />}
+            title="新增消息平台"
+            tone="primary"
+          />
+          <DialogBody className="space-y-4">
+            {error && messagePlatformDialogOpen ? (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {error}
+              </div>
+            ) : null}
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                {
+                  backend: "napcat",
+                  title: "QQ-NapCat",
+                  description: "使用 NapCat WebUI 登录 QQ，并通过 OneBot WebSocket 连接 MaiBot。",
+                },
+                {
+                  backend: "snowluma",
+                  title: "QQ-SnowLuma",
+                  description: "使用 SnowLuma 注入 QQ 进程，并通过 OneBot WebSocket 连接 MaiBot。",
+                },
+              ] as const).map((option) => (
+                <button
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition-colors",
+                    messagePlatformBackend === option.backend
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
+                  )}
+                  disabled={busy === "message-platform:setup"}
+                  key={option.backend}
+                  onClick={() => setMessagePlatformBackend(option.backend)}
+                  type="button"
+                >
+                  <span className="block text-sm font-semibold">{option.title}</span>
+                  <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                </button>
+              ))}
+            </div>
+            <label className="grid gap-1.5 text-xs font-medium">
+              机器人 QQ 号
+              <Input
+                disabled={busy === "message-platform:setup"}
+                inputMode="numeric"
+                monospace
+                onChange={(event) => setMessagePlatformAccount(event.target.value)}
+                placeholder="例如 123456789"
+                value={messagePlatformAccount}
+              />
+            </label>
+            {qqBackendBusy ? (
+              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+                QQ 后端正在运行，请先停止后再新增或切换消息平台。
+              </div>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <Button disabled={busy === "message-platform:setup"} onClick={() => setMessagePlatformDialogOpen(false)} size="sm" variant="ghost">
+              取消
+            </Button>
+            <Button
+              disabled={busy === "message-platform:setup" || qqBackendBusy || !messagePlatformAccount.trim()}
+              onClick={setupMessagePlatform}
+              size="sm"
+            >
+              {busy === "message-platform:setup" ? <Loader2 className="animate-spin" /> : <Server />}
+              配置并启动
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={updateDialog === "maibot"}
@@ -914,6 +1574,59 @@ export function HomePanel({
                   { value: "legacy", label: "最新旧版", version: maibotTargets.legacy },
                 ]}
               />
+            </div>
+            <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium">更新源</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    会同步保存到设置中心的模块更新源。
+                  </p>
+                </div>
+                <Button
+                  disabled={busy !== null}
+                  onClick={() => void loadModuleSourceConfig()}
+                  size="sm"
+                  variant="ghost"
+                >
+                  <RefreshCw />
+                  重新读取
+                </Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)] md:items-end">
+                <label className="grid gap-1.5 text-xs font-medium">
+                  源预设
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    disabled={busy !== null || !moduleSourceConfig}
+                    onChange={(event) => {
+                      const preset = event.target.value as ModuleSourcePreset;
+                      setModuleSourcePreset(preset);
+                      const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
+                      if (option) {
+                        setCustomMaiBotUrl(option.maibotUrl);
+                        setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
+                      }
+                    }}
+                    value={moduleSourcePreset}
+                  >
+                    {moduleSourceConfig?.options.map((option) => (
+                      <option key={option.preset} value={option.preset}>
+                        {option.label}
+                      </option>
+                    ))}
+                    <option value="custom">自定义</option>
+                  </select>
+                </label>
+                <label className="grid gap-1.5 text-xs font-medium">
+                  MaiBot 仓库
+                  <Input
+                    disabled={busy !== null || moduleSourcePreset !== "custom"}
+                    onChange={(event) => setCustomMaiBotUrl(event.target.value)}
+                    value={customMaiBotUrl}
+                  />
+                </label>
+              </div>
             </div>
           </DialogBody>
           <DialogFooter>
@@ -999,7 +1712,7 @@ export function HomePanel({
               active={napcatWebuiOpen}
               emptyText={`${napcat?.name ?? "QQ 后端"} 启动后会在这里打开它自己的 WebUI。`}
               title={`${napcat?.name ?? "QQ 后端"} WebUI`}
-              url={napcat?.url ?? "http://127.0.0.1:6099/webui"}
+              url={currentQqWebuiUrl}
             />
           </DialogBody>
         </DialogContent>

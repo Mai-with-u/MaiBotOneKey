@@ -1,7 +1,8 @@
-import {
+﻿import {
   Bot,
   CircleAlert,
   ImageIcon,
+  ChevronDown,
   Loader2,
   MessageSquare,
   RefreshCw,
@@ -14,8 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocalChatEvent, LocalChatImageAttachment, LocalChatMessageEvent, ServiceDescriptor } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { cn } from "@/lib/utils";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "error";
@@ -27,14 +30,18 @@ interface ChatMessage {
   timestamp: number;
   sender?: string;
   images?: LocalChatImageAttachment[];
+  quote?: LocalChatMessageEvent["quote"];
+  kind?: "chat" | "planner";
+  final?: boolean;
+  collapsed?: boolean;
+  plannerTools?: LocalChatMessageEvent["plannerTools"];
 }
 
 const DEFAULT_USER_NAME = "本地用户";
-const DEFAULT_ADAPTER_PORT = "8000";
-const ADAPTER_PORT_STORAGE_KEY = "maibot.localChat.adapterPort";
 const USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const USER_AVATAR_STORAGE_KEY = "maibot.localChat.userAvatar";
 const BOT_AVATAR_STORAGE_KEY = "maibot.localChat.botAvatar";
+const PLANNER_VISIBLE_STORAGE_KEY = "maibot.localChat.showPlanner";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function maibotOrigin(service: ServiceDescriptor | undefined): string {
@@ -53,18 +60,75 @@ function toChatMessage(event: LocalChatMessageEvent): ChatMessage {
     timestamp: event.timestamp,
     sender: event.sender,
     images: event.images,
+    quote: event.quote,
+    kind: event.kind,
+    final: event.final,
+    plannerTools: event.plannerTools,
   };
 }
 
 function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
-  if (messages.some((item) => item.id === message.id)) {
-    return messages;
+  const existingIndex = messages.findIndex((item) => item.id === message.id);
+  let nextMessages: ChatMessage[];
+  if (existingIndex >= 0) {
+    nextMessages = messages.map((item, index) =>
+      index === existingIndex
+        ? { ...item, ...message, collapsed: message.final ? item.collapsed : false }
+        : item,
+    );
+  } else {
+    nextMessages = [...messages, message].slice(-120);
   }
-  return [...messages, message].slice(-120);
+  return placePlannerBeforeReply(nextMessages);
+}
+
+function placePlannerBeforeReply(messages: ChatMessage[]): ChatMessage[] {
+  const nextMessages = [...messages];
+  for (let index = 0; index < nextMessages.length; index += 1) {
+    const message = nextMessages[index];
+    if (message.kind !== "planner") {
+      continue;
+    }
+
+    const userIndex = findPreviousUserIndex(nextMessages, index);
+    const firstReplyBeforePlanner = nextMessages.findIndex((item, itemIndex) =>
+      itemIndex > userIndex && itemIndex < index && item.role === "bot" && item.kind !== "planner"
+    );
+    if (firstReplyBeforePlanner < 0) {
+      continue;
+    }
+
+    const planner = nextMessages.splice(index, 1)[0];
+    const insertIndex = findPlannerInsertEnd(nextMessages, userIndex, firstReplyBeforePlanner);
+    nextMessages.splice(insertIndex, 0, planner);
+    index = Math.max(insertIndex, 0);
+  }
+  return nextMessages.slice(-120);
+}
+
+function findPreviousUserIndex(messages: ChatMessage[], beforeIndex: number): number {
+  for (let index = Math.min(beforeIndex - 1, messages.length - 1); index >= 0; index -= 1) {
+    if (messages[index].role === "user") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findPlannerInsertEnd(messages: ChatMessage[], userIndex: number, beforeReplyIndex: number): number {
+  let insertIndex = userIndex + 1;
+  while (insertIndex < beforeReplyIndex && messages[insertIndex].kind === "planner") {
+    insertIndex += 1;
+  }
+  return insertIndex;
 }
 
 function attachmentDataUrl(image: LocalChatImageAttachment): string {
   return image.dataUrl ?? `data:${image.mimeType};base64,${image.base64}`;
+}
+
+function readPlannerVisible(): boolean {
+  return localStorage.getItem(PLANNER_VISIBLE_STORAGE_KEY) !== "0";
 }
 
 function readImageFile(file: File): Promise<LocalChatImageAttachment> {
@@ -147,20 +211,20 @@ export function LocalChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [userName, setUserName] = useState(() => localStorage.getItem(USER_NAME_STORAGE_KEY) ?? DEFAULT_USER_NAME);
-  const [adapterPort, setAdapterPort] = useState(() => localStorage.getItem(ADAPTER_PORT_STORAGE_KEY) ?? DEFAULT_ADAPTER_PORT);
   const [userAvatar, setUserAvatar] = useState(() => localStorage.getItem(USER_AVATAR_STORAGE_KEY) ?? "");
   const [botAvatar, setBotAvatar] = useState(() => localStorage.getItem(BOT_AVATAR_STORAGE_KEY) ?? "");
   const [pendingImages, setPendingImages] = useState<LocalChatImageAttachment[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-
-  useEffect(() => {
-    localStorage.setItem(ADAPTER_PORT_STORAGE_KEY, adapterPort);
-  }, [adapterPort]);
+  const [showPlanner, setShowPlanner] = useState(readPlannerVisible);
 
   useEffect(() => {
     localStorage.setItem(USER_NAME_STORAGE_KEY, userName);
   }, [userName]);
+
+  useEffect(() => {
+    localStorage.setItem(PLANNER_VISIBLE_STORAGE_KEY, showPlanner ? "1" : "0");
+  }, [showPlanner]);
 
   useEffect(() => {
     if (userAvatar) {
@@ -188,25 +252,20 @@ export function LocalChatPanel({
         throw new Error("请先启动 MaiBot Core");
       }
 
-      const port = Number(adapterPort);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        throw new Error("适配器端口必须在 1-65535 之间");
-      }
-
-      const nextState = await window.maibotDesktop?.localChat.connect({ port });
+      const nextState = await window.maibotDesktop?.localChat.connect();
       setState(nextState ?? "error");
       const history = await window.maibotDesktop?.localChat.listMessages();
       if (history) {
         setMessages(history.map(toChatMessage));
       }
       if (nextState !== "connected") {
-        setError("本地适配器未连接，请确认 MaiBot Core 的 maim_message 服务已启动");
+        setError("MaiBot Core 正在启动或 WebUI 聊天服务还在加载，请稍等片刻后重试。");
       }
     } catch (nextError) {
       setState("error");
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(localChatErrorMessage(nextError));
     }
-  }, [adapterPort, maibotService?.status]);
+  }, [maibotService?.status]);
 
   useEffect(() => {
     if (!active) {
@@ -226,7 +285,15 @@ export function LocalChatPanel({
       }
 
       setIsTyping(false);
-      setMessages((current) => appendMessage(current, toChatMessage(event)));
+      const message = toChatMessage(event);
+      setMessages((current) => appendMessage(current, message));
+      if (message.kind === "planner" && message.final) {
+        window.setTimeout(() => {
+          setMessages((current) =>
+            current.map((item) => item.id === message.id ? { ...item, collapsed: true } : item),
+          );
+        }, 1000);
+      }
     });
 
     void connect();
@@ -277,7 +344,7 @@ export function LocalChatPanel({
     setIsTyping(true);
 
     try {
-      const sent = await window.maibotDesktop?.localChat.send({ content, images, userName, port: Number(adapterPort) });
+      const sent = await window.maibotDesktop?.localChat.send({ content, images, userName });
       if (sent) {
         setMessages((current) => appendMessage(current, toChatMessage(sent)));
       }
@@ -288,7 +355,7 @@ export function LocalChatPanel({
       setDraft(content);
       setPendingImages(images);
     }
-  }, [adapterPort, draft, pendingImages, state, userName]);
+  }, [draft, pendingImages, state, userName]);
 
   const connected = state === "connected";
   const canSend = connected && (draft.trim() || pendingImages.length > 0);
@@ -307,10 +374,17 @@ export function LocalChatPanel({
             {connected ? "已连接" : state === "connecting" ? "连接中" : state === "error" ? "未连接" : "待连接"}
           </Badge>
           <code className="hidden truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block">
-            {origin} / maim_message
+            {origin} / simple-chat
           </code>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <label className="hidden items-center gap-1.5 rounded-md border border-border bg-muted/35 px-2 py-1 text-[11px] text-muted-foreground sm:flex">
+            <Checkbox
+              checked={showPlanner}
+              onCheckedChange={(checked) => setShowPlanner(checked === true)}
+            />
+            Planner
+          </label>
           <Button className="size-7" onClick={() => void connect()} size="icon" title="重连" variant="outline">
             {state === "connecting" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           </Button>
@@ -335,11 +409,11 @@ export function LocalChatPanel({
               <div>
                 <MessageSquare className="mx-auto size-8 text-primary" />
                 <p className="mt-3 text-sm font-medium">和 MaiBot 本地对话</p>
-                <p className="mt-1 text-xs text-muted-foreground">启动 MaiBot Core 后通过本地适配器发送消息。</p>
+                <p className="mt-1 text-xs text-muted-foreground">启动 MaiBot Core 后通过内置聊天通道发送消息。</p>
               </div>
             </div>
           ) : (
-            messages.map((message) => (
+            messages.filter((message) => showPlanner || message.kind !== "planner").map((message) => (
               <div
                 className={cn("flex gap-2", message.role === "user" ? "justify-end" : "justify-start")}
                 key={message.id}
@@ -348,8 +422,10 @@ export function LocalChatPanel({
                   <span className="mt-1 grid size-8 shrink-0 place-items-center overflow-hidden rounded-md bg-primary/10 text-primary">
                     {message.role === "bot" && botAvatar ? (
                       <img alt="" className="size-full object-cover" src={botAvatar} />
-                    ) : message.role === "bot" ? (
-                      <Bot className="size-4" />
+                  ) : message.role === "bot" ? (
+                    <Bot className="size-4" />
+                    ) : message.kind === "planner" ? (
+                      <Loader2 className={cn("size-3.5", message.final ? "" : "animate-spin")} />
                     ) : (
                       <CircleAlert className="size-3.5" />
                     )}
@@ -363,12 +439,110 @@ export function LocalChatPanel({
                       : message.role === "error"
                         ? "border-destructive/30 bg-destructive/10 text-destructive"
                         : message.role === "system"
-                          ? "border-border bg-muted/45 text-muted-foreground"
+                          ? "border-border bg-muted/45 text-xs leading-relaxed text-muted-foreground"
                           : "border-border bg-card text-foreground",
                   )}
                 >
                   {message.sender ? <p className="mb-1 text-[11px] opacity-70">{message.sender}</p> : null}
-                  {message.content ? <p className="whitespace-pre-wrap break-words">{message.content}</p> : null}
+                  {message.quote ? (
+                    <div
+                      className={cn(
+                        "mb-2 rounded-md border-l-2 px-2 py-1.5 text-xs leading-relaxed",
+                        message.role === "user"
+                          ? "border-primary-foreground/60 bg-primary-foreground/15 text-primary-foreground/85"
+                          : "border-primary/60 bg-muted/60 text-muted-foreground",
+                      )}
+                    >
+                      {message.quote.sender ? (
+                        <p className="mb-0.5 truncate font-medium">{message.quote.sender}</p>
+                      ) : null}
+                      <p className="line-clamp-2 whitespace-pre-wrap break-words">{message.quote.content}</p>
+                    </div>
+                  ) : null}
+                  {message.kind === "planner" ? (
+                    <div className="relative">
+                      {message.content ? (
+                        <p
+                          className={cn(
+                            "whitespace-pre-wrap break-words transition-[max-height]",
+                            message.collapsed && "line-clamp-2 max-h-12 overflow-hidden",
+                          )}
+                        >
+                          {message.content}
+                        </p>
+                      ) : null}
+                      {message.collapsed ? (
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-muted/45" />
+                      ) : null}
+                    </div>
+                  ) : message.content ? (
+                    <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                  ) : null}
+                  {message.kind === "planner" && !message.collapsed && message.plannerTools?.length ? (
+                    <div className={cn("grid gap-2", message.content ? "mt-2" : "")}>
+                      {message.plannerTools.map((tool, index) => (
+                        <div
+                          className="rounded-md border border-border bg-background/70 p-2 text-[11px] text-foreground"
+                          key={tool.id ?? `${tool.name}-${index}`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-mono font-semibold">{tool.name}</span>
+                            <div className="flex items-center gap-1.5">
+                              {typeof tool.success === "boolean" ? (
+                                <Badge variant={tool.success ? "success" : "danger"}>
+                                  {tool.success ? "成功" : "失败"}
+                                </Badge>
+                              ) : null}
+                              {typeof tool.durationMs === "number" ? (
+                                <span className="font-mono text-[9px] text-muted-foreground">{Math.round(tool.durationMs)} ms</span>
+                              ) : null}
+                            </div>
+                          </div>
+                          {tool.arguments?.length ? (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {tool.arguments.map((argument) => (
+                                <span
+                                  className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 font-mono text-[10px] leading-relaxed"
+                                  key={argument.key}
+                                  title={`${argument.key}: ${argument.value}`}
+                                >
+                                  <span className="shrink-0 text-muted-foreground">{argument.key}</span>
+                                  <span className="min-w-0 max-w-72 truncate text-foreground">{argument.value}</span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : tool.argumentsText ? (
+                            <span
+                              className="mt-2 inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 font-mono text-[10px] leading-relaxed"
+                              title={tool.argumentsText}
+                            >
+                              <span className="shrink-0 text-muted-foreground">参数</span>
+                              <span className="min-w-0 max-w-72 truncate text-foreground">{tool.argumentsText}</span>
+                            </span>
+                          ) : null}
+                          {tool.resultText ? (
+                            <p className="mt-2 rounded-md border border-border bg-muted/45 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                              {tool.resultText}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {message.kind === "planner" && (message.content || message.plannerTools?.length) ? (
+                    <button
+                      className="mt-2 flex h-5 w-full items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+                      onClick={() =>
+                        setMessages((current) =>
+                          current.map((item) => item.id === message.id ? { ...item, collapsed: !item.collapsed } : item),
+                        )
+                      }
+                      title={message.collapsed ? "展开 Planner 内容" : "折叠 Planner 内容"}
+                      type="button"
+                    >
+                      <ChevronDown className={cn("size-3.5 transition-transform", !message.collapsed && "rotate-180")} />
+                    </button>
+                  ) : null}
                   {message.images?.length ? (
                     <div className={cn("grid gap-2", message.content ? "mt-2" : "")}>
                       {message.images.map((image, index) => (
@@ -443,7 +617,7 @@ export function LocalChatPanel({
                   void sendMessage();
                 }
               }}
-              placeholder={connected ? "输入消息，Enter 发送，Shift+Enter 换行" : "等待本地适配器连接"}
+              placeholder={connected ? "输入消息，Enter 发送，Shift+Enter 换行" : "等待 WebUI 聊天服务加载"}
               value={draft}
             />
             <Button disabled={!canSend} onClick={() => void sendMessage()}>
@@ -457,7 +631,7 @@ export function LocalChatPanel({
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
       <DialogContent size="md">
         <DialogHeader
-          description="设置本地聊天的显示名称、头像和 maim_message 连接端口。"
+          description="设置简单聊聊的显示名称和头像。"
           icon={<Settings className="size-4" />}
           title="随便聊聊设置"
           tone="primary"
@@ -507,21 +681,6 @@ export function LocalChatPanel({
             </div>
           </div>
 
-          <div className="rounded-lg border border-border bg-background p-3">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-              <MessageSquare className="size-4 text-primary" />
-              连接
-            </div>
-            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
-              <span>maim_message 端口</span>
-              <Input
-                className="h-9 font-mono text-sm text-foreground"
-                inputMode="numeric"
-                onChange={(event) => setAdapterPort(event.target.value.replace(/\D/gu, "").slice(0, 5))}
-                value={adapterPort}
-              />
-            </label>
-          </div>
         </DialogBody>
         <DialogFooter>
           <Button onClick={() => setSettingsOpen(false)} size="sm" variant="ghost">
