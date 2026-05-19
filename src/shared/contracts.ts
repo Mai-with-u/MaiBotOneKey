@@ -153,6 +153,9 @@ export interface LocalChatSendRequest {
   userName?: string;
   port?: number;
   images?: LocalChatImageAttachment[];
+  emojis?: LocalChatImageAttachment[];
+  files?: LocalChatFileAttachment[];
+  voices?: LocalChatVoiceAttachment[];
 }
 
 export interface LocalChatConnectRequest {
@@ -166,6 +169,9 @@ export interface LocalChatMessageEvent {
   timestamp: number;
   sender?: string;
   images?: LocalChatImageAttachment[];
+  emojis?: LocalChatImageAttachment[];
+  files?: LocalChatFileAttachment[];
+  voices?: LocalChatVoiceAttachment[];
   quote?: LocalChatMessageQuote;
   kind?: "chat" | "planner";
   final?: boolean;
@@ -183,6 +189,22 @@ export interface LocalChatImageAttachment {
   mimeType: string;
   base64: string;
   dataUrl?: string;
+  size?: number;
+}
+
+export interface LocalChatFileAttachment {
+  name: string;
+  mimeType: string;
+  base64: string;
+  size: number;
+}
+
+export interface LocalChatVoiceAttachment {
+  name?: string;
+  mimeType: string;
+  base64: string;
+  dataUrl?: string;
+  size?: number;
 }
 
 export interface LocalChatPlannerToolCall {
@@ -244,6 +266,8 @@ export interface WindowState {
   isFullScreen: boolean;
   isFocused: boolean;
   isFloating?: boolean;
+  isFloatingCollapsed?: boolean;
+  floatingEdge?: "left" | "right";
 }
 
 export interface InitCheck {
@@ -768,6 +792,9 @@ export interface DesktopBridge {
     close: () => Promise<void>;
     setFloatingMode: (enabled: boolean) => Promise<WindowState>;
     setFloatingPanelExpanded: (expanded: boolean) => Promise<WindowState>;
+    moveFloatingBy: (deltaX: number, deltaY: number) => Promise<WindowState>;
+    moveFloatingTo: (screenX: number, screenY: number, offsetX: number, offsetY: number) => Promise<WindowState>;
+    finishFloatingDrag: () => Promise<WindowState>;
     getState: () => Promise<WindowState>;
     onState: (callback: (state: WindowState) => void) => () => void;
   };
