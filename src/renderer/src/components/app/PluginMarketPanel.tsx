@@ -66,6 +66,18 @@ type InstalledPluginView = InstalledPlugin & {
 type DetailPlugin = MarketPlugin | InstalledPluginView;
 
 type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive";
+type AdapterConfigPage = "connection" | "chat";
+const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
+  "enable_chat_list_filter",
+  "show_dropped_chat_list_messages",
+]);
+
+interface AdapterConfigView {
+  kind: "napcat" | "snowluma";
+  connectionSectionName: string;
+  connectionTitle: string;
+  chatTitle: string;
+}
 
 interface CardAction {
   label: string;
@@ -82,11 +94,15 @@ export function PluginMarketPanel({
   onModeChange,
   maibotService,
   maibotVersion,
+  requestedConfigPluginId,
+  onRequestedConfigHandled,
 }: {
   mode: PluginPanelMode;
   onModeChange?: (mode: PluginPanelMode) => void;
   maibotService?: ServiceDescriptor;
   maibotVersion?: string;
+  requestedConfigPluginId?: string | null;
+  onRequestedConfigHandled?: () => void;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [preferCompatible, setPreferCompatible] = useState(true);
@@ -153,7 +169,7 @@ export function PluginMarketPanel({
     setConfigError(null);
     setConfigBusy("load");
     try {
-      const state = await fetchPluginConfig(plugin.id);
+      const state = await fetchPluginConfig(plugin.id, maibotService);
       setConfigState(state);
       setConfigDraft(clonePluginConfig(state.config));
     } catch (nextError) {
@@ -161,17 +177,33 @@ export function PluginMarketPanel({
     } finally {
       setConfigBusy(null);
     }
-  }, []);
+  }, [maibotService]);
+
+  useEffect(() => {
+    if (!requestedConfigPluginId || mode !== "manage" || loadState === "idle" || loadState === "loading") {
+      return;
+    }
+
+    const plugin = installedPlugins.find(
+      (item) => item.id === requestedConfigPluginId || item.manifest.id === requestedConfigPluginId,
+    );
+    if (plugin) {
+      void openPluginConfig(plugin);
+    } else if (loadState === "ready") {
+      toast.error(`未找到已安装插件：${requestedConfigPluginId}`);
+    }
+    onRequestedConfigHandled?.();
+  }, [installedPlugins, loadState, mode, onRequestedConfigHandled, openPluginConfig, requestedConfigPluginId]);
 
   const saveOpenPluginConfig = useCallback(async () => {
     if (!configPlugin || !configDraft) {
-      return;
+      return false;
     }
 
     setConfigBusy("save");
     setConfigError(null);
     try {
-      const result = await savePluginConfig(configPlugin.id, configDraft);
+      const result = await savePluginConfig(configPlugin.id, configDraft, maibotService);
       setConfigState((state) =>
         state
           ? {
@@ -187,19 +219,21 @@ export function PluginMarketPanel({
       setConfigDraft(clonePluginConfig(result.config));
       toast.success(`配置已保存：${pluginName(configPlugin)}`);
       await loadPlugins();
+      return true;
     } catch (nextError) {
       setConfigError(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
     } finally {
       setConfigBusy(null);
     }
-  }, [configDraft, configPlugin, loadPlugins]);
+  }, [configDraft, configPlugin, loadPlugins, maibotService]);
 
   const togglePluginEnabled = useCallback(async (plugin: InstalledPlugin, enabled: boolean) => {
     setToggleBusyPluginId(plugin.id);
     try {
-      const state = await fetchPluginConfig(plugin.id);
+      const state = await fetchPluginConfig(plugin.id, maibotService);
       const nextConfig = setPluginConfigValue(clonePluginConfig(state.config), ["plugin", "enabled"], enabled);
-      await savePluginConfig(plugin.id, nextConfig);
+      await savePluginConfig(plugin.id, nextConfig, maibotService);
       toast.success(`${enabled ? "已启用" : "已禁用"}：${pluginName(plugin)}`);
       await loadPlugins();
     } catch (nextError) {
@@ -207,7 +241,7 @@ export function PluginMarketPanel({
     } finally {
       setToggleBusyPluginId(null);
     }
-  }, [loadPlugins]);
+  }, [loadPlugins, maibotService]);
 
   const updateConfigDraft = useCallback((path: string[], value: PluginConfigValue) => {
     setConfigDraft((draft) => (draft ? setPluginConfigValue(draft, path, value) : draft));
@@ -437,7 +471,16 @@ export function PluginMarketPanel({
             setConfigError(null);
           }
         }}
-        onSave={() => void saveOpenPluginConfig()}
+        onSave={() => {
+          void saveOpenPluginConfig().then((saved) => {
+            if (saved) {
+              setConfigPlugin(null);
+              setConfigState(null);
+              setConfigDraft(null);
+              setConfigError(null);
+            }
+          });
+        }}
         plugin={configPlugin}
         state={configState}
       />
@@ -1181,12 +1224,35 @@ function PluginConfigDialog({
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const sections = state?.schema.sections ?? [];
+  const adapterView = plugin ? getAdapterConfigView(plugin.id) : null;
+  const [adapterPage, setAdapterPage] = useState<AdapterConfigPage>("chat");
+
+  useEffect(() => {
+    setAdapterPage("chat");
+  }, [plugin?.id]);
+
+  const visibleSections = adapterView
+    ? sections.filter((section) =>
+        adapterPage === "connection"
+          ? section.name === adapterView.connectionSectionName
+          : section.name === "chat",
+      )
+      .map((section) =>
+        adapterPage === "chat"
+          ? {
+              ...section,
+              fields: section.fields.filter((field) => !isHiddenAdapterChatField(field)),
+            }
+          : section,
+      )
+      .filter((section) => section.fields.length > 0)
+    : sections;
 
   return (
     <Dialog open={plugin !== null} onOpenChange={onOpenChange}>
       <DialogContent size="xl">
         <DialogHeader
-          description={plugin ? `${plugin.id} · ${state?.configPath ?? "config.toml"}` : undefined}
+          description={plugin && !adapterView ? `${plugin.id} · ${state?.configPath ?? "config.toml"}` : undefined}
           icon={<Settings className="size-4" />}
           title={plugin ? `${pluginName(plugin)} 配置` : "插件配置"}
           tone="primary"
@@ -1206,9 +1272,16 @@ function PluginConfigDialog({
               </span>
             </div>
           ) : state && draft ? (
-            sections.length > 0 ? (
+            visibleSections.length > 0 ? (
               <div className="grid gap-3">
-                {sections.map((section) => (
+                {adapterView ? (
+                  <AdapterConfigPageHeader
+                    adapterPage={adapterPage}
+                    adapterView={adapterView}
+                    onPageChange={setAdapterPage}
+                  />
+                ) : null}
+                {visibleSections.map((section) => (
                   <PluginConfigSection
                     draft={draft}
                     key={section.name}
@@ -1225,17 +1298,88 @@ function PluginConfigDialog({
           ) : null}
         </DialogBody>
         <DialogFooter>
-          <Button disabled={busy !== null} onClick={() => onOpenChange(false)} size="sm" variant="ghost">
+          <Button className="hidden" disabled={busy !== null} onClick={() => onOpenChange(false)} size="sm" variant="ghost">
             关闭
           </Button>
-          <Button disabled={busy !== null || !draft || !state} onClick={onSave} size="sm">
+          <Button className="text-[0]" disabled={busy !== null || !draft || !state} onClick={onSave} size="sm">
             {busy === "save" ? <Loader2 className="animate-spin" /> : <Save />}
+            <span className="text-sm">保存并关闭</span>
             保存配置
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function AdapterConfigPageHeader({
+  adapterView,
+  adapterPage,
+  onPageChange,
+}: {
+  adapterView: AdapterConfigView;
+  adapterPage: AdapterConfigPage;
+  onPageChange: (page: AdapterConfigPage) => void;
+}): React.JSX.Element {
+  const pageTitle = adapterPage === "connection" ? adapterView.connectionTitle : adapterView.chatTitle;
+  const pageDescription = adapterPage === "connection"
+    ? "填写与 QQ 后端 WebSocket 服务连接相关的地址、端口、token 和超时参数。"
+    : "设置允许响应的群聊、私聊与用户名单。这里会影响哪些聊天能进入 MaiBot。";
+  return (
+    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">{pageTitle}</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{pageDescription}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
+          <Button
+            onClick={() => onPageChange("chat")}
+            size="sm"
+            type="button"
+            variant={adapterPage === "chat" ? "secondary" : "ghost"}
+          >
+            聊天过滤
+          </Button>
+          <Button
+            onClick={() => onPageChange("connection")}
+            size="sm"
+            type="button"
+            variant={adapterPage === "connection" ? "secondary" : "ghost"}
+          >
+            连接配置
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function isHiddenAdapterChatField(
+  field: PluginConfigState["schema"]["sections"][number]["fields"][number],
+): boolean {
+  const fallbackName = field.path[field.path.length - 1];
+  return HIDDEN_ADAPTER_CHAT_FIELDS.has(field.name || fallbackName || "");
+}
+
+function getAdapterConfigView(pluginId: string): AdapterConfigView | null {
+  if (pluginId === "maibot-team.napcat-adapter") {
+    return {
+      kind: "napcat",
+      connectionSectionName: "napcat_server",
+      connectionTitle: "NapCat 连接配置",
+      chatTitle: "聊天过滤配置",
+    };
+  }
+  if (pluginId === "maibot-team.snowluma-adapter") {
+    return {
+      kind: "snowluma",
+      connectionSectionName: "luma_client",
+      connectionTitle: "SnowLuma 连接配置",
+      chatTitle: "聊天过滤配置",
+    };
+  }
+  return null;
 }
 
 function PluginConfigSection({
@@ -1247,11 +1391,14 @@ function PluginConfigSection({
   draft: Record<string, PluginConfigValue>;
   onChange: (path: string[], value: PluginConfigValue) => void;
 }): React.JSX.Element {
+  const title = resolveLocalizedText(section.title, section.name);
+  const description = resolveLocalizedText(section.description, "");
   return (
     <div className="rounded-lg border border-border bg-card p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{section.title}</p>
+          <p className="truncate text-sm font-semibold">{title}</p>
+          {description ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
           <p className="mt-1 font-mono text-[10px] text-muted-foreground">{section.name}</p>
         </div>
         <Badge variant="secondary">{section.fields.length}</Badge>
@@ -1279,45 +1426,106 @@ function PluginConfigField({
   value: PluginConfigValue;
   onChange: (path: string[], value: PluginConfigValue) => void;
 }): React.JSX.Element {
+  const label = fieldLabel(field);
+  const description = fieldDescription(field);
+  const disabled = field.disabled === true;
+  const widget = (field.uiType ?? field.inputType ?? "").toLowerCase();
+  const choices = field.choices;
+
+  if (choices?.length) {
+    return (
+      <label className="grid min-w-0 gap-1.5 text-xs font-medium">
+        <span className="truncate">{label}</span>
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={disabled}
+          onChange={(event) => onChange(field.path, parseChoiceValue(event.target.value, choices))}
+          value={choiceValueKey(value)}
+        >
+          {choices.map((choice) => {
+            const choiceValue = isChoiceObject(choice) ? choice.value : choice;
+            const choiceLabel = isChoiceObject(choice)
+              ? resolveLocalizedText(choice.label, String(choiceValue))
+              : String(choice);
+            return (
+              <option key={choiceValueKey(choiceValue)} value={choiceValueKey(choiceValue)}>
+                {choiceLabel}
+              </option>
+            );
+          })}
+        </select>
+        <ConfigFieldHelp description={description} field={field} />
+      </label>
+    );
+  }
+
   if (typeof value === "boolean") {
     return (
       <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-muted/35 px-3 py-2.5">
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium">{field.label}</span>
+          <span className="block truncate text-sm font-medium">{label}</span>
+          {description ? <span className="block truncate text-[11px] text-muted-foreground">{description}</span> : null}
           <span className="block truncate font-mono text-[10px] text-muted-foreground">{field.name}</span>
         </span>
-        <Checkbox checked={value} onCheckedChange={(checked) => onChange(field.path, checked === true)} />
+        <Checkbox checked={value} disabled={disabled} onCheckedChange={(checked) => onChange(field.path, checked === true)} />
       </label>
     );
   }
 
   if (typeof value === "number") {
+    const isSlider = widget === "slider" || widget === "range";
     return (
       <label className="grid min-w-0 gap-1.5 text-xs font-medium">
-        <span className="truncate">{field.label}</span>
+        <span className="truncate">{label}</span>
         <Input
+          disabled={disabled}
           inputMode="decimal"
+          max={field.max}
+          min={field.min}
           monospace
           onChange={(event) => {
             const nextValue = Number(event.target.value);
             onChange(field.path, Number.isFinite(nextValue) ? nextValue : 0);
           }}
-          type="number"
+          step={field.step}
+          type={isSlider ? "range" : "number"}
           value={String(value)}
         />
+        <ConfigFieldHelp description={description} field={field} />
       </label>
     );
   }
 
   if (typeof value === "string") {
+    const placeholder = resolveLocalizedText(field.placeholder, "");
+    if (widget === "textarea" || field.rows) {
+      return (
+        <label className="grid min-w-0 gap-1.5 text-xs font-medium md:col-span-2">
+          <span className="truncate">{label}</span>
+          <textarea
+            className="min-h-24 rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            onChange={(event) => onChange(field.path, event.target.value)}
+            placeholder={placeholder}
+            rows={field.rows}
+            value={value}
+          />
+          <ConfigFieldHelp description={description} field={field} />
+        </label>
+      );
+    }
     return (
       <label className="grid min-w-0 gap-1.5 text-xs font-medium">
-        <span className="truncate">{field.label}</span>
+        <span className="truncate">{label}</span>
         <Input
+          disabled={disabled}
           monospace
           onChange={(event) => onChange(field.path, event.target.value)}
+          placeholder={placeholder}
+          type={widget === "password" ? "password" : "text"}
           value={value}
         />
+        <ConfigFieldHelp description={description} field={field} />
       </label>
     );
   }
@@ -1351,6 +1559,8 @@ function StringArrayConfigField({
   onChange: (value: PluginConfigValue) => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
+  const label = fieldLabel(field);
+  const description = fieldDescription(field);
 
   const addItem = useCallback(() => {
     const nextItem = draft.trim();
@@ -1371,7 +1581,7 @@ function StringArrayConfigField({
 
   return (
     <div className="grid min-w-0 gap-2 text-xs font-medium md:col-span-2">
-      <span className="truncate">{field.label}</span>
+      <span className="truncate">{label}</span>
       <div className="grid gap-2 rounded-md border border-border bg-muted/25 p-2">
         {value.length > 0 ? (
           value.map((item, index) => (
@@ -1382,7 +1592,7 @@ function StringArrayConfigField({
                 value={item}
               />
               <Button
-                aria-label={`移除 ${field.label} 第 ${index + 1} 项`}
+                aria-label={`移除 ${label} 第 ${index + 1} 项`}
                 onClick={() => removeItem(index)}
                 size="icon-sm"
                 type="button"
@@ -1415,7 +1625,7 @@ function StringArrayConfigField({
           </Button>
         </div>
       </div>
-      <span className="font-mono text-[10px] text-muted-foreground">{field.name}</span>
+      <ConfigFieldHelp description={description} field={field} />
     </div>
   );
 }
@@ -1429,6 +1639,7 @@ function JsonConfigField({
   value: PluginConfigValue;
   onChange: (value: PluginConfigValue) => void;
 }): React.JSX.Element {
+  const label = fieldLabel(field);
   const serialized = useMemo(() => JSON.stringify(value, null, 2), [value]);
   const [text, setText] = useState(serialized);
   const [error, setError] = useState<string | null>(null);
@@ -1450,7 +1661,7 @@ function JsonConfigField({
 
   return (
     <label className="grid min-w-0 gap-1.5 text-xs font-medium md:col-span-2">
-      <span className="truncate">{field.label}</span>
+      <span className="truncate">{label}</span>
       <textarea
         className="min-h-24 rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
         onBlur={() => commit(text)}
@@ -1461,6 +1672,83 @@ function JsonConfigField({
       {error ? <span className="text-[11px] text-destructive">JSON 格式错误：{error}</span> : null}
     </label>
   );
+}
+
+function ConfigFieldHelp({
+  field,
+  description,
+}: {
+  field: PluginConfigState["schema"]["sections"][number]["fields"][number];
+  description: string;
+}): React.JSX.Element {
+  const hint = resolveLocalizedText(field.hint, "");
+  return (
+    <span className="font-mono text-[10px] text-muted-foreground">
+      {description ? <span className="mr-2 font-sans">{description}</span> : null}
+      {hint ? <span className="mr-2 font-sans">{hint}</span> : null}
+      {field.name}
+    </span>
+  );
+}
+
+function fieldLabel(field: PluginConfigState["schema"]["sections"][number]["fields"][number]): string {
+  return resolveLocalizedText(field.label, field.name);
+}
+
+function fieldDescription(field: PluginConfigState["schema"]["sections"][number]["fields"][number]): string {
+  return resolveLocalizedText(field.description, "");
+}
+
+function resolveLocalizedText(value: unknown, fallback: string): string {
+  if (typeof value === "string") {
+    return value || fallback;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const language = navigator.language.toLowerCase();
+  const candidates = [
+    language,
+    language.split("-")[0],
+    language.startsWith("zh") ? "zh-CN" : "",
+    language.startsWith("zh") ? "zh" : "",
+    "zh-CN",
+    "zh",
+    "en-US",
+    "en",
+  ].filter(Boolean);
+  for (const key of candidates) {
+    const text = record[key];
+    if (typeof text === "string" && text.trim()) {
+      return text;
+    }
+  }
+  const first = Object.values(record).find((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return first ?? fallback;
+}
+
+function isChoiceObject(
+  choice: NonNullable<PluginConfigState["schema"]["sections"][number]["fields"][number]["choices"]>[number],
+): choice is { label?: string | Record<string, string>; value: PluginConfigValue } {
+  return choice !== null && typeof choice === "object" && !Array.isArray(choice) && "value" in choice;
+}
+
+function choiceValueKey(value: PluginConfigValue): string {
+  return JSON.stringify(value);
+}
+
+function parseChoiceValue(
+  key: string,
+  choices: NonNullable<PluginConfigState["schema"]["sections"][number]["fields"][number]["choices"]>,
+): PluginConfigValue {
+  for (const choice of choices) {
+    const value = isChoiceObject(choice) ? choice.value : choice;
+    if (choiceValueKey(value) === key) {
+      return value;
+    }
+  }
+  return key;
 }
 
 function clonePluginConfig(config: Record<string, PluginConfigValue>): Record<string, PluginConfigValue> {

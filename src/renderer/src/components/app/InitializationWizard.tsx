@@ -1,21 +1,21 @@
-import {
+﻿import {
   Bot,
-  Filter,
-  KeyRound,
-  ListChecks,
+  CheckCircle2,
   Loader2,
-  Save,
+  RotateCcw,
   ShieldAlert,
+  TerminalSquare,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopSnapshot,
-  NapcatAdapterChatConfig,
-  NapcatChatListMode,
-  QqBackend,
+  LogEntry,
+  PythonOverridesState,
+  PythonPackageSourcePreset,
+  ServiceDescriptor,
 } from "@shared/contracts";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -25,28 +25,21 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Progress } from "@/components/ui/progress";
 import { useShortcut } from "@/lib/use-shortcut";
-import { cn } from "@/lib/utils";
-import { IdListEditor } from "./IdListEditor";
 
 interface InitializationWizardProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
+  onOpenTab: (tab: string) => void;
 }
 
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
-
-const DEFAULT_CHAT_CONFIG: NapcatAdapterChatConfig = {
-  enableChatListFilter: true,
-  showDroppedChatListMessages: false,
-  groupListType: "whitelist",
-  groupList: [],
-  privateListType: "whitelist",
-  privateList: [],
-  banUserId: [],
-  banQqBot: false,
-};
+const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
+const AUTO_START_DELAY_MS = 2000;
+const WEBUI_READY_TIMEOUT_MS = 90_000;
+const WEBUI_READY_POLL_MS = 1000;
+type WizardStep = "core" | "profile";
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -68,254 +61,331 @@ function markStartupWizardSeen(): void {
   }
 }
 
-interface ListModeFieldProps {
-  label: string;
-  value: NapcatChatListMode;
-  onChange: (value: NapcatChatListMode) => void;
-  name: string;
+function readLocalUserName(): string {
+  try {
+    return localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
 }
 
-function ListModeField({ label, value, onChange, name }: ListModeFieldProps): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-[12px] font-medium text-foreground">{label}</span>
-      <RadioGroup
-        className="flex items-center gap-3"
-        name={name}
-        onValueChange={(next) => onChange(next as NapcatChatListMode)}
-        value={value}
-      >
-        <label className="flex items-center gap-1.5 text-[12px] text-foreground">
-          <RadioGroupItem value="whitelist" /> 白名单
-        </label>
-        <label className="flex items-center gap-1.5 text-[12px] text-foreground">
-          <RadioGroupItem value="blacklist" /> 黑名单
-        </label>
-      </RadioGroup>
-    </div>
-  );
+function saveLocalUserName(userName: string): void {
+  try {
+    localStorage.setItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY, userName);
+  } catch {
+    // Local storage can be unavailable in isolated previews.
+  }
+}
+
+function maibotServiceFrom(snapshot: DesktopSnapshot): ServiceDescriptor | undefined {
+  return snapshot.services?.find((service) => service.id === "maibot");
+}
+
+function dependencyLogs(entries: LogEntry[]): LogEntry[] {
+  return entries
+    .filter((entry) => entry.source === "maibot" && entry.stream === "system")
+    .filter((entry) =>
+      entry.message.includes("startup dependency upgrade") ||
+      entry.message.includes("dependency") ||
+      entry.message.includes("pip"),
+    )
+    .slice(-8);
+}
+
+function serviceProgress(service: ServiceDescriptor | undefined, busy: boolean): number {
+  if (service?.status === "running" && service.health === "ready") {
+    return 100;
+  }
+  if (service?.status === "running") {
+    return service.health === "checking" ? 88 : 92;
+  }
+  if (service?.status === "starting" && service.detail?.includes("依赖检查完成")) {
+    return 72;
+  }
+  if (service?.status === "starting") {
+    return 42;
+  }
+  return busy ? 18 : 0;
+}
+
+function wizardServiceDetail(service: ServiceDescriptor | undefined, busy: boolean): string {
+  if (service?.status === "running" && service.health === "ready") {
+    return "MaiCore 已启动，正在进入首次配置";
+  }
+  if (service?.status === "running" || service?.health === "unreachable") {
+    return "等待 MaiCore 启动中";
+  }
+  if (service?.status === "starting") {
+    return service.detail ?? "正在启动 MaiCore";
+  }
+  return busy ? "正在准备 MaiCore 启动环境" : "正在读取依赖源并准备自动初始化";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export function InitializationWizard({
   snapshot,
   onSnapshot,
+  onOpenTab,
 }: InitializationWizardProps): React.JSX.Element | null {
   const [seen, setSeen] = useState(readStartupWizardSeen);
-  const [qqAccount, setQqAccount] = useState(snapshot.initState.qqAccount ?? "");
-  const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [chat, setChat] = useState<NapcatAdapterChatConfig>(DEFAULT_CHAT_CONFIG);
-  const services = snapshot.services ?? [];
-  const runtimeSwitchBlocked = services.some(
-    (service) =>
-      service.status === "starting" ||
-      service.status === "running" ||
-      service.status === "stopping",
-  );
-
-  useEffect(() => {
-    setQqAccount(snapshot.initState.qqAccount ?? "");
-    setQqBackend(snapshot.initState.qqBackend ?? "napcat");
-  }, [snapshot.initState.qqAccount, snapshot.initState.qqBackend]);
-
+  const [pythonDeps, setPythonDeps] = useState<PythonOverridesState | null>(null);
+  const [localUserName, setLocalUserName] = useState(readLocalUserName);
+  const [step, setStep] = useState<WizardStep>("core");
+  const autoStartRequested = useRef(false);
+  const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agreementPending = !snapshot.startupAgreement.isConfirmed;
-  const open = !agreementPending && !seen && !snapshot.initState.qqAccount;
+  const service = maibotServiceFrom(snapshot);
+  const logs = useMemo(() => dependencyLogs(snapshot.recentLogs ?? []), [snapshot.recentLogs]);
+  const running = service?.status === "running";
+  const ready = running && service?.health === "ready";
+  const starting = service?.status === "starting";
+  const open = !agreementPending && !seen;
+  const progress = serviceProgress(service, busy);
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();
     if (nextSnapshot) {
       onSnapshot(nextSnapshot);
     }
+    return nextSnapshot;
   }, [onSnapshot]);
+
+  const waitForMaiBotWebUi = useCallback(async (): Promise<void> => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < WEBUI_READY_TIMEOUT_MS) {
+      const nextSnapshot = await refreshSnapshot();
+      const nextService = nextSnapshot ? maibotServiceFrom(nextSnapshot) : undefined;
+      if (nextService?.status === "running" && nextService.health === "ready") {
+        return;
+      }
+      if (nextService?.status === "error") {
+        throw new Error(nextService.error ?? nextService.detail ?? "MaiBot Core 鍚姩澶辫触");
+      }
+      await delay(WEBUI_READY_POLL_MS);
+    }
+
+    throw new Error("MaiBot WebUI 鍚姩瓒呮椂锛岃鍦ㄧ粓绔〉鏌ョ湅鍚姩鏃ュ織");
+  }, [refreshSnapshot]);
 
   const close = useCallback(() => {
     markStartupWizardSeen();
     setSeen(true);
   }, []);
 
-  const updateChat = useCallback(
-    <K extends keyof NapcatAdapterChatConfig>(key: K, value: NapcatAdapterChatConfig[K]) => {
-      setChat((prev) => ({ ...prev, [key]: value }));
-    },
-    [],
-  );
-
-  const saveQqAccount = useCallback(async () => {
-    const trimmed = qqAccount.trim();
-    if (trimmed.length === 0) {
-      return;
-    }
-
+  const startMaiCore = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      await window.maibotDesktop?.init.setQqAccount({
-        qqAccount: trimmed,
-        qqBackend,
-        chat,
-      });
-      await refreshSnapshot();
-      close();
+      await window.maibotDesktop?.init.repair();
+      await window.maibotDesktop?.services.start("maibot");
+      await waitForMaiBotWebUi();
+      setStep("profile");
     } catch (nextError) {
       setError(messageFromError(nextError));
+      await refreshSnapshot().catch(() => undefined);
     } finally {
       setBusy(false);
     }
-  }, [chat, close, qqAccount, qqBackend, refreshSnapshot]);
+  }, [refreshSnapshot, waitForMaiBotWebUi]);
 
-  const canSave = !busy && qqAccount.trim().length > 0;
+  const saveDependencySource = useCallback(async (preset: PythonPackageSourcePreset) => {
+    setError(null);
+    if (!busy && !starting && !running) {
+      autoStartRequested.current = false;
+      if (autoStartTimer.current) {
+        clearTimeout(autoStartTimer.current);
+        autoStartTimer.current = null;
+      }
+    }
+    try {
+      const state = await window.maibotDesktop?.pythonDeps.saveSourcePreset(preset);
+      if (state) {
+        setPythonDeps(state);
+      }
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    }
+  }, [busy, running, starting]);
 
-  useShortcut("Escape", close, { enabled: open, allowInEditable: true });
-  useShortcut("Mod+Enter", saveQqAccount, { enabled: open && canSave, allowInEditable: true });
+  const updateLocalUserName = useCallback((value: string) => {
+    setLocalUserName(value);
+    setError(null);
+  }, []);
 
-  const filterDisabled = !chat.enableChatListFilter;
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
 
-  const description = useMemo(
-    () => "填写机器人账号后会自动生成 NapCat 与 OneBot 连接配置。",
-    [],
-  );
+    let mounted = true;
+    window.maibotDesktop?.pythonDeps
+      .getState()
+      .then((state) => {
+        if (mounted) {
+          setPythonDeps(state);
+        }
+      })
+      .catch((nextError: unknown) => {
+        if (mounted) {
+          setError(messageFromError(nextError));
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || step !== "core" || !pythonDeps || autoStartRequested.current || busy || starting || running) {
+      return;
+    }
+
+    autoStartRequested.current = true;
+    autoStartTimer.current = setTimeout(() => {
+      void startMaiCore();
+    }, AUTO_START_DELAY_MS);
+
+    return () => {
+      if (autoStartTimer.current) {
+        clearTimeout(autoStartTimer.current);
+        autoStartTimer.current = null;
+      }
+    };
+  }, [busy, open, pythonDeps, running, startMaiCore, starting, step]);
+
+  const retry = useCallback(() => {
+    autoStartRequested.current = true;
+    void startMaiCore();
+  }, [startMaiCore]);
+
+  const finishProfile = useCallback(() => {
+    const userName = localUserName.trim();
+    if (!userName) {
+      setError("请先填写你自己的用户名。");
+      return;
+    }
+    saveLocalUserName(userName);
+    onOpenTab("maibot");
+    close();
+  }, [close, localUserName, onOpenTab]);
+
+  useShortcut("Escape", close, { enabled: open && !busy, allowInEditable: true });
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !busy) close(); }}>
       <DialogContent
-        onPointerDownOutside={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => {
+          if (busy) {
+            event.preventDefault();
+          }
+        }}
         size="lg"
       >
         <DialogHeader
-          description={description}
           icon={<Bot className="size-4" />}
-          title="启动向导"
+          title="初始化 MaiBot Core"
           tone="default"
         />
 
-        <DialogBody className="space-y-5">
-          <section className="rounded-lg border border-border bg-muted/40 p-4">
-            <label
-              className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
-              htmlFor="startup-qq-input"
-            >
-              <KeyRound className="size-3.5" />
-              机器人 QQ 号
-            </label>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {([
-                { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接。" },
-                { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程。" },
-              ] as const).map((option) => (
-                <button
-                  className={cn(
-                    "rounded-md border p-3 text-left transition-colors",
-                    runtimeSwitchBlocked &&
-                      qqBackend !== option.value &&
-                      "cursor-not-allowed opacity-55",
-                    qqBackend === option.value
-                      ? "border-primary bg-primary/10 text-foreground"
-                      : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+        <DialogBody className="space-y-4">
+          {step === "core" ? (
+            <>
+              <section className="rounded-lg border border-border bg-muted/40 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <TerminalSquare className="size-5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold">MaiBot Core</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        首次启动会检查运行目录、同步基础文件，并按需安装 Python 覆盖依赖。
+                      </p>
+                    </div>
+                  </div>
+                  <Badge dot variant={ready ? "success" : running || starting || busy ? "warning" : "secondary"}>
+                    {ready ? "WebUI 已就绪" : running ? "等待 WebUI" : starting || busy ? "初始化中" : "即将开始"}
+                  </Badge>
+                </div>
+
+                <label className="mt-4 grid gap-1.5 text-xs font-medium">
+                  依赖源
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    disabled={busy || starting || !pythonDeps}
+                    onChange={(event) => void saveDependencySource(event.target.value as PythonPackageSourcePreset)}
+                    value={pythonDeps?.sourcePreset ?? "tuna"}
+                  >
+                    {(pythonDeps?.sourceOptions ?? [
+                      { preset: "tuna", label: "清华源", url: "https://pypi.tuna.tsinghua.edu.cn/simple" },
+                      { preset: "pypi", label: "官方 PyPI", url: "https://pypi.org/simple" },
+                      { preset: "aliyun", label: "阿里源", url: "https://mirrors.aliyun.com/pypi/simple" },
+                    ]).map((option) => (
+                      <option key={option.preset} value={option.preset}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="mt-4 space-y-2">
+                  <Progress value={progress} />
+                  <p className="text-xs text-muted-foreground">
+                    {wizardServiceDetail(service, busy)}
+                  </p>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-border bg-card p-4">
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  {ready ? <CheckCircle2 className="size-3.5 text-success" /> : <Loader2 className="size-3.5 animate-spin" />}
+                  依赖安装进度
+                </div>
+                <div className="mt-3 max-h-36 space-y-1 overflow-auto rounded-md border border-border bg-muted/30 p-3">
+                  {logs.length > 0 ? (
+                    logs.map((entry) => (
+                      <p className="font-mono text-[11px] leading-relaxed text-muted-foreground" key={entry.id}>
+                        {entry.message}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      还没有依赖安装日志。初始化开始后，检查、下载和安装输出会出现在这里。
+                    </p>
                   )}
-                  disabled={runtimeSwitchBlocked && qqBackend !== option.value}
-                  key={option.value}
-                  onClick={() => setQqBackend(option.value)}
-                  type="button"
-                >
-                  <span className="text-sm font-semibold">{option.label}</span>
-                  <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                </button>
-              ))}
-            </div>
-            <Input
-              className="mt-3"
-              id="startup-qq-input"
-              inputMode="numeric"
-              monospace
-              onChange={(event) => setQqAccount(event.target.value)}
-              placeholder="例如 123456789"
-              value={qqAccount}
-            />
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              保存后会向 NapCat 写入端口 7998 的正向 WebSocket 服务；如果当前 MaiBot 已安装
-              napcat-adapter，会同步写入同一个 token。
-            </p>
-            {runtimeSwitchBlocked ? (
-              <p className="mt-2 text-[11px] leading-relaxed text-warning">
-                MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
-              </p>
-            ) : null}
-          </section>
-
-          <section className="rounded-lg border border-border bg-card p-4">
-            <header className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              <ListChecks className="size-3.5" />
-              群聊 / 私聊名单
-            </header>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              当前 MaiBot 已存在 napcat-adapter 时，名单设置会同步写入它的 <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">config.toml</code>。
-            </p>
-
-            <div className="mt-3 grid gap-3">
-              <label className="flex items-start gap-2">
-                <Checkbox
-                  checked={chat.enableChatListFilter}
-                  id="wiz-enable-filter"
-                  onCheckedChange={(next) => updateChat("enableChatListFilter", Boolean(next))}
-                />
-                <span className="flex flex-col text-[12px] text-foreground">
-                  启用群聊 / 私聊名单过滤
-                  <span className="text-[11px] text-muted-foreground">
-                    关闭时仍会应用全局屏蔽用户与官方机器人屏蔽设置。
-                  </span>
+                </div>
+              </section>
+            </>
+          ) : (
+            <section className="rounded-lg border border-border bg-muted/40 p-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                  <Bot className="size-5" />
                 </span>
-              </label>
-
-              <div
-                className={cn(
-                  "grid gap-3 rounded-md border border-dashed border-border bg-background/40 p-3",
-                  filterDisabled && "pointer-events-none opacity-60",
-                )}
-              >
-                <ListModeField
-                  label="群聊名单模式"
-                  name="wiz-group-mode"
-                  onChange={(value) => updateChat("groupListType", value)}
-                  value={chat.groupListType}
-                />
-                <IdListEditor
-                  emptyHint="暂未添加群号，留空表示不命中名单"
-                  label="群聊名单（群号）"
-                  onChange={(next) => updateChat("groupList", next)}
-                  placeholder="输入群号后回车添加"
-                  values={chat.groupList}
-                />
-                <ListModeField
-                  label="私聊名单模式"
-                  name="wiz-private-mode"
-                  onChange={(value) => updateChat("privateListType", value)}
-                  value={chat.privateListType}
-                />
-                <IdListEditor
-                  emptyHint="暂未添加私聊用户"
-                  label="私聊名单（用户 ID）"
-                  onChange={(next) => updateChat("privateList", next)}
-                  placeholder="输入用户 QQ 号后回车添加"
-                  values={chat.privateList}
-                />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">设置你的用户名</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    这个名称会用于随便聊聊里显示你的本地发送者名称。
+                  </p>
+                </div>
               </div>
-
-              <label className="flex items-start gap-2">
-                <Checkbox
-                  checked={chat.banQqBot}
-                  id="wiz-ban-bot"
-                  onCheckedChange={(next) => updateChat("banQqBot", Boolean(next))}
+              <label className="mt-4 grid gap-1.5 text-xs font-medium">
+                你的用户名
+                <Input
+                  autoFocus
+                  onChange={(event) => updateLocalUserName(event.target.value)}
+                  placeholder="例如 小明"
+                  value={localUserName}
                 />
-                <span className="flex flex-col text-[12px] text-foreground">
-                  屏蔽 QQ 官方机器人 / 频道机器人
-                  <span className="text-[11px] text-muted-foreground">
-                    开启后会忽略来自官方机器人的消息事件。
-                  </span>
-                </span>
               </label>
-            </div>
-          </section>
+            </section>
+          )}
 
           {error ? (
             <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
@@ -323,23 +393,25 @@ export function InitializationWizard({
               <span>{error}</span>
             </div>
           ) : null}
-
-          <p className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
-            <Filter className="size-3.5 shrink-0" />
-            稍后想要修改？打开顶部「插件」标签页，在插件管理中找到对应插件即可调整配置。
-          </p>
         </DialogBody>
 
         <DialogFooter>
-          <Button onClick={close} size="sm" variant="ghost">
-            稍后设置
+          <Button disabled={busy} onClick={close} size="sm" variant="ghost">
+            稍后再说
             <Kbd className="ml-1" keys="Esc" size="xs" tone="muted" />
           </Button>
-          <Button disabled={!canSave} onClick={saveQqAccount} size="sm">
-            {busy ? <Loader2 className="animate-spin" /> : <Save />}
-            保存并继续
-            <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
-          </Button>
+          {step === "core" && error && !busy && !starting ? (
+            <Button onClick={retry} size="sm">
+              <RotateCcw />
+              重试
+            </Button>
+          ) : null}
+          {step === "profile" ? (
+            <Button onClick={finishProfile} size="sm">
+              <CheckCircle2 />
+              完成
+            </Button>
+          ) : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>
