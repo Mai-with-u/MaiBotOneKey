@@ -1,18 +1,30 @@
 ﻿import {
   Bot,
   CircleAlert,
-  ImageIcon,
   ChevronDown,
+  FileText,
+  ImageIcon,
   Loader2,
   MessageSquare,
+  Mic,
+  Square,
+  Paperclip,
   RefreshCw,
   Send,
   Settings,
+  Smile,
   UserRound,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LocalChatEvent, LocalChatImageAttachment, LocalChatMessageEvent, ServiceDescriptor } from "@shared/contracts";
+import type {
+  LocalChatEvent,
+  LocalChatFileAttachment,
+  LocalChatImageAttachment,
+  LocalChatMessageEvent,
+  LocalChatVoiceAttachment,
+  ServiceDescriptor,
+} from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,6 +42,9 @@ interface ChatMessage {
   timestamp: number;
   sender?: string;
   images?: LocalChatImageAttachment[];
+  emojis?: LocalChatImageAttachment[];
+  files?: LocalChatFileAttachment[];
+  voices?: LocalChatVoiceAttachment[];
   quote?: LocalChatMessageEvent["quote"];
   kind?: "chat" | "planner";
   final?: boolean;
@@ -43,6 +58,8 @@ const USER_AVATAR_STORAGE_KEY = "maibot.localChat.userAvatar";
 const BOT_AVATAR_STORAGE_KEY = "maibot.localChat.botAvatar";
 const PLANNER_VISIBLE_STORAGE_KEY = "maibot.localChat.showPlanner";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_VOICE_BYTES = 16 * 1024 * 1024;
 
 function maibotOrigin(service: ServiceDescriptor | undefined): string {
   try {
@@ -60,9 +77,13 @@ function toChatMessage(event: LocalChatMessageEvent): ChatMessage {
     timestamp: event.timestamp,
     sender: event.sender,
     images: event.images,
+    emojis: event.emojis,
+    files: event.files,
+    voices: event.voices,
     quote: event.quote,
     kind: event.kind,
     final: event.final,
+    collapsed: event.kind === "planner" ? true : undefined,
     plannerTools: event.plannerTools,
   };
 }
@@ -73,7 +94,11 @@ function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessa
   if (existingIndex >= 0) {
     nextMessages = messages.map((item, index) =>
       index === existingIndex
-        ? { ...item, ...message, collapsed: message.final ? item.collapsed : false }
+        ? {
+            ...item,
+            ...message,
+            collapsed: message.kind === "planner" ? item.collapsed ?? true : message.collapsed,
+          }
         : item,
     );
   } else {
@@ -127,6 +152,10 @@ function attachmentDataUrl(image: LocalChatImageAttachment): string {
   return image.dataUrl ?? `data:${image.mimeType};base64,${image.base64}`;
 }
 
+function voiceDataUrl(voice: LocalChatVoiceAttachment): string {
+  return voice.dataUrl ?? `data:${voice.mimeType};base64,${voice.base64}`;
+}
+
 function readPlannerVisible(): boolean {
   return localStorage.getItem(PLANNER_VISIBLE_STORAGE_KEY) !== "0";
 }
@@ -146,11 +175,79 @@ function readImageFile(file: File): Promise<LocalChatImageAttachment> {
     reader.onload = () => {
       const dataUrl = String(reader.result ?? "");
       const base64 = dataUrl.slice(dataUrl.indexOf(";base64,") + 8);
-      resolve({ name: file.name, mimeType: file.type, base64, dataUrl });
+      resolve({ name: file.name, mimeType: file.type, base64, dataUrl, size: file.size });
     };
     reader.onerror = () => reject(new Error("读取图片失败"));
     reader.readAsDataURL(file);
   });
+}
+
+function readRegularFile(file: File): Promise<LocalChatFileAttachment> {
+  return new Promise((resolve, reject) => {
+    if (file.size > MAX_FILE_BYTES) {
+      reject(new Error("文件不能超过 16 MB"));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      const base64 = dataUrl.slice(dataUrl.indexOf(";base64,") + 8);
+      resolve({
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        base64,
+        size: file.size,
+      });
+    };
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readVoiceBlob(blob: Blob, mimeType: string): Promise<LocalChatVoiceAttachment> {
+  return new Promise((resolve, reject) => {
+    if (blob.size > MAX_VOICE_BYTES) {
+      reject(new Error("语音不能超过 16 MB"));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      const base64 = dataUrl.slice(dataUrl.indexOf(";base64,") + 8);
+      resolve({
+        name: `voice-${new Date().toISOString().replace(/[:.]/gu, "-")}.webm`,
+        mimeType,
+        base64,
+        dataUrl,
+        size: blob.size,
+      });
+    };
+    reader.onerror = () => reject(new Error("读取语音失败"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function preferredVoiceMimeType(): string {
+  if (typeof MediaRecorder === "undefined") {
+    return "";
+  }
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) {
+    return "未知大小";
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function AvatarButton({
@@ -206,6 +303,11 @@ export function LocalChatPanel({
   const origin = useMemo(() => maibotOrigin(maibotService), [maibotService]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const emojiInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
   const [state, setState] = useState<ConnectionState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -214,9 +316,13 @@ export function LocalChatPanel({
   const [userAvatar, setUserAvatar] = useState(() => localStorage.getItem(USER_AVATAR_STORAGE_KEY) ?? "");
   const [botAvatar, setBotAvatar] = useState(() => localStorage.getItem(BOT_AVATAR_STORAGE_KEY) ?? "");
   const [pendingImages, setPendingImages] = useState<LocalChatImageAttachment[]>([]);
+  const [pendingEmojis, setPendingEmojis] = useState<LocalChatImageAttachment[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<LocalChatFileAttachment[]>([]);
+  const [pendingVoices, setPendingVoices] = useState<LocalChatVoiceAttachment[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showPlanner, setShowPlanner] = useState(readPlannerVisible);
+  const [recording, setRecording] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(USER_NAME_STORAGE_KEY, userName);
@@ -287,13 +393,6 @@ export function LocalChatPanel({
       setIsTyping(false);
       const message = toChatMessage(event);
       setMessages((current) => appendMessage(current, message));
-      if (message.kind === "planner" && message.final) {
-        window.setTimeout(() => {
-          setMessages((current) =>
-            current.map((item) => item.id === message.id ? { ...item, collapsed: true } : item),
-          );
-        }, 1000);
-      }
     });
 
     void connect();
@@ -333,18 +432,138 @@ export function LocalChatPanel({
     }
   }, []);
 
+  const addEmojis = useCallback(async (files: FileList | null) => {
+    if (!files?.length) {
+      return;
+    }
+    try {
+      const emojis = await Promise.all(Array.from(files).map(readImageFile));
+      setPendingEmojis((current) => [...current, ...emojis].slice(0, 12));
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  const addFiles = useCallback(async (files: FileList | null) => {
+    if (!files?.length) {
+      return;
+    }
+    try {
+      const nextFiles = await Promise.all(Array.from(files).map(readRegularFile));
+      setPendingFiles((current) => [...current, ...nextFiles].slice(0, 6));
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  const stopRecordingTracks = useCallback(() => {
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+  }, []);
+
+  const stopVoiceRecording = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder) {
+      setRecording(false);
+      return;
+    }
+    try {
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+    } catch (nextError) {
+      setRecording(false);
+      stopRecordingTracks();
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [stopRecordingTracks]);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (recording) {
+      stopVoiceRecording();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("当前环境不支持录音");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = preferredVoiceMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recordingStreamRef.current = stream;
+      recordingChunksRef.current = [];
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setError("录音失败");
+        setRecording(false);
+        stopRecordingTracks();
+      };
+      recorder.onstop = () => {
+        const recordedMimeType = recorder.mimeType || mimeType || "audio/webm";
+        const blob = new Blob(recordingChunksRef.current, { type: recordedMimeType });
+        recorderRef.current = null;
+        recordingChunksRef.current = [];
+        stopRecordingTracks();
+        setRecording(false);
+        if (blob.size <= 0) {
+          setError("没有录到语音内容");
+          return;
+        }
+        void readVoiceBlob(blob, recordedMimeType)
+          .then((voice) => {
+            setPendingVoices((current) => [...current, voice].slice(0, 4));
+            setError(null);
+          })
+          .catch((nextError) => {
+            setError(nextError instanceof Error ? nextError.message : String(nextError));
+          });
+      };
+
+      recorder.start();
+      setRecording(true);
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setRecording(false);
+      stopRecordingTracks();
+    }
+  }, [recording, stopRecordingTracks, stopVoiceRecording]);
+
+  useEffect(() => () => {
+    recorderRef.current?.state === "recording" && recorderRef.current.stop();
+    stopRecordingTracks();
+  }, [stopRecordingTracks]);
+
   const sendMessage = useCallback(async () => {
     const content = draft.trim();
-    if ((!content && pendingImages.length === 0) || state !== "connected") {
+    if (
+      (!content && pendingImages.length === 0 && pendingEmojis.length === 0 && pendingFiles.length === 0 && pendingVoices.length === 0)
+      || state !== "connected"
+    ) {
       return;
     }
     const images = pendingImages;
+    const emojis = pendingEmojis;
+    const files = pendingFiles;
+    const voices = pendingVoices;
     setDraft("");
     setPendingImages([]);
+    setPendingEmojis([]);
+    setPendingFiles([]);
+    setPendingVoices([]);
     setIsTyping(true);
 
     try {
-      const sent = await window.maibotDesktop?.localChat.send({ content, images, userName });
+      const sent = await window.maibotDesktop?.localChat.send({ content, images, emojis, files, voices, userName });
       if (sent) {
         setMessages((current) => appendMessage(current, toChatMessage(sent)));
       }
@@ -354,11 +573,20 @@ export function LocalChatPanel({
       setError(nextError instanceof Error ? nextError.message : String(nextError));
       setDraft(content);
       setPendingImages(images);
+      setPendingEmojis(emojis);
+      setPendingFiles(files);
+      setPendingVoices(voices);
     }
-  }, [draft, pendingImages, state, userName]);
+  }, [draft, pendingEmojis, pendingFiles, pendingImages, pendingVoices, state, userName]);
 
   const connected = state === "connected";
-  const canSend = connected && (draft.trim() || pendingImages.length > 0);
+  const canSend = connected && (
+    draft.trim()
+    || pendingImages.length > 0
+    || pendingEmojis.length > 0
+    || pendingFiles.length > 0
+    || pendingVoices.length > 0
+  );
 
   return (
     <>
@@ -555,6 +783,62 @@ export function LocalChatPanel({
                       ))}
                     </div>
                   ) : null}
+                  {message.emojis?.length ? (
+                    <div className={cn("flex flex-wrap gap-2", message.content || message.images?.length ? "mt-2" : "")}>
+                      {message.emojis.map((emoji, index) => (
+                        <img
+                          alt={emoji.name ?? "表情"}
+                          className="size-20 rounded-md border border-black/10 bg-background object-contain p-1"
+                          key={`${message.id}-emoji-${index}`}
+                          src={attachmentDataUrl(emoji)}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  {message.files?.length ? (
+                    <div className={cn("grid gap-1.5", message.content || message.images?.length || message.emojis?.length ? "mt-2" : "")}>
+                      {message.files.map((file, index) => (
+                        <div
+                          className={cn(
+                            "flex min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-xs",
+                            message.role === "user"
+                              ? "border-primary-foreground/25 bg-primary-foreground/10 text-primary-foreground"
+                              : "border-border bg-muted/45 text-foreground",
+                          )}
+                          key={`${message.id}-file-${index}`}
+                        >
+                          <FileText className="size-3.5 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium">{file.name}</p>
+                            <p className="text-[10px] opacity-70">{formatBytes(file.size)}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {message.voices?.length ? (
+                    <div
+                      className={cn(
+                        "grid gap-1.5",
+                        message.content || message.images?.length || message.emojis?.length || message.files?.length ? "mt-2" : "",
+                      )}
+                    >
+                      {message.voices.map((voice, index) => (
+                        <div
+                          className={cn(
+                            "flex min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-xs",
+                            message.role === "user"
+                              ? "border-primary-foreground/25 bg-primary-foreground/10 text-primary-foreground"
+                              : "border-border bg-muted/45 text-foreground",
+                          )}
+                          key={`${message.id}-voice-${index}`}
+                        >
+                          <Mic className="size-3.5 shrink-0" />
+                          <audio className="h-8 min-w-0 flex-1" controls preload="metadata" src={voiceDataUrl(voice)} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 {message.role === "user" ? (
                   <span className="mt-1 grid size-8 shrink-0 place-items-center overflow-hidden rounded-md bg-secondary text-secondary-foreground">
@@ -592,6 +876,63 @@ export function LocalChatPanel({
               ))}
             </div>
           ) : null}
+          {pendingEmojis.length ? (
+            <div className="flex flex-wrap gap-2">
+              {pendingEmojis.map((emoji, index) => (
+                <div className="group relative h-14 w-14 overflow-hidden rounded-md border border-border bg-muted" key={`${emoji.name}-${index}`}>
+                  <img alt={emoji.name ?? "表情"} className="size-full object-contain p-1" src={attachmentDataUrl(emoji)} />
+                  <button
+                    className="absolute right-1 top-1 grid size-5 place-items-center rounded bg-background/85 text-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                    onClick={() => setPendingEmojis((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    title="移除表情"
+                    type="button"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {pendingFiles.length ? (
+            <div className="grid gap-1.5">
+              {pendingFiles.map((file, index) => (
+                <div className="group flex items-center gap-2 rounded-md border border-border bg-muted/45 px-2 py-1.5 text-xs" key={`${file.name}-${index}`}>
+                  <FileText className="size-4 shrink-0 text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{file.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatBytes(file.size)}</p>
+                  </div>
+                  <button
+                    className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                    onClick={() => setPendingFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    title="移除文件"
+                    type="button"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {pendingVoices.length ? (
+            <div className="grid gap-1.5">
+              {pendingVoices.map((voice, index) => (
+                <div className="group flex items-center gap-2 rounded-md border border-border bg-muted/45 px-2 py-1.5 text-xs" key={`${voice.name}-${index}`}>
+                  <Mic className="size-4 shrink-0 text-primary" />
+                  <audio className="h-8 min-w-0 flex-1" controls preload="metadata" src={voiceDataUrl(voice)} />
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{formatBytes(voice.size ?? 0)}</span>
+                  <button
+                    className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                    onClick={() => setPendingVoices((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    title="移除语音"
+                    type="button"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="flex items-end gap-2">
             <Button disabled={!connected} onClick={() => imageInputRef.current?.click()} size="icon" title="发送图片" variant="outline">
               <ImageIcon />
@@ -607,6 +948,43 @@ export function LocalChatPanel({
               ref={imageInputRef}
               type="file"
             />
+            <Button disabled={!connected} onClick={() => emojiInputRef.current?.click()} size="icon" title="发送表情包" variant="outline">
+              <Smile />
+            </Button>
+            <input
+              accept="image/*"
+              className="hidden"
+              multiple
+              onChange={(event) => {
+                void addEmojis(event.target.files);
+                event.target.value = "";
+              }}
+              ref={emojiInputRef}
+              type="file"
+            />
+            <Button disabled={!connected} onClick={() => fileInputRef.current?.click()} size="icon" title="发送文件" variant="outline">
+              <Paperclip />
+            </Button>
+            <input
+              className="hidden"
+              multiple
+              onChange={(event) => {
+                void addFiles(event.target.files);
+                event.target.value = "";
+              }}
+              ref={fileInputRef}
+              type="file"
+            />
+            <Button
+              className={cn(recording && "border-destructive bg-destructive/10 text-destructive hover:bg-destructive/15")}
+              disabled={!connected}
+              onClick={() => void startVoiceRecording()}
+              size="icon"
+              title={recording ? "停止录音" : "录制语音"}
+              variant="outline"
+            >
+              {recording ? <Square /> : <Mic />}
+            </Button>
             <textarea
               className="min-h-10 max-h-32 min-w-0 flex-1 resize-none rounded-md border border-input bg-card px-3 py-2 text-sm outline-none transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!connected}

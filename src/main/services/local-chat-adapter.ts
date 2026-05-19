@@ -6,12 +6,14 @@ import type {
   LocalChatConnectionState,
   LocalChatConnectRequest,
   LocalChatEvent,
+  LocalChatFileAttachment,
   LocalChatImageAttachment,
   LocalChatMessageEvent,
   LocalChatMessageQuote,
   LocalChatPlannerToolArgument,
   LocalChatPlannerToolCall,
   LocalChatSendRequest,
+  LocalChatVoiceAttachment,
   RuntimePaths,
 } from "../../shared/contracts";
 
@@ -84,6 +86,133 @@ function imagePlaceholder(images: LocalChatImageAttachment[]): string {
     return "";
   }
   return images.length === 1 ? "[图片]" : `[图片 x${images.length}]`;
+}
+
+function emojiPlaceholder(emojis: LocalChatImageAttachment[]): string {
+  if (emojis.length === 0) {
+    return "";
+  }
+  return emojis.length === 1 ? "[表情]" : `[表情 x${emojis.length}]`;
+}
+
+function filePlaceholder(files: LocalChatFileAttachment[]): string {
+  return files.map((file) => `[文件] ${file.name}`).join("\n");
+}
+
+function voicePlaceholder(voices: LocalChatVoiceAttachment[]): string {
+  if (voices.length === 0) {
+    return "";
+  }
+  return voices.length === 1 ? "[语音]" : `[语音 x${voices.length}]`;
+}
+
+function imagePayload(images: LocalChatImageAttachment[]): Record<string, string | number>[] {
+  return images.map((image) => ({
+    name: image.name ?? "",
+    mime_type: image.mimeType,
+    base64: image.base64.trim(),
+    data_url: image.dataUrl ?? `data:${image.mimeType};base64,${image.base64.trim()}`,
+    size: image.size ?? 0,
+  }));
+}
+
+function imageAttachments(value: unknown): LocalChatImageAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = asRecord(item);
+    if (!record) {
+      return [];
+    }
+    const mimeType = asString(record.mimeType) ?? asString(record.mime_type) ?? "image/png";
+    const dataUrl = asString(record.dataUrl) ?? asString(record.data_url);
+    let base64 = asString(record.base64) ?? "";
+    if (!base64 && dataUrl?.startsWith("data:image/") && dataUrl.includes(",")) {
+      base64 = dataUrl.split(",", 2)[1]?.trim() ?? "";
+    }
+    if (!base64 || !mimeType.startsWith("image/")) {
+      return [];
+    }
+    return [{
+      name: asString(record.name),
+      mimeType,
+      base64,
+      dataUrl: dataUrl ?? `data:${mimeType};base64,${base64}`,
+      size: asNumber(record.size),
+    }];
+  });
+}
+
+function voicePayload(voices: LocalChatVoiceAttachment[]): Record<string, string | number>[] {
+  return voices.map((voice) => ({
+    name: voice.name ?? "",
+    mime_type: voice.mimeType,
+    base64: voice.base64.trim(),
+    data_url: voice.dataUrl ?? `data:${voice.mimeType};base64,${voice.base64.trim()}`,
+    size: voice.size ?? 0,
+  }));
+}
+
+function voiceAttachments(value: unknown): LocalChatVoiceAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = asRecord(item);
+    if (!record) {
+      return [];
+    }
+    const mimeType = asString(record.mimeType) ?? asString(record.mime_type) ?? "audio/mpeg";
+    const dataUrl = asString(record.dataUrl) ?? asString(record.data_url);
+    let base64 = asString(record.base64) ?? "";
+    if (!base64 && dataUrl?.startsWith("data:audio/") && dataUrl.includes(",")) {
+      base64 = dataUrl.split(",", 2)[1]?.trim() ?? "";
+    }
+    if (!base64 || !mimeType.startsWith("audio/")) {
+      return [];
+    }
+    return [{
+      name: asString(record.name),
+      mimeType,
+      base64,
+      dataUrl: dataUrl ?? `data:${mimeType};base64,${base64}`,
+      size: asNumber(record.size),
+    }];
+  });
+}
+
+function filePayload(files: LocalChatFileAttachment[]): Record<string, string | number>[] {
+  return files.map((file) => ({
+    name: file.name,
+    mime_type: file.mimeType,
+    base64: file.base64.trim(),
+    size: file.size,
+  }));
+}
+
+function fileAttachments(value: unknown): LocalChatFileAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = asRecord(item);
+    if (!record) {
+      return [];
+    }
+    const name = asString(record.name) ?? asString(record.file_name) ?? asString(record.filename);
+    const base64 = asString(record.base64) ?? "";
+    const size = asNumber(record.size) ?? 0;
+    if (!name || !base64) {
+      return [];
+    }
+    return [{
+      name,
+      mimeType: asString(record.mimeType) ?? asString(record.mime_type) ?? "application/octet-stream",
+      base64,
+      size,
+    }];
+  });
 }
 
 function plannerContent(data: Record<string, unknown>): string {
@@ -242,11 +371,18 @@ function splitReplyMessage(content: string): { content: string; hasReplyPrefix: 
 
 function historyMessageToLocal(message: Record<string, unknown>): LocalChatMessageEvent | undefined {
   const rawContent = asString(message.content);
-  if (!rawContent) {
+  const images = imageAttachments(message.images);
+  const emojis = imageAttachments(message.emojis);
+  const files = fileAttachments(message.files);
+  const voices = voiceAttachments(message.voices);
+  const fallbackContent = [imagePlaceholder(images), emojiPlaceholder(emojis), voicePlaceholder(voices), filePlaceholder(files)]
+    .filter(Boolean)
+    .join("\n");
+  if (!rawContent && !fallbackContent) {
     return undefined;
   }
 
-  const parsed = splitReplyMessage(rawContent);
+  const parsed = splitReplyMessage(rawContent ?? fallbackContent);
   const type = asString(message.type);
   const isBot = message.is_bot === true || type === "bot";
   return {
@@ -255,6 +391,10 @@ function historyMessageToLocal(message: Record<string, unknown>): LocalChatMessa
     content: parsed.content,
     timestamp: normalizeTimestamp(message.timestamp),
     sender: asString(message.sender_name) ?? (isBot ? "MaiBot" : DEFAULT_USER_NAME),
+    images,
+    emojis,
+    files,
+    voices,
     quote: quoteFromRecord(message),
   };
 }
@@ -324,11 +464,16 @@ export class LocalChatAdapter extends EventEmitter {
 
     const content = request.content.trim();
     const images = (request.images ?? []).filter((image) => image.base64.trim() && image.mimeType.startsWith("image/"));
-    if (!content && images.length === 0) {
+    const emojis = (request.emojis ?? []).filter((emoji) => emoji.base64.trim() && emoji.mimeType.startsWith("image/"));
+    const files = (request.files ?? []).filter((file) => file.base64.trim() && file.name.trim());
+    const voices = (request.voices ?? []).filter((voice) => voice.base64.trim() && voice.mimeType.startsWith("audio/"));
+    if (!content && images.length === 0 && emojis.length === 0 && files.length === 0 && voices.length === 0) {
       throw new Error("消息内容为空");
     }
 
-    const displayContent = [content, imagePlaceholder(images)].filter(Boolean).join("\n");
+    const displayContent = [content, imagePlaceholder(images), emojiPlaceholder(emojis), voicePlaceholder(voices), filePlaceholder(files)]
+      .filter(Boolean)
+      .join("\n");
     this.lastUserName = request.userName?.trim() || DEFAULT_USER_NAME;
     const message: LocalChatMessageEvent = {
       id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -337,6 +482,9 @@ export class LocalChatAdapter extends EventEmitter {
       timestamp: Date.now(),
       sender: this.lastUserName,
       images,
+      emojis,
+      files,
+      voices,
     };
 
     await this.sendRequest({
@@ -345,7 +493,11 @@ export class LocalChatAdapter extends EventEmitter {
       method: "message.send",
       session: SESSION_ID,
       data: {
-        content: displayContent,
+        content,
+        images: imagePayload(images),
+        emojis: imagePayload(emojis),
+        files: filePayload(files),
+        voices: voicePayload(voices),
         user_name: this.lastUserName,
       },
     });
@@ -590,15 +742,22 @@ export class LocalChatAdapter extends EventEmitter {
       return;
     }
 
+    const images = imageAttachments(data.images);
+    const emojis = imageAttachments(data.emojis);
+    const files = fileAttachments(data.files);
+    const voices = voiceAttachments(data.voices);
     const rawContent = asString(data.content);
-    if (!rawContent) {
+    const fallbackContent = [imagePlaceholder(images), emojiPlaceholder(emojis), voicePlaceholder(voices), filePlaceholder(files)]
+      .filter(Boolean)
+      .join("\n");
+    if (!rawContent && !fallbackContent) {
       return;
     }
 
     const sender = asRecord(data.sender);
     const isUser = eventName === "user_message" || sender?.is_bot === false;
     const role = eventName === "error" ? "error" : isUser ? "user" : eventName === "system" ? "system" : "bot";
-    const parsed = splitReplyMessage(rawContent);
+    const parsed = splitReplyMessage(rawContent ?? fallbackContent);
     const content = parsed.content;
     if (
       role === "user"
@@ -616,6 +775,10 @@ export class LocalChatAdapter extends EventEmitter {
       content,
       timestamp: normalizeTimestamp(data.timestamp),
       sender: asString(sender?.name) ?? (role === "bot" ? "MaiBot" : undefined),
+      images,
+      emojis,
+      files,
+      voices,
       quote: this.localQuoteForMessage(data, parsed.hasReplyPrefix),
     });
   }
