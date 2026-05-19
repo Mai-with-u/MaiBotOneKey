@@ -12,6 +12,7 @@ __pycache__/
 /node_modules/
 /out/
 /release/
+/release-assets/
 /.payload/
 /payload.zip
 /release-payload*.zip

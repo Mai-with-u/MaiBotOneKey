@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -90,6 +90,15 @@
         ]
       },
       {
+        "from": "release-assets/python-overrides",
+        "to": "python-overrides",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
         "from": "modules",
         "to": "modules",
         "filter": [
@@ -103,6 +112,8 @@
           "!MaiBot/maibot_statistics.html",
           "!MaiBot/plugins/sengokucola_better-image/**",
           "!MaiBot/plugins/__init__.py",
+          "!MaiBot/plugins/napcat-adapter/.git/**",
+          "!MaiBot/plugins/snowluma-adapter/.git/**",
           "!napcat/napcat/config/webui.json",
           "!napcat/**/*linux*",
           "!napcat/**/*darwin*",
