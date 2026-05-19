@@ -1391,15 +1391,11 @@ export function SettingsStatusPanel({
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="checks">
                   <ClipboardCheck className="size-3" />
-                  环境检查
+                  环境与服务
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="account">
                   <UserRound className="size-3" />
                   协议端选择
-                </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="services">
-                  <Network className="size-3" />
-                  服务状态
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="modules">
                   <Download className="size-3" />
@@ -1425,9 +1421,6 @@ export function SettingsStatusPanel({
                         </span>
                         <div className="min-w-0">
                           <p className="text-sm font-medium">窗口关闭行为</p>
-                          <p className="text-xs text-muted-foreground">
-                            选择点击关闭按钮时是询问、收进托盘继续运行，还是直接关闭应用。
-                          </p>
                         </div>
                       </div>
                     </div>
@@ -1750,6 +1743,19 @@ export function SettingsStatusPanel({
               </TabsContent>
 
               <TabsContent className="space-y-4" value="checks">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">环境检查</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      检查运行目录、基础依赖和必要工具是否可用。
+                    </p>
+                  </div>
+                  <Button disabled={busy !== null} onClick={repair} variant="outline">
+                    {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
+                    准备基础目录
+                    <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
+                  </Button>
+                </div>
                 <div className="grid gap-2 md:grid-cols-2">
                   {initState.checks.map((check) => (
                     <div
@@ -1788,12 +1794,29 @@ export function SettingsStatusPanel({
                   ))}
                 </div>
 
-                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
-                  <Button disabled={busy !== null} onClick={repair} variant="outline">
-                    {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
-                    准备基础目录
-                    <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
-                  </Button>
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Network className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">服务状态</p>
+                      <p className="text-xs text-muted-foreground">
+                        固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
+                      </p>
+                    </div>
+                  </div>
+                  {services.map((service) => (
+                    <ServiceDetail
+                      commandBusy={busy === `command:${service.id}`}
+                      commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
+                      key={service.id}
+                      onOpenPath={openPath}
+                      onResetCommand={resetCommandConfig}
+                      onSaveCommand={saveCommandConfig}
+                      service={service}
+                    />
+                  ))}
                 </div>
               </TabsContent>
 
@@ -1854,23 +1877,6 @@ export function SettingsStatusPanel({
                     <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
                   </Button>
                 </div>
-              </TabsContent>
-
-              <TabsContent className="space-y-3" value="services">
-                <p className="text-xs text-muted-foreground">
-                  固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
-                </p>
-                {services.map((service) => (
-                  <ServiceDetail
-                    commandBusy={busy === `command:${service.id}`}
-                    commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
-                    key={service.id}
-                    onOpenPath={openPath}
-                    onResetCommand={resetCommandConfig}
-                    onSaveCommand={saveCommandConfig}
-                    service={service}
-                  />
-                ))}
               </TabsContent>
 
               <TabsContent className="space-y-3" value="modules">
