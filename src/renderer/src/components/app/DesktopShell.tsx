@@ -11,9 +11,8 @@
   Settings,
   Square,
   TerminalSquare,
-  Wrench,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopSnapshot,
   ServiceDescriptor,
@@ -39,7 +38,6 @@ import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
 import { LocalChatPanel } from "./LocalChatPanel";
 import { PluginMarketPanel } from "./PluginMarketPanel";
-import { QuickActionsPanel } from "./QuickActionsPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
 import { TerminalPanel } from "./TerminalPanel";
@@ -153,24 +151,131 @@ function ServiceChip({
 
 function FloatingShell({
   expanded,
+  edge,
   maibotService,
   onExpand,
   onCollapse,
   onRestore,
 }: {
   expanded: boolean;
+  edge: "left" | "right" | null;
   maibotService: ServiceDescriptor | undefined;
   onExpand: () => void;
   onCollapse: () => void;
   onRestore: () => void;
 }): React.JSX.Element {
+  const dragRef = useRef<{
+    offsetX: number;
+    offsetY: number;
+    startScreenX: number;
+    startScreenY: number;
+    moved: boolean;
+    pointerId: number;
+  } | null>(null);
+
+  const updateFloatingState = useCallback(() => undefined, []);
+
+  const startDrag = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    dragRef.current = {
+      offsetX: event.clientX,
+      offsetY: event.clientY,
+      startScreenX: event.screenX,
+      startScreenY: event.screenY,
+      moved: false,
+      pointerId: event.pointerId,
+    };
+  }, []);
+
+  const cancelDrag = useCallback((event: PointerEvent<HTMLElement>) => {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const drag = useCallback((event: PointerEvent<HTMLElement>) => {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.pointerType === "mouse" && (event.buttons & 1) !== 1) {
+      cancelDrag(event);
+      return;
+    }
+    const movedDistance = Math.hypot(event.screenX - current.startScreenX, event.screenY - current.startScreenY);
+    if (movedDistance < 4) {
+      return;
+    }
+    current.moved = true;
+    void window.maibotDesktop?.window
+      .moveFloatingTo(event.screenX, event.screenY, current.offsetX, current.offsetY)
+      .then(updateFloatingState);
+  }, [cancelDrag, updateFloatingState]);
+
+  const finishDrag = useCallback((event: PointerEvent<HTMLElement>, clickAction?: () => void) => {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (current.moved) {
+      void window.maibotDesktop?.window.finishFloatingDrag().then(updateFloatingState);
+      return;
+    }
+    clickAction?.();
+  }, [updateFloatingState]);
+
   if (!expanded) {
+    if (edge) {
+      return (
+        <div
+          className={cn(
+            "flex h-screen cursor-grab select-none items-center justify-center bg-transparent active:cursor-grabbing",
+            edge === "left" ? "pl-0.5" : "pr-0.5",
+          )}
+          data-floating-shell="true"
+          onPointerCancel={(event) => finishDrag(event)}
+          onPointerDown={startDrag}
+          onPointerMove={drag}
+          onPointerUp={(event) => finishDrag(event, onExpand)}
+          title="拖动悬浮条，点击展开"
+        >
+          <div className="grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl">
+            <img
+              alt=""
+              className="h-14 max-w-none select-none object-cover"
+              draggable={false}
+              src={maiMascotImage}
+            />
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="grid h-screen place-items-center bg-transparent" data-floating-shell="true">
         <button
-          className="relative grid size-20 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl transition-transform hover:scale-105"
+          className="relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl transition-transform hover:scale-105 active:cursor-grabbing"
           data-app-region="no-drag"
-          onClick={onExpand}
+          onPointerCancel={(event) => finishDrag(event)}
+          onPointerDown={startDrag}
+          onPointerMove={drag}
+          onPointerUp={(event) => finishDrag(event, onExpand)}
           title="打开悬浮菜单"
           type="button"
         >
@@ -183,10 +288,21 @@ function FloatingShell({
 
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl" data-floating-shell="true">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-2" data-app-region="drag">
+      <div
+        className="flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-card px-2 active:cursor-grabbing"
+        data-app-region="no-drag"
+        onPointerCancel={(event) => finishDrag(event)}
+        onPointerDown={startDrag}
+        onPointerMove={drag}
+        onPointerUp={(event) => finishDrag(event)}
+      >
         <GripHorizontal className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">MaiBot 悬浮球</span>
-        <div className="flex shrink-0 items-center gap-1" data-app-region="no-drag">
+        <div
+          className="flex shrink-0 items-center gap-1"
+          data-app-region="no-drag"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <Button className="h-7 px-2 text-[11px]" onClick={onCollapse} size="sm" variant="secondary">
             收起
           </Button>
@@ -211,6 +327,7 @@ export function DesktopShell(): React.JSX.Element {
   const [actionError, setActionError] = useState<string | null>(null);
   const [floatingMode, setFloatingMode] = useState(false);
   const [floatingExpanded, setFloatingExpanded] = useState(false);
+  const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const theme = useTheme();
 
   const refreshSnapshot = useCallback(async () => {
@@ -244,12 +361,14 @@ export function DesktopShell(): React.JSX.Element {
     window.maibotDesktop?.window.getState().then((state) => {
       if (mounted) {
         setFloatingMode(state.isFloating === true);
+        setFloatingEdge(state.floatingEdge ?? null);
       }
     });
     const offWindowState = window.maibotDesktop?.window.onState((state) => {
       if (typeof state.isFloating === "boolean") {
         setFloatingMode(state.isFloating);
       }
+      setFloatingEdge(state.floatingEdge ?? null);
     });
 
     return () => {
@@ -356,20 +475,29 @@ export function DesktopShell(): React.JSX.Element {
 
   const enterFloatingMode = useCallback(() => {
     setFloatingExpanded(false);
+    setFloatingEdge(null);
     void window.maibotDesktop?.window.setFloatingMode(true).then((state) => {
       setFloatingMode(state.isFloating === true);
+      setFloatingEdge(state.floatingEdge ?? null);
     });
   }, []);
 
   const setFloatingPanel = useCallback((expanded: boolean) => {
     setFloatingExpanded(expanded);
-    void window.maibotDesktop?.window.setFloatingPanelExpanded(expanded);
+    if (expanded) {
+      setFloatingEdge(null);
+    }
+    void window.maibotDesktop?.window.setFloatingPanelExpanded(expanded).then((state) => {
+      setFloatingEdge(state.floatingEdge ?? null);
+    });
   }, []);
 
   const restoreMainWindow = useCallback(() => {
     setFloatingExpanded(false);
+    setFloatingEdge(null);
     void window.maibotDesktop?.window.setFloatingMode(false).then((state) => {
       setFloatingMode(state.isFloating === true);
+      setFloatingEdge(state.floatingEdge ?? null);
     });
   }, []);
 
@@ -408,9 +536,8 @@ export function DesktopShell(): React.JSX.Element {
   useShortcut("Mod+2", () => selectTab("maibot"));
   useShortcut("Mod+3", () => selectTab("localchat"));
   useShortcut("Mod+4", () => selectTab("terminal"), { enabled: showTerminalTab });
-  useShortcut("Mod+5", () => selectTab("quickactions"));
-  useShortcut("Mod+6", () => selectTab("pluginmarket"));
-  useShortcut("Mod+7", () => selectTab("pluginmanage"));
+  useShortcut("Mod+5", () => selectTab("pluginmarket"));
+  useShortcut("Mod+6", () => selectTab("pluginmanage"));
   useShortcut("Mod+8", () => selectTab("settings"));
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
@@ -421,6 +548,7 @@ export function DesktopShell(): React.JSX.Element {
     return (
       <TooltipProvider delayDuration={250}>
         <FloatingShell
+          edge={floatingEdge}
           expanded={floatingExpanded}
           maibotService={maibotService}
           onCollapse={() => setFloatingPanel(false)}
@@ -583,15 +711,10 @@ export function DesktopShell(): React.JSX.Element {
                     <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
                   </TabsTrigger>
                 ) : null}
-                <TabsTrigger value="quickactions" className="gap-1.5">
-                  <Wrench />
-                  快捷操作
-                  <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
                 <TabsTrigger value="plugins" className="gap-1.5">
                   <Puzzle />
                   插件
-                  <Kbd keys="Mod+6" size="xs" tone="muted" className="ml-1" />
+                  <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
               </TabsList>
               <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -675,13 +798,6 @@ export function DesktopShell(): React.JSX.Element {
                 />
               </TabsContent>
             ) : null}
-
-            <TabsContent
-              value="quickactions"
-              className="min-h-0 flex-1 overflow-hidden outline-none"
-            >
-              <QuickActionsPanel />
-            </TabsContent>
 
             <TabsContent
               value="plugins"

@@ -98,6 +98,12 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("desktop:window:setFloatingMode", enabled) as Promise<WindowState>,
     setFloatingPanelExpanded: (expanded: boolean) =>
       ipcRenderer.invoke("desktop:window:setFloatingPanelExpanded", expanded) as Promise<WindowState>,
+    moveFloatingBy: (deltaX: number, deltaY: number) =>
+      ipcRenderer.invoke("desktop:window:moveFloatingBy", deltaX, deltaY) as Promise<WindowState>,
+    moveFloatingTo: (screenX: number, screenY: number, offsetX: number, offsetY: number) =>
+      ipcRenderer.invoke("desktop:window:moveFloatingTo", screenX, screenY, offsetX, offsetY) as Promise<WindowState>,
+    finishFloatingDrag: () =>
+      ipcRenderer.invoke("desktop:window:finishFloatingDrag") as Promise<WindowState>,
     getState: () => ipcRenderer.invoke("desktop:window:getState") as Promise<WindowState>,
     onState: (callback: (state: WindowState) => void) => onIpc("desktop:window-state", callback),
   },

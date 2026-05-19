@@ -84,6 +84,8 @@ const REMOVE_RETRY_OPTIONS = { recursive: true, force: true, maxRetries: 8, retr
 const NORMAL_MINIMUM_SIZE = { width: 1080, height: 720 };
 const FLOATING_BALL_SIZE = { width: 96, height: 96 };
 const FLOATING_PANEL_SIZE = { width: 380, height: 520 };
+const FLOATING_STRIP_SIZE = { width: 28, height: 112 };
+const FLOATING_EDGE_SNAP_DISTANCE = 18;
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
@@ -103,9 +105,20 @@ export interface RegisteredAppIpcDisposables {
   dispose: () => void;
 }
 
-function readWindowState(window: BrowserWindow | null, isFloating = false): WindowState {
+function readWindowState(
+  window: BrowserWindow | null,
+  isFloating = false,
+  floatingEdgeSide: "left" | "right" | null = null,
+): WindowState {
   if (!window || window.isDestroyed()) {
-    return { isMaximized: false, isFullScreen: false, isFocused: false, isFloating };
+    return {
+      isMaximized: false,
+      isFullScreen: false,
+      isFocused: false,
+      isFloating,
+      isFloatingCollapsed: Boolean(floatingEdgeSide),
+      floatingEdge: floatingEdgeSide ?? undefined,
+    };
   }
 
   return {
@@ -113,6 +126,8 @@ function readWindowState(window: BrowserWindow | null, isFloating = false): Wind
     isFullScreen: window.isFullScreen(),
     isFocused: window.isFocused(),
     isFloating,
+    isFloatingCollapsed: Boolean(floatingEdgeSide),
+    floatingEdge: floatingEdgeSide ?? undefined,
   };
 }
 
@@ -523,12 +538,25 @@ export function registerAppIpc({
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
   let initDependencyRefreshPromise: Promise<void> | null = null;
   let floatingMode = false;
+  let floatingPanelExpanded = false;
+  let floatingEdgeSide: "left" | "right" | null = null;
   let normalBounds: Electron.Rectangle | null = null;
 
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
-    const state = readWindowState(window, floatingMode);
+    const state = readWindowState(window, floatingMode, floatingEdgeSide);
     window?.webContents.send("desktop:window-state", state);
     return state;
+  };
+
+  const clampFloatingBounds = (bounds: Electron.Rectangle): Electron.Rectangle => {
+    const display = screen.getDisplayMatching(bounds);
+    const workArea = display.workArea;
+    return {
+      x: Math.min(Math.max(bounds.x, workArea.x), workArea.x + workArea.width - bounds.width),
+      y: Math.min(Math.max(bounds.y, workArea.y), workArea.y + workArea.height - bounds.height),
+      width: bounds.width,
+      height: bounds.height,
+    };
   };
 
   const floatingBounds = (window: BrowserWindow, size: { width: number; height: number }): Electron.Rectangle => {
@@ -544,7 +572,7 @@ export function registerAppIpc({
   const applyFloatingMode = (enabled: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode);
+      return readWindowState(window, floatingMode, floatingEdgeSide);
     }
 
     if (enabled && !floatingMode) {
@@ -553,6 +581,8 @@ export function registerAppIpc({
         window.unmaximize();
       }
       floatingMode = true;
+      floatingPanelExpanded = false;
+      floatingEdgeSide = null;
       window.setMinimumSize(72, 72);
       window.setResizable(false);
       window.setAlwaysOnTop(true, "floating");
@@ -564,6 +594,8 @@ export function registerAppIpc({
 
     if (!enabled && floatingMode) {
       floatingMode = false;
+      floatingPanelExpanded = false;
+      floatingEdgeSide = null;
       window.setAlwaysOnTop(false);
       window.setResizable(true);
       window.setMinimumSize(NORMAL_MINIMUM_SIZE.width, NORMAL_MINIMUM_SIZE.height);
@@ -580,12 +612,139 @@ export function registerAppIpc({
   const applyFloatingPanelExpanded = (expanded: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode);
+      return readWindowState(window, floatingMode, floatingEdgeSide);
     }
     if (!floatingMode) {
       return sendWindowState(window);
     }
-    window.setBounds(floatingBounds(window, expanded ? FLOATING_PANEL_SIZE : FLOATING_BALL_SIZE), true);
+    floatingPanelExpanded = expanded;
+    floatingEdgeSide = null;
+    const currentBounds = window.getBounds();
+    const nextSize = expanded ? FLOATING_PANEL_SIZE : FLOATING_BALL_SIZE;
+    window.setBounds(
+      clampFloatingBounds({
+        x: currentBounds.x,
+        y: currentBounds.y,
+        width: nextSize.width,
+        height: nextSize.height,
+      }),
+      true,
+    );
+    return sendWindowState(window);
+  };
+
+  const moveFloatingBy = (deltaX: number, deltaY: number): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readWindowState(window, floatingMode, floatingEdgeSide);
+    }
+    if (!floatingMode) {
+      return sendWindowState(window);
+    }
+
+    const currentBounds = window.getBounds();
+    if (floatingEdgeSide) {
+      const previousEdgeSide = floatingEdgeSide;
+      floatingEdgeSide = null;
+      const undockedBounds = {
+        x: previousEdgeSide === "left" ? currentBounds.x : currentBounds.x + currentBounds.width - FLOATING_BALL_SIZE.width,
+        y: currentBounds.y,
+        width: FLOATING_BALL_SIZE.width,
+        height: FLOATING_BALL_SIZE.height,
+      };
+      window.setBounds(clampFloatingBounds(undockedBounds), false);
+    }
+
+    const bounds = window.getBounds();
+    window.setBounds(
+      clampFloatingBounds({
+        ...bounds,
+        x: bounds.x + Math.round(deltaX),
+        y: bounds.y + Math.round(deltaY),
+      }),
+      false,
+    );
+    return sendWindowState(window);
+  };
+
+  const moveFloatingTo = (screenX: number, screenY: number, offsetX: number, offsetY: number): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readWindowState(window, floatingMode, floatingEdgeSide);
+    }
+    if (!floatingMode) {
+      return sendWindowState(window);
+    }
+
+    const wasEdgeDocked = Boolean(floatingEdgeSide);
+    if (floatingEdgeSide) {
+      floatingEdgeSide = null;
+      const currentBounds = window.getBounds();
+      const nextSize = floatingPanelExpanded ? FLOATING_PANEL_SIZE : FLOATING_BALL_SIZE;
+      window.setBounds(
+        clampFloatingBounds({
+          x: currentBounds.x,
+          y: currentBounds.y,
+          width: nextSize.width,
+          height: nextSize.height,
+        }),
+        false,
+      );
+    }
+
+    const bounds = window.getBounds();
+    const safeOffsetX = wasEdgeDocked && !floatingPanelExpanded
+      ? Math.round(FLOATING_BALL_SIZE.width / 2)
+      : Math.min(Math.max(Math.round(offsetX), 0), bounds.width);
+    const safeOffsetY = wasEdgeDocked && !floatingPanelExpanded
+      ? Math.round(FLOATING_BALL_SIZE.height / 2)
+      : Math.min(Math.max(Math.round(offsetY), 0), bounds.height);
+    window.setBounds(
+      clampFloatingBounds({
+        ...bounds,
+        x: Math.round(screenX) - safeOffsetX,
+        y: Math.round(screenY) - safeOffsetY,
+      }),
+      false,
+    );
+    return sendWindowState(window);
+  };
+
+  const finishFloatingDrag = (): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readWindowState(window, floatingMode, floatingEdgeSide);
+    }
+    if (!floatingMode) {
+      return sendWindowState(window);
+    }
+
+    const currentBounds = window.getBounds();
+    const display = screen.getDisplayMatching(currentBounds);
+    const workArea = display.workArea;
+    const isNearLeft = currentBounds.x <= workArea.x + FLOATING_EDGE_SNAP_DISTANCE;
+    const isNearRight =
+      currentBounds.x + currentBounds.width >= workArea.x + workArea.width - FLOATING_EDGE_SNAP_DISTANCE;
+
+    if (!floatingPanelExpanded && (isNearLeft || isNearRight)) {
+      floatingEdgeSide = isNearLeft ? "left" : "right";
+      const x = floatingEdgeSide === "left"
+        ? workArea.x
+        : workArea.x + workArea.width - FLOATING_STRIP_SIZE.width;
+      window.setBounds(
+        clampFloatingBounds({
+          x,
+          y: currentBounds.y,
+          width: FLOATING_STRIP_SIZE.width,
+          height: FLOATING_STRIP_SIZE.height,
+        }),
+        true,
+      );
+      return sendWindowState(window);
+    }
+
+    floatingEdgeSide = null;
+    window.setBounds(clampFloatingBounds(currentBounds), true);
     return sendWindowState(window);
   };
 
@@ -662,7 +821,7 @@ export function registerAppIpc({
     appVersion: app.getVersion(),
     moduleVersions: await readModuleVersions(),
     platform: process.platform,
-    windowState: readWindowState(getMainWindow(), floatingMode),
+    windowState: readWindowState(getMainWindow(), floatingMode, floatingEdgeSide),
     initState: await initManager.getState({ refreshDependencies: options.refreshDependencies ?? false }),
     startupAgreement: await initManager.getAgreementState(),
     recentLogs: logStore.list(),
@@ -1378,7 +1537,20 @@ export function registerAppIpc({
     applyFloatingPanelExpanded(expanded),
   );
 
-  ipcMain.handle("desktop:window:getState", (): WindowState => readWindowState(getMainWindow(), floatingMode));
+  ipcMain.handle("desktop:window:moveFloatingBy", (_event, deltaX: number, deltaY: number): WindowState =>
+    moveFloatingBy(deltaX, deltaY),
+  );
+  ipcMain.handle(
+    "desktop:window:moveFloatingTo",
+    (_event, screenX: number, screenY: number, offsetX: number, offsetY: number): WindowState =>
+      moveFloatingTo(screenX, screenY, offsetX, offsetY),
+  );
+
+  ipcMain.handle("desktop:window:finishFloatingDrag", (): WindowState => finishFloatingDrag());
+
+  ipcMain.handle("desktop:window:getState", (): WindowState =>
+    readWindowState(getMainWindow(), floatingMode, floatingEdgeSide),
+  );
 
   return {
     localChatAdapter,
