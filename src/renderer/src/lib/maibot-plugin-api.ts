@@ -181,15 +181,16 @@ export function updateMaiBotPlugin(
   });
 }
 
-export function fetchPluginConfig(pluginId: string): Promise<PluginConfigState> {
-  return requirePluginBridge().getConfig(pluginId);
+export function fetchPluginConfig(pluginId: string, service?: ServiceDescriptor): Promise<PluginConfigState> {
+  return requirePluginBridge().getConfig(pluginId, service?.url);
 }
 
 export function savePluginConfig(
   pluginId: string,
   config: Record<string, PluginConfigValue>,
+  service?: ServiceDescriptor,
 ): Promise<PluginConfigSaveResponse> {
-  return requirePluginBridge().saveConfig(pluginId, config);
+  return requirePluginBridge().saveConfig(pluginId, config, service?.url);
 }
 
 export function fetchPluginReadme(pluginId: string, repositoryUrl?: string): Promise<PluginReadmeResult> {

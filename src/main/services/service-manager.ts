@@ -97,6 +97,7 @@ interface StoredRuntimePathFile {
 interface StoredTerminalSettingsFile {
   version: 1;
   useEmbeddedTerminal?: boolean;
+  fontSize?: number;
 }
 
 const STOP_FORCE_AFTER_MS = 10_000;
@@ -111,7 +112,10 @@ const TERMINAL_SETTINGS_FILE = "terminal-settings.json";
 const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
 const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   useEmbeddedTerminal: true,
+  fontSize: 12,
 };
+const MIN_TERMINAL_FONT_SIZE = 10;
+const MAX_TERMINAL_FONT_SIZE = 22;
 
 function quoteCommandPart(value: string): string {
   const normalized = normalizePathLikeValue(value);
@@ -433,6 +437,7 @@ class TerminalSettingsStore {
   async set(settings: TerminalSettings): Promise<TerminalSettings> {
     this.cache = {
       useEmbeddedTerminal: settings.useEmbeddedTerminal !== false,
+      fontSize: normalizeTerminalFontSize(settings.fontSize),
     };
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(
@@ -448,11 +453,20 @@ class TerminalSettingsStore {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredTerminalSettingsFile;
       return {
         useEmbeddedTerminal: raw.useEmbeddedTerminal !== false,
+        fontSize: normalizeTerminalFontSize(raw.fontSize),
       };
     } catch {
       return { ...DEFAULT_TERMINAL_SETTINGS };
     }
   }
+}
+
+function normalizeTerminalFontSize(value: unknown): number {
+  const fontSize = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(fontSize)) {
+    return DEFAULT_TERMINAL_SETTINGS.fontSize;
+  }
+  return Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, Math.round(fontSize)));
 }
 
 export class ServiceManager extends EventEmitter {
@@ -485,7 +499,7 @@ export class ServiceManager extends EventEmitter {
         desired: false,
         restartAttempts: 0,
         healthFailures: 0,
-        detail: "绛夊緟鍚姩",
+        detail: "\u7b49\u5f85\u542f\u52a8",
       });
     }
 
@@ -576,10 +590,6 @@ export class ServiceManager extends EventEmitter {
 
     let resolved: ResolvedServiceCommand;
     try {
-      const changedFiles = await this.initManager.ensureServiceReady(serviceId);
-      if (changedFiles.length > 0) {
-        this.logs.append(serviceId, "system", `prepared writable modules: ${changedFiles.join(", ")}`);
-      }
       resolved = await this.resolveStartCommand(definition);
       this.assertRequiredPaths(definition, resolved.requiredPaths);
     } catch (error) {
@@ -610,7 +620,7 @@ export class ServiceManager extends EventEmitter {
       restartAttempts: resetRestartAttempts ? 0 : (state.restartAttempts ?? 0),
       healthFailures: 0,
       error: undefined,
-      detail: `正在启动 ${definition.name} PTY`,
+      detail: `\u6b63\u5728\u542f\u52a8 ${definition.name} PTY`,
       stoppedAt: undefined,
       terminalMode: this.shouldUseEmbeddedTerminal() ? "embedded" : "external",
       pid: undefined,
@@ -633,9 +643,13 @@ export class ServiceManager extends EventEmitter {
       const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
       const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
       if (usePythonOverlay && this.pythonDependencyManager) {
+        const syncedPythonOverrides = await this.initManager.ensureBundledPythonOverrides();
+        if (syncedPythonOverrides.length > 0) {
+          this.logs.append("maibot", "system", `startup dependency upgrade: copied bundled Python overrides to ${syncedPythonOverrides[0]}`);
+        }
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "正在检查 MaiBot 启动依赖，完成后会启动 PTY",
+          detail: "\u6b63\u5728\u68c0\u67e5 MaiBot \u542f\u52a8\u4f9d\u8d56\uff0c\u5b8c\u6210\u540e\u4f1a\u542f\u52a8 PTY",
         });
         this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependency files");
         const dependencyUpgradeStartedAt = Date.now();
@@ -658,7 +672,7 @@ export class ServiceManager extends EventEmitter {
         }
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "依赖检查完成，正在启动 MaiBot Core PTY",
+          detail: "\u4f9d\u8d56\u68c0\u67e5\u5b8c\u6210\uff0c\u6b63\u5728\u542f\u52a8 MaiBot Core PTY",
         });
       }
       if (!this.shouldUseEmbeddedTerminal()) {
@@ -673,7 +687,7 @@ export class ServiceManager extends EventEmitter {
           terminalMode: "external",
           command: displayCommand,
           cwd: resolved.cwd,
-          detail: "外部 Windows 终端已打开，正在检测服务端口",
+          detail: "\u5916\u90e8 Windows \u7ec8\u7aef\u5df2\u6253\u5f00\uff0c\u6b63\u5728\u68c0\u6d4b\u670d\u52a1\u7aef\u53e3",
           startedAt: Date.now(),
         });
 
@@ -704,7 +718,7 @@ export class ServiceManager extends EventEmitter {
         ptySessionId: session.id,
         command: displayCommand,
         cwd: resolved.cwd,
-        detail: "PTY 已启动，正在检测服务端口",
+        detail: "PTY \u5df2\u542f\u52a8\uff0c\u6b63\u5728\u68c0\u6d4b\u670d\u52a1\u7aef\u53e3",
         startedAt: Date.now(),
       });
 
@@ -722,7 +736,7 @@ export class ServiceManager extends EventEmitter {
           managed: false,
           pid: undefined,
           error: undefined,
-          detail: "已取消启动",
+          detail: "\u5df2\u53d6\u6d88\u542f\u52a8",
           stoppedAt: Date.now(),
         });
         return this.toDescriptor(definition, this.getState(serviceId));
@@ -788,7 +802,7 @@ export class ServiceManager extends EventEmitter {
         managed: false,
         desired: false,
         pid: undefined,
-        detail: "PTY 浼氳瘽涓嶅瓨鍦紝宸叉爣璁颁负鍋滄",
+        detail: "PTY \u4f1a\u8bdd\u4e0d\u5b58\u5728\uff0c\u5df2\u6807\u8bb0\u4e3a\u505c\u6b62",
         stoppedAt: Date.now(),
       });
     }
@@ -821,7 +835,7 @@ export class ServiceManager extends EventEmitter {
           managed: false,
           pid: undefined,
           error: undefined,
-          detail: cancelledDependencyUpdate ? "已强制取消启动并中断依赖更新" : "已强制取消启动",
+          detail: cancelledDependencyUpdate ? "\u5df2\u5f3a\u5236\u53d6\u6d88\u542f\u52a8\u5e76\u4e2d\u65ad\u4f9d\u8d56\u66f4\u65b0" : "\u5df2\u5f3a\u5236\u53d6\u6d88\u542f\u52a8",
           stoppedAt: Date.now(),
         });
         return this.toDescriptor(definition, this.getState(serviceId));
@@ -834,7 +848,7 @@ export class ServiceManager extends EventEmitter {
     this.setState(serviceId, {
       ...state,
       desired: false,
-      detail: "正在强制结束后台 PTY 进程树",
+      detail: "\u6b63\u5728\u5f3a\u5236\u7ed3\u675f\u540e\u53f0 PTY \u8fdb\u7a0b\u6811",
     });
 
     try {
@@ -847,7 +861,7 @@ export class ServiceManager extends EventEmitter {
         health: "unknown",
         managed: false,
         pid: undefined,
-        detail: "PTY 浼氳瘽涓嶅瓨鍦紝宸叉爣璁颁负鍋滄",
+        detail: "PTY \u4f1a\u8bdd\u4e0d\u5b58\u5728\uff0c\u5df2\u6807\u8bb0\u4e3a\u505c\u6b62",
         stoppedAt: Date.now(),
       });
     }
@@ -879,7 +893,7 @@ export class ServiceManager extends EventEmitter {
             ...state,
             health: "conflict",
             dynamicUrl,
-            detail: "榛樿绔彛宸茶澶栭儴杩涚▼鍗犵敤",
+            detail: "\u9ed8\u8ba4\u7aef\u53e3\u5df2\u88ab\u5916\u90e8\u8fdb\u7a0b\u5360\u7528",
           });
         } else if (state.dynamicUrl !== dynamicUrl) {
           this.setState(definition.id, {
@@ -1406,7 +1420,7 @@ export class ServiceManager extends EventEmitter {
         ptySessionId: session.id,
         command: session.command,
         cwd: session.cwd,
-        detail: `宸查檮鍔犲埌鍚庡彴 PTY锛孭ID ${session.pid ?? "鏈煡"}`,
+        detail: `\u5df2\u9644\u52a0\u5230\u540e\u53f0 PTY\uff0cPID ${session.pid ?? "\u672a\u77e5"}`,
         startedAt: state.startedAt ?? session.startedAt,
       });
     }
@@ -1625,7 +1639,7 @@ export class ServiceManager extends EventEmitter {
       health: "checking",
       managed: false,
       pid: undefined,
-      detail: `${definition.name} 寮傚父閫€鍑猴紝${Math.round(RESTART_DELAY_MS / 1000)} 绉掑悗鑷姩閲嶅惎 (${restartAttempts}/${MAX_RESTART_ATTEMPTS})`,
+      detail: `${definition.name} \u5f02\u5e38\u9000\u51fa\uff0c${Math.round(RESTART_DELAY_MS / 1000)} \u79d2\u540e\u81ea\u52a8\u91cd\u542f (${restartAttempts}/${MAX_RESTART_ATTEMPTS})`,
     });
   }
 

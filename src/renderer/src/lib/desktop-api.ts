@@ -117,10 +117,12 @@ const fallbackSnapshot: DesktopSnapshot = {
   ],
   terminalSettings: {
     useEmbeddedTerminal: true,
+    fontSize: 12,
   },
   initState: {
     isReady: false,
     qqBackend: "napcat",
+    messagePlatformConfigured: false,
     checks: [
       {
         id: "preview",
@@ -188,6 +190,7 @@ export async function getDesktopSnapshot(): Promise<DesktopSnapshot> {
       initState: {
         isReady: false,
         qqBackend: fallbackSnapshot.initState.qqBackend,
+        messagePlatformConfigured: false,
         checks: [
           {
             id: "desktop-snapshot",

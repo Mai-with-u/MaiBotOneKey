@@ -11,6 +11,7 @@ import type {
   LocalChatEvent,
   LocalChatMessageEvent,
   LocalChatSendRequest,
+  LauncherResetResult,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
@@ -25,6 +26,7 @@ import type {
   MaiBotPluginOperationResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  MaiBotStatisticSummary,
   ManagedPythonPackageName,
   ModuleUpdateResult,
   ModuleSourceConfig,
@@ -32,6 +34,7 @@ import type {
   ModuleTagOption,
   PythonOverridesState,
   PythonRuntimeCandidate,
+  PythonPackageSourcePreset,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -54,6 +57,7 @@ import type {
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
+  SnowLumaResetResult,
   StartupAgreementConfirmResult,
   StartupAgreementState,
   TerminalSettings,
@@ -90,12 +94,18 @@ const desktopBridge: DesktopBridge = {
     minimize: () => ipcRenderer.invoke("desktop:window:minimize") as Promise<void>,
     toggleMaximize: () => ipcRenderer.invoke("desktop:window:toggleMaximize") as Promise<void>,
     close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
+    setFloatingMode: (enabled: boolean) =>
+      ipcRenderer.invoke("desktop:window:setFloatingMode", enabled) as Promise<WindowState>,
+    setFloatingPanelExpanded: (expanded: boolean) =>
+      ipcRenderer.invoke("desktop:window:setFloatingPanelExpanded", expanded) as Promise<WindowState>,
     getState: () => ipcRenderer.invoke("desktop:window:getState") as Promise<WindowState>,
     onState: (callback: (state: WindowState) => void) => onIpc("desktop:window-state", callback),
   },
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
     repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
+    resetSnowLuma: () =>
+      ipcRenderer.invoke("init:resetSnowLuma") as Promise<SnowLumaResetResult>,
     setQqBackend: (backend: QqBackend) =>
       ipcRenderer.invoke("init:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
@@ -123,6 +133,12 @@ const desktopBridge: DesktopBridge = {
     resetMaiBotData: () =>
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },
+  launcher: {
+    resetSettings: () =>
+      ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
+    resetAll: () =>
+      ipcRenderer.invoke("launcher:resetAll") as Promise<LauncherResetResult>,
+  },
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) =>
       ipcRenderer.invoke("plugins:listMarket", serviceUrl, options) as Promise<MaiBotPluginListResult>,
@@ -134,17 +150,23 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
     uninstall: (pluginId: string) =>
       ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
-    getConfig: (pluginId: string) =>
-      ipcRenderer.invoke("plugins:getConfig", pluginId) as Promise<MaiBotPluginConfigState>,
-    saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>) =>
-      ipcRenderer.invoke("plugins:saveConfig", pluginId, config) as Promise<MaiBotPluginConfigSaveResult>,
+    getConfig: (pluginId: string, serviceUrl?: string) =>
+      ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
+    saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>
+      ipcRenderer.invoke("plugins:saveConfig", pluginId, config, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
     getReadme: (pluginId: string, repositoryUrl?: string) =>
       ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl) as Promise<MaiBotPluginReadmeResult>,
     getStats: (pluginId: string) =>
       ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
   },
+  statistics: {
+    getMaiBot: () =>
+      ipcRenderer.invoke("statistics:getMaibot") as Promise<MaiBotStatisticSummary>,
+  },
   pythonDeps: {
     getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,
+    saveSourcePreset: (preset: PythonPackageSourcePreset) =>
+      ipcRenderer.invoke("pythonDeps:saveSourcePreset", preset) as Promise<PythonOverridesState>,
     listVersions: (packageName: ManagedPythonPackageName) =>
       ipcRenderer.invoke("pythonDeps:listVersions", packageName) as Promise<PythonPackageVersionList>,
     installVersion: (request: PythonPackageInstallRequest) =>

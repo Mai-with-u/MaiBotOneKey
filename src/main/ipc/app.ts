@@ -1,13 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   CloseAction,
   DesktopSnapshot,
   InitRepairResult,
   InitState,
+  LauncherResetResult,
   LogEntry,
   LocalChatConnectionState,
   LocalChatConnectRequest,
@@ -27,6 +28,7 @@ import type {
   MaiBotPluginOperationResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  MaiBotStatisticSummary,
   ManagedPythonPackageName,
   ModuleRuntimeVersions,
   ModuleUpdateResult,
@@ -34,6 +36,7 @@ import type {
   ModuleSourceUpdate,
   ModuleTagOption,
   PythonOverridesState,
+  PythonPackageSourcePreset,
   PythonRuntimeCandidate,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
@@ -49,6 +52,7 @@ import type {
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
+  SnowLumaResetResult,
   StartupAgreementConfirmResult,
   StartupAgreementState,
   TerminalSettings,
@@ -62,6 +66,24 @@ import { ModuleUpdater } from "../services/module-updater";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
+
+const LAUNCHER_SETTING_FILES = [
+  "resource-paths.json",
+  "resource-location.json",
+  "service-commands.json",
+  "runtime-paths.json",
+  "terminal-settings.json",
+  "qq-backend.json",
+  "message-platform.json",
+  "module-sources.json",
+  "python-dependency-source.json",
+];
+const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "logs"];
+const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
+const REMOVE_RETRY_OPTIONS = { recursive: true, force: true, maxRetries: 8, retryDelay: 250 } as const;
+const NORMAL_MINIMUM_SIZE = { width: 1080, height: 720 };
+const FLOATING_BALL_SIZE = { width: 96, height: 96 };
+const FLOATING_PANEL_SIZE = { width: 380, height: 520 };
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
@@ -81,15 +103,16 @@ export interface RegisteredAppIpcDisposables {
   dispose: () => void;
 }
 
-function readWindowState(window: BrowserWindow | null): WindowState {
+function readWindowState(window: BrowserWindow | null, isFloating = false): WindowState {
   if (!window || window.isDestroyed()) {
-    return { isMaximized: false, isFullScreen: false, isFocused: false };
+    return { isMaximized: false, isFullScreen: false, isFocused: false, isFloating };
   }
 
   return {
     isMaximized: window.isMaximized(),
     isFullScreen: window.isFullScreen(),
     isFocused: window.isFocused(),
+    isFloating,
   };
 }
 
@@ -123,6 +146,103 @@ function runProcess(file: string, args: string[], cwd: string, env?: Record<stri
 
 function isRuntimeBusy(service: ServiceDescriptor): boolean {
   return service.status === "starting" || service.status === "running" || service.status === "stopping";
+}
+
+function normalizePathForCompare(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function samePath(left: string, right: string): boolean {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const resolvedParent = resolve(parent);
+  const resolvedChild = resolve(child);
+  const diff = relative(resolvedParent, resolvedChild);
+  return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`) && !isAbsolute(diff);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isBusyFsError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+}
+
+async function removePathWithRetry(path: string): Promise<void> {
+  try {
+    await rm(path, REMOVE_RETRY_OPTIONS);
+    return;
+  } catch (error) {
+    if (!isBusyFsError(error)) {
+      throw error;
+    }
+  }
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(500 + attempt * 500);
+    try {
+      await rm(path, REMOVE_RETRY_OPTIONS);
+      return;
+    } catch (error) {
+      if (!isBusyFsError(error) || attempt === 4) {
+        throw error;
+      }
+    }
+  }
+}
+
+async function retireAndRemovePath(path: string, root: string): Promise<void> {
+  try {
+    await removePathWithRetry(path);
+    return;
+  } catch (error) {
+    if (!isBusyFsError(error)) {
+      throw error;
+    }
+  }
+
+  const retiredRoot = join(root, RETIRED_ENTRY_DIRECTORY);
+  await mkdir(retiredRoot, { recursive: true });
+  const retiredPath = join(retiredRoot, `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  try {
+    await rename(path, retiredPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  void removePathWithRetry(retiredPath).catch(() => undefined);
+}
+
+async function removeExistingPath(path: string): Promise<string[]> {
+  if (!existsSync(path)) {
+    return [];
+  }
+  await removePathWithRetry(path);
+  return [path];
+}
+
+async function clearDirectoryContents(root: string, entryNames?: string[]): Promise<string[]> {
+  if (!existsSync(root)) {
+    await mkdir(root, { recursive: true });
+    return [];
+  }
+
+  const entries = entryNames ?? (await readdir(root));
+  const removedEntries = entries.map((entry) => join(root, entry));
+  await Promise.all(removedEntries.map((entryPath) => retireAndRemovePath(entryPath, root)));
+  await mkdir(root, { recursive: true });
+  return removedEntries;
 }
 
 interface ParsedVersionTag {
@@ -289,6 +409,104 @@ async function fetchPypiVersionSummary(
   }
 }
 
+function decodeStatisticText(content: string): string {
+  return content
+    .replace(/\u001b\[[0-9;]*m/gu, "")
+    .replace(/<br\s*\/?>/giu, "\n")
+    .replace(/<\/(?:p|div|tr|li|h[1-6]|section|article)>/giu, "\n")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/&nbsp;/giu, " ")
+    .replace(/&yen;/giu, "¥")
+    .replace(/&amp;/giu, "&")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/&#(\d+);/gu, (_match, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/\r\n?/gu, "\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function readStatisticField(text: string, label: string): string | undefined {
+  const inlineValue = text.match(new RegExp(`${escapeRegExp(label)}\\s*[:：]\\s*([^\\n]+)`, "u"))?.[1]?.trim();
+  if (inlineValue) {
+    return inlineValue;
+  }
+
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const labelIndex = lines.findIndex((line) => line === label);
+  const nextLine = labelIndex >= 0 ? lines[labelIndex + 1] : undefined;
+  return nextLine && !nextLine.endsWith(":") && !nextLine.endsWith("：") ? nextLine : undefined;
+}
+
+function readStatisticCount(text: string, label: string): number | undefined {
+  const raw = readStatisticField(text, label);
+  const value = raw?.match(/[\d,]+/u)?.[0]?.replace(/,/gu, "");
+  return value ? Number(value) : undefined;
+}
+
+function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] {
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const startIndex = lines.findIndex((line) => line.includes("聊天消息统计"));
+  if (startIndex < 0) {
+    return [];
+  }
+
+  const stats: MaiBotStatisticSummary["chatStats"] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    if (line.startsWith("-") || line.includes("Token/") || line.includes("花费/")) {
+      break;
+    }
+    if (line.includes("联系人") || line.includes("群组名称") || line.includes("消息数量")) {
+      continue;
+    }
+    const match = line.match(/^(.+?)\s+(\d+)$/u);
+    if (!match) {
+      continue;
+    }
+    stats.push({ name: match[1].trim(), messageCount: Number(match[2]) });
+  }
+  return stats;
+}
+
+async function readMaiBotStatistics(paths: RuntimePaths): Promise<MaiBotStatisticSummary> {
+  const candidates = [
+    join(paths.maibotRoot, "maibot_statistics.html"),
+    join(paths.maibotRoot, "data", "maibot_statistics.html"),
+    join(paths.maibotRoot, "logs", "maibot_statistics.html"),
+  ];
+  const sourcePath = candidates.find((path) => existsSync(path));
+  if (!sourcePath) {
+    return { available: false, updatedAt: Date.now(), chatStats: [] };
+  }
+
+  const [content, fileStat] = await Promise.all([readFile(sourcePath, "utf8"), stat(sourcePath)]);
+  const text = decodeStatisticText(content);
+  const periodLabel = text.match(/(最近[^\s(（]*统计数据)/u)?.[1];
+  const startedAt = text.match(/自\s*([^，,)）]+)开始/u)?.[1]?.trim();
+
+  return {
+    available: true,
+    updatedAt: fileStat.mtimeMs,
+    sourcePath,
+    periodLabel,
+    startedAt,
+    totalOnlineTime: readStatisticField(text, "总在线时间"),
+    totalMessages: readStatisticCount(text, "总消息数"),
+    totalReplies: readStatisticCount(text, "总回复数"),
+    totalRequests: readStatisticCount(text, "总请求数"),
+    totalTokens: readStatisticCount(text, "总Token数"),
+    totalCost: readStatisticField(text, "总花费"),
+    costPerMessage: readStatisticField(text, "花费/消息数量"),
+    costPerReceivedMessage: readStatisticField(text, "花费/接受消息数量"),
+    costPerReply: readStatisticField(text, "花费/回复数量"),
+    costPerHour: readStatisticField(text, "花费/时间"),
+    tokensPerHour: readStatisticField(text, "Token/时间"),
+    chatStats: parseChatStatistics(text),
+  };
+}
+
 export function registerAppIpc({
   paths,
   initManager,
@@ -304,6 +522,72 @@ export function registerAppIpc({
   let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
   let initDependencyRefreshPromise: Promise<void> | null = null;
+  let floatingMode = false;
+  let normalBounds: Electron.Rectangle | null = null;
+
+  const sendWindowState = (window: BrowserWindow | null): WindowState => {
+    const state = readWindowState(window, floatingMode);
+    window?.webContents.send("desktop:window-state", state);
+    return state;
+  };
+
+  const floatingBounds = (window: BrowserWindow, size: { width: number; height: number }): Electron.Rectangle => {
+    const display = screen.getDisplayMatching(window.getBounds());
+    return {
+      x: Math.round(display.workArea.x + display.workArea.width - size.width - 18),
+      y: Math.round(display.workArea.y + display.workArea.height - size.height - 18),
+      width: size.width,
+      height: size.height,
+    };
+  };
+
+  const applyFloatingMode = (enabled: boolean): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readWindowState(window, floatingMode);
+    }
+
+    if (enabled && !floatingMode) {
+      normalBounds = window.getBounds();
+      if (window.isMaximized()) {
+        window.unmaximize();
+      }
+      floatingMode = true;
+      window.setMinimumSize(72, 72);
+      window.setResizable(false);
+      window.setAlwaysOnTop(true, "floating");
+      window.setBounds(floatingBounds(window, FLOATING_BALL_SIZE), true);
+      window.show();
+      window.focus();
+      return sendWindowState(window);
+    }
+
+    if (!enabled && floatingMode) {
+      floatingMode = false;
+      window.setAlwaysOnTop(false);
+      window.setResizable(true);
+      window.setMinimumSize(NORMAL_MINIMUM_SIZE.width, NORMAL_MINIMUM_SIZE.height);
+      window.setBounds(normalBounds ?? { x: 80, y: 80, width: 1280, height: 820 }, true);
+      normalBounds = null;
+      window.show();
+      window.focus();
+      return sendWindowState(window);
+    }
+
+    return sendWindowState(window);
+  };
+
+  const applyFloatingPanelExpanded = (expanded: boolean): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readWindowState(window, floatingMode);
+    }
+    if (!floatingMode) {
+      return sendWindowState(window);
+    }
+    window.setBounds(floatingBounds(window, expanded ? FLOATING_PANEL_SIZE : FLOATING_BALL_SIZE), true);
+    return sendWindowState(window);
+  };
 
   const readLocalModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
@@ -378,7 +662,7 @@ export function registerAppIpc({
     appVersion: app.getVersion(),
     moduleVersions: await readModuleVersions(),
     platform: process.platform,
-    windowState: readWindowState(getMainWindow()),
+    windowState: readWindowState(getMainWindow(), floatingMode),
     initState: await initManager.getState({ refreshDependencies: options.refreshDependencies ?? false }),
     startupAgreement: await initManager.getAgreementState(),
     recentLogs: logStore.list(),
@@ -431,6 +715,7 @@ export function registerAppIpc({
     new MaiBotPluginClient({
       maibotRoot: paths.maibotRoot,
       gitPath: initManager.getGitPath(),
+      getModuleSourceConfig: () => moduleUpdater.getSourceConfig(),
     });
   let maibotPluginClient = createMaibotPluginClient();
   const localChatAdapter = new LocalChatAdapter(paths);
@@ -463,6 +748,76 @@ export function registerAppIpc({
     );
     await broadcastSnapshot();
     return result;
+  };
+
+  const resetLauncherStores = async (): Promise<void> => {
+    for (const service of serviceManager.snapshot()) {
+      await serviceManager.resetCommandConfig(service.id);
+    }
+    await serviceManager.resetRuntimePathConfig("python");
+    await serviceManager.resetRuntimePathConfig("git");
+    await serviceManager.saveTerminalSettings({ ...serviceManager.getTerminalSettings(), useEmbeddedTerminal: true });
+
+    for (const key of ["maibot", "napcat"] as const) {
+      const config = resourceLocationManager.getPathConfigs().find((item) => item.key === key);
+      if (config?.customized) {
+        await resourceLocationManager.resetPath(key);
+      }
+    }
+
+    initManager.clearDependencyCache();
+    serviceManager.reloadRuntimePaths();
+    maibotPluginClient = createMaibotPluginClient();
+  };
+
+  const resetLauncherSettings = async (): Promise<LauncherResetResult> => {
+    assertServicesStoppedForResourceMove();
+    await resetLauncherStores();
+
+    const removedEntries: string[] = [];
+    for (const fileName of LAUNCHER_SETTING_FILES) {
+      removedEntries.push(...(await removeExistingPath(join(paths.userDataRoot, fileName))));
+    }
+
+    await mkdir(paths.userDataRoot, { recursive: true });
+    await mkdir(paths.logsRoot, { recursive: true });
+    logStore.append("desktop", "system", "启动器设置已清空，将重新进入启动引导");
+    await broadcastSnapshot();
+    return {
+      mode: "settings",
+      root: paths.userDataRoot,
+      removedEntries,
+      resetAt: Date.now(),
+    };
+  };
+
+  const resetLauncherAll = async (): Promise<LauncherResetResult> => {
+    assertServicesStoppedForResourceMove();
+    const root = paths.defaultResourceRoot;
+    if (samePath(root, paths.installRoot) || isPathInside(root, paths.installRoot)) {
+      throw new Error("当前运行时资源目录指向安装/开发目录，已阻止完整清空。请在打包版的独立运行时目录中执行。");
+    }
+    if (!samePath(root, paths.userDataRoot) && !isPathInside(paths.userDataRoot, root)) {
+      throw new Error("当前运行时资源目录不在启动器数据目录内，已阻止完整清空。");
+    }
+
+    await resetLauncherStores();
+    const resetEntries = samePath(root, paths.userDataRoot)
+      ? [...LAUNCHER_RUNTIME_DIRECTORIES, ...LAUNCHER_SETTING_FILES]
+      : undefined;
+    const removedEntries = await clearDirectoryContents(root, resetEntries);
+    await mkdir(paths.logsRoot, { recursive: true });
+    initManager.clearDependencyCache();
+    serviceManager.reloadRuntimePaths();
+    maibotPluginClient = createMaibotPluginClient();
+    logStore.append("desktop", "system", `运行时资源目录已清空: ${root}`);
+    await broadcastSnapshot();
+    return {
+      mode: "all",
+      root,
+      removedEntries,
+      resetAt: Date.now(),
+    };
   };
 
   serviceManager.on("snapshot", (services: ServiceDescriptor[]) => {
@@ -502,6 +857,19 @@ export function registerAppIpc({
   ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
     const result = await initManager.repair();
     logStore.append("desktop", "system", `初始化准备完成，变更 ${result.changedFiles.length} 个文件`);
+    await broadcastSnapshot();
+    return result;
+  });
+
+  ipcMain.handle("init:resetSnowLuma", async (): Promise<SnowLumaResetResult> => {
+    await serviceManager.refresh();
+    if (serviceManager.snapshot().some(isRuntimeBusy)) {
+      throw new Error("请先停止 MaiBot Core 和 QQ 后端，再重置 SnowLuma 组件。");
+    }
+
+    const result = await initManager.resetSnowLumaComponent();
+    serviceManager.reloadRuntimePaths();
+    logStore.append("desktop", "system", `SnowLuma 组件已重置: ${result.snowlumaRoot}`);
     await broadcastSnapshot();
     return result;
   });
@@ -681,6 +1049,14 @@ export function registerAppIpc({
     return resetResult;
   });
 
+  ipcMain.handle("launcher:resetSettings", async (): Promise<LauncherResetResult> => {
+    return resetLauncherSettings();
+  });
+
+  ipcMain.handle("launcher:resetAll", async (): Promise<LauncherResetResult> => {
+    return resetLauncherAll();
+  });
+
   ipcMain.handle("plugins:listMarket", async (
     _event,
     serviceUrl?: string,
@@ -734,8 +1110,8 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle("plugins:getConfig", async (_event, pluginId: string): Promise<MaiBotPluginConfigState> => {
-    return maibotPluginClient.getConfig(pluginId);
+  ipcMain.handle("plugins:getConfig", async (_event, pluginId: string, serviceUrl?: string): Promise<MaiBotPluginConfigState> => {
+    return maibotPluginClient.getConfig(pluginId, serviceUrl);
   });
 
   ipcMain.handle(
@@ -744,8 +1120,9 @@ export function registerAppIpc({
       _event,
       pluginId: string,
       config: Record<string, MaiBotPluginConfigValue>,
+      serviceUrl?: string,
     ): Promise<MaiBotPluginConfigSaveResult> => {
-      const result = await maibotPluginClient.saveConfig(pluginId, config);
+      const result = await maibotPluginClient.saveConfig(pluginId, config, serviceUrl);
       logStore.append("desktop", "system", `MaiBot plugin config saved: ${pluginId}`);
       await broadcastSnapshot();
       return result;
@@ -760,8 +1137,18 @@ export function registerAppIpc({
     return maibotPluginClient.getStats(pluginId);
   });
 
+  ipcMain.handle("statistics:getMaibot", async (): Promise<MaiBotStatisticSummary> => {
+    return readMaiBotStatistics(paths);
+  });
+
   ipcMain.handle("pythonDeps:getState", (): PythonOverridesState => {
     return pythonDependencyManager.getState();
+  });
+
+  ipcMain.handle("pythonDeps:saveSourcePreset", async (_event, preset: PythonPackageSourcePreset): Promise<PythonOverridesState> => {
+    const state = await pythonDependencyManager.saveSourcePreset(preset);
+    await broadcastSnapshot();
+    return state;
   });
 
   ipcMain.handle("pythonDeps:listVersions", async (_event, packageName: ManagedPythonPackageName): Promise<PythonPackageVersionList> => {
@@ -958,7 +1345,7 @@ export function registerAppIpc({
     const mainWindow = getMainWindow();
 
     if (action === "minimize") {
-      mainWindow?.minimize();
+      mainWindow?.hide();
       return;
     }
 
@@ -985,7 +1372,13 @@ export function registerAppIpc({
     getMainWindow()?.close();
   });
 
-  ipcMain.handle("desktop:window:getState", (): WindowState => readWindowState(getMainWindow()));
+  ipcMain.handle("desktop:window:setFloatingMode", (_event, enabled: boolean): WindowState => applyFloatingMode(enabled));
+
+  ipcMain.handle("desktop:window:setFloatingPanelExpanded", (_event, expanded: boolean): WindowState =>
+    applyFloatingPanelExpanded(expanded),
+  );
+
+  ipcMain.handle("desktop:window:getState", (): WindowState => readWindowState(getMainWindow(), floatingMode));
 
   return {
     localChatAdapter,

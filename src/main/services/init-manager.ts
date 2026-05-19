@@ -21,6 +21,7 @@ import type {
   RuntimePaths,
   PythonRuntimeCandidate,
   ServiceId,
+  SnowLumaResetResult,
   StartupAgreementConfirmResult,
   StartupAgreementState,
 } from "../../shared/contracts";
@@ -35,6 +36,8 @@ const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
 const QQ_BACKEND_FILE = "qq-backend.json";
+const MESSAGE_PLATFORM_FILE = "message-platform.json";
+const PYTHON_OVERRIDES_IGNORED_ENTRIES = new Set([".keep", "resource.lock"]);
 
 function uniqueExistingPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -253,6 +256,7 @@ const NAPCAT_ADAPTER_PORT = 7998;
 const SNOWLUMA_ONEBOT_PORT = 7988;
 const SNOWLUMA_WEBUI_PORT = 5099;
 const LOCAL_CHAT_PLATFORM = "onekey-local-chat";
+const LOCAL_CHAT_BOT_ACCOUNT = "onekey-local-bot";
 
 interface NapcatWebsocketServerConfig {
   host: string;
@@ -482,6 +486,14 @@ interface StoredAgreementFile {
   confirmedAt?: number;
 }
 
+interface StoredMessagePlatformFile {
+  version: 1;
+  backend?: QqBackend;
+  qqAccount?: string;
+  configuredAt?: number;
+  adapterConfigInitialized?: Partial<Record<QqBackend, number>>;
+}
+
 function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
 }
@@ -491,9 +503,28 @@ function escapeRegExp(value: string): string {
 }
 
 function ensureBotQqConfig(content: string, account: string): string {
+  return ensureBotPlatformConfig(content, {
+    platform: "qq",
+    qqAccount: account,
+    extraPlatformAccount: `${LOCAL_CHAT_PLATFORM}:${LOCAL_CHAT_BOT_ACCOUNT}`,
+  });
+}
+
+function ensureLocalChatBotConfig(content: string): string {
+  return ensureBotPlatformConfig(content, {
+    extraPlatformAccount: `${LOCAL_CHAT_PLATFORM}:${LOCAL_CHAT_BOT_ACCOUNT}`,
+  });
+}
+
+function ensureBotPlatformConfig(
+  content: string,
+  options: { platform?: string; qqAccount?: string; extraPlatformAccount: string },
+): string {
   const botSectionMatch = content.match(/(^|\r?\n)(\s*\[bot\]\s*(?:#.*)?)(?:\r?\n|$)/u);
   if (!botSectionMatch) {
-    return `${content.trimEnd()}\n\n[bot]\nplatform = "qq"\nqq_account = ${account}\nplatforms = [\n    "${LOCAL_CHAT_PLATFORM}:${account}",\n]\n`;
+    const platformLine = options.platform ? `platform = "${options.platform}"\n` : "";
+    const qqAccountLine = options.qqAccount ? `qq_account = ${options.qqAccount}\n` : "";
+    return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}platforms = [\n    "${options.extraPlatformAccount}",\n]\n`;
   }
 
   const botSectionStart = (botSectionMatch.index ?? 0) + botSectionMatch[0].length;
@@ -507,19 +538,28 @@ function ensureBotQqConfig(content: string, account: string): string {
   const afterBotSection = content.slice(botSectionEnd);
   let nextBotSection = botSection;
 
-  if (/^\s*platform\s*=/mu.test(nextBotSection)) {
-    nextBotSection = nextBotSection.replace(/^\s*platform\s*=\s*["'][^"']*["'](\s*#.*)?$/mu, 'platform = "qq"$1');
-  } else {
-    nextBotSection = `platform = "qq"\n${nextBotSection}`;
+  if (options.platform) {
+    if (/^\s*platform\s*=/mu.test(nextBotSection)) {
+      nextBotSection = nextBotSection.replace(
+        /^\s*platform\s*=\s*["'][^"']*["'](\s*#.*)?$/mu,
+        `platform = "${options.platform}"$1`,
+      );
+    } else {
+      nextBotSection = `platform = "${options.platform}"\n${nextBotSection}`;
+    }
   }
 
-  if (/^\s*qq_account\s*=/mu.test(nextBotSection)) {
-    nextBotSection = nextBotSection.replace(/^\s*qq_account\s*=\s*["']?\d+["']?(\s*#.*)?$/mu, `qq_account = ${account}$1`);
-  } else {
-    nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${account}\n`;
+  if (options.qqAccount) {
+    if (/^\s*qq_account\s*=/mu.test(nextBotSection)) {
+      nextBotSection = nextBotSection.replace(
+        /^\s*qq_account\s*=\s*["']?[^"'\r\n]+["']?(\s*#.*)?$/mu,
+        `qq_account = ${options.qqAccount}$1`,
+      );
+    } else {
+      nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${options.qqAccount}\n`;
+    }
   }
 
-  const platformsEntry = `${LOCAL_CHAT_PLATFORM}:${account}`;
   const platformsMatch = nextBotSection.match(/(^|\r?\n)(\s*platforms\s*=\s*)(\[[\s\S]*?\])(\s*(?:#.*)?)(?=\r?\n|$)/u);
   const platformEntries = platformsMatch
     ? Array.from(platformsMatch[3].matchAll(/["']([^"']+)["']/gu), (match) => match[1])
@@ -529,13 +569,13 @@ function ensureBotQqConfig(content: string, account: string): string {
       const [platformName] = entry.split(":", 1);
       return platformName.trim().toLowerCase() !== LOCAL_CHAT_PLATFORM;
     }),
-    platformsEntry,
+    options.extraPlatformAccount,
   ];
   if (platformsMatch) {
     const nextListBody = nextPlatformEntries.map((entry) => `    "${entry}",`).join("\n");
     nextBotSection = `${nextBotSection.slice(0, platformsMatch.index)}${platformsMatch[1] ?? ""}${platformsMatch[2]}[\n${nextListBody}\n]${platformsMatch[4]}${nextBotSection.slice((platformsMatch.index ?? 0) + platformsMatch[0].length)}`;
   } else {
-    nextBotSection = `${nextBotSection.trimEnd()}\nplatforms = [\n    "${platformsEntry}",\n]\n`;
+    nextBotSection = `${nextBotSection.trimEnd()}\nplatforms = [\n    "${options.extraPlatformAccount}",\n]\n`;
   }
 
   return `${beforeBotSection}${nextBotSection}${afterBotSection}`;
@@ -690,6 +730,10 @@ export class InitManager {
     return this.getQqBackendSync();
   }
 
+  hasMessagePlatformConfigured(): boolean {
+    return existsSync(this.messagePlatformPath());
+  }
+
   async setQqBackend(backend: QqBackend, options: { syncAdapters?: boolean } = {}): Promise<void> {
     await mkdir(dirname(this.qqBackendPath()), { recursive: true });
     await writeFile(
@@ -697,14 +741,25 @@ export class InitManager {
       `${JSON.stringify({ version: 1, backend, updatedAt: Date.now() }, null, 2)}\n`,
       "utf8",
     );
+    await this.ensureServiceReady("napcat");
     if (options.syncAdapters !== false) {
-      await this.syncSelectedQqAdapterConfigs();
+      const qqAccount = await this.readQqAccount();
+      if (qqAccount && !(await this.isAdapterConfigInitialized(backend))) {
+        const syncedPaths = await this.syncSelectedQqAdapterConfigs();
+        const selectedConfigPath = backend === "snowluma"
+          ? this.snowlumaAdapterConfigPath()
+          : this.napcatAdapterConfigPath();
+        if (syncedPaths.some((path) => samePath(path, selectedConfigPath))) {
+          await this.markMessagePlatformConfigured(backend, qqAccount, backend);
+        }
+      }
     }
   }
 
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
     const qqAccount = await this.readQqAccount();
     const qqBackend = await this.readQqBackend();
+    const messagePlatformConfigured = this.hasMessagePlatformConfigured();
     const dependencyChecks = options.refreshDependencies === false
       ? this.getCachedDependencyChecks()
       : await this.checkDependencies();
@@ -732,7 +787,7 @@ export class InitManager {
       ...dependencyChecks,
     ];
     const isReady = checks.every((check) => check.status !== "error");
-    return { isReady, qqAccount, qqBackend, checks };
+    return { isReady, qqAccount, qqBackend, messagePlatformConfigured, checks };
   }
 
   async refreshDependencyChecks(): Promise<InitCheck[]> {
@@ -930,6 +985,38 @@ export class InitManager {
     return { dataDir, removedEntries: removed, clearedAt: Date.now() };
   }
 
+  async resetSnowLumaComponent(): Promise<SnowLumaResetResult> {
+    const bundledRoot = join(this.paths.bundledModulesRoot, "SnowLuma");
+    const snowlumaRoot = this.paths.snowlumaRoot;
+
+    if (!existsSync(bundledRoot)) {
+      throw new Error(`内置 SnowLuma 模板缺失: ${bundledRoot}`);
+    }
+
+    if (samePath(bundledRoot, snowlumaRoot)) {
+      throw new Error("当前 SnowLuma 目录指向内置模板，拒绝重置。请在打包后的可写数据目录中执行。");
+    }
+
+    const removed = existsSync(snowlumaRoot);
+    await rm(snowlumaRoot, { recursive: true, force: true });
+    await mkdir(dirname(snowlumaRoot), { recursive: true });
+    await runWithoutAsar(() =>
+      cp(bundledRoot, snowlumaRoot, {
+        recursive: true,
+        force: true,
+        errorOnExist: false,
+      }),
+    );
+
+    return {
+      snowlumaRoot,
+      bundledRoot,
+      removed,
+      copied: true,
+      resetAt: Date.now(),
+    };
+  }
+
   private agreementStorePath(): string {
     return join(this.paths.userDataRoot, AGREEMENT_STORE_FILE);
   }
@@ -984,13 +1071,28 @@ export class InitManager {
       port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
       token: existingWebsocketServer?.token || websocketToken || createWebsocketToken(),
     };
+    const shouldInitializeAdapterConfig = !(await this.isAdapterConfigInitialized(qqBackend));
+    let initializedAdapterConfig = false;
+
     if (qqBackend === "snowluma") {
       await this.createSnowLumaConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
     } else {
       await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
       await this.ensureNapCatWebUiConfig();
     }
-    await this.writeQqAdapterConfigsForBackend(qqBackend, resolvedWebsocketServer, qqAccount, chatOverrides);
+    if (shouldInitializeAdapterConfig) {
+      initializedAdapterConfig = await this.writeQqAdapterConfigsForBackend(
+        qqBackend,
+        resolvedWebsocketServer,
+        qqAccount,
+        chatOverrides,
+      );
+    }
+    await this.markMessagePlatformConfigured(
+      qqBackend,
+      qqAccount,
+      initializedAdapterConfig ? qqBackend : undefined,
+    );
     return this.getState();
   }
 
@@ -1086,7 +1188,7 @@ export class InitManager {
     selectedWebsocketServer: NapcatWebsocketServerConfig,
     qqAccount?: string,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const napcatServer = qqBackend === "napcat"
       ? selectedWebsocketServer
       : await this.resolveNapcatAdapterServer(qqAccount);
@@ -1094,14 +1196,22 @@ export class InitManager {
       ? selectedWebsocketServer
       : await this.resolveSnowLumaAdapterServer(qqAccount);
 
+    const shouldInitializeInactive = !(await this.isAdapterConfigInitialized(
+      qqBackend === "snowluma" ? "napcat" : "snowluma",
+    ));
+
     if (qqBackend === "snowluma") {
-      await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false);
-      await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true);
-      return;
+      if (shouldInitializeInactive) {
+        await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false);
+      }
+      return this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true);
     }
 
-    await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, true);
-    await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false);
+    const wroteSelected = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, true);
+    if (shouldInitializeInactive) {
+      await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false);
+    }
+    return wroteSelected;
   }
 
   private async resolveNapcatAdapterServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig> {
@@ -1156,14 +1266,14 @@ export class InitManager {
     websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
     enabled = true,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
     let existing: NapcatAdapterConfig = defaults;
     const configPath = this.napcatAdapterConfigPath();
     const adapterRoot = dirname(configPath);
 
     if (!existsSync(adapterRoot)) {
-      return;
+      return false;
     }
 
     if (existsSync(configPath)) {
@@ -1194,13 +1304,14 @@ export class InitManager {
     };
 
     await writeFile(configPath, napcatAdapterConfigToToml(merged), "utf8");
+    return true;
   }
 
   private async writeSnowLumaAdapterConfigForServer(
     websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
     enabled = true,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
     defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
     defaults.server.actionTimeoutSec = 10;
@@ -1210,7 +1321,7 @@ export class InitManager {
     const adapterRoot = dirname(configPath);
 
     if (!existsSync(adapterRoot)) {
-      return;
+      return false;
     }
 
     if (existsSync(configPath)) {
@@ -1241,12 +1352,14 @@ export class InitManager {
     };
 
     await writeFile(configPath, snowlumaAdapterConfigToToml(merged), "utf8");
+    return true;
   }
 
   async ensureModulesReady(): Promise<string[]> {
     return [
       ...(await this.ensureServiceReady("maibot")),
       ...(await this.ensureServiceReady("napcat")),
+      ...(await this.ensureBundledPythonOverrides()),
     ];
   }
 
@@ -1263,9 +1376,8 @@ export class InitManager {
       });
       changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(NAPCAT_ADAPTER_DIR, ["plugin.py"], NAPCAT_ADAPTER_PLUGIN_ID)));
       changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(SNOWLUMA_ADAPTER_DIR, ["plugin.py"], SNOWLUMA_ADAPTER_PLUGIN_ID)));
-      const syncedAdapterConfigs = await this.syncSelectedQqAdapterConfigs();
       const repairedConfig = await this.repairBotConfigVersionInfo();
-      return [...changedFiles, ...syncedAdapterConfigs, ...(repairedConfig ? [repairedConfig] : [])];
+      return [...changedFiles, ...(repairedConfig ? [repairedConfig] : [])];
     }
 
     const qqBackend = await this.readQqBackend();
@@ -1274,7 +1386,9 @@ export class InitManager {
         "node.exe",
         "index.mjs",
         "launcher.bat",
-      ]);
+      ], {
+        excludeRelativePaths: ["config", "data", "logs"],
+      });
     }
 
     const changedFiles = [
@@ -1282,14 +1396,64 @@ export class InitManager {
         "node.exe",
         "index.js",
         join("napcat", "package.json"),
-      ])),
-      ...(await this.ensureBundledModuleSubtree("napcatframework", ["versions"], true)),
+      ], {
+        excludeRelativePaths: [
+          "config",
+          "data",
+          "logs",
+          join("napcat", "config"),
+          join("napcat", "data"),
+          join("napcat", "logs"),
+        ],
+      })),
+      ...(await this.ensureBundledModuleSubtree("napcatframework", ["versions"], {
+        optional: true,
+        excludeRelativePaths: ["config", "data", "logs"],
+      })),
     ];
     const launcher = await this.ensureNapCatLauncher();
     if (launcher) {
       changedFiles.push(launcher);
     }
     return changedFiles;
+  }
+
+  async ensureBundledPythonOverrides(): Promise<string[]> {
+    const bundledRoot = join(dirname(this.paths.runtimeRoot), "python-overrides");
+    const targetRoot = this.paths.pythonOverridesRoot;
+    if (!existsSync(bundledRoot) || samePath(bundledRoot, targetRoot)) {
+      return [];
+    }
+
+    let bundledEntries: string[];
+    try {
+      bundledEntries = (await readdir(bundledRoot)).filter((entry) => !PYTHON_OVERRIDES_IGNORED_ENTRIES.has(entry));
+    } catch {
+      return [];
+    }
+    if (bundledEntries.length === 0) {
+      return [];
+    }
+
+    let targetEntries: string[] = [];
+    try {
+      targetEntries = (await readdir(targetRoot)).filter((entry) => !PYTHON_OVERRIDES_IGNORED_ENTRIES.has(entry));
+    } catch {
+      targetEntries = [];
+    }
+    if (targetEntries.length > 0) {
+      return [];
+    }
+
+    await mkdir(dirname(targetRoot), { recursive: true });
+    await runWithoutAsar(() =>
+      cp(bundledRoot, targetRoot, {
+        recursive: true,
+        force: false,
+        errorOnExist: false,
+      }),
+    );
+    return [targetRoot];
   }
 
   /**
@@ -1700,6 +1864,70 @@ export class InitManager {
     return join(this.paths.userDataRoot, QQ_BACKEND_FILE);
   }
 
+  private messagePlatformPath(): string {
+    return join(this.paths.userDataRoot, MESSAGE_PLATFORM_FILE);
+  }
+
+  private readMessagePlatformStore(): StoredMessagePlatformFile | undefined {
+    try {
+      const parsed = JSON.parse(readFileSync(this.messagePlatformPath(), "utf8")) as Partial<StoredMessagePlatformFile>;
+      const backend = parsed.backend === "snowluma" ? "snowluma" : parsed.backend === "napcat" ? "napcat" : undefined;
+      const initialized = parsed.adapterConfigInitialized && typeof parsed.adapterConfigInitialized === "object"
+        ? parsed.adapterConfigInitialized
+        : {};
+      return {
+        version: 1,
+        backend,
+        qqAccount: typeof parsed.qqAccount === "string" ? parsed.qqAccount : undefined,
+        configuredAt: typeof parsed.configuredAt === "number" ? parsed.configuredAt : undefined,
+        adapterConfigInitialized: {
+          napcat: typeof initialized.napcat === "number" ? initialized.napcat : undefined,
+          snowluma: typeof initialized.snowluma === "number" ? initialized.snowluma : undefined,
+        },
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async isAdapterConfigInitialized(backend: QqBackend): Promise<boolean> {
+    const configPath = backend === "snowluma"
+      ? this.snowlumaAdapterConfigPath()
+      : this.napcatAdapterConfigPath();
+    return (
+      typeof this.readMessagePlatformStore()?.adapterConfigInitialized?.[backend] === "number"
+      || existsSync(configPath)
+    );
+  }
+
+  private async markMessagePlatformConfigured(
+    backend: QqBackend,
+    qqAccount: string,
+    initializedBackend?: QqBackend,
+  ): Promise<void> {
+    const existing = this.readMessagePlatformStore();
+    const adapterConfigInitialized = {
+      ...(existing?.adapterConfigInitialized ?? {}),
+    };
+    if (initializedBackend) {
+      adapterConfigInitialized[initializedBackend] = Date.now();
+    }
+
+    await mkdir(dirname(this.messagePlatformPath()), { recursive: true });
+    await writeFile(
+      this.messagePlatformPath(),
+      `${JSON.stringify({
+        version: 1,
+        backend,
+        qqAccount,
+        configuredAt: existing?.configuredAt ?? Date.now(),
+        updatedAt: Date.now(),
+        adapterConfigInitialized,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+  }
+
   private agreementSourcePath(fileName: string): string {
     const writablePath = join(this.paths.maibotRoot, fileName);
     if (existsSync(writablePath)) {
@@ -1774,11 +2002,11 @@ export class InitManager {
     const botConfigPath = this.botConfigPath();
     const configVersion = maibotInitialConfigVersion(await this.readMaiBotConfigVersion());
     if (!existsSync(botConfigPath)) {
-      return `[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`;
+      return ensureLocalChatBotConfig(`[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`);
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    return ensureInnerVersion(content, configVersion);
+    return ensureLocalChatBotConfig(ensureInnerVersion(content, configVersion));
   }
 
   private async repairBotConfigVersionInfo(): Promise<string | undefined> {
@@ -1788,7 +2016,9 @@ export class InitManager {
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    const repaired = ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion()));
+    const repaired = ensureLocalChatBotConfig(
+      ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion())),
+    );
     if (repaired === content) {
       return undefined;
     }

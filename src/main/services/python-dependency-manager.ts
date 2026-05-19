@@ -1,11 +1,13 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { delimiter, dirname, join } from "node:path";
 import type {
   ManagedPythonPackage,
   ManagedPythonPackageName,
   PythonOverridesState,
+  PythonPackageSourceOption,
+  PythonPackageSourcePreset,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersion,
@@ -18,10 +20,11 @@ const TUNA_PYPI_ROOT = "https://pypi.tuna.tsinghua.edu.cn";
 const TUNA_SIMPLE_INDEX = `${TUNA_PYPI_ROOT}/simple`;
 const PYPI_SIMPLE_INDEX = "https://pypi.org/simple";
 const ALIYUN_SIMPLE_INDEX = "https://mirrors.aliyun.com/pypi/simple";
-const PIP_INDEXES: Array<{ label: string; url: string; trustedHost?: string }> = [
-  { label: "清华源", url: TUNA_SIMPLE_INDEX, trustedHost: "pypi.tuna.tsinghua.edu.cn" },
-  { label: "官方 PyPI", url: PYPI_SIMPLE_INDEX },
-  { label: "阿里源", url: ALIYUN_SIMPLE_INDEX, trustedHost: "mirrors.aliyun.com" },
+const PYTHON_SOURCE_FILE = "python-dependency-source.json";
+const PIP_INDEXES: Array<PythonPackageSourceOption & { trustedHost?: string }> = [
+  { preset: "tuna", label: "清华源", url: TUNA_SIMPLE_INDEX, trustedHost: "pypi.tuna.tsinghua.edu.cn" },
+  { preset: "pypi", label: "官方 PyPI", url: PYPI_SIMPLE_INDEX },
+  { preset: "aliyun", label: "阿里源", url: ALIYUN_SIMPLE_INDEX, trustedHost: "mirrors.aliyun.com" },
 ] as const;
 const MANAGED_PACKAGES: ManagedPythonPackage[] = [
   { name: "maibot-dashboard", label: "MaiBot Dashboard" },
@@ -371,10 +374,34 @@ export class PythonDependencyManager {
     return this.paths.pythonOverridesRoot;
   }
 
+  getSourcePreset(): PythonPackageSourcePreset {
+    try {
+      const raw = JSON.parse(readFileSync(this.sourceConfigPath(), "utf8")) as { preset?: unknown };
+      return this.normalizeSourcePreset(raw.preset);
+    } catch {
+      return "tuna";
+    }
+  }
+
+  async saveSourcePreset(preset: PythonPackageSourcePreset): Promise<PythonOverridesState> {
+    const nextPreset = this.normalizeSourcePreset(preset);
+    const path = this.sourceConfigPath();
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      `${JSON.stringify({ version: 1, preset: nextPreset, updatedAt: Date.now() }, null, 2)}\n`,
+      "utf8",
+    );
+    return this.getState();
+  }
+
   getState(): PythonOverridesState {
+    const sourcePreset = this.getSourcePreset();
     return {
       root: this.getOverridesRoot(),
-      sourceUrl: TUNA_SIMPLE_INDEX,
+      sourcePreset,
+      sourceUrl: this.getPrimaryIndex().url,
+      sourceOptions: PIP_INDEXES.map(({ preset, label, url }) => ({ preset, label, url })),
       packages: MANAGED_PACKAGES,
     };
   }
@@ -389,14 +416,15 @@ export class PythonDependencyManager {
 
   async listVersions(packageName: ManagedPythonPackageName): Promise<PythonPackageVersionList> {
     assertManagedPackage(packageName);
-    const tunaUrl = `${TUNA_SIMPLE_INDEX}/${packageName}/`;
-    const output = [`GET ${tunaUrl}`];
+    const primaryIndex = this.getPrimaryIndex();
+    const primaryUrl = `${primaryIndex.url}/${packageName}/`;
+    const output = [`GET ${primaryUrl}`];
 
     try {
-      let versions = await fetchSimpleVersions(packageName, TUNA_SIMPLE_INDEX);
-      output.push(`从清华 Simple 索引解析到 ${versions.length} 个版本`);
+      let versions = await fetchSimpleVersions(packageName, primaryIndex.url);
+      output.push(`从 ${primaryIndex.label} Simple 索引解析到 ${versions.length} 个版本`);
       if (versions.length === 0) {
-        throw new Error("娓呭崕 Simple 绱㈠紩娌℃湁杩斿洖鍙В鏋愮殑鐗堟湰");
+        throw new Error(`${primaryIndex.label} Simple 索引没有返回可解析的版本`);
       }
 
       if (hasMissingUploadTimes(versions)) {
@@ -417,7 +445,7 @@ export class PythonDependencyManager {
       );
       return {
         packageName,
-        sourceUrl: TUNA_SIMPLE_INDEX,
+        sourceUrl: primaryIndex.url,
         versions,
         output,
         fetchedAt: Date.now(),
@@ -769,7 +797,7 @@ print(json.dumps(missing, ensure_ascii=False))
   ): Promise<PipInstallAttemptResult> {
     const failures: string[] = [];
 
-    for (const index of PIP_INDEXES) {
+    for (const index of this.getPipIndexes()) {
       if (signal?.aborted) {
         throw new Error("Python dependency install was cancelled");
       }
@@ -800,9 +828,28 @@ print(json.dumps(missing, ensure_ascii=False))
   }
 
   private nextIndexHint(failedUrl: string): string {
-    const currentIndex = PIP_INDEXES.findIndex((item) => item.url === failedUrl);
-    const next = PIP_INDEXES[currentIndex + 1];
+    const indexes = this.getPipIndexes();
+    const currentIndex = indexes.findIndex((item) => item.url === failedUrl);
+    const next = indexes[currentIndex + 1];
     return next ? `retrying with ${next.label}` : "no fallback index remains";
+  }
+
+  private sourceConfigPath(): string {
+    return join(this.paths.userDataRoot, PYTHON_SOURCE_FILE);
+  }
+
+  private normalizeSourcePreset(value: unknown): PythonPackageSourcePreset {
+    return value === "pypi" || value === "aliyun" || value === "tuna" ? value : "tuna";
+  }
+
+  private getPrimaryIndex(): typeof PIP_INDEXES[number] {
+    const preset = this.getSourcePreset();
+    return PIP_INDEXES.find((index) => index.preset === preset) ?? PIP_INDEXES[0];
+  }
+
+  private getPipIndexes(): typeof PIP_INDEXES {
+    const primary = this.getPrimaryIndex();
+    return [primary, ...PIP_INDEXES.filter((index) => index.preset !== primary.preset)] as typeof PIP_INDEXES;
   }
 
   private runPython(

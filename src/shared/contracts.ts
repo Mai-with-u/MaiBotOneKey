@@ -126,6 +126,7 @@ export interface RuntimeResourcePathChangeResult {
 
 export interface TerminalSettings {
   useEmbeddedTerminal: boolean;
+  fontSize: number;
 }
 
 export interface RuntimePaths {
@@ -165,6 +166,16 @@ export interface LocalChatMessageEvent {
   timestamp: number;
   sender?: string;
   images?: LocalChatImageAttachment[];
+  quote?: LocalChatMessageQuote;
+  kind?: "chat" | "planner";
+  final?: boolean;
+  plannerTools?: LocalChatPlannerToolCall[];
+}
+
+export interface LocalChatMessageQuote {
+  messageId?: string;
+  sender?: string;
+  content: string;
 }
 
 export interface LocalChatImageAttachment {
@@ -172,6 +183,21 @@ export interface LocalChatImageAttachment {
   mimeType: string;
   base64: string;
   dataUrl?: string;
+}
+
+export interface LocalChatPlannerToolCall {
+  id?: string;
+  name: string;
+  arguments?: LocalChatPlannerToolArgument[];
+  argumentsText?: string;
+  resultText?: string;
+  success?: boolean;
+  durationMs?: number;
+}
+
+export interface LocalChatPlannerToolArgument {
+  key: string;
+  value: string;
 }
 
 export interface LocalChatStateEvent {
@@ -217,6 +243,7 @@ export interface WindowState {
   isMaximized: boolean;
   isFullScreen: boolean;
   isFocused: boolean;
+  isFloating?: boolean;
 }
 
 export interface InitCheck {
@@ -233,6 +260,7 @@ export interface InitState {
   isReady: boolean;
   qqAccount?: string;
   qqBackend: QqBackend;
+  messagePlatformConfigured: boolean;
   checks: InitCheck[];
   repairedAt?: number;
 }
@@ -279,6 +307,46 @@ export interface MaiBotDataResetResult {
   dataDir: string;
   removedEntries: string[];
   clearedAt: number;
+}
+
+export interface SnowLumaResetResult {
+  snowlumaRoot: string;
+  bundledRoot: string;
+  removed: boolean;
+  copied: boolean;
+  resetAt: number;
+}
+
+export interface LauncherResetResult {
+  mode: "settings" | "all";
+  root: string;
+  removedEntries: string[];
+  resetAt: number;
+}
+
+export interface MaiBotChatStatistic {
+  name: string;
+  messageCount: number;
+}
+
+export interface MaiBotStatisticSummary {
+  available: boolean;
+  updatedAt: number;
+  sourcePath?: string;
+  periodLabel?: string;
+  startedAt?: string;
+  totalOnlineTime?: string;
+  totalMessages?: number;
+  totalReplies?: number;
+  totalRequests?: number;
+  totalTokens?: number;
+  totalCost?: string;
+  costPerMessage?: string;
+  costPerReceivedMessage?: string;
+  costPerReply?: string;
+  costPerHour?: string;
+  tokensPerHour?: string;
+  chatStats: MaiBotChatStatistic[];
 }
 
 export type MaiBotConfigFileName = "bot_config.toml" | "model_config.toml";
@@ -423,22 +491,67 @@ export type MaiBotPluginConfigValue =
   | MaiBotPluginConfigValue[]
   | { [key: string]: MaiBotPluginConfigValue };
 
+export type MaiBotPluginConfigLocalizedText = string | Record<string, string>;
+
 export interface MaiBotPluginConfigField {
   name: string;
-  label: string;
+  label: MaiBotPluginConfigLocalizedText;
   path: string[];
   type: "string" | "number" | "boolean" | "array" | "object" | "null";
   value: MaiBotPluginConfigValue;
+  description?: MaiBotPluginConfigLocalizedText;
+  hint?: MaiBotPluginConfigLocalizedText;
+  placeholder?: MaiBotPluginConfigLocalizedText;
+  uiType?: string;
+  inputType?: string;
+  choices?: Array<MaiBotPluginConfigValue | { label?: MaiBotPluginConfigLocalizedText; value: MaiBotPluginConfigValue }>;
+  min?: number;
+  max?: number;
+  step?: number;
+  rows?: number;
+  required?: boolean;
+  hidden?: boolean;
+  disabled?: boolean;
+  order?: number;
+  icon?: string;
+  default?: MaiBotPluginConfigValue;
+  itemType?: string;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface MaiBotPluginConfigSection {
   name: string;
-  title: string;
+  title: MaiBotPluginConfigLocalizedText;
+  description?: MaiBotPluginConfigLocalizedText;
+  icon?: string;
+  collapsed?: boolean;
+  order?: number;
   fields: MaiBotPluginConfigField[];
 }
 
+export interface MaiBotPluginConfigTab {
+  id: string;
+  title: MaiBotPluginConfigLocalizedText;
+  sections: string[];
+  icon?: string;
+  order?: number;
+  badge?: string;
+}
+
 export interface MaiBotPluginConfigSchema {
+  pluginInfo?: {
+    name?: MaiBotPluginConfigLocalizedText;
+    version?: string;
+    description?: MaiBotPluginConfigLocalizedText;
+    author?: string;
+  };
   sections: MaiBotPluginConfigSection[];
+  layout?: {
+    type: "auto" | "tabs" | "pages";
+    tabs: MaiBotPluginConfigTab[];
+  };
+  source?: "runtime" | "local";
 }
 
 export interface MaiBotPluginConfigState {
@@ -525,6 +638,14 @@ export interface ManagedPythonPackage {
   label: string;
 }
 
+export type PythonPackageSourcePreset = "tuna" | "pypi" | "aliyun";
+
+export interface PythonPackageSourceOption {
+  preset: PythonPackageSourcePreset;
+  label: string;
+  url: string;
+}
+
 export interface PythonPackageVersion {
   version: string;
   isPrerelease: boolean;
@@ -557,7 +678,9 @@ export interface PythonPackageInstallResult {
 
 export interface PythonOverridesState {
   root: string;
+  sourcePreset: PythonPackageSourcePreset;
   sourceUrl: string;
+  sourceOptions: PythonPackageSourceOption[];
   packages: ManagedPythonPackage[];
 }
 
@@ -643,12 +766,15 @@ export interface DesktopBridge {
     minimize: () => Promise<void>;
     toggleMaximize: () => Promise<void>;
     close: () => Promise<void>;
+    setFloatingMode: (enabled: boolean) => Promise<WindowState>;
+    setFloatingPanelExpanded: (expanded: boolean) => Promise<WindowState>;
     getState: () => Promise<WindowState>;
     onState: (callback: (state: WindowState) => void) => () => void;
   };
   init: {
     getState: () => Promise<InitState>;
     repair: () => Promise<InitRepairResult>;
+    resetSnowLuma: () => Promise<SnowLumaResetResult>;
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };
@@ -667,22 +793,31 @@ export interface DesktopBridge {
     importMaiBotConfig: (fileName: MaiBotConfigFileName) => Promise<MaiBotConfigImportResult | null>;
     resetMaiBotData: () => Promise<MaiBotDataResetResult>;
   };
+  launcher: {
+    resetSettings: () => Promise<LauncherResetResult>;
+    resetAll: () => Promise<LauncherResetResult>;
+  };
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) => Promise<MaiBotPluginListResult>;
     listInstalled: (serviceUrl?: string) => Promise<MaiBotInstalledPlugin[]>;
     install: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     update: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     uninstall: (pluginId: string) => Promise<MaiBotPluginOperationResult>;
-    getConfig: (pluginId: string) => Promise<MaiBotPluginConfigState>;
+    getConfig: (pluginId: string, serviceUrl?: string) => Promise<MaiBotPluginConfigState>;
     saveConfig: (
       pluginId: string,
       config: Record<string, MaiBotPluginConfigValue>,
+      serviceUrl?: string,
     ) => Promise<MaiBotPluginConfigSaveResult>;
     getReadme: (pluginId: string, repositoryUrl?: string) => Promise<MaiBotPluginReadmeResult>;
     getStats: (pluginId: string) => Promise<MaiBotPluginStats | null>;
   };
+  statistics: {
+    getMaiBot: () => Promise<MaiBotStatisticSummary>;
+  };
   pythonDeps: {
     getState: () => Promise<PythonOverridesState>;
+    saveSourcePreset: (preset: PythonPackageSourcePreset) => Promise<PythonOverridesState>;
     listVersions: (packageName: ManagedPythonPackageName) => Promise<PythonPackageVersionList>;
     installVersion: (request: PythonPackageInstallRequest) => Promise<PythonPackageInstallResult>;
   };

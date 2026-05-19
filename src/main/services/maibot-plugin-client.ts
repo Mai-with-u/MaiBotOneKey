@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigSchema,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
+  MaiBotPluginConfigLocalizedText,
   MaiBotInstalledPlugin,
   MaiBotPluginListOptions,
   MaiBotMarketPlugin,
@@ -15,10 +16,14 @@ import type {
   MaiBotPluginOperationResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  ModuleSourceConfig,
 } from "../../shared/contracts";
 
 const MARKET_URL =
   "https://raw.githubusercontent.com/Mai-with-u/plugin-repo/main/plugin_details.json";
+const OFFICIAL_GITHUB_BASE_URL = "https://github.com/";
+const OFFICIAL_RAW_GITHUB_BASE_URL = "https://raw.githubusercontent.com/";
+const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
 const PLUGIN_STATS_URL = process.env.MAIBOT_PLUGIN_STATS_BASE_URL
   ? `${process.env.MAIBOT_PLUGIN_STATS_BASE_URL.replace(/\/+$/u, "")}/stats/summary`
   : "http://hyybuth.xyz:10059/stats/summary";
@@ -31,6 +36,7 @@ const PLUGIN_CONFIG_FILE = "config.toml";
 export interface MaiBotPluginClientOptions {
   maibotRoot: string;
   gitPath: string;
+  getModuleSourceConfig?: () => Promise<ModuleSourceConfig>;
 }
 
 interface GitRunResult {
@@ -50,6 +56,8 @@ export class MaiBotPluginClient {
 
   private readonly gitPath: string;
 
+  private readonly getModuleSourceConfig?: () => Promise<ModuleSourceConfig>;
+
   private marketCache: CacheFile<MaiBotMarketPlugin[]> | null = null;
 
   private marketRequest: Promise<MaiBotMarketPlugin[]> | null = null;
@@ -62,6 +70,7 @@ export class MaiBotPluginClient {
     this.maibotRoot = resolve(options.maibotRoot);
     this.pluginsRoot = resolve(this.maibotRoot, "plugins");
     this.gitPath = options.gitPath;
+    this.getModuleSourceConfig = options.getModuleSourceConfig;
   }
 
   async listInstalled(serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> {
@@ -136,14 +145,14 @@ export class MaiBotPluginClient {
   async install(pluginId: string, repositoryUrl: string, branch = "main"): Promise<MaiBotPluginOperationResult> {
     const targetPath = this.installTargetPath(pluginId);
     if (await pathExists(targetPath)) {
-      throw new Error("插件已安装，请先卸载");
+      throw new Error("鎻掍欢宸插畨瑁咃紝璇峰厛鍗歌浇");
     }
 
-    await this.cloneRepository(repositoryUrl, targetPath, branch);
+    await this.cloneRepository(await this.resolveSourceUrl(repositoryUrl), targetPath, branch);
     const manifest = await this.validateInstalledManifest(targetPath, pluginId);
     return {
       success: true,
-      message: "插件安装成功",
+      message: "鎻掍欢瀹夎鎴愬姛",
       plugin_id: pluginId,
       plugin_name: pluginName({ id: pluginId, manifest }),
       new_version: pluginVersion(manifest),
@@ -158,26 +167,34 @@ export class MaiBotPluginClient {
   ): Promise<MaiBotPluginOperationResult> {
     const pluginPath = await this.resolveInstalledPluginPath(pluginId);
     if (!pluginPath) {
-      throw new Error("插件未安装，请先安装");
+      throw new Error("鎻掍欢鏈畨瑁咃紝璇峰厛瀹夎");
     }
 
     const oldManifest = await this.readManifest(pluginPath);
     const oldVersion = oldManifest ? pluginVersion(oldManifest) : "unknown";
     if (latestVersion && !isNewerVersion(latestVersion, oldVersion)) {
-      throw new Error("当前已是最新版本，无需更新");
+      throw new Error("褰撳墠宸叉槸鏈€鏂扮増鏈紝鏃犻渶鏇存柊");
     }
-    await this.removePluginPath(pluginPath);
-    await this.cloneRepository(repositoryUrl, pluginPath, branch);
-    const newManifest = await this.validateInstalledManifest(pluginPath, pluginId);
+    const beforeCommit = await this.currentGitCommit(pluginPath);
+    if (!beforeCommit) {
+      throw new Error("插件目录不是可更新的 Git 仓库，无法执行强制 pull");
+    }
 
-    return {
-      success: true,
-      message: "插件更新成功",
-      plugin_id: pluginId,
-      plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
-      old_version: oldVersion,
-      new_version: pluginVersion(newManifest),
-    };
+    try {
+      await this.forcePullRepository(pluginPath, await this.resolveSourceUrl(repositoryUrl), branch);
+      const newManifest = await this.validateInstalledManifest(pluginPath, pluginId, false);
+      return {
+        success: true,
+        message: "插件更新成功",
+        plugin_id: pluginId,
+        plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
+        old_version: oldVersion,
+        new_version: pluginVersion(newManifest),
+      };
+    } catch (error) {
+      await this.rollbackRepository(pluginPath, beforeCommit);
+      throw error;
+    }
   }
 
   async uninstall(pluginId: string): Promise<MaiBotPluginOperationResult> {
@@ -190,17 +207,22 @@ export class MaiBotPluginClient {
     await this.removePluginPath(pluginPath);
     return {
       success: true,
-      message: "插件卸载成功",
+      message: "鎻掍欢鍗歌浇鎴愬姛",
       plugin_id: pluginId,
       plugin_name: manifest ? pluginName({ id: pluginId, manifest }) : pluginId,
     };
   }
 
-  async getConfig(pluginId: string): Promise<MaiBotPluginConfigState> {
+  async getConfig(pluginId: string, serviceUrl?: string): Promise<MaiBotPluginConfigState> {
     const pluginPath = await this.requireInstalledPluginPath(pluginId);
     const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
     if (!isPathInside(pluginPath, configPath)) {
-      throw new Error("插件配置路径超出允许范围");
+      throw new Error("鎻掍欢閰嶇疆璺緞瓒呭嚭鍏佽鑼冨洿");
+    }
+
+    const runtimeConfig = await this.getRuntimeConfig(pluginId, pluginPath, configPath, serviceUrl);
+    if (runtimeConfig) {
+      return runtimeConfig;
     }
 
     const exists = await pathExists(configPath);
@@ -213,7 +235,7 @@ export class MaiBotPluginClient {
       configPath,
       exists,
       config,
-      schema: buildPluginConfigSchema(config),
+      schema: buildPluginConfigSchema(config, "local"),
       raw,
     };
   }
@@ -221,11 +243,18 @@ export class MaiBotPluginClient {
   async saveConfig(
     pluginId: string,
     config: Record<string, MaiBotPluginConfigValue>,
+    serviceUrl?: string,
   ): Promise<MaiBotPluginConfigSaveResult> {
     const pluginPath = await this.requireInstalledPluginPath(pluginId);
     const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
     if (!isPathInside(pluginPath, configPath)) {
-      throw new Error("插件配置路径超出允许范围");
+      throw new Error("鎻掍欢閰嶇疆璺緞瓒呭嚭鍏佽鑼冨洿");
+    }
+
+    const runtimeConfig = normalizePluginConfigRoot(config);
+    const runtimeResult = await this.saveRuntimeConfig(pluginId, runtimeConfig, pluginPath, configPath, serviceUrl);
+    if (runtimeResult) {
+      return runtimeResult;
     }
 
     const normalizedConfig = normalizePluginConfigRootForToml(config);
@@ -243,7 +272,7 @@ export class MaiBotPluginClient {
       pluginId,
       configPath,
       config: normalizedConfig,
-      schema: buildPluginConfigSchema(normalizedConfig),
+      schema: buildPluginConfigSchema(normalizedConfig, "local"),
       raw,
       backupPath,
       savedAt: Date.now(),
@@ -266,9 +295,9 @@ export class MaiBotPluginClient {
       }
     }
 
-    const remoteUrl = repositoryUrl ? githubRawReadmeUrl(repositoryUrl) : undefined;
+    const remoteUrl = repositoryUrl ? githubRawReadmeUrl(await this.resolveSourceUrl(repositoryUrl)) : undefined;
     if (!remoteUrl) {
-      return { success: false, error: "未找到插件 README" };
+      return { success: false, error: "鏈壘鍒版彃浠?README" };
     }
 
     for (const branch of ["main", "master"]) {
@@ -277,7 +306,7 @@ export class MaiBotPluginClient {
         return { success: true, content: await response.text() };
       }
     }
-    return { success: false, error: "未找到插件 README" };
+    return { success: false, error: "鏈壘鍒版彃浠?README" };
   }
 
   async getStats(pluginId: string): Promise<MaiBotPluginStats | null> {
@@ -338,7 +367,8 @@ export class MaiBotPluginClient {
     }
 
     if (!this.marketRequest || options.forceRefresh) {
-      this.marketRequest = fetchMarketPluginsUncached()
+      this.marketRequest = this.resolveSourceUrl(MARKET_URL)
+        .then((marketUrl) => fetchMarketPluginsUncached(marketUrl))
         .then(async (plugins) => {
           const nextCache = { timestamp: Date.now(), data: plugins };
           this.marketCache = nextCache;
@@ -392,6 +422,18 @@ export class MaiBotPluginClient {
     return this.statsRequest;
   }
 
+  private async resolveSourceUrl(url: string): Promise<string> {
+    if (!this.getModuleSourceConfig) {
+      return url;
+    }
+
+    try {
+      return rewriteGithubUrl(url, (await this.getModuleSourceConfig()).maibotUrl);
+    } catch {
+      return url;
+    }
+  }
+
   private async readCache<T>(
     fileName: string,
     memoryCache: CacheFile<T> | null,
@@ -422,7 +464,7 @@ export class MaiBotPluginClient {
   private cachePath(fileName: string): string {
     const cachePath = resolve(this.maibotRoot, "data", fileName);
     if (!isPathInside(this.maibotRoot, cachePath)) {
-      throw new Error("插件市场缓存路径超出允许范围");
+      throw new Error("鎻掍欢甯傚満缂撳瓨璺緞瓒呭嚭鍏佽鑼冨洿");
     }
     return cachePath;
   }
@@ -433,21 +475,54 @@ export class MaiBotPluginClient {
     const result = await runGit(this.gitPath, args, this.maibotRoot);
     if (result.exitCode !== 0) {
       await rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
-      throw new Error(result.output || "克隆仓库失败");
+      throw new Error(result.output || "鍏嬮殕浠撳簱澶辫触");
     }
   }
 
-  private async validateInstalledManifest(pluginPath: string, pluginId: string): Promise<MaiBotPluginManifest> {
+  private async currentGitCommit(pluginPath: string): Promise<string | null> {
+    if (!(await isDirectory(join(pluginPath, ".git")))) {
+      return null;
+    }
+    const result = await runGit(this.gitPath, ["rev-parse", "HEAD"], pluginPath);
+    return result.exitCode === 0 && result.output.trim() ? result.output.trim().split(/\s+/u)[0] : null;
+  }
+
+  private async forcePullRepository(pluginPath: string, repositoryUrl: string, branch: string): Promise<void> {
+    const remote = repositoryUrl.trim();
+    const targetBranch = branch || "main";
+    await this.runGitOrThrow(pluginPath, ["remote", "set-url", "origin", remote], "更新插件远端失败");
+    await this.runGitOrThrow(pluginPath, ["fetch", "--force", "--prune", "origin", targetBranch], "拉取插件远端失败");
+    await this.runGitOrThrow(pluginPath, ["reset", "--hard", `origin/${targetBranch}`], "强制更新插件失败");
+    await this.runGitOrThrow(pluginPath, ["submodule", "update", "--init", "--recursive"], "更新插件子模块失败", true);
+  }
+
+  private async rollbackRepository(pluginPath: string, commit: string): Promise<void> {
+    await runGit(this.gitPath, ["reset", "--hard", commit], pluginPath);
+    await runGit(this.gitPath, ["submodule", "update", "--init", "--recursive"], pluginPath);
+  }
+
+  private async runGitOrThrow(pluginPath: string, args: string[], message: string, optional = false): Promise<void> {
+    const result = await runGit(this.gitPath, args, pluginPath);
+    if (result.exitCode !== 0 && !optional) {
+      throw new Error(result.output || message);
+    }
+  }
+
+  private async validateInstalledManifest(pluginPath: string, pluginId: string, removeOnFailure = true): Promise<MaiBotPluginManifest> {
     const manifest = await this.readManifest(pluginPath);
     if (!manifest) {
-      await rm(pluginPath, { recursive: true, force: true }).catch(() => undefined);
-      throw new Error("无效的插件：缺少 _manifest.json");
+      if (removeOnFailure) {
+        await rm(pluginPath, { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw new Error("鏃犳晥鐨勬彃浠讹細缂哄皯 _manifest.json");
     }
 
     for (const field of ["name", "version", "author"]) {
       if (!(field in manifest)) {
-        await rm(pluginPath, { recursive: true, force: true }).catch(() => undefined);
-        throw new Error(`无效的 _manifest.json：缺少必需字段 ${field}`);
+        if (removeOnFailure) {
+          await rm(pluginPath, { recursive: true, force: true }).catch(() => undefined);
+        }
+        throw new Error(`鏃犳晥鐨?_manifest.json锛氱己灏戝繀闇€瀛楁 ${field}`);
       }
     }
 
@@ -495,6 +570,117 @@ export class MaiBotPluginClient {
     }
   }
 
+  private async getRuntimeConfig(
+    pluginId: string,
+    pluginPath: string,
+    configPath: string,
+    serviceUrl?: string,
+  ): Promise<MaiBotPluginConfigState | null> {
+    const schemaUrl = maibotApiUrl(serviceUrl, `/api/webui/plugins/config/${encodeURIComponent(pluginId)}/schema`);
+    const configUrl = maibotApiUrl(serviceUrl, `/api/webui/plugins/config/${encodeURIComponent(pluginId)}`);
+    if (!schemaUrl || !configUrl) {
+      return null;
+    }
+
+    try {
+      const headers = await this.maibotRuntimeAuthHeaders(serviceUrl);
+      const [schemaResponse, configResponse] = await Promise.all([
+        fetchWithTimeout(schemaUrl, MAIBOT_API_TIMEOUT_MS, { headers }),
+        fetchWithTimeout(configUrl, MAIBOT_API_TIMEOUT_MS, { headers }),
+      ]);
+      if (!schemaResponse.ok || !configResponse.ok) {
+        return null;
+      }
+
+      const [schemaPayload, configPayload] = await Promise.all([
+        schemaResponse.json() as Promise<unknown>,
+        configResponse.json() as Promise<unknown>,
+      ]);
+      const dashboardSchema = readDashboardConfigSchema(schemaPayload);
+      const config = readDashboardConfig(configPayload);
+      if (!dashboardSchema || !config) {
+        return null;
+      }
+
+      const raw = await this.getRuntimeConfigRaw(pluginId, serviceUrl);
+      return {
+        pluginId,
+        pluginPath,
+        configPath,
+        exists: true,
+        config,
+        schema: buildDashboardPluginConfigSchema(dashboardSchema, config),
+        raw: raw ?? stringifyToml(normalizePluginConfigRootForToml(config)),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async getRuntimeConfigRaw(pluginId: string, serviceUrl?: string): Promise<string | null> {
+    const rawUrl = maibotApiUrl(serviceUrl, `/api/webui/plugins/config/${encodeURIComponent(pluginId)}/raw`);
+    if (!rawUrl) {
+      return null;
+    }
+    try {
+      const response = await fetchWithTimeout(rawUrl, MAIBOT_API_TIMEOUT_MS, {
+        headers: await this.maibotRuntimeAuthHeaders(serviceUrl),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as unknown;
+      return readDashboardRawConfig(payload);
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveRuntimeConfig(
+    pluginId: string,
+    config: Record<string, MaiBotPluginConfigValue>,
+    pluginPath: string,
+    configPath: string,
+    serviceUrl?: string,
+  ): Promise<MaiBotPluginConfigSaveResult | null> {
+    const configUrl = maibotApiUrl(serviceUrl, `/api/webui/plugins/config/${encodeURIComponent(pluginId)}`);
+    if (!configUrl) {
+      return null;
+    }
+
+    try {
+      const response = await fetchWithTimeout(configUrl, MAIBOT_API_TIMEOUT_MS, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await this.maibotRuntimeAuthHeaders(serviceUrl)),
+        },
+        body: JSON.stringify({ config }),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as unknown;
+      if (!isUnknownRecord(payload) || payload.success !== true) {
+        return null;
+      }
+      const state = await this.getRuntimeConfig(pluginId, pluginPath, configPath, serviceUrl);
+      if (!state) {
+        return null;
+      }
+      return {
+        pluginId,
+        configPath,
+        config: state.config,
+        schema: state.schema,
+        raw: state.raw,
+        savedAt: Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private async maibotRuntimeAuthHeaders(serviceUrl?: string): Promise<HeadersInit> {
     const token = tokenFromServiceUrl(serviceUrl) ?? (await this.readMaiBotWebUiToken());
     return token ? { Cookie: `maibot_session=${encodeURIComponent(token)}` } : {};
@@ -521,12 +707,12 @@ export class MaiBotPluginClient {
 
   private safePluginPath(folderName: string, mustExist: boolean): string {
     if (!folderName || folderName.includes("..") || /[\\/\0\r\n\t]/u.test(folderName)) {
-      throw new Error("插件 ID 包含非法字符");
+      throw new Error("鎻掍欢 ID 鍖呭惈闈炴硶瀛楃");
     }
 
     const targetPath = resolve(this.pluginsRoot, folderName);
     if (!isPathInside(this.pluginsRoot, targetPath)) {
-      throw new Error("插件路径超出允许范围");
+      throw new Error("鎻掍欢璺緞瓒呭嚭鍏佽鑼冨洿");
     }
     if (mustExist && targetPath === this.pluginsRoot) {
       throw new Error("拒绝操作插件根目录");
@@ -585,8 +771,8 @@ function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
   };
 }
 
-async function fetchMarketPluginsUncached(): Promise<MaiBotMarketPlugin[]> {
-  const response = await fetchWithTimeout(MARKET_URL);
+async function fetchMarketPluginsUncached(marketUrl: string): Promise<MaiBotMarketPlugin[]> {
+  const response = await fetchWithTimeout(marketUrl);
   if (!response.ok) {
     throw new Error(`Plugin market list failed: HTTP ${response.status}`);
   }
@@ -663,7 +849,7 @@ function normalizePluginRatings(rawRatings: unknown): MaiBotPluginStats["recent_
   return rawRatings
     .filter(isUnknownRecord)
     .map((rating) => ({
-      user_id: String(rating.user_id ?? "匿名用户"),
+      user_id: String(rating.user_id ?? "鍖垮悕鐢ㄦ埛"),
       rating: normalizeStatsNumber(rating.rating) ?? 0,
       comment: typeof rating.comment === "string" ? rating.comment : undefined,
       created_at: String(rating.created_at ?? ""),
@@ -678,6 +864,46 @@ function githubRawReadmeUrl(repositoryUrl: string): ((branch: string) => string)
   }
   const [, owner, repo] = match;
   return (branch: string) => `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`;
+}
+
+function rewriteGithubUrl(url: string, sourceMaibotUrl: string): string {
+  const sourcePrefix = githubSourcePrefix(sourceMaibotUrl);
+  if (!sourcePrefix) {
+    return url;
+  }
+
+  const normalized = normalizeGithubUrl(url);
+  return normalized ? `${sourcePrefix}${normalized}` : url;
+}
+
+function githubSourcePrefix(sourceMaibotUrl: string): string | undefined {
+  const normalizedSource = sourceMaibotUrl.trim();
+  const officialSourceIndex = normalizedSource.toLowerCase().indexOf(OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase());
+  if (officialSourceIndex > 0) {
+    return normalizedSource.slice(0, officialSourceIndex);
+  }
+  return undefined;
+}
+
+function normalizeGithubUrl(url: string): string | undefined {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const rawMatch = trimmed.match(/raw\.githubusercontent\.com\/([^/\s]+)\/([^/\s#?]+)\/(.+)$/iu);
+  if (rawMatch) {
+    const [, owner, repo, rest] = rawMatch;
+    return `${OFFICIAL_RAW_GITHUB_BASE_URL}${owner}/${repo.replace(/\.git$/iu, "")}/${rest}`;
+  }
+
+  const repoMatch = trimmed.match(/github\.com[/:]([^/\s]+)\/([^/\s#?]+?)(?:\.git)?(?:[/?#]|$)/iu);
+  if (!repoMatch) {
+    return undefined;
+  }
+
+  const [, owner, repo] = repoMatch;
+  return `${OFFICIAL_GITHUB_BASE_URL}${owner}/${repo.replace(/\.git$/iu, "")}.git`;
 }
 
 function resolvePluginStats(
@@ -713,10 +939,10 @@ function inferPluginId(folderName: string, manifest: MaiBotPluginManifest): stri
 function validatePluginId(pluginId: string): string {
   const normalized = pluginId.trim();
   if (!normalized || normalized.startsWith(".") || normalized.endsWith(".")) {
-    throw new Error("插件 ID 不能为空，且不能以点开头或结尾");
+    throw new Error("鎻掍欢 ID 涓嶈兘涓虹┖锛屼笖涓嶈兘浠ョ偣寮€澶存垨缁撳熬");
   }
   if ([".", ".."].includes(normalized) || /[\\/\0\r\n\t]/u.test(normalized) || normalized.includes("..")) {
-    throw new Error("插件 ID 包含非法字符");
+    throw new Error("鎻掍欢 ID 鍖呭惈闈炴硶瀛楃");
   }
   return normalized;
 }
@@ -733,7 +959,7 @@ function parsePluginConfig(raw: string, configPath: string): Record<string, MaiB
   try {
     return normalizePluginConfigRoot(parseToml(raw));
   } catch (error) {
-    throw new Error(`TOML 配置解析失败: ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`TOML 閰嶇疆瑙ｆ瀽澶辫触: ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -749,6 +975,70 @@ function readPluginEnabled(config: Record<string, MaiBotPluginConfigValue>): boo
     if (["1", "true", "yes", "on"].includes(normalized)) return true;
   }
   return typeof enabled === "boolean" ? enabled : true;
+}
+
+interface DashboardConfigFieldSchema {
+  name?: unknown;
+  type?: unknown;
+  default?: unknown;
+  description?: unknown;
+  label?: unknown;
+  placeholder?: unknown;
+  hint?: unknown;
+  icon?: unknown;
+  ui_type?: unknown;
+  input_type?: unknown;
+  choices?: unknown;
+  min?: unknown;
+  max?: unknown;
+  step?: unknown;
+  rows?: unknown;
+  required?: unknown;
+  hidden?: unknown;
+  disabled?: unknown;
+  order?: unknown;
+  item_type?: unknown;
+  min_items?: unknown;
+  max_items?: unknown;
+}
+
+interface DashboardConfigSectionSchema {
+  name?: unknown;
+  title?: unknown;
+  description?: unknown;
+  icon?: unknown;
+  collapsed?: unknown;
+  order?: unknown;
+  fields?: unknown;
+}
+
+interface DashboardConfigSchema {
+  plugin_id?: unknown;
+  plugin_info?: unknown;
+  sections?: unknown;
+  layout?: unknown;
+}
+
+function readDashboardConfigSchema(payload: unknown): DashboardConfigSchema | null {
+  if (!isUnknownRecord(payload)) {
+    return null;
+  }
+  const schema = payload.schema;
+  return isUnknownRecord(schema) && isUnknownRecord(schema.sections) ? schema : null;
+}
+
+function readDashboardConfig(payload: unknown): Record<string, MaiBotPluginConfigValue> | null {
+  if (!isUnknownRecord(payload)) {
+    return null;
+  }
+  return isUnknownRecord(payload.config) ? normalizePluginConfigRoot(payload.config) : null;
+}
+
+function readDashboardRawConfig(payload: unknown): string | null {
+  if (!isUnknownRecord(payload)) {
+    return null;
+  }
+  return typeof payload.config === "string" ? payload.config : null;
 }
 
 function normalizePluginConfigRoot(value: unknown): Record<string, MaiBotPluginConfigValue> {
@@ -798,14 +1088,14 @@ function normalizePluginConfigRootForToml(
 
 function normalizePluginConfigValueForToml(value: MaiBotPluginConfigValue, path: string): MaiBotPluginConfigValue {
   if (value === null) {
-    throw new Error(`TOML 不支持 null: ${path}`);
+    throw new Error(`TOML 涓嶆敮鎸?null: ${path}`);
   }
   if (typeof value === "string" || typeof value === "boolean") {
     return value;
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new Error(`数字配置无效: ${path}`);
+      throw new Error(`鏁板瓧閰嶇疆鏃犳晥: ${path}`);
     }
     return value;
   }
@@ -820,10 +1110,13 @@ function normalizePluginConfigValueForToml(value: MaiBotPluginConfigValue, path:
       ]),
     );
   }
-  throw new Error(`插件配置值不受支持: ${path}`);
+  throw new Error(`鎻掍欢閰嶇疆鍊间笉鍙楁敮鎸? ${path}`);
 }
 
-function buildPluginConfigSchema(config: Record<string, MaiBotPluginConfigValue>): MaiBotPluginConfigSchema {
+function buildPluginConfigSchema(
+  config: Record<string, MaiBotPluginConfigValue>,
+  source: MaiBotPluginConfigSchema["source"] = "local",
+): MaiBotPluginConfigSchema {
   const generalFields = Object.entries(config)
     .filter(([, value]) => !isConfigRecord(value) || Array.isArray(value))
     .map(([key, value]) => buildPluginConfigField([key], key, value));
@@ -841,12 +1134,12 @@ function buildPluginConfigSchema(config: Record<string, MaiBotPluginConfigValue>
   if (generalFields.length > 0) {
     sections.unshift({
       name: "general",
-      title: "常规",
+      title: "甯歌",
       fields: generalFields,
     });
   }
 
-  return { sections };
+  return { sections, source };
 }
 
 function buildPluginConfigField(path: string[], name: string, value: MaiBotPluginConfigValue): MaiBotPluginConfigSchema["sections"][number]["fields"][number] {
@@ -857,6 +1150,187 @@ function buildPluginConfigField(path: string[], name: string, value: MaiBotPlugi
     type: pluginConfigValueType(value),
     value,
   };
+}
+
+function buildDashboardPluginConfigSchema(
+  dashboardSchema: DashboardConfigSchema,
+  config: Record<string, MaiBotPluginConfigValue>,
+): MaiBotPluginConfigSchema {
+  const sectionsRecord = isUnknownRecord(dashboardSchema.sections) ? dashboardSchema.sections : {};
+  const sections = Object.entries(sectionsRecord)
+    .map(([sectionKey, rawSection]) => normalizeDashboardSection(sectionKey, rawSection, config))
+    .filter((section): section is MaiBotPluginConfigSchema["sections"][number] => section !== null)
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+
+  const pluginInfo = isUnknownRecord(dashboardSchema.plugin_info)
+    ? {
+        name: localizedTextOrUndefined(dashboardSchema.plugin_info.name),
+        version: stringOrUndefined(dashboardSchema.plugin_info.version),
+        description: localizedTextOrUndefined(dashboardSchema.plugin_info.description),
+        author: stringOrUndefined(dashboardSchema.plugin_info.author),
+      }
+    : undefined;
+  const layout = normalizeDashboardLayout(dashboardSchema.layout);
+
+  return { pluginInfo, sections, layout, source: "runtime" };
+}
+
+function normalizeDashboardSection(
+  sectionKey: string,
+  rawSection: unknown,
+  config: Record<string, MaiBotPluginConfigValue>,
+): MaiBotPluginConfigSchema["sections"][number] | null {
+  if (!isUnknownRecord(rawSection)) {
+    return null;
+  }
+  const section = rawSection as DashboardConfigSectionSchema;
+  const fieldsRecord = isUnknownRecord(section.fields) ? section.fields : {};
+  const sectionName = stringOrUndefined(section.name) ?? sectionKey;
+  const fields = Object.entries(fieldsRecord)
+    .map(([fieldKey, rawField]) => normalizeDashboardField(sectionName, fieldKey, rawField, config))
+    .filter((field): field is MaiBotPluginConfigSchema["sections"][number]["fields"][number] => field !== null)
+    .filter((field) => field.hidden !== true)
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+
+  return {
+    name: sectionName,
+    title: localizedTextOrUndefined(section.title) ?? labelFromKey(sectionName),
+    description: localizedTextOrUndefined(section.description),
+    icon: stringOrUndefined(section.icon),
+    collapsed: typeof section.collapsed === "boolean" ? section.collapsed : undefined,
+    order: numberOrUndefined(section.order),
+    fields,
+  };
+}
+
+function normalizeDashboardField(
+  sectionName: string,
+  fieldKey: string,
+  rawField: unknown,
+  config: Record<string, MaiBotPluginConfigValue>,
+): MaiBotPluginConfigSchema["sections"][number]["fields"][number] | null {
+  if (!isUnknownRecord(rawField)) {
+    return null;
+  }
+  const field = rawField as DashboardConfigFieldSchema;
+  const name = stringOrUndefined(field.name) ?? fieldKey;
+  const path = [sectionName, name];
+  const configValue = getConfigValueAtPath(config, path);
+  const defaultValue = field.default === undefined ? undefined : normalizePluginConfigValue(field.default);
+  const value = configValue ?? defaultValue ?? defaultValueForDashboardType(field.type);
+  return {
+    name,
+    label: localizedTextOrUndefined(field.label) ?? labelFromKey(name),
+    path,
+    type: pluginConfigValueType(value),
+    value,
+    description: localizedTextOrUndefined(field.description),
+    hint: localizedTextOrUndefined(field.hint),
+    placeholder: localizedTextOrUndefined(field.placeholder),
+    uiType: stringOrUndefined(field.ui_type),
+    inputType: stringOrUndefined(field.input_type),
+    choices: normalizeDashboardChoices(field.choices),
+    min: numberOrUndefined(field.min),
+    max: numberOrUndefined(field.max),
+    step: numberOrUndefined(field.step),
+    rows: numberOrUndefined(field.rows),
+    required: typeof field.required === "boolean" ? field.required : undefined,
+    hidden: typeof field.hidden === "boolean" ? field.hidden : undefined,
+    disabled: typeof field.disabled === "boolean" ? field.disabled : undefined,
+    order: numberOrUndefined(field.order),
+    icon: stringOrUndefined(field.icon),
+    default: defaultValue,
+    itemType: stringOrUndefined(field.item_type),
+    minItems: numberOrUndefined(field.min_items),
+    maxItems: numberOrUndefined(field.max_items),
+  };
+}
+
+function normalizeDashboardLayout(rawLayout: unknown): MaiBotPluginConfigSchema["layout"] {
+  if (!isUnknownRecord(rawLayout)) {
+    return undefined;
+  }
+  const rawTabs = Array.isArray(rawLayout.tabs) ? rawLayout.tabs : [];
+  const tabs = rawTabs
+    .filter(isUnknownRecord)
+    .map((tab) => ({
+      id: stringOrUndefined(tab.id) ?? "",
+      title: localizedTextOrUndefined(tab.title) ?? "",
+      sections: Array.isArray(tab.sections) ? tab.sections.map(String) : [],
+      icon: stringOrUndefined(tab.icon),
+      order: numberOrUndefined(tab.order),
+      badge: stringOrUndefined(tab.badge),
+    }))
+    .filter((tab) => tab.id && tab.title)
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+  const type = rawLayout.type === "tabs" || rawLayout.type === "pages" ? rawLayout.type : "auto";
+  return { type, tabs };
+}
+
+function normalizeDashboardChoices(
+  choices: unknown,
+): MaiBotPluginConfigSchema["sections"][number]["fields"][number]["choices"] {
+  if (!Array.isArray(choices)) {
+    return undefined;
+  }
+  return choices.map((choice) => {
+    if (isUnknownRecord(choice) && "value" in choice) {
+      return {
+        label: localizedTextOrUndefined(choice.label),
+        value: normalizePluginConfigValue(choice.value),
+      };
+    }
+    return normalizePluginConfigValue(choice);
+  });
+}
+
+function getConfigValueAtPath(config: Record<string, MaiBotPluginConfigValue>, path: string[]): MaiBotPluginConfigValue | undefined {
+  let cursor: MaiBotPluginConfigValue | Record<string, MaiBotPluginConfigValue> = config;
+  for (const segment of path) {
+    if (!isConfigRecord(cursor) || !(segment in cursor)) {
+      return undefined;
+    }
+    cursor = cursor[segment];
+  }
+  return cursor as MaiBotPluginConfigValue;
+}
+
+function defaultValueForDashboardType(type: unknown): MaiBotPluginConfigValue {
+  switch (type) {
+    case "boolean":
+      return false;
+    case "number":
+    case "integer":
+      return 0;
+    case "array":
+    case "list":
+      return [];
+    case "object":
+      return {};
+    default:
+      return "";
+  }
+}
+
+function localizedTextOrUndefined(value: unknown): MaiBotPluginConfigLocalizedText | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!isUnknownRecord(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : undefined;
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
 function pluginConfigValueType(value: MaiBotPluginConfigValue): MaiBotPluginConfigSchema["sections"][number]["fields"][number]["type"] {
