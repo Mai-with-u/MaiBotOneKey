@@ -13,6 +13,7 @@
   Settings,
   Send,
   Store,
+  Wrench,
 } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -45,6 +46,7 @@ import { Input } from "@/components/ui/input";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
+import { QuickActionsPanel } from "./QuickActionsPanel";
 
 type MaiBotUpdateChannel = "stable" | "test" | "legacy";
 type DashboardUpdateChannel = "stable" | "test";
@@ -320,16 +322,14 @@ function LocalChatQuickCard({
           </span>
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold">随便聊聊</h3>
-            <p className="mt-1 truncate text-[11px] text-muted-foreground">在首页发一句简单文字。</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
             {statusLabel}
           </Badge>
-          <Button className="h-7 px-2.5 text-[11px]" onClick={onOpenFull} size="sm" variant="secondary">
+          <Button className="size-7" onClick={onOpenFull} size="icon" title="展开随便聊聊" variant="secondary">
             <Maximize2 className="size-3.5" />
-            展开
           </Button>
         </div>
       </div>
@@ -515,6 +515,8 @@ function MaiBotOverviewCard({
   latestPrerelease,
   updateBusy,
   onUpdate,
+  onOpenPluginStore,
+  onOpenPluginManager,
 }: {
   service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
@@ -522,7 +524,11 @@ function MaiBotOverviewCard({
   latestPrerelease: string | undefined;
   updateBusy?: boolean;
   onUpdate: () => void;
+  onOpenPluginStore: () => void;
+  onOpenPluginManager: () => void;
 }): React.JSX.Element {
+  const [activeTab, setActiveTab] = useState<"version" | "plugins">("version");
+
   return (
     <div className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5">
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -541,37 +547,90 @@ function MaiBotOverviewCard({
         ) : null}
       </div>
 
-      <div className="grid gap-3 rounded-md border border-border bg-muted/30 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">MaiBot 本地版本</p>
-          <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
-            {valueOrFallback(localVersion)}
-          </p>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_4.25rem]">
+        <div className="min-w-0 sm:order-2">
+          <div className="grid grid-cols-2 rounded-md border border-border bg-muted/35 p-1 sm:grid-cols-1">
+          {([
+            { value: "version", label: "版本" },
+            { value: "plugins", label: "插件" },
+          ] as const).map((tab) => (
+            <button
+              className={cn(
+                "h-7 rounded-sm px-2 text-[11px] font-medium transition-colors sm:h-12",
+                activeTab === tab.value
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              key={tab.value}
+              onClick={() => setActiveTab(tab.value)}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+          </div>
         </div>
-        <div className="grid min-w-0 gap-1 sm:min-w-44">
-          <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-            <span className="shrink-0 text-muted-foreground">最新正式版</span>
-            <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestStable}>
-              {valueOrFallback(latestStable)}
+
+        {activeTab === "version" ? (
+          <div className="grid min-w-0 gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">MaiBot 本地版本</p>
+              <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
+                {valueOrFallback(localVersion)}
+              </p>
+            </div>
+            <div className="grid min-w-0 gap-1 sm:min-w-44">
+              <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
+                <span className="shrink-0 text-muted-foreground">最新正式版</span>
+                <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestStable}>
+                  {valueOrFallback(latestStable)}
+                </span>
+              </div>
+              <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
+                <span className="shrink-0 text-muted-foreground">最新测试版</span>
+                <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestPrerelease}>
+                  {valueOrFallback(latestPrerelease)}
+                </span>
+              </div>
+              <Button
+                className="mt-1 h-7 justify-self-end px-2.5 text-[11px]"
+                disabled={updateBusy}
+                onClick={onUpdate}
+                size="sm"
+                variant="secondary"
+              >
+                {updateBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                更新
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                <Puzzle className="size-4.5" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">插件</span>
+                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                  安装或管理 MaiBot Core 插件。
+                </span>
+              </span>
+            </div>
+            <span className="flex shrink-0 flex-wrap gap-2">
+              <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenPluginStore} size="sm">
+                <Store className="size-3.5" />
+                打开商店
+                <ArrowRight className="size-3.5" />
+              </Button>
+              <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenPluginManager} size="sm" variant="secondary">
+                <Puzzle className="size-3.5" />
+                插件管理
+                <ArrowRight className="size-3.5" />
+              </Button>
             </span>
           </div>
-          <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-            <span className="shrink-0 text-muted-foreground">最新测试版</span>
-            <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestPrerelease}>
-              {valueOrFallback(latestPrerelease)}
-            </span>
-          </div>
-          <Button
-            className="mt-1 h-7 justify-self-end px-2.5 text-[11px]"
-            disabled={updateBusy}
-            onClick={onUpdate}
-            size="sm"
-            variant="secondary"
-          >
-            {updateBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            更新
-          </Button>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -580,9 +639,11 @@ function MaiBotOverviewCard({
 function HomeStatsPanel({
   snapshot,
   services,
+  onOpenQuickActions,
 }: {
   snapshot: DesktopSnapshot;
   services: ServiceDescriptor[];
+  onOpenQuickActions: () => void;
 }): React.JSX.Element {
   const [maibotStats, setMaibotStats] = useState<MaiBotStatisticSummary | null>(null);
   const runningCount = services.filter((service) => service.status === "running").length;
@@ -618,103 +679,72 @@ function HomeStatsPanel({
   }, [snapshot.paths.maibotRoot]);
 
   return (
-    <aside className="grid gap-3 self-start rounded-lg border border-border bg-card p-3.5">
-      <div className="flex items-center gap-3">
-        <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-          <PackageCheck className="size-4.5" />
-        </span>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">统计信息</p>
-          <p className="text-[11px] text-muted-foreground">当前实例概览</p>
+    <div className="grid gap-3 self-start">
+      <aside className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
+        <div className="flex items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <PackageCheck className="size-4.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">统计信息</p>
+            <p className="text-[11px] text-muted-foreground">当前实例概览</p>
+          </div>
         </div>
-      </div>
 
-      <div className="grid gap-2 text-xs">
-        <DetailRow label="服务运行" value={`${runningCount}/${services.length}`} />
-        <DetailRow label="端口可用" value={`${readyCount}/${services.length}`} />
-        <DetailRow label="一键包版本" value={`v${snapshot.appVersion}`} />
-        <DetailRow label="MaiBot 本地版本" value={snapshot.moduleVersions.maibotLocal} />
-        <DetailRow label="QQ 后端" value={qqBackend} />
-      </div>
+        <div className="grid gap-2 text-xs">
+          <DetailRow label="服务运行" value={`${runningCount}/${services.length}`} />
+          <DetailRow label="端口可用" value={`${readyCount}/${services.length}`} />
+          <DetailRow label="一键包版本" value={`v${snapshot.appVersion}`} />
+          <DetailRow label="MaiBot 本地版本" value={snapshot.moduleVersions.maibotLocal} />
+          <DetailRow label="QQ 后端" value={qqBackend} />
+        </div>
 
-      <div className="grid gap-2 border-t border-border pt-3 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
-          {maibotStats?.periodLabel ? (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-              {maibotStats.periodLabel}
+        <div className="grid gap-2 border-t border-border pt-3 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
+            {maibotStats?.periodLabel ? (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                {maibotStats.periodLabel}
+              </span>
+            ) : null}
+          </div>
+          <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} />
+          <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} />
+          <DetailRow label="总花费" value={maibotStats?.totalCost} />
+          <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} />
+        </div>
+
+        <div className="grid gap-2 border-t border-border pt-3 text-xs">
+          <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
+          <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} />
+          <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} />
+          <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} />
+          {topChats.map((chat) => (
+            <DetailRow
+              key={chat.name}
+              label={chat.name}
+              value={formatStatNumber(chat.messageCount)}
+            />
+          ))}
+        </div>
+      </aside>
+      <section className="rounded-lg border border-border bg-card p-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+              <Wrench className="size-4.5" />
             </span>
-          ) : null}
-        </div>
-        <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} />
-        <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} />
-        <DetailRow label="总花费" value={maibotStats?.totalCost} />
-        <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} />
-      </div>
-
-      <div className="grid gap-2 border-t border-border pt-3 text-xs">
-        <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
-        <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} />
-        <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} />
-        <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} />
-        {topChats.map((chat) => (
-          <DetailRow
-            key={chat.name}
-            label={chat.name}
-            value={formatStatNumber(chat.messageCount)}
-          />
-        ))}
-      </div>
-    </aside>
-  );
-}
-
-function ShortcutTile({
-  icon,
-  title,
-  description,
-  actions,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  actions: Array<{
-    label: string;
-    onClick: () => void;
-    icon?: React.ReactNode;
-    variant?: "primary" | "secondary";
-  }>;
-}): React.JSX.Element {
-  return (
-    <div className="flex min-h-28 min-w-0 items-center gap-3 rounded-lg border border-border bg-card p-4">
-      <span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-semibold text-foreground">{title}</span>
-        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-          {description}
-        </span>
-      </span>
-      <span className="grid shrink-0 gap-2">
-        {actions.map((action) => (
-          <button
-            className={cn(
-              "flex h-8 items-center justify-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors",
-              action.variant === "primary"
-                ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                : "bg-secondary text-secondary-foreground hover:bg-accent hover:text-foreground",
-            )}
-            key={action.label}
-            onClick={action.onClick}
-            type="button"
-          >
-            {action.icon}
-            {action.label}
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">快捷操作</p>
+              <p className="text-[11px] text-muted-foreground">路径、数据库和配置导入。</p>
+            </div>
+          </div>
+          <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenQuickActions} size="sm" variant="secondary">
+            打开
             <ArrowRight className="size-3.5" />
-          </button>
-        ))}
-      </span>
+          </Button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1128,7 +1158,7 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
   return (
     <div
       aria-hidden="true"
-      className="fixed right-0 bottom-0 z-20 hidden h-40 w-48 overflow-hidden md:block"
+      className="fixed right-0 bottom-0 z-20 hidden h-28 w-32 overflow-hidden md:block"
       data-mascot-stage="true"
       onClick={onClick}
       onPointerCancel={onPointerUp}
@@ -1141,7 +1171,7 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
     >
       <img
         alt=""
-        className="pointer-events-none absolute right-[-58px] bottom-[-48px] w-36 select-none"
+        className="pointer-events-none absolute right-[-46px] bottom-[-40px] w-32 select-none"
         draggable={false}
         src={maiMascotImage}
         style={{
@@ -1193,6 +1223,7 @@ export function HomePanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend>("napcat");
   const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
@@ -1261,6 +1292,21 @@ export function HomePanel({
     setCustomMaiBotUrl(config.maibotUrl);
     setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
   }, []);
+
+  const reloadModuleSourceOptions = useCallback(async () => {
+    if (!window.maibotDesktop?.modules) {
+      return;
+    }
+
+    const currentPreset = moduleSourcePreset;
+    const currentMaiBotUrl = customMaiBotUrl;
+    const currentNapcatAdapterUrl = customNapcatAdapterUrl;
+    const config = await window.maibotDesktop.modules.getSourceConfig();
+    setModuleSourceConfig(config);
+    setModuleSourcePreset(currentPreset);
+    setCustomMaiBotUrl(currentMaiBotUrl);
+    setCustomNapcatAdapterUrl(currentNapcatAdapterUrl);
+  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
@@ -1389,34 +1435,16 @@ export function HomePanel({
         <div className="mx-auto grid max-w-6xl gap-4">
           <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="grid min-w-0 gap-3">
-              <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
-                <MaiBotOverviewCard
-                  latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
-                  latestStable={snapshot.moduleVersions.maibotLatestStableTag}
-                  localVersion={snapshot.moduleVersions.maibotLocal}
-                  onUpdate={openMaiBotUpdate}
-                  service={maibot}
-                  updateBusy={busy === "maibot:update"}
-                />
-                <ShortcutTile
-                  actions={[
-                    {
-                      label: "打开商店",
-                      onClick: openPluginStore,
-                      icon: <Store className="size-3.5" />,
-                      variant: "primary",
-                    },
-                    {
-                      label: "插件管理",
-                      onClick: openPluginManager,
-                      icon: <Puzzle className="size-3.5" />,
-                    },
-                  ]}
-                  description="安装或管理插件。"
-                  icon={<Puzzle className="size-5" />}
-                  title="插件"
-                />
-              </div>
+              <MaiBotOverviewCard
+                latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
+                latestStable={snapshot.moduleVersions.maibotLatestStableTag}
+                localVersion={snapshot.moduleVersions.maibotLocal}
+                onOpenPluginManager={openPluginManager}
+                onOpenPluginStore={openPluginStore}
+                onUpdate={openMaiBotUpdate}
+                service={maibot}
+                updateBusy={busy === "maibot:update"}
+              />
               <LocalChatQuickCard
                 active={active}
                 maibotService={maibot}
@@ -1444,11 +1472,34 @@ export function HomePanel({
                 <MessagePlatformConnectCard onClick={openMessagePlatformDialog} />
               )}
             </div>
-            <HomeStatsPanel services={services} snapshot={snapshot} />
+            <HomeStatsPanel
+              onOpenQuickActions={() => setQuickActionsOpen(true)}
+              services={services}
+              snapshot={snapshot}
+            />
           </div>
           <ElasticMascot onLongPress={onEnterFloatingMode} />
         </div>
       </div>
+
+      <Dialog open={quickActionsOpen} onOpenChange={setQuickActionsOpen}>
+        <DialogContent size="lg">
+          <DialogHeader
+            description="选择路径、导入旧数据库或覆盖 MaiBot 配置文件。"
+            icon={<Wrench className="size-4" />}
+            title="快捷操作"
+            tone="primary"
+          />
+          <DialogBody>
+            <QuickActionsPanel embedded />
+          </DialogBody>
+          <DialogFooter>
+            <Button onClick={() => setQuickActionsOpen(false)} size="sm" variant="ghost">
+              关闭
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={messagePlatformDialogOpen}
@@ -1585,7 +1636,7 @@ export function HomePanel({
                 </div>
                 <Button
                   disabled={busy !== null}
-                  onClick={() => void loadModuleSourceConfig()}
+                  onClick={() => void reloadModuleSourceOptions()}
                   size="sm"
                   variant="ghost"
                 >

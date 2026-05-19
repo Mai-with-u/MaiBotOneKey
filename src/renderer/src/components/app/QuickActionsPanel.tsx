@@ -67,7 +67,7 @@ function DetailRow({
   );
 }
 
-export function QuickActionsPanel(): React.JSX.Element {
+export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
   const [importing, setImporting] = useState(false);
   const [selectingMaiBotPath, setSelectingMaiBotPath] = useState(false);
   const [lastImport, setLastImport] = useState<MaiBotDataImportResult | null>(null);
@@ -148,9 +148,9 @@ export function QuickActionsPanel(): React.JSX.Element {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-background">
-      <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
-        <div>
+    <div className={embedded ? "max-h-[70vh] overflow-y-auto" : "h-full overflow-y-auto bg-background"}>
+      <div className={embedded ? "flex flex-col gap-4 pr-2" : "mx-auto flex max-w-3xl flex-col gap-4 p-6"}>
+        <div className={embedded ? "hidden" : undefined}>
           <h2 className="text-base font-semibold tracking-tight">快捷操作</h2>
         </div>
 
