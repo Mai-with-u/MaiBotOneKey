@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
   MaiBotPluginConfigSaveResult,
+  MaiBotPluginConfigField,
   MaiBotPluginConfigSchema,
+  MaiBotPluginConfigSection,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
   MaiBotPluginConfigLocalizedText,
@@ -47,6 +49,46 @@ interface GitRunResult {
 interface CacheFile<T> {
   timestamp: number;
   data: T;
+}
+
+interface LocalPythonConfigInspection {
+  classes: Map<string, LocalPythonConfigClass>;
+  configModel?: string;
+}
+
+interface LocalPythonConfigClass {
+  name: string;
+  description?: string;
+  label?: string;
+  icon?: string;
+  order?: number;
+  fields: LocalPythonConfigField[];
+}
+
+interface LocalPythonConfigField {
+  name: string;
+  annotation: string;
+  defaultFactory?: string;
+  defaultValue?: MaiBotPluginConfigValue;
+  label?: MaiBotPluginConfigLocalizedText;
+  description?: MaiBotPluginConfigLocalizedText;
+  hint?: MaiBotPluginConfigLocalizedText;
+  placeholder?: MaiBotPluginConfigLocalizedText;
+  uiType?: string;
+  inputType?: string;
+  choices?: Array<MaiBotPluginConfigValue | { label?: MaiBotPluginConfigLocalizedText; value: MaiBotPluginConfigValue }>;
+  min?: number;
+  max?: number;
+  step?: number;
+  rows?: number;
+  required?: boolean;
+  hidden?: boolean;
+  disabled?: boolean;
+  order?: number;
+  icon?: string;
+  itemType?: string;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export class MaiBotPluginClient {
@@ -228,6 +270,8 @@ export class MaiBotPluginClient {
     const exists = await pathExists(configPath);
     const raw = exists ? await readFile(configPath, "utf8") : "";
     const config = exists ? parsePluginConfig(raw, configPath) : {};
+    const schema = await buildLocalPluginConfigSchema(pluginPath, config)
+      ?? buildPluginConfigSchema(config, "local");
 
     return {
       pluginId,
@@ -235,7 +279,7 @@ export class MaiBotPluginClient {
       configPath,
       exists,
       config,
-      schema: buildPluginConfigSchema(config, "local"),
+      schema,
       raw,
     };
   }
@@ -272,7 +316,8 @@ export class MaiBotPluginClient {
       pluginId,
       configPath,
       config: normalizedConfig,
-      schema: buildPluginConfigSchema(normalizedConfig, "local"),
+      schema: await buildLocalPluginConfigSchema(pluginPath, normalizedConfig)
+        ?? buildPluginConfigSchema(normalizedConfig, "local"),
       raw,
       backupPath,
       savedAt: Date.now(),
@@ -760,14 +805,22 @@ function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
   if (!id || !manifest.name || !manifest.version) {
     return null;
   }
+  const loadStatus = typeof raw.load_status === "string" ? raw.load_status : undefined;
+  const loaded = loadStatus === "success"
+    ? true
+    : loadStatus === "failed"
+      ? false
+      : raw.loaded === true
+        ? true
+        : undefined;
 
   return {
     id,
     manifest: { ...manifest, id: manifest.id?.trim() || id },
     path: typeof raw.path === "string" ? raw.path : "",
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : typeof raw.disabled === "boolean" ? !raw.disabled : true,
-    loaded: typeof raw.loaded === "boolean" ? raw.loaded : undefined,
-    load_status: typeof raw.load_status === "string" ? raw.load_status : undefined,
+    loaded,
+    load_status: loadStatus,
   };
 }
 
@@ -975,6 +1028,684 @@ function readPluginEnabled(config: Record<string, MaiBotPluginConfigValue>): boo
     if (["1", "true", "yes", "on"].includes(normalized)) return true;
   }
   return typeof enabled === "boolean" ? enabled : true;
+}
+
+async function buildLocalPluginConfigSchema(
+  pluginPath: string,
+  config: Record<string, MaiBotPluginConfigValue>,
+): Promise<MaiBotPluginConfigSchema | null> {
+  const pythonFiles = await collectPluginPythonFiles(pluginPath).catch(() => []);
+  if (pythonFiles.length === 0) {
+    return null;
+  }
+
+  const sources: string[] = [];
+  for (const filePath of pythonFiles) {
+    try {
+      if ((await stat(filePath)).size > 512 * 1024) {
+        continue;
+      }
+      sources.push(await readFile(filePath, "utf8"));
+    } catch {
+      // Ignore unreadable plugin helper files and keep the weak TOML fallback available.
+    }
+  }
+
+  if (sources.length === 0) {
+    return null;
+  }
+
+  const inspection = parseLocalPythonConfigInspection(sources);
+  if (inspection.classes.size === 0) {
+    return null;
+  }
+  return buildPluginConfigSchemaFromLocalPython(inspection, config);
+}
+
+async function collectPluginPythonFiles(
+  pluginPath: string,
+  currentPath = pluginPath,
+  depth = 0,
+  files: string[] = [],
+): Promise<string[]> {
+  if (depth > 2 || files.length >= 80) {
+    return files;
+  }
+
+  const entries = await readdir(currentPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (files.length >= 80) {
+      break;
+    }
+    if (entry.name.startsWith(".") || entry.name === "__pycache__" || entry.name === "node_modules") {
+      continue;
+    }
+
+    const entryPath = resolve(currentPath, entry.name);
+    if (!isPathInside(pluginPath, entryPath)) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      await collectPluginPythonFiles(pluginPath, entryPath, depth + 1, files);
+    } else if (entry.isFile() && entry.name.endsWith(".py")) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function parseLocalPythonConfigInspection(sources: string[]): LocalPythonConfigInspection {
+  const classes = new Map<string, LocalPythonConfigClass>();
+  let configModel: string | undefined;
+
+  for (const source of sources) {
+    configModel ??= extractPythonConfigModel(source);
+    for (const configClass of parsePythonConfigClasses(source)) {
+      if (configClass.fields.length > 0 || configClass.label || configClass.description) {
+        classes.set(configClass.name, configClass);
+      }
+    }
+  }
+
+  return { classes, configModel };
+}
+
+function extractPythonConfigModel(source: string): string | undefined {
+  const match = source.match(/^\s{4}config_model(?:\s*:[^=\n]+)?\s*=\s*([A-Za-z_]\w*)/mu)
+    ?? source.match(/^config_model(?:\s*:[^=\n]+)?\s*=\s*([A-Za-z_]\w*)/mu);
+  return match?.[1];
+}
+
+function parsePythonConfigClasses(source: string): LocalPythonConfigClass[] {
+  const classHeaders: Array<{ name: string; headerEnd: number; start: number }> = [];
+  const classRegex = /^class\s+([A-Za-z_]\w*)\([^)]*\):/gmu;
+  let classMatch: RegExpExecArray | null;
+  while ((classMatch = classRegex.exec(source)) !== null) {
+    classHeaders.push({
+      name: classMatch[1],
+      headerEnd: classMatch.index + classMatch[0].length,
+      start: classMatch.index,
+    });
+  }
+
+  return classHeaders.map((header, index) => {
+    const nextHeader = classHeaders[index + 1];
+    const block = source.slice(header.headerEnd, nextHeader?.start);
+    return parsePythonConfigClass(header.name, block);
+  });
+}
+
+function parsePythonConfigClass(name: string, block: string): LocalPythonConfigClass {
+  return {
+    name,
+    description: extractPythonClassDocstring(block),
+    label: extractPythonClassStringAttribute(block, "__ui_label__"),
+    icon: extractPythonClassStringAttribute(block, "__ui_icon__"),
+    order: extractPythonClassNumberAttribute(block, "__ui_order__"),
+    fields: parsePythonConfigFields(block),
+  };
+}
+
+function parsePythonConfigFields(block: string): LocalPythonConfigField[] {
+  const fields: LocalPythonConfigField[] = [];
+  const fieldRegex = /^ {4}([A-Za-z_]\w*)\s*:\s*([^=\n]+?)\s*=\s*Field\s*\(/gmu;
+  let fieldMatch: RegExpExecArray | null;
+  while ((fieldMatch = fieldRegex.exec(block)) !== null) {
+    const openParenIndex = fieldMatch.index + fieldMatch[0].lastIndexOf("(");
+    const closeParenIndex = findMatchingDelimiter(block, openParenIndex, "(", ")");
+    if (closeParenIndex < 0) {
+      continue;
+    }
+
+    const name = fieldMatch[1];
+    const annotation = fieldMatch[2].trim();
+    const expression = block.slice(openParenIndex + 1, closeParenIndex);
+    const extra = extractPythonFieldExtra(expression);
+    fields.push({
+      name,
+      annotation,
+      defaultFactory: extractPythonIdentifierKeyword(expression, "default_factory"),
+      defaultValue: extractPythonDefaultValue(expression, annotation),
+      label: extra.label,
+      description: extractPythonStringKeyword(expression, "description") ?? extra.description,
+      hint: extra.hint,
+      placeholder: extra.placeholder,
+      uiType: extra.uiType,
+      inputType: extra.inputType,
+      choices: extra.choices ?? extractLiteralChoices(annotation),
+      min: extra.min,
+      max: extra.max,
+      step: extra.step,
+      rows: extra.rows,
+      required: extra.required,
+      hidden: extra.hidden,
+      disabled: extra.disabled,
+      order: extra.order,
+      icon: extra.icon,
+      itemType: extra.itemType,
+      minItems: extra.minItems,
+      maxItems: extra.maxItems,
+    });
+    fieldRegex.lastIndex = closeParenIndex + 1;
+  }
+  return fields;
+}
+
+function buildPluginConfigSchemaFromLocalPython(
+  inspection: LocalPythonConfigInspection,
+  config: Record<string, MaiBotPluginConfigValue>,
+): MaiBotPluginConfigSchema | null {
+  const rootClass = resolveLocalPythonRootConfigClass(inspection, config);
+  if (!rootClass) {
+    return null;
+  }
+
+  const sections: MaiBotPluginConfigSection[] = [];
+  const usedConfigKeys = new Set<string>();
+  const rootFields = [...rootClass.fields].sort(compareLocalPythonFields);
+
+  for (const rootField of rootFields) {
+    const sectionValue = config[rootField.name];
+    const sectionClassName = resolveLocalPythonFieldClassName(rootField, inspection.classes);
+    const sectionClass = sectionClassName ? inspection.classes.get(sectionClassName) : undefined;
+    if (!sectionClass && !isConfigRecord(sectionValue)) {
+      continue;
+    }
+
+    usedConfigKeys.add(rootField.name);
+    sections.push(buildLocalPythonConfigSection(
+      rootField.name,
+      isConfigRecord(sectionValue) ? sectionValue : {},
+      sectionClass,
+      rootField,
+    ));
+  }
+
+  const generalFields = rootFields
+    .filter((field) => !usedConfigKeys.has(field.name) && field.hidden !== true)
+    .map((field) => buildLocalPythonConfigField([field.name], field, config[field.name]))
+    .filter((field): field is MaiBotPluginConfigField => field !== null);
+
+  const extraGeneralFields = Object.entries(config)
+    .filter(([key, value]) => !usedConfigKeys.has(key) && !rootClass.fields.some((field) => field.name === key) && !isConfigRecord(value))
+    .map(([key, value]) => buildPluginConfigField([key], key, value));
+
+  if (generalFields.length > 0 || extraGeneralFields.length > 0) {
+    sections.unshift({
+      name: "general",
+      title: "General",
+      fields: [...generalFields, ...extraGeneralFields],
+    });
+  }
+
+  for (const [sectionName, sectionValue] of Object.entries(config)) {
+    if (usedConfigKeys.has(sectionName) || !isConfigRecord(sectionValue)) {
+      continue;
+    }
+    sections.push(buildLocalPythonConfigSection(sectionName, sectionValue));
+  }
+
+  if (sections.length === 0) {
+    return null;
+  }
+  return {
+    pluginInfo: {
+      name: rootClass.label,
+      description: rootClass.description,
+    },
+    sections: sections.sort((left, right) => (left.order ?? 0) - (right.order ?? 0)),
+    source: "local",
+  };
+}
+
+function resolveLocalPythonRootConfigClass(
+  inspection: LocalPythonConfigInspection,
+  config: Record<string, MaiBotPluginConfigValue>,
+): LocalPythonConfigClass | undefined {
+  if (inspection.configModel && inspection.classes.has(inspection.configModel)) {
+    return inspection.classes.get(inspection.configModel);
+  }
+
+  const configKeys = new Set(Object.keys(config));
+  return [...inspection.classes.values()]
+    .map((configClass) => {
+      let score = 0;
+      for (const field of configClass.fields) {
+        const className = resolveLocalPythonFieldClassName(field, inspection.classes);
+        if (className) {
+          score += 4;
+        }
+        if (configKeys.has(field.name)) {
+          score += 2;
+        }
+      }
+      return { configClass, score };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score)[0]?.configClass;
+}
+
+function buildLocalPythonConfigSection(
+  sectionName: string,
+  sectionConfig: Record<string, MaiBotPluginConfigValue>,
+  sectionClass?: LocalPythonConfigClass,
+  rootField?: LocalPythonConfigField,
+): MaiBotPluginConfigSection {
+  const metadataFields = [...(sectionClass?.fields ?? [])].sort(compareLocalPythonFields);
+  const metadataNames = new Set(metadataFields.map((field) => field.name));
+  const fields = [
+    ...metadataFields
+      .filter((field) => field.hidden !== true)
+      .map((field) => buildLocalPythonConfigField([sectionName, field.name], field, sectionConfig[field.name]))
+      .filter((field): field is MaiBotPluginConfigField => field !== null),
+    ...Object.entries(sectionConfig)
+      .filter(([fieldName]) => !metadataNames.has(fieldName))
+      .map(([fieldName, fieldValue]) => buildPluginConfigField([sectionName, fieldName], fieldName, fieldValue)),
+  ];
+
+  return {
+    name: sectionName,
+    title: sectionClass?.label ?? rootField?.label ?? labelFromKey(sectionName),
+    description: sectionClass?.description ?? rootField?.description,
+    icon: sectionClass?.icon ?? rootField?.icon,
+    order: sectionClass?.order ?? rootField?.order,
+    fields,
+  };
+}
+
+function buildLocalPythonConfigField(
+  path: string[],
+  metadata: LocalPythonConfigField,
+  currentValue: MaiBotPluginConfigValue | undefined,
+): MaiBotPluginConfigField | null {
+  if (metadata.hidden === true) {
+    return null;
+  }
+  const value = currentValue
+    ?? metadata.defaultValue
+    ?? defaultValueForPythonAnnotation(metadata.annotation, metadata.defaultFactory);
+  return {
+    name: metadata.name,
+    label: metadata.label ?? metadata.description ?? labelFromKey(metadata.name),
+    path,
+    type: pluginConfigValueType(value),
+    value,
+    description: metadata.description,
+    hint: metadata.hint,
+    placeholder: metadata.placeholder,
+    uiType: metadata.uiType,
+    inputType: metadata.inputType,
+    choices: metadata.choices,
+    min: metadata.min,
+    max: metadata.max,
+    step: metadata.step,
+    rows: metadata.rows,
+    required: metadata.required,
+    disabled: metadata.disabled,
+    order: metadata.order,
+    icon: metadata.icon,
+    default: metadata.defaultValue,
+    itemType: metadata.itemType,
+    minItems: metadata.minItems,
+    maxItems: metadata.maxItems,
+  };
+}
+
+function compareLocalPythonFields(left: LocalPythonConfigField, right: LocalPythonConfigField): number {
+  return (left.order ?? 0) - (right.order ?? 0);
+}
+
+function resolveLocalPythonFieldClassName(
+  field: LocalPythonConfigField,
+  classes: Map<string, LocalPythonConfigClass>,
+): string | undefined {
+  const candidates = [
+    ...extractPythonIdentifierTokens(field.annotation),
+    ...(field.defaultFactory ? extractPythonIdentifierTokens(field.defaultFactory) : []),
+  ];
+  return candidates.find((candidate) => classes.has(candidate));
+}
+
+function defaultValueForPythonAnnotation(annotation: string, defaultFactory?: string): MaiBotPluginConfigValue {
+  const normalized = annotation.toLowerCase();
+  const factory = defaultFactory?.toLowerCase();
+  if (factory === "list" || normalized.includes("list[")) {
+    return [];
+  }
+  if (factory === "dict" || normalized.includes("dict[") || normalized.includes("mapping[")) {
+    return {};
+  }
+  if (normalized.includes("bool")) {
+    return false;
+  }
+  if (normalized.includes("int") || normalized.includes("float")) {
+    return 0;
+  }
+  return "";
+}
+
+function extractPythonClassDocstring(block: string): string | undefined {
+  const firstContent = block.match(/^\s*(?:(?:\r?\n)\s*)*/u)?.[0].length ?? 0;
+  const literal = readPythonStringLiteral(block, firstContent);
+  return literal?.value.trim() || undefined;
+}
+
+function extractPythonClassStringAttribute(block: string, attribute: string): string | undefined {
+  const regex = new RegExp(`^ {4}${escapeRegExp(attribute)}(?:\\s*:[^=\\n]+)?\\s*=\\s*`, "mu");
+  const match = regex.exec(block);
+  if (!match) {
+    return undefined;
+  }
+  return readPythonStringLiteral(block, match.index + match[0].length)?.value;
+}
+
+function extractPythonClassNumberAttribute(block: string, attribute: string): number | undefined {
+  const regex = new RegExp(`^ {4}${escapeRegExp(attribute)}(?:\\s*:[^=\\n]+)?\\s*=\\s*([-+]?\\d+(?:\\.\\d+)?)`, "mu");
+  const value = Number(regex.exec(block)?.[1]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function extractPythonFieldExtra(expression: string): Partial<LocalPythonConfigField> {
+  return {
+    label: extractPythonDictStringValue(expression, "label"),
+    description: extractPythonDictStringValue(expression, "description"),
+    hint: extractPythonDictStringValue(expression, "hint"),
+    placeholder: extractPythonDictStringValue(expression, "placeholder"),
+    uiType: extractPythonDictStringValue(expression, "ui_type"),
+    inputType: extractPythonDictStringValue(expression, "input_type"),
+    icon: extractPythonDictStringValue(expression, "icon"),
+    itemType: extractPythonDictStringValue(expression, "item_type"),
+    hidden: extractPythonDictBooleanValue(expression, "hidden"),
+    disabled: extractPythonDictBooleanValue(expression, "disabled"),
+    required: extractPythonDictBooleanValue(expression, "required"),
+    order: extractPythonDictNumberValue(expression, "order"),
+    min: extractPythonDictNumberValue(expression, "min"),
+    max: extractPythonDictNumberValue(expression, "max"),
+    step: extractPythonDictNumberValue(expression, "step"),
+    rows: extractPythonDictNumberValue(expression, "rows"),
+    minItems: extractPythonDictNumberValue(expression, "min_items"),
+    maxItems: extractPythonDictNumberValue(expression, "max_items"),
+    choices: extractPythonDictChoices(expression, "choices"),
+  };
+}
+
+function extractPythonDefaultValue(
+  expression: string,
+  annotation: string,
+): MaiBotPluginConfigValue | undefined {
+  const rawDefault = extractPythonKeywordExpression(expression, "default");
+  if (rawDefault !== undefined) {
+    return parsePythonLiteral(rawDefault);
+  }
+
+  const factory = extractPythonIdentifierKeyword(expression, "default_factory")?.toLowerCase();
+  if (factory === "list") {
+    return [];
+  }
+  if (factory === "dict") {
+    return {};
+  }
+  return undefined;
+}
+
+function extractPythonStringKeyword(expression: string, keyword: string): string | undefined {
+  const rawValue = extractPythonKeywordExpression(expression, keyword);
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  return readPythonStringLiteral(rawValue, 0)?.value;
+}
+
+function extractPythonIdentifierKeyword(expression: string, keyword: string): string | undefined {
+  const rawValue = extractPythonKeywordExpression(expression, keyword);
+  return rawValue?.trim().match(/^[A-Za-z_]\w*/u)?.[0];
+}
+
+function extractPythonKeywordExpression(expression: string, keyword: string): string | undefined {
+  const regex = new RegExp(`\\b${escapeRegExp(keyword)}\\s*=`, "u");
+  const match = regex.exec(expression);
+  if (!match) {
+    return undefined;
+  }
+  return readPythonExpressionUntilComma(expression, match.index + match[0].length).trim();
+}
+
+function extractPythonDictStringValue(expression: string, key: string): string | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const literal = readPythonStringLiteral(rawValue, 0);
+    if (literal?.value) {
+      return literal.value;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictBooleanValue(expression: string, key: string): boolean | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const parsed = parsePythonLiteral(rawValue);
+    if (typeof parsed === "boolean") {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictNumberValue(expression: string, key: string): number | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const parsed = parsePythonLiteral(rawValue);
+    if (typeof parsed === "number") {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictChoices(
+  expression: string,
+  key: string,
+): Array<MaiBotPluginConfigValue | { label?: MaiBotPluginConfigLocalizedText; value: MaiBotPluginConfigValue }> | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const parsed = parsePythonLiteral(rawValue);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictExpressions(expression: string, key: string): string[] {
+  const values: string[] = [];
+  const regex = new RegExp(`["']${escapeRegExp(key)}["']\\s*:`, "gu");
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(expression)) !== null) {
+    values.push(readPythonExpressionUntilComma(expression, match.index + match[0].length).trim());
+  }
+  return values;
+}
+
+function extractLiteralChoices(annotation: string): MaiBotPluginConfigValue[] | undefined {
+  const literalMatch = annotation.match(/Literal\s*\[(.*)\]/u);
+  if (!literalMatch) {
+    return undefined;
+  }
+  const values: MaiBotPluginConfigValue[] = [];
+  const content = literalMatch[1];
+  let index = 0;
+  while (index < content.length) {
+    const rawExpression = readPythonExpressionUntilComma(content, index);
+    const expression = rawExpression.trim();
+    const parsed = parsePythonLiteral(expression);
+    if (parsed !== undefined) {
+      values.push(parsed);
+    }
+    index += rawExpression.length + 1;
+  }
+  return values.length > 0 ? values : undefined;
+}
+
+function parsePythonLiteral(rawValue: string): MaiBotPluginConfigValue | undefined {
+  const value = rawValue.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (value === "True") {
+    return true;
+  }
+  if (value === "False") {
+    return false;
+  }
+  if (value === "None") {
+    return null;
+  }
+
+  const stringLiteral = readPythonStringLiteral(value, 0);
+  if (stringLiteral && value.slice(stringLiteral.end).trim().length === 0) {
+    return stringLiteral.value;
+  }
+
+  if (/^[-+]?\d+(?:\.\d+)?$/u.test(value)) {
+    return Number(value);
+  }
+
+  if (value === "[]" || value.toLowerCase() === "list()") {
+    return [];
+  }
+  if (value === "{}" || value.toLowerCase() === "dict()") {
+    return {};
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return parsePythonListLiteral(value);
+  }
+  return undefined;
+}
+
+function parsePythonListLiteral(value: string): MaiBotPluginConfigValue[] | undefined {
+  const content = value.slice(1, -1);
+  const values: MaiBotPluginConfigValue[] = [];
+  let index = 0;
+  while (index < content.length) {
+    const rawExpression = readPythonExpressionUntilComma(content, index);
+    const item = rawExpression.trim();
+    if (item) {
+      const parsed = parsePythonLiteral(item);
+      if (parsed === undefined || isConfigRecord(parsed)) {
+        return undefined;
+      }
+      values.push(parsed);
+    }
+    index += rawExpression.length + 1;
+  }
+  return values;
+}
+
+function readPythonExpressionUntilComma(text: string, startIndex: number): string {
+  let depth = 0;
+  for (let index = startIndex; index < text.length; index++) {
+    const stringEnd = findPythonStringEnd(text, index);
+    if (stringEnd > index) {
+      index = stringEnd - 1;
+      continue;
+    }
+
+    const char = text[index];
+    if (char === "(" || char === "[" || char === "{") {
+      depth++;
+    } else if (char === ")" || char === "]" || char === "}") {
+      if (depth === 0) {
+        return text.slice(startIndex, index);
+      }
+      depth--;
+    } else if (char === "," && depth === 0) {
+      return text.slice(startIndex, index);
+    }
+  }
+  return text.slice(startIndex);
+}
+
+function findMatchingDelimiter(text: string, openIndex: number, open: string, close: string): number {
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index++) {
+    const stringEnd = findPythonStringEnd(text, index);
+    if (stringEnd > index) {
+      index = stringEnd - 1;
+      continue;
+    }
+
+    if (text[index] === open) {
+      depth++;
+    } else if (text[index] === close) {
+      depth--;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function readPythonStringLiteral(text: string, startIndex: number): { value: string; end: number } | null {
+  let index = skipWhitespace(text, startIndex);
+  while (/[rRuUbBfF]/u.test(text[index] ?? "") && (text[index + 1] === "\"" || text[index + 1] === "'")) {
+    index++;
+  }
+
+  const quote = text[index];
+  if (quote !== "\"" && quote !== "'") {
+    return null;
+  }
+
+  const triple = text.slice(index, index + 3) === quote.repeat(3);
+  const contentStart = index + (triple ? 3 : 1);
+  let value = "";
+  for (let cursor = contentStart; cursor < text.length; cursor++) {
+    if (triple && text.slice(cursor, cursor + 3) === quote.repeat(3)) {
+      return { value, end: cursor + 3 };
+    }
+    if (!triple && text[cursor] === quote) {
+      return { value, end: cursor + 1 };
+    }
+    if (text[cursor] === "\\" && cursor + 1 < text.length) {
+      value += decodePythonEscapedChar(text[cursor + 1]);
+      cursor++;
+    } else {
+      value += text[cursor];
+    }
+  }
+  return null;
+}
+
+function findPythonStringEnd(text: string, index: number): number {
+  const literal = readPythonStringLiteral(text, index);
+  return literal?.end ?? index;
+}
+
+function decodePythonEscapedChar(char: string): string {
+  switch (char) {
+    case "n":
+      return "\n";
+    case "r":
+      return "\r";
+    case "t":
+      return "\t";
+    default:
+      return char;
+  }
+}
+
+function skipWhitespace(text: string, startIndex: number): number {
+  let index = startIndex;
+  while (/\s/u.test(text[index] ?? "")) {
+    index++;
+  }
+  return index;
+}
+
+function extractPythonIdentifierTokens(value: string): string[] {
+  return [...value.matchAll(/[A-Za-z_]\w*/gu)].map((match) => match[0]);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 interface DashboardConfigFieldSchema {

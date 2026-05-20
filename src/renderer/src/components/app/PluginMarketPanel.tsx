@@ -65,7 +65,7 @@ type InstalledPluginView = InstalledPlugin & {
 
 type DetailPlugin = MarketPlugin | InstalledPluginView;
 
-type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive";
+type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive" | "loading";
 type AdapterConfigPage = "connection" | "chat";
 const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
   "enable_chat_list_filter",
@@ -930,14 +930,21 @@ function pluginRuntimeState(plugin: InstalledPluginView, maibotRunning: boolean)
   if (!maibotRunning) {
     return "inactive";
   }
+  const loadStatus = plugin.load_status?.toLowerCase();
   if (plugin.loaded === true) {
     return "loaded";
   }
-  if (plugin.load_status === "success") {
+  if (loadStatus === "success") {
     return "loaded";
   }
-  if (plugin.loaded === false || plugin.load_status === "failed") {
+  if (loadStatus === "failed") {
     return "failed";
+  }
+  if (loadStatus === "inactive") {
+    return "inactive";
+  }
+  if (!loadStatus || loadStatus === "unknown" || loadStatus === "loading") {
+    return "loading";
   }
   return "inactive";
 }
@@ -946,6 +953,7 @@ function PluginRuntimeLight({ state }: { state: PluginRuntimeState }): React.JSX
   const meta = {
     disabled: { label: "未启用", className: "bg-muted-foreground/55" },
     inactive: { label: "未加载", className: "bg-muted-foreground/55" },
+    loading: { label: "加载中", className: "bg-sky-500" },
     failed: { label: "加载失败", className: "bg-destructive" },
     loaded: { label: "加载成功", className: "bg-emerald-500" },
   }[state];
