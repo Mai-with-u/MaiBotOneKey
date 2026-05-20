@@ -330,6 +330,9 @@ class PtySession {
   resize(request: Omit<PtyResizeRequest, "sessionId">): void {
     const cols = clampDimension(request.cols, this.snapshot.cols);
     const rows = normalizeRows(request.rows);
+    if (cols === this.snapshot.cols && rows === this.snapshot.rows) {
+      return;
+    }
 
     this.snapshot = {
       ...this.snapshot,

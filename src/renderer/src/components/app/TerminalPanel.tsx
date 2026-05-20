@@ -295,6 +295,11 @@ export function TerminalPanel({
           });
         }),
         terminal.onResize(({ cols, rows }) => {
+          const currentSession = sessionsRef.current.get(sessionId);
+          if (currentSession?.cols === cols && currentSession.rows === rows) {
+            return;
+          }
+
           const pane = panesRef.current.get(sessionId);
           const rect = pane?.getBoundingClientRect();
           if (
