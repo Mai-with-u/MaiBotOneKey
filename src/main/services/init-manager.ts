@@ -255,8 +255,6 @@ const NAPCAT_ADAPTER_HOST = "127.0.0.1";
 const NAPCAT_ADAPTER_PORT = 7998;
 const SNOWLUMA_ONEBOT_PORT = 7988;
 const SNOWLUMA_WEBUI_PORT = 5099;
-const LOCAL_CHAT_PLATFORM = "onekey-local-chat";
-const LOCAL_CHAT_BOT_ACCOUNT = "onekey-local-bot";
 
 interface NapcatWebsocketServerConfig {
   host: string;
@@ -506,25 +504,18 @@ function ensureBotQqConfig(content: string, account: string): string {
   return ensureBotPlatformConfig(content, {
     platform: "qq",
     qqAccount: account,
-    extraPlatformAccount: `${LOCAL_CHAT_PLATFORM}:${LOCAL_CHAT_BOT_ACCOUNT}`,
-  });
-}
-
-function ensureLocalChatBotConfig(content: string): string {
-  return ensureBotPlatformConfig(content, {
-    extraPlatformAccount: `${LOCAL_CHAT_PLATFORM}:${LOCAL_CHAT_BOT_ACCOUNT}`,
   });
 }
 
 function ensureBotPlatformConfig(
   content: string,
-  options: { platform?: string; qqAccount?: string; extraPlatformAccount: string },
+  options: { platform?: string; qqAccount?: string },
 ): string {
   const botSectionMatch = content.match(/(^|\r?\n)(\s*\[bot\]\s*(?:#.*)?)(?:\r?\n|$)/u);
   if (!botSectionMatch) {
     const platformLine = options.platform ? `platform = "${options.platform}"\n` : "";
     const qqAccountLine = options.qqAccount ? `qq_account = ${options.qqAccount}\n` : "";
-    return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}platforms = [\n    "${options.extraPlatformAccount}",\n]\n`;
+    return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}`;
   }
 
   const botSectionStart = (botSectionMatch.index ?? 0) + botSectionMatch[0].length;
@@ -558,24 +549,6 @@ function ensureBotPlatformConfig(
     } else {
       nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${options.qqAccount}\n`;
     }
-  }
-
-  const platformsMatch = nextBotSection.match(/(^|\r?\n)(\s*platforms\s*=\s*)(\[[\s\S]*?\])(\s*(?:#.*)?)(?=\r?\n|$)/u);
-  const platformEntries = platformsMatch
-    ? Array.from(platformsMatch[3].matchAll(/["']([^"']+)["']/gu), (match) => match[1])
-    : [];
-  const nextPlatformEntries = [
-    ...platformEntries.filter((entry) => {
-      const [platformName] = entry.split(":", 1);
-      return platformName.trim().toLowerCase() !== LOCAL_CHAT_PLATFORM;
-    }),
-    options.extraPlatformAccount,
-  ];
-  if (platformsMatch) {
-    const nextListBody = nextPlatformEntries.map((entry) => `    "${entry}",`).join("\n");
-    nextBotSection = `${nextBotSection.slice(0, platformsMatch.index)}${platformsMatch[1] ?? ""}${platformsMatch[2]}[\n${nextListBody}\n]${platformsMatch[4]}${nextBotSection.slice((platformsMatch.index ?? 0) + platformsMatch[0].length)}`;
-  } else {
-    nextBotSection = `${nextBotSection.trimEnd()}\nplatforms = [\n    "${options.extraPlatformAccount}",\n]\n`;
   }
 
   return `${beforeBotSection}${nextBotSection}${afterBotSection}`;
@@ -2002,11 +1975,11 @@ export class InitManager {
     const botConfigPath = this.botConfigPath();
     const configVersion = maibotInitialConfigVersion(await this.readMaiBotConfigVersion());
     if (!existsSync(botConfigPath)) {
-      return ensureLocalChatBotConfig(`[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`);
+      return `[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`;
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    return ensureLocalChatBotConfig(ensureInnerVersion(content, configVersion));
+    return ensureInnerVersion(content, configVersion);
   }
 
   private async repairBotConfigVersionInfo(): Promise<string | undefined> {
@@ -2016,9 +1989,7 @@ export class InitManager {
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    const repaired = ensureLocalChatBotConfig(
-      ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion())),
-    );
+    const repaired = ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion()));
     if (repaired === content) {
       return undefined;
     }
