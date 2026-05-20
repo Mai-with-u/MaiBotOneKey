@@ -134,6 +134,26 @@ function formatStatNumber(value: number | undefined): string | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : undefined;
 }
 
+function parseVersionParts(version: string | undefined): number[] {
+  const normalized = version?.trim().replace(/^v/iu, "").split(/[+-]/u, 1)[0] ?? "";
+  return normalized
+    .split(/[._-]/u)
+    .map((part) => Number(part.match(/^\d+/u)?.[0] ?? 0));
+}
+
+function compareVersionText(left: string | undefined, right: string | undefined): number {
+  const leftParts = parseVersionParts(left);
+  const rightParts = parseVersionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index++) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
+}
+
 function messageFromError(error: unknown): string {
   return localChatErrorMessage(error);
 }
@@ -505,6 +525,47 @@ function MessagePlatformConnectCard({
         </span>
       </div>
     </button>
+  );
+}
+
+function LauncherUpdateCard({
+  appVersion,
+  latestTag,
+  onOpenRelease,
+}: {
+  appVersion: string;
+  latestTag?: string;
+  onOpenRelease: () => void;
+}): React.JSX.Element {
+  const currentTag = `v${appVersion}`;
+  const updateAvailable = latestTag ? compareVersionText(latestTag, currentTag) > 0 : false;
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-3.5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <Download className="size-4.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">一键包版本和更新</p>
+          </div>
+        </div>
+        <Badge dot variant={latestTag ? (updateAvailable ? "warning" : "success") : "secondary"}>
+          {latestTag ? (updateAvailable ? "可更新" : "已是最新") : "未读取"}
+        </Badge>
+      </div>
+      <div className="mt-3 grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
+        <DetailRow label="本地版本" value={currentTag} />
+        <DetailRow label="最新版本" value={latestTag} />
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button className="h-8 px-3 text-xs" onClick={onOpenRelease} size="sm" variant="secondary">
+          <ExternalLink className="size-3.5" />
+          查看更新
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -1335,6 +1396,14 @@ export function HomePanel({
     onOpenTab("pluginmanage");
   }, [onOpenTab]);
 
+  const openLauncherRelease = useCallback(() => {
+    const tag = snapshot.appLatestTag?.trim();
+    const url = tag
+      ? `https://github.com/DrSmoothl/MaiBotOneKey/releases/tag/${encodeURIComponent(tag)}`
+      : "https://github.com/DrSmoothl/MaiBotOneKey/releases";
+    void window.maibotDesktop?.openExternal(url);
+  }, [snapshot.appLatestTag]);
+
   const openMessagePlatformDialog = useCallback(() => {
     setError(null);
     setMessagePlatformBackend(snapshot.initState.qqBackend ?? "napcat");
@@ -1471,6 +1540,11 @@ export function HomePanel({
               ) : (
                 <MessagePlatformConnectCard onClick={openMessagePlatformDialog} />
               )}
+              <LauncherUpdateCard
+                appVersion={snapshot.appVersion}
+                latestTag={snapshot.appLatestTag}
+                onOpenRelease={openLauncherRelease}
+              />
             </div>
             <HomeStatsPanel
               onOpenQuickActions={() => setQuickActionsOpen(true)}

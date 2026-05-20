@@ -7,6 +7,7 @@ import { InitManager } from "./services/init-manager";
 import { acquireInstallInstanceLock } from "./services/instance-lock";
 import { LogStore } from "./services/log-store";
 import { ModuleUpdater } from "./services/module-updater";
+import { NetworkProxyManager } from "./services/network-proxy-manager";
 import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
 import { ResourceLocationManager } from "./services/resource-location-manager";
@@ -20,6 +21,7 @@ const resourceLock = instanceLock.acquired
   : { acquired: true };
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
+const networkProxyManager = new NetworkProxyManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
 const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager);
 const ptySessionManager = new PtySessionManager();
@@ -72,6 +74,7 @@ function createMainWindow(): BrowserWindow {
     height: 820,
     minWidth: 1080,
     minHeight: 720,
+    resizable: true,
     show: false,
     backgroundColor: "#00000000",
     transparent: true,
@@ -202,7 +205,10 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
   ptySessionManager.dispose();
   app.quit();
 } else {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
+      logStore.append("desktop", "system", `network proxy apply failed: ${String(error)}`);
+    });
     mainWindow = createMainWindow();
     tray = createTray();
 
@@ -210,6 +216,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       paths: runtimePaths,
       initManager,
       moduleUpdater,
+      networkProxyManager,
       pythonDependencyManager,
       resourceLocationManager,
       serviceManager,

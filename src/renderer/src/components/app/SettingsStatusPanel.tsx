@@ -35,6 +35,7 @@ import type {
   ModuleSourcePreset,
   ModuleTagOption,
   ModuleUpdateResult,
+  NetworkProxySettings,
   PythonOverridesState,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -152,6 +153,11 @@ const scaleOptions: Array<{ value: InterfaceScale; label: string; description: s
   { value: "normal", label: "标准", description: "默认的信息密度与字号。" },
   { value: "comfortable", label: "宽松", description: "字号更大，留白更多。" },
 ];
+
+const defaultNetworkProxySettings: NetworkProxySettings = {
+  enabled: false,
+  port: 7890,
+};
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
 
@@ -768,6 +774,8 @@ export function SettingsStatusPanel({
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
   const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
+  const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
+  const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
   const recentLogEntries = snapshot.recentLogs ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
@@ -791,6 +799,14 @@ export function SettingsStatusPanel({
       service.status === "running" ||
       service.status === "stopping",
   );
+  const networkProxyDirty =
+    networkProxyDraft.enabled !== networkProxySettings.enabled ||
+    networkProxyDraft.port !== networkProxySettings.port;
+
+  useEffect(() => {
+    setNetworkProxyDraft(networkProxySettings);
+  }, [networkProxySettings.enabled, networkProxySettings.port]);
+
   useEffect(() => {
     setQqBackend(initState.qqBackend ?? "napcat");
   }, [initState.qqBackend]);
@@ -1263,6 +1279,25 @@ export function SettingsStatusPanel({
     [onSnapshot, refreshSnapshot, snapshot],
   );
 
+  const saveNetworkProxySettings = useCallback(async () => {
+    setBusy("network-proxy");
+    setError(null);
+    try {
+      const nextNetworkProxySettings =
+        await window.maibotDesktop?.launcher.saveNetworkProxySettings(networkProxyDraft);
+      if (nextNetworkProxySettings) {
+        onSnapshot({ ...snapshot, networkProxySettings: nextNetworkProxySettings });
+        setNetworkProxyDraft(nextNetworkProxySettings);
+      }
+      toast.success("网络代理设置已保存");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [networkProxyDraft, onSnapshot, refreshSnapshot, snapshot]);
+
   const migrateRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
     setBusy(`resource:migrate:${key}`);
     setError(null);
@@ -1524,6 +1559,75 @@ export function SettingsStatusPanel({
                     />
                     px
                   </label>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Network className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">网络代理</p>
+                        <p className="text-xs text-muted-foreground">
+                          对接 Clash 等本机代理，地址固定为 127.0.0.1。
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={networkProxyDraft.enabled ? "success" : "outline"}>
+                      {networkProxyDraft.enabled ? "已启用" : "未启用"}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <label className="flex min-h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                      <Checkbox
+                        checked={networkProxyDraft.enabled}
+                        disabled={busy !== null}
+                        onCheckedChange={(checked) =>
+                          setNetworkProxyDraft((current) => ({ ...current, enabled: checked === true }))
+                        }
+                      />
+                      启用本机代理
+                    </label>
+                    <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                      端口
+                      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
+                        <span className="font-mono text-xs text-muted-foreground">127.0.0.1:</span>
+                        <Input
+                          className="h-8 w-24 font-mono text-sm"
+                          disabled={busy !== null}
+                          inputMode="numeric"
+                          max={65535}
+                          min={1}
+                          onChange={(event) =>
+                            setNetworkProxyDraft((current) => ({
+                              ...current,
+                              port: Number(event.target.value),
+                            }))
+                          }
+                          type="number"
+                          value={networkProxyDraft.port}
+                        />
+                      </div>
+                    </label>
+                    <p className="min-w-[220px] flex-1 pb-2 text-xs text-muted-foreground">
+                      保存后影响启动器网络请求、Git / pip 更新，以及之后启动的托管服务。
+                    </p>
+                    <Button
+                      disabled={
+                        busy !== null ||
+                        !networkProxyDirty ||
+                        !Number.isInteger(networkProxyDraft.port) ||
+                        networkProxyDraft.port < 1 ||
+                        networkProxyDraft.port > 65535
+                      }
+                      onClick={() => void saveNetworkProxySettings()}
+                      size="sm"
+                    >
+                      {busy === "network-proxy" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                      保存代理设置
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">

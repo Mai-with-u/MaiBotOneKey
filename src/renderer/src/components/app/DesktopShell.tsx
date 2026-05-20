@@ -12,12 +12,13 @@
   Square,
   TerminalSquare,
 } from "lucide-react";
-import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopSnapshot,
   ServiceDescriptor,
   ServiceId,
   ServiceStatus,
+  WindowResizeEdge,
 } from "@shared/contracts";
 import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
 import { useShortcut } from "@/lib/use-shortcut";
@@ -62,6 +63,76 @@ const statusDotColor: Record<ServiceStatus, string> = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const resizeHandles: Array<{ edge: WindowResizeEdge; className: string }> = [
+  { edge: "top", className: "inset-x-3 top-0 h-1.5 cursor-ns-resize" },
+  { edge: "right", className: "inset-y-3 right-0 w-1.5 cursor-ew-resize" },
+  { edge: "bottom", className: "inset-x-3 bottom-0 h-1.5 cursor-ns-resize" },
+  { edge: "left", className: "inset-y-3 left-0 w-1.5 cursor-ew-resize" },
+  { edge: "top-left", className: "left-0 top-0 size-3 cursor-nwse-resize" },
+  { edge: "top-right", className: "right-0 top-0 size-3 cursor-nesw-resize" },
+  { edge: "bottom-right", className: "bottom-0 right-0 size-3 cursor-nwse-resize" },
+  { edge: "bottom-left", className: "bottom-0 left-0 size-3 cursor-nesw-resize" },
+];
+
+function WindowResizeHandles(): React.JSX.Element {
+  const resizingRef = useRef(false);
+  const pointerIdRef = useRef<number | null>(null);
+
+  const startResize = useCallback((edge: WindowResizeEdge, event: PointerEvent<HTMLDivElement>) => {
+    const bridge = window.maibotDesktop?.window;
+    if (!bridge) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    resizingRef.current = true;
+    pointerIdRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    void bridge.startResize(edge, event.screenX, event.screenY);
+  }, []);
+
+  const resize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!resizingRef.current || pointerIdRef.current !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void window.maibotDesktop?.window.resizeTo(event.screenX, event.screenY);
+  }, []);
+
+  const finishResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!resizingRef.current || pointerIdRef.current !== event.pointerId) {
+      return;
+    }
+
+    resizingRef.current = false;
+    pointerIdRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void window.maibotDesktop?.window.finishResize();
+  }, []);
+
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-0 z-[80]">
+      {resizeHandles.map((handle) => (
+        <div
+          className={cn("pointer-events-auto absolute", handle.className)}
+          key={handle.edge}
+          onPointerCancel={finishResize}
+          onPointerDown={(event) => startResize(handle.edge, event)}
+          onPointerMove={resize}
+          onPointerUp={finishResize}
+        />
+      ))}
+    </div>
+  );
 }
 
 function ServiceChip({
@@ -172,8 +243,66 @@ function FloatingShell({
     moved: boolean;
     pointerId: number;
   } | null>(null);
+  const dragRequestPendingRef = useRef(false);
+  const dragPointRef = useRef<{
+    clientX: number;
+    clientY: number;
+    screenX: number;
+    screenY: number;
+  } | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
+  const suppressNextClickRef = useRef(false);
 
   const updateFloatingState = useCallback(() => undefined, []);
+
+  const suppressNextClickBriefly = useCallback(() => {
+    suppressNextClickRef.current = true;
+    window.setTimeout(() => {
+      suppressNextClickRef.current = false;
+    }, 250);
+  }, []);
+
+  const expandFromClick = useCallback((event: MouseEvent<HTMLElement>) => {
+    if (suppressNextClickRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    onExpand();
+  }, [onExpand]);
+
+  const flushDragMove = useCallback(() => {
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+    }
+    if (dragRequestPendingRef.current) {
+      return;
+    }
+    const point = dragPointRef.current;
+    if (!point) {
+      return;
+    }
+    dragPointRef.current = null;
+    dragRequestPendingRef.current = true;
+    void window.maibotDesktop?.window
+      .moveFloatingTo(point.screenX, point.screenY, point.clientX, point.clientY)
+      .then(updateFloatingState)
+      .finally(() => {
+        dragRequestPendingRef.current = false;
+        flushDragMove();
+      });
+  }, [updateFloatingState]);
+
+  const scheduleDragMove = useCallback(() => {
+    if (dragFrameRef.current !== null) {
+      return;
+    }
+    dragFrameRef.current = window.requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      flushDragMove();
+    });
+  }, [flushDragMove]);
 
   const startDrag = useCallback((event: PointerEvent<HTMLElement>) => {
     if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) {
@@ -192,6 +321,7 @@ function FloatingShell({
       moved: false,
       pointerId: event.pointerId,
     };
+    dragPointRef.current = null;
   }, []);
 
   const cancelDrag = useCallback((event: PointerEvent<HTMLElement>) => {
@@ -200,6 +330,11 @@ function FloatingShell({
       return;
     }
     dragRef.current = null;
+    dragPointRef.current = null;
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -218,27 +353,38 @@ function FloatingShell({
     if (movedDistance < 4) {
       return;
     }
+    if (event.screenX === current.startScreenX && event.screenY === current.startScreenY) {
+      return;
+    }
     current.moved = true;
-    void window.maibotDesktop?.window
-      .moveFloatingTo(event.screenX, event.screenY, current.offsetX, current.offsetY)
-      .then(updateFloatingState);
-  }, [cancelDrag, updateFloatingState]);
+    dragPointRef.current = {
+      screenX: event.screenX,
+      screenY: event.screenY,
+      clientX: current.offsetX,
+      clientY: current.offsetY,
+    };
+    scheduleDragMove();
+  }, [cancelDrag, scheduleDragMove]);
 
-  const finishDrag = useCallback((event: PointerEvent<HTMLElement>, clickAction?: () => void) => {
+  const finishDrag = useCallback((event: PointerEvent<HTMLElement>) => {
     const current = dragRef.current;
     if (!current || current.pointerId !== event.pointerId) {
       return;
     }
     dragRef.current = null;
+    dragPointRef.current = null;
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (current.moved) {
+      suppressNextClickBriefly();
       void window.maibotDesktop?.window.finishFloatingDrag().then(updateFloatingState);
-      return;
     }
-    clickAction?.();
-  }, [updateFloatingState]);
+  }, [suppressNextClickBriefly, updateFloatingState]);
 
   if (!expanded) {
     if (edge) {
@@ -249,10 +395,11 @@ function FloatingShell({
             edge === "left" ? "pl-0.5" : "pr-0.5",
           )}
           data-floating-shell="true"
+          onClick={expandFromClick}
           onPointerCancel={(event) => finishDrag(event)}
           onPointerDown={startDrag}
           onPointerMove={drag}
-          onPointerUp={(event) => finishDrag(event, onExpand)}
+          onPointerUp={(event) => finishDrag(event)}
           title="拖动悬浮条，点击展开"
         >
           <div className="grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl">
@@ -270,12 +417,13 @@ function FloatingShell({
     return (
       <div className="grid h-screen place-items-center bg-transparent" data-floating-shell="true">
         <button
-          className="relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl transition-transform hover:scale-105 active:cursor-grabbing"
+          className="relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl active:cursor-grabbing"
           data-app-region="no-drag"
+          onClick={expandFromClick}
           onPointerCancel={(event) => finishDrag(event)}
           onPointerDown={startDrag}
           onPointerMove={drag}
-          onPointerUp={(event) => finishDrag(event, onExpand)}
+          onPointerUp={(event) => finishDrag(event)}
           title="打开悬浮菜单"
           type="button"
         >
@@ -562,6 +710,7 @@ export function DesktopShell(): React.JSX.Element {
 
   return (
     <TooltipProvider delayDuration={250}>
+      <WindowResizeHandles />
       <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
         <Titlebar
           appVersion={snapshot?.appVersion ?? "0.1.0"}

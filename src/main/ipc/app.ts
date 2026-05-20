@@ -32,6 +32,7 @@ import type {
   ManagedPythonPackageName,
   ModuleRuntimeVersions,
   ModuleUpdateResult,
+  NetworkProxySettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -56,6 +57,7 @@ import type {
   StartupAgreementConfirmResult,
   StartupAgreementState,
   TerminalSettings,
+  WindowResizeEdge,
   WindowState,
 } from "../../shared/contracts";
 import { InitManager } from "../services/init-manager";
@@ -63,6 +65,7 @@ import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
+import { NetworkProxyManager } from "../services/network-proxy-manager";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
@@ -77,6 +80,7 @@ const LAUNCHER_SETTING_FILES = [
   "message-platform.json",
   "module-sources.json",
   "python-dependency-source.json",
+  "network-proxy.json",
 ];
 const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
@@ -86,11 +90,24 @@ const FLOATING_BALL_SIZE = { width: 96, height: 96 };
 const FLOATING_PANEL_SIZE = { width: 380, height: 520 };
 const FLOATING_STRIP_SIZE = { width: 28, height: 112 };
 const FLOATING_EDGE_SNAP_DISTANCE = 18;
+const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "top-left",
+  "top-right",
+  "bottom-right",
+  "bottom-left",
+]);
+const ONEKEY_REPOSITORY_URL = "https://github.com/DrSmoothl/MaiBotOneKey.git";
+const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/tags?per_page=100";
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
   initManager: InitManager;
   moduleUpdater: ModuleUpdater;
+  networkProxyManager: NetworkProxyManager;
   pythonDependencyManager: PythonDependencyManager;
   resourceLocationManager: ResourceLocationManager;
   serviceManager: ServiceManager;
@@ -98,6 +115,13 @@ interface RegisterAppIpcOptions {
   getMainWindow: () => BrowserWindow | null;
   requestQuit: () => void;
   showMainWindow: () => void;
+}
+
+interface WindowResizeState {
+  edge: WindowResizeEdge;
+  startScreenX: number;
+  startScreenY: number;
+  bounds: Electron.Rectangle;
 }
 
 export interface RegisteredAppIpcDisposables {
@@ -381,6 +405,14 @@ function pickLatestTags(
   };
 }
 
+function pickLatestVersionTag(rawTags: string[]): string | undefined {
+  return rawTags
+    .map(parseVersionTag)
+    .filter((tag): tag is ParsedVersionTag => Boolean(tag))
+    .sort(compareParsedTags)
+    .at(-1)?.tag;
+}
+
 function parsePackageVersion(version: string): ParsedVersionTag | undefined {
   const normalized = version.replace(/^v/iu, "");
   const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:(?:[-._]?(?:dev|a|alpha|b|beta|rc|pre|preview))\d*)?/iu);
@@ -461,6 +493,10 @@ function readStatisticCount(text: string, label: string): number | undefined {
   return value ? Number(value) : undefined;
 }
 
+function isStatisticStyleLine(line: string): boolean {
+  return /^[a-z][\w-]*\s*:\s*[-\w.%#()'",\s]+$/iu.test(line);
+}
+
 function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] {
   const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
   const startIndex = lines.findIndex((line) => line.includes("聊天消息统计"));
@@ -470,6 +506,9 @@ function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] 
 
   const stats: MaiBotStatisticSummary["chatStats"] = [];
   for (const line of lines.slice(startIndex + 1)) {
+    if (isStatisticStyleLine(line)) {
+      continue;
+    }
     if (line.startsWith("-") || line.includes("Token/") || line.includes("花费/")) {
       break;
     }
@@ -480,7 +519,11 @@ function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] 
     if (!match) {
       continue;
     }
-    stats.push({ name: match[1].trim(), messageCount: Number(match[2]) });
+    const name = match[1].trim();
+    if (name.endsWith(":")) {
+      continue;
+    }
+    stats.push({ name, messageCount: Number(match[2]) });
   }
   return stats;
 }
@@ -526,6 +569,7 @@ export function registerAppIpc({
   paths,
   initManager,
   moduleUpdater,
+  networkProxyManager,
   pythonDependencyManager,
   resourceLocationManager,
   serviceManager,
@@ -535,12 +579,14 @@ export function registerAppIpc({
   showMainWindow,
 }: RegisterAppIpcOptions): RegisteredAppIpcDisposables {
   let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
+  let remoteAppVersionCache: Pick<DesktopSnapshot, "appLatestTag" | "appLatestSource"> = {};
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
   let initDependencyRefreshPromise: Promise<void> | null = null;
   let floatingMode = false;
   let floatingPanelExpanded = false;
   let floatingEdgeSide: "left" | "right" | null = null;
   let normalBounds: Electron.Rectangle | null = null;
+  let resizeState: WindowResizeState | null = null;
 
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
     const state = readWindowState(window, floatingMode, floatingEdgeSide);
@@ -569,6 +615,96 @@ export function registerAppIpc({
     };
   };
 
+  const activeFloatingSize = (): { width: number; height: number } =>
+    floatingEdgeSide
+      ? FLOATING_STRIP_SIZE
+      : floatingPanelExpanded
+        ? FLOATING_PANEL_SIZE
+        : FLOATING_BALL_SIZE;
+
+  const withActiveFloatingSize = (bounds: Electron.Rectangle): Electron.Rectangle => {
+    const size = activeFloatingSize();
+    return {
+      x: bounds.x,
+      y: bounds.y,
+      width: size.width,
+      height: size.height,
+    };
+  };
+
+  const restoreNormalWindowChrome = (window: BrowserWindow): void => {
+    window.setResizable(true);
+    window.setMaximizable(true);
+    window.setMinimumSize(NORMAL_MINIMUM_SIZE.width, NORMAL_MINIMUM_SIZE.height);
+  };
+
+  const startWindowResize = (
+    edge: WindowResizeEdge,
+    screenX: number,
+    screenY: number,
+  ): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readWindowState(window, floatingMode, floatingEdgeSide);
+    }
+    if (floatingMode || window.isMaximized() || window.isFullScreen() || !WINDOW_RESIZE_EDGES.has(edge)) {
+      return sendWindowState(window);
+    }
+
+    restoreNormalWindowChrome(window);
+    resizeState = {
+      edge,
+      startScreenX: Math.round(screenX),
+      startScreenY: Math.round(screenY),
+      bounds: window.getBounds(),
+    };
+    return sendWindowState(window);
+  };
+
+  const resizeWindowTo = (screenX: number, screenY: number): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      resizeState = null;
+      return readWindowState(window, floatingMode, floatingEdgeSide);
+    }
+    if (!resizeState || floatingMode || window.isMaximized() || window.isFullScreen()) {
+      return sendWindowState(window);
+    }
+
+    const deltaX = Math.round(screenX) - resizeState.startScreenX;
+    const deltaY = Math.round(screenY) - resizeState.startScreenY;
+    const { edge, bounds } = resizeState;
+    const minWidth = NORMAL_MINIMUM_SIZE.width;
+    const minHeight = NORMAL_MINIMUM_SIZE.height;
+    let x = bounds.x;
+    let y = bounds.y;
+    let width = bounds.width;
+    let height = bounds.height;
+
+    if (edge === "right" || edge.endsWith("-right")) {
+      width = Math.max(minWidth, bounds.width + deltaX);
+    }
+    if (edge === "left" || edge.endsWith("-left")) {
+      width = Math.max(minWidth, bounds.width - deltaX);
+      x = bounds.x + bounds.width - width;
+    }
+    if (edge === "bottom" || edge.startsWith("bottom-")) {
+      height = Math.max(minHeight, bounds.height + deltaY);
+    }
+    if (edge === "top" || edge.startsWith("top-")) {
+      height = Math.max(minHeight, bounds.height - deltaY);
+      y = bounds.y + bounds.height - height;
+    }
+
+    window.setBounds({ x, y, width, height }, false);
+    return sendWindowState(window);
+  };
+
+  const finishWindowResize = (): WindowState => {
+    resizeState = null;
+    return sendWindowState(getMainWindow());
+  };
+
   const applyFloatingMode = (enabled: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
@@ -576,6 +712,7 @@ export function registerAppIpc({
     }
 
     if (enabled && !floatingMode) {
+      resizeState = null;
       normalBounds = window.getBounds();
       if (window.isMaximized()) {
         window.unmaximize();
@@ -583,7 +720,7 @@ export function registerAppIpc({
       floatingMode = true;
       floatingPanelExpanded = false;
       floatingEdgeSide = null;
-      window.setMinimumSize(72, 72);
+      window.setMinimumSize(1, 1);
       window.setResizable(false);
       window.setAlwaysOnTop(true, "floating");
       window.setBounds(floatingBounds(window, FLOATING_BALL_SIZE), true);
@@ -592,14 +729,17 @@ export function registerAppIpc({
       return sendWindowState(window);
     }
 
-    if (!enabled && floatingMode) {
+    if (!enabled) {
+      resizeState = null;
+      const shouldRestoreBounds = floatingMode;
       floatingMode = false;
       floatingPanelExpanded = false;
       floatingEdgeSide = null;
       window.setAlwaysOnTop(false);
-      window.setResizable(true);
-      window.setMinimumSize(NORMAL_MINIMUM_SIZE.width, NORMAL_MINIMUM_SIZE.height);
-      window.setBounds(normalBounds ?? { x: 80, y: 80, width: 1280, height: 820 }, true);
+      restoreNormalWindowChrome(window);
+      if (shouldRestoreBounds) {
+        window.setBounds(normalBounds ?? { x: 80, y: 80, width: 1280, height: 820 }, true);
+      }
       normalBounds = null;
       window.show();
       window.focus();
@@ -615,6 +755,9 @@ export function registerAppIpc({
       return readWindowState(window, floatingMode, floatingEdgeSide);
     }
     if (!floatingMode) {
+      return sendWindowState(window);
+    }
+    if (floatingPanelExpanded === expanded && (expanded || !floatingEdgeSide)) {
       return sendWindowState(window);
     }
     floatingPanelExpanded = expanded;
@@ -658,9 +801,10 @@ export function registerAppIpc({
     const bounds = window.getBounds();
     window.setBounds(
       clampFloatingBounds({
-        ...bounds,
         x: bounds.x + Math.round(deltaX),
         y: bounds.y + Math.round(deltaY),
+        width: activeFloatingSize().width,
+        height: activeFloatingSize().height,
       }),
       false,
     );
@@ -692,22 +836,24 @@ export function registerAppIpc({
       );
     }
 
-    const bounds = window.getBounds();
+    const size = activeFloatingSize();
+    const cursorPoint = screen.getCursorScreenPoint();
     const safeOffsetX = wasEdgeDocked && !floatingPanelExpanded
       ? Math.round(FLOATING_BALL_SIZE.width / 2)
-      : Math.min(Math.max(Math.round(offsetX), 0), bounds.width);
+      : Math.min(Math.max(Math.round(offsetX), 0), size.width);
     const safeOffsetY = wasEdgeDocked && !floatingPanelExpanded
       ? Math.round(FLOATING_BALL_SIZE.height / 2)
-      : Math.min(Math.max(Math.round(offsetY), 0), bounds.height);
+      : Math.min(Math.max(Math.round(offsetY), 0), size.height);
     window.setBounds(
       clampFloatingBounds({
-        ...bounds,
-        x: Math.round(screenX) - safeOffsetX,
-        y: Math.round(screenY) - safeOffsetY,
+        x: Math.round(cursorPoint.x) - safeOffsetX,
+        y: Math.round(cursorPoint.y) - safeOffsetY,
+        width: size.width,
+        height: size.height,
       }),
       false,
     );
-    return sendWindowState(window);
+    return readWindowState(window, floatingMode, floatingEdgeSide);
   };
 
   const finishFloatingDrag = (): WindowState => {
@@ -719,7 +865,7 @@ export function registerAppIpc({
       return sendWindowState(window);
     }
 
-    const currentBounds = window.getBounds();
+    const currentBounds = withActiveFloatingSize(window.getBounds());
     const display = screen.getDisplayMatching(currentBounds);
     const workArea = display.workArea;
     const isNearLeft = currentBounds.x <= workArea.x + FLOATING_EDGE_SNAP_DISTANCE;
@@ -744,7 +890,7 @@ export function registerAppIpc({
     }
 
     floatingEdgeSide = null;
-    window.setBounds(clampFloatingBounds(currentBounds), true);
+    window.setBounds(clampFloatingBounds(withActiveFloatingSize(currentBounds)), true);
     return sendWindowState(window);
   };
 
@@ -806,6 +952,51 @@ export function registerAppIpc({
     return versions;
   };
 
+  const readRemoteAppVersion = async (): Promise<Pick<DesktopSnapshot, "appLatestTag" | "appLatestSource">> => {
+    const gitPath = initManager.getGitPath();
+    if (existsSync(gitPath)) {
+      const tagsOutput = await runProcess(
+        gitPath,
+        ["ls-remote", "--tags", "--refs", ONEKEY_REPOSITORY_URL],
+        paths.installRoot,
+      );
+      const tags = tagsOutput
+        ?.split(/\r?\n/u)
+        .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
+        .filter((tag): tag is string => Boolean(tag)) ?? [];
+      const latestTag = pickLatestVersionTag(Array.from(new Set(tags)));
+      if (latestTag) {
+        return {
+          appLatestTag: latestTag,
+          appLatestSource: "DrSmoothl/MaiBotOneKey",
+        };
+      }
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(ONEKEY_TAGS_API_URL, { signal: controller.signal });
+      if (!response.ok) {
+        return {};
+      }
+      const data = (await response.json()) as Array<{ name?: unknown }>;
+      const latestTag = pickLatestVersionTag(
+        data.map((tag) => typeof tag.name === "string" ? tag.name : "").filter(Boolean),
+      );
+      return latestTag
+        ? {
+            appLatestTag: latestTag,
+            appLatestSource: "DrSmoothl/MaiBotOneKey",
+          }
+        : {};
+    } catch {
+      return {};
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   const readModuleVersions = async (): Promise<ModuleRuntimeVersions> => ({
     ...remoteModuleVersionsCache,
     ...(await readLocalModuleVersions()),
@@ -818,7 +1009,10 @@ export function registerAppIpc({
     runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
     runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
     terminalSettings: serviceManager.getTerminalSettings(),
+    networkProxySettings: networkProxyManager.getSettings(),
     appVersion: app.getVersion(),
+    appLatestTag: remoteAppVersionCache.appLatestTag,
+    appLatestSource: remoteAppVersionCache.appLatestSource,
     moduleVersions: await readModuleVersions(),
     platform: process.platform,
     windowState: readWindowState(getMainWindow(), floatingMode, floatingEdgeSide),
@@ -839,9 +1033,10 @@ export function registerAppIpc({
     if (remoteModuleVersionsRefreshPromise) {
       return;
     }
-    remoteModuleVersionsRefreshPromise = readRemoteModuleVersions()
-      .then(async (versions) => {
+    remoteModuleVersionsRefreshPromise = Promise.all([readRemoteModuleVersions(), readRemoteAppVersion()])
+      .then(async ([versions, appVersion]) => {
         remoteModuleVersionsCache = versions;
+        remoteAppVersionCache = appVersion;
         await broadcastSnapshot();
       })
       .catch((error: unknown) => {
@@ -916,6 +1111,7 @@ export function registerAppIpc({
     await serviceManager.resetRuntimePathConfig("python");
     await serviceManager.resetRuntimePathConfig("git");
     await serviceManager.saveTerminalSettings({ ...serviceManager.getTerminalSettings(), useEmbeddedTerminal: true });
+    await networkProxyManager.resetSettings();
 
     for (const key of ["maibot", "napcat"] as const) {
       const config = resourceLocationManager.getPathConfigs().find((item) => item.key === key);
@@ -1215,6 +1411,22 @@ export function registerAppIpc({
   ipcMain.handle("launcher:resetAll", async (): Promise<LauncherResetResult> => {
     return resetLauncherAll();
   });
+
+  ipcMain.handle(
+    "launcher:saveNetworkProxySettings",
+    async (_event, settings: NetworkProxySettings): Promise<NetworkProxySettings> => {
+      const result = await networkProxyManager.saveSettings(settings);
+      logStore.append(
+        "desktop",
+        "system",
+        result.enabled
+          ? `\u7f51\u7edc\u4ee3\u7406\u5df2\u542f\u7528: 127.0.0.1:${result.port}`
+          : "\u7f51\u7edc\u4ee3\u7406\u5df2\u5173\u95ed",
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
   ipcMain.handle("plugins:listMarket", async (
     _event,
@@ -1547,6 +1759,18 @@ export function registerAppIpc({
   );
 
   ipcMain.handle("desktop:window:finishFloatingDrag", (): WindowState => finishFloatingDrag());
+
+  ipcMain.handle(
+    "desktop:window:startResize",
+    (_event, edge: WindowResizeEdge, screenX: number, screenY: number): WindowState =>
+      startWindowResize(edge, screenX, screenY),
+  );
+
+  ipcMain.handle("desktop:window:resizeTo", (_event, screenX: number, screenY: number): WindowState =>
+    resizeWindowTo(screenX, screenY),
+  );
+
+  ipcMain.handle("desktop:window:finishResize", (): WindowState => finishWindowResize());
 
   ipcMain.handle("desktop:window:getState", (): WindowState =>
     readWindowState(getMainWindow(), floatingMode, floatingEdgeSide),

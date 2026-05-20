@@ -2,6 +2,8 @@ import type { DesktopSnapshot } from "@shared/contracts";
 
 const fallbackSnapshot: DesktopSnapshot = {
   appVersion: "0.1.0",
+  appLatestTag: undefined,
+  appLatestSource: undefined,
   moduleVersions: {},
   platform:
     typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
@@ -119,6 +121,10 @@ const fallbackSnapshot: DesktopSnapshot = {
     useEmbeddedTerminal: true,
     fontSize: 12,
   },
+  networkProxySettings: {
+    enabled: false,
+    port: 7890,
+  },
   initState: {
     isReady: false,
     qqBackend: "napcat",
@@ -162,6 +168,7 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
     runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
+    networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,
     moduleVersions: {
       ...fallbackSnapshot.moduleVersions,
       ...snapshot.moduleVersions,

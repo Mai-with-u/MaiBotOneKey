@@ -29,6 +29,7 @@ import type {
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
   ModuleUpdateResult,
+  NetworkProxySettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -61,6 +62,7 @@ import type {
   StartupAgreementConfirmResult,
   StartupAgreementState,
   TerminalSettings,
+  WindowResizeEdge,
   WindowState,
 } from "../shared/contracts";
 
@@ -104,6 +106,12 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("desktop:window:moveFloatingTo", screenX, screenY, offsetX, offsetY) as Promise<WindowState>,
     finishFloatingDrag: () =>
       ipcRenderer.invoke("desktop:window:finishFloatingDrag") as Promise<WindowState>,
+    startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) =>
+      ipcRenderer.invoke("desktop:window:startResize", edge, screenX, screenY) as Promise<WindowState>,
+    resizeTo: (screenX: number, screenY: number) =>
+      ipcRenderer.invoke("desktop:window:resizeTo", screenX, screenY) as Promise<WindowState>,
+    finishResize: () =>
+      ipcRenderer.invoke("desktop:window:finishResize") as Promise<WindowState>,
     getState: () => ipcRenderer.invoke("desktop:window:getState") as Promise<WindowState>,
     onState: (callback: (state: WindowState) => void) => onIpc("desktop:window-state", callback),
   },
@@ -140,6 +148,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },
   launcher: {
+    saveNetworkProxySettings: (settings: NetworkProxySettings) =>
+      ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
     resetSettings: () =>
       ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
     resetAll: () =>

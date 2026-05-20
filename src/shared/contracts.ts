@@ -129,6 +129,11 @@ export interface TerminalSettings {
   fontSize: number;
 }
 
+export interface NetworkProxySettings {
+  enabled: boolean;
+  port: number;
+}
+
 export interface RuntimePaths {
   installRoot: string;
   userDataRoot: string;
@@ -252,7 +257,10 @@ export interface DesktopSnapshot {
   runtimePathConfigs: RuntimePathConfig[];
   runtimeResourcePathConfigs: RuntimeResourcePathConfig[];
   terminalSettings: TerminalSettings;
+  networkProxySettings: NetworkProxySettings;
   appVersion: string;
+  appLatestTag?: string;
+  appLatestSource?: string;
   moduleVersions: ModuleRuntimeVersions;
   platform: NodeJS.Platform;
   windowState: WindowState;
@@ -269,6 +277,16 @@ export interface WindowState {
   isFloatingCollapsed?: boolean;
   floatingEdge?: "left" | "right";
 }
+
+export type WindowResizeEdge =
+  | "top"
+  | "right"
+  | "bottom"
+  | "left"
+  | "top-left"
+  | "top-right"
+  | "bottom-right"
+  | "bottom-left";
 
 export interface InitCheck {
   id: string;
@@ -795,6 +813,9 @@ export interface DesktopBridge {
     moveFloatingBy: (deltaX: number, deltaY: number) => Promise<WindowState>;
     moveFloatingTo: (screenX: number, screenY: number, offsetX: number, offsetY: number) => Promise<WindowState>;
     finishFloatingDrag: () => Promise<WindowState>;
+    startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) => Promise<WindowState>;
+    resizeTo: (screenX: number, screenY: number) => Promise<WindowState>;
+    finishResize: () => Promise<WindowState>;
     getState: () => Promise<WindowState>;
     onState: (callback: (state: WindowState) => void) => () => void;
   };
@@ -821,6 +842,7 @@ export interface DesktopBridge {
     resetMaiBotData: () => Promise<MaiBotDataResetResult>;
   };
   launcher: {
+    saveNetworkProxySettings: (settings: NetworkProxySettings) => Promise<NetworkProxySettings>;
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;
   };
