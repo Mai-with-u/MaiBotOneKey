@@ -24,7 +24,9 @@ bun run build
 
 ## Windows 打包
 
-Windows x64 NSIS 安装包会同时产出两个变体：`full` 完整包包含内置 Python 与 Git，`lite` 精简包不包含内置 Python 与 Git，会在运行时自动寻找系统 Python 3.12+ 与系统 Git。打包前需要在仓库根目录放好完整 payload：
+Windows x64 NSIS 安装包当前产出正式版：`MaiBot OK-<version>-win.exe`。正式版会打包干净的基础 Python、内置 Git、MaiBot、NapCat、SnowLuma 以及 NapCat/SnowLuma 适配器插件，但不会打包 MaiBot Python 依赖，也不会打包 `python-overrides` 覆盖层；首次启动时再由启动器安装运行依赖。
+
+打包前需要在仓库根目录放好 payload：
 
 ```text
 runtime/
@@ -37,15 +39,14 @@ runtime/
     bin/git.exe
 modules/
   MaiBot/
-  MaiBot-Napcat-Adapter/
+    plugins/
+      napcat-adapter/
+      snowluma-adapter/
   napcat/
+  SnowLuma/
 ```
 
-只构建 `lite` 变体时，`runtime/python/` 与 `runtime/git/` 可以省略：
-
-```bash
-bun run release:win:lite
-```
+`runtime/python` 必须保持干净，只允许 Python 自身和 `pip`/`setuptools`/`wheel` 等基础启动包；不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`。`release-assets/python-overrides` 不会进入安装包。
 
 发布前检查：
 
@@ -53,17 +54,31 @@ bun run release:win:lite
 bun run release:check
 ```
 
-生成两个安装包：
+构建 Windows 安装包：
+
+```bash
+bun run release:patch-nsis
+bun run build
+bun run scripts/release/build-windows-variants.ts
+```
+
+也可以直接执行：
 
 ```bash
 bun run release:win
 ```
 
-产物输出到 `release/`，文件名会带上 `full` 或 `lite` 后缀。`runtime/` 和 `modules/` 会作为 `extraResources` 放进完整包；`lite` 变体会排除 `runtime/python/` 与 `runtime/git/`，缺失时会在环境检查中提供 Python 和 Git 下载入口。
+产物输出到 `release/`：
+
+```text
+release/MaiBot OK-<version>-win.exe
+release/MaiBot OK-<version>-win.exe.blockmap
+release/latest-win.yml
+```
 
 ## CI
 
 - `.github/workflows/ci.yml`：在 Linux、macOS、Windows 上执行依赖安装、类型检查和 Electron 构建，不需要 release payload。
-- `.github/workflows/release-windows.yml`：手动触发 Windows x64 安装包构建，可输入 payload zip URL；构建完整包时 zip 内需要包含 `runtime/` 和 `modules/`。
+- `.github/workflows/release-windows.yml`：手动触发 Windows x64 安装包构建，可输入 payload zip URL；zip 内需要包含 `runtime/` 和 `modules/`。
 
 更多发布细节见 [docs/release.md](docs/release.md)。

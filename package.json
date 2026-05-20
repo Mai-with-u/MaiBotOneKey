@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
@@ -85,15 +85,6 @@
           "**/*",
           "!python/Doc/**",
           "!**/.git/**",
-          "!**/__pycache__/**",
-          "!**/*.pyc"
-        ]
-      },
-      {
-        "from": "release-assets/python-overrides",
-        "to": "python-overrides",
-        "filter": [
-          "**/*",
           "!**/__pycache__/**",
           "!**/*.pyc"
         ]
