@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDownWideNarrow, Download, ExternalLink, Info, Loader2, Plus, Puzzle, RefreshCw, Save, Search, Settings, Star, Store, ThumbsUp, Trash2, Upload, Wrench, X } from "lucide-react";
+import { AlertTriangle, ArrowDownWideNarrow, Download, ExternalLink, Info, Loader2, MessageSquare, Plus, Puzzle, RefreshCw, Save, Search, Settings, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X } from "lucide-react";
 import type { ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -26,16 +26,22 @@ import {
   fetchPluginConfig,
   fetchPluginReadme,
   fetchPluginStats,
+  fetchPluginUserState,
   type PluginConfigState,
   type PluginConfigValue,
   type PluginStats,
+  type PluginUserState,
+  dislikePlugin,
   pluginAuthor,
   pluginDescription,
   pluginHomepageUrl,
+  likePlugin,
   pluginName,
   pluginNeedsUpdate,
   pluginRepositoryUrl,
   pluginVersion,
+  ratePlugin,
+  recordPluginDownload,
   savePluginConfig,
   uninstallMaiBotPlugin,
   updateMaiBotPlugin,
@@ -47,7 +53,7 @@ type PluginPanelMode = "market" | "manage";
 type LoadState = "idle" | "loading" | "ready" | "error";
 type OperationKind = "install" | "update" | "uninstall";
 type ConfigBusyState = "load" | "save" | null;
-type MarketSortKey = "default" | "downloads" | "likes" | "rating";
+type MarketSortKey = "default" | "downloads" | "likes" | "rating" | "comments";
 
 type PendingOperation = {
   kind: OperationKind;
@@ -64,6 +70,8 @@ type InstalledPluginView = InstalledPlugin & {
 };
 
 type DetailPlugin = MarketPlugin | InstalledPluginView;
+type QuickStatsAction = "like" | "rating" | "user-state";
+type QuickStatsBusy = { pluginId: string; action: QuickStatsAction } | null;
 
 type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive" | "loading";
 type AdapterConfigPage = "connection" | "chat";
@@ -110,6 +118,9 @@ export function PluginMarketPanel({
   const [marketPlugins, setMarketPlugins] = useState<MarketPlugin[]>([]);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
   const [pluginStats, setPluginStats] = useState<Record<string, PluginStats>>({});
+  const [pluginUserStates, setPluginUserStates] = useState<Record<string, PluginUserState>>({});
+  const [quickStatsBusy, setQuickStatsBusy] = useState<QuickStatsBusy>(null);
+  const [quickRatingPluginId, setQuickRatingPluginId] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
@@ -263,6 +274,16 @@ export function PluginMarketPanel({
           pendingOperation.branch,
         );
         toast.success(`插件已安装：${pluginName(pendingOperation.plugin)}`);
+        const statsId = pluginStatsPrimaryId(pendingOperation.plugin);
+        void recordPluginDownload(statsId)
+          .then((result) => {
+            if (result.success && typeof result.downloads === "number") {
+              setPluginStats((current) => mergePluginStatsMap(current, statsId, { downloads: result.downloads }));
+            }
+          })
+          .catch((error) => {
+            console.warn("Failed to record plugin download:", error);
+          });
       } else if (pendingOperation.kind === "update") {
         if (!pendingOperation.repositoryUrl) throw new Error("插件缺少仓库地址，无法更新");
         const installedVersion =
@@ -299,6 +320,121 @@ export function PluginMarketPanel({
       setOperationBusy(false);
     }
   }, [loadPlugins, maibotService, pendingOperation]);
+
+  const updatePluginUserState = useCallback((pluginId: string, partialState: Partial<PluginUserState>) => {
+    setPluginUserStates((current) => ({
+      ...current,
+      [pluginId]: mergePluginUserState(current[pluginId], partialState),
+    }));
+  }, []);
+
+  const loadPluginUserState = useCallback(async (plugin: { id: string; manifest: MarketPlugin["manifest"] }) => {
+    const statsId = pluginStatsPrimaryId(plugin);
+    if (pluginUserStates[statsId]) {
+      return;
+    }
+
+    setQuickStatsBusy({ pluginId: statsId, action: "user-state" });
+    try {
+      const userState = await fetchPluginUserState(statsId);
+      if (userState) {
+        updatePluginUserState(statsId, userState);
+      }
+    } catch {
+      // User state is nice to have; the user can still rate or like from the card.
+    } finally {
+      setQuickStatsBusy((current) =>
+        current?.pluginId === statsId && current.action === "user-state" ? null : current,
+      );
+    }
+  }, [pluginUserStates, updatePluginUserState]);
+
+  const handleQuickPluginLike = useCallback(async (plugin: { id: string; manifest: MarketPlugin["manifest"] }) => {
+    if (quickStatsBusy) {
+      return;
+    }
+
+    const statsId = pluginStatsPrimaryId(plugin);
+    const stats = resolvePluginStats(plugin, pluginStats);
+    setQuickStatsBusy({ pluginId: statsId, action: "like" });
+    try {
+      const result = await likePlugin(statsId);
+      if (!result.success) {
+        toast.error(result.error ?? "点赞失败");
+        return;
+      }
+
+      const userStatePatch: Partial<PluginUserState> = {};
+      if (typeof result.liked === "boolean") {
+        userStatePatch.liked = result.liked;
+      }
+      if (typeof result.disliked === "boolean") {
+        userStatePatch.disliked = result.disliked;
+      }
+      updatePluginUserState(statsId, userStatePatch);
+      setPluginStats((current) => mergePluginStatsMap(current, statsId, {
+        likes: result.likes ?? stats?.likes ?? pluginInlineStat(plugin, "likes") ?? 0,
+        dislikes: result.dislikes ?? stats?.dislikes ?? 0,
+      }));
+      toast.success(result.liked === false ? "已取消点赞" : "已点赞");
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setQuickStatsBusy((current) =>
+        current?.pluginId === statsId && current.action === "like" ? null : current,
+      );
+    }
+  }, [pluginStats, quickStatsBusy, updatePluginUserState]);
+
+  const handleQuickRatingToggle = useCallback((plugin: { id: string; manifest: MarketPlugin["manifest"] }) => {
+    const statsId = pluginStatsPrimaryId(plugin);
+    setQuickRatingPluginId((current) => current === statsId ? null : statsId);
+    void loadPluginUserState(plugin);
+  }, [loadPluginUserState]);
+
+  const handleQuickPluginRate = useCallback(async (
+    plugin: { id: string; manifest: MarketPlugin["manifest"] },
+    rating: number,
+  ) => {
+    if (quickStatsBusy) {
+      return;
+    }
+
+    const statsId = pluginStatsPrimaryId(plugin);
+    const stats = resolvePluginStats(plugin, pluginStats);
+    setQuickStatsBusy({ pluginId: statsId, action: "rating" });
+    try {
+      const result = await ratePlugin(statsId, rating);
+      if (!result.success) {
+        toast.error(result.error ?? "评分失败");
+        return;
+      }
+
+      const nextUserRating = result.user_rating ?? rating;
+      updatePluginUserState(statsId, { rating: nextUserRating });
+      setPluginStats((current) => mergePluginStatsMap(current, statsId, {
+        rating: result.rating ?? stats?.rating ?? pluginInlineStat(plugin, "rating") ?? 0,
+        rating_count: result.rating_count ?? stats?.rating_count ?? 0,
+        comment_count: result.comment_count ?? pluginCommentCount(stats) ?? pluginInlineStat(plugin, "comment_count") ?? 0,
+      }));
+      setQuickRatingPluginId(null);
+      toast.success(`已评分 ${nextUserRating} 星`);
+      void fetchPluginStats(statsId).then((nextStats) => {
+        if (nextStats) {
+          setPluginStats((current) => ({
+            ...current,
+            [statsId]: nextStats,
+          }));
+        }
+      });
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setQuickStatsBusy((current) =>
+        current?.pluginId === statsId && current.action === "rating" ? null : current,
+      );
+    }
+  }, [pluginStats, quickStatsBusy, updatePluginUserState]);
 
   const marketById = useMemo(() => new Map(marketPlugins.map((plugin) => [plugin.id, plugin])), [marketPlugins]);
   const installedViews = useMemo<InstalledPluginView[]>(
@@ -411,6 +547,7 @@ export function PluginMarketPanel({
                   <option value="downloads">下载最多</option>
                   <option value="likes">点赞最多</option>
                   <option value="rating">评分最高</option>
+                  <option value="comments">评论最多</option>
                 </select>
               </label>
             </div>
@@ -430,8 +567,14 @@ export function PluginMarketPanel({
               maibotVersion={maibotVersion}
               onDetail={setDetailPlugin}
               onOperate={beginOperation}
+              onQuickLike={handleQuickPluginLike}
+              onQuickRate={handleQuickPluginRate}
+              onQuickRatingToggle={handleQuickRatingToggle}
               pluginStats={pluginStats}
+              pluginUserStates={pluginUserStates}
               plugins={filteredMarket}
+              quickRatingPluginId={quickRatingPluginId}
+              quickStatsBusy={quickStatsBusy}
             />
           ) : (
             <InstalledGrid
@@ -488,6 +631,9 @@ export function PluginMarketPanel({
         maibotVersion={maibotVersion}
         onOpenChange={(open) => {
           if (!open) setDetailPlugin(null);
+        }}
+        onStatsChange={(pluginId, partialStats) => {
+          setPluginStats((current) => mergePluginStatsMap(current, pluginId, partialStats));
         }}
         plugin={detailPlugin}
         stats={detailPlugin ? resolvePluginStats(detailPlugin, pluginStats) : undefined}
@@ -554,6 +700,7 @@ function marketSortValue(
   const downloads = stats?.downloads ?? pluginInlineStat(plugin, "downloads") ?? 0;
   const likes = stats?.likes ?? pluginInlineStat(plugin, "likes") ?? 0;
   const rating = stats?.rating ?? pluginInlineStat(plugin, "rating") ?? 0;
+  const comments = pluginCommentCount(stats) ?? pluginInlineStat(plugin, "comment_count") ?? 0;
 
   if (sortBy === "downloads") {
     return downloads;
@@ -564,10 +711,14 @@ function marketSortValue(
   if (sortBy === "rating") {
     return rating;
   }
+  if (sortBy === "comments") {
+    return comments;
+  }
 
   const ratingCount = stats?.rating_count ?? 0;
   return Math.log10(downloads + 1) * 4
     + Math.log10(likes + 1) * 3
+    + Math.log10(comments + 1) * 2
     + rating * Math.log10(ratingCount + 2) * 2;
 }
 
@@ -598,14 +749,26 @@ function PluginGrid({
   plugins,
   onOperate,
   onDetail,
+  onQuickLike,
+  onQuickRate,
+  onQuickRatingToggle,
   maibotVersion,
   pluginStats,
+  pluginUserStates,
+  quickRatingPluginId,
+  quickStatsBusy,
 }: {
   plugins: MarketPlugin[];
   onOperate: (operation: PendingOperation) => void;
   onDetail: (plugin: MarketPlugin) => void;
+  onQuickLike: (plugin: MarketPlugin) => void;
+  onQuickRate: (plugin: MarketPlugin, rating: number) => void;
+  onQuickRatingToggle: (plugin: MarketPlugin) => void;
   maibotVersion?: string;
   pluginStats: Record<string, PluginStats>;
+  pluginUserStates: Record<string, PluginUserState>;
+  quickRatingPluginId: string | null;
+  quickStatsBusy: QuickStatsBusy;
 }): React.JSX.Element {
   if (plugins.length === 0) {
     return <EmptyState icon={<Download />} title="没有匹配的插件" />;
@@ -616,6 +779,7 @@ function PluginGrid({
       {plugins.map((plugin) => {
         const repositoryUrl = pluginRepositoryUrl(plugin.manifest);
         const incompatibleReason = getPluginCompatibilityReason(plugin.manifest, maibotVersion);
+        const statsId = pluginStatsPrimaryId(plugin);
         const detailAction: CardAction = {
           label: "详情",
           icon: <Info />,
@@ -657,6 +821,14 @@ function PluginGrid({
             compatibilityReason={incompatibleReason}
             key={plugin.id}
             plugin={plugin}
+            quickStats={{
+              busy: quickStatsBusy?.pluginId === statsId ? quickStatsBusy.action : null,
+              ratingOpen: quickRatingPluginId === statsId,
+              userState: pluginUserStates[statsId],
+              onLike: () => onQuickLike(plugin),
+              onRate: (rating) => onQuickRate(plugin, rating),
+              onToggleRating: () => onQuickRatingToggle(plugin),
+            }}
             stats={resolvePluginStats(plugin, pluginStats)}
             status={plugin.installed ? `本地 ${plugin.installedVersion ?? "-"}` : undefined}
           />
@@ -772,6 +944,7 @@ function PluginCard({
   compatibilityReason,
   runtimeState,
   stats,
+  quickStats,
   toggleEnabled,
 }: {
   plugin: { id: string; manifest: MarketPlugin["manifest"] };
@@ -780,6 +953,14 @@ function PluginCard({
   compatibilityReason?: string | null;
   runtimeState?: PluginRuntimeState;
   stats?: PluginStats;
+  quickStats?: {
+    busy: QuickStatsAction | null;
+    ratingOpen: boolean;
+    userState?: PluginUserState;
+    onLike: () => void;
+    onRate: (rating: number) => void;
+    onToggleRating: () => void;
+  };
   toggleEnabled?: {
     checked: boolean;
     busy: boolean;
@@ -790,6 +971,7 @@ function PluginCard({
   const downloads = stats?.downloads ?? pluginInlineStat(plugin, "downloads") ?? 0;
   const rating = stats?.rating ?? pluginInlineStat(plugin, "rating") ?? 0;
   const likes = stats?.likes ?? pluginInlineStat(plugin, "likes") ?? 0;
+  const comments = pluginCommentCount(stats) ?? pluginInlineStat(plugin, "comment_count") ?? 0;
   const topActions = actions.filter((action) => action.placement === "top");
   const bottomActions = actions.filter((action) => action.placement !== "top");
   return (
@@ -850,6 +1032,10 @@ function PluginCard({
           <ThumbsUp className="size-3.5" />
           {likes.toLocaleString()}
         </span>
+        <span className="inline-flex items-center gap-1">
+          <MessageSquare className="size-3.5" />
+          {comments.toLocaleString()}
+        </span>
       </div>
       <div className="mt-3 flex flex-wrap gap-1">
         {(plugin.manifest.categories ?? plugin.manifest.keywords ?? []).slice(0, 3).map((tag) => (
@@ -859,7 +1045,19 @@ function PluginCard({
         ))}
       </div>
       <div className="mt-auto flex items-center justify-between gap-3 pt-4">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {quickStats ? (
+            <PluginCardQuickStats
+              busy={quickStats.busy}
+              likes={likes}
+              onLike={quickStats.onLike}
+              onRate={quickStats.onRate}
+              onToggleRating={quickStats.onToggleRating}
+              rating={rating}
+              ratingOpen={quickStats.ratingOpen}
+              userState={quickStats.userState}
+            />
+          ) : null}
           {toggleEnabled ? (
             <label className="inline-flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground" title={toggleEnabled.checked ? "禁用插件" : "启用插件"}>
               <button
@@ -907,6 +1105,91 @@ function PluginCard({
   );
 }
 
+function PluginCardQuickStats({
+  likes,
+  rating,
+  userState,
+  busy,
+  ratingOpen,
+  onLike,
+  onToggleRating,
+  onRate,
+}: {
+  likes: number;
+  rating: number;
+  userState?: PluginUserState;
+  busy: QuickStatsAction | null;
+  ratingOpen: boolean;
+  onLike: () => void;
+  onToggleRating: () => void;
+  onRate: (rating: number) => void;
+}): React.JSX.Element {
+  const liked = userState?.liked === true;
+  const userRating = userState?.rating ?? 0;
+  const ratingBusy = busy === "rating" || busy === "user-state";
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <Button
+        className="h-8 px-2 text-xs"
+        disabled={busy !== null}
+        onClick={onLike}
+        size="sm"
+        title={liked ? "取消点赞" : "点赞插件"}
+        variant={liked ? "default" : "outline"}
+      >
+        {busy === "like" ? <Loader2 className="animate-spin" /> : <ThumbsUp />}
+        <span>{liked ? "已赞" : "点赞"}</span>
+        <span className={cn("font-mono text-[11px]", liked ? "text-primary-foreground/85" : "text-muted-foreground")}>
+          {likes.toLocaleString()}
+        </span>
+      </Button>
+
+      <div className="relative">
+        <Button
+          className="h-8 px-2 text-xs"
+          disabled={busy !== null && !ratingOpen}
+          onClick={onToggleRating}
+          size="sm"
+          title={userRating > 0 ? `我的评分 ${userRating} 星` : "评分插件"}
+          variant={userRating > 0 || ratingOpen ? "secondary" : "outline"}
+        >
+          {ratingBusy ? (
+            <Loader2 className="animate-spin" />
+          ) : (
+            <Star className={cn("size-3.5", (userRating > 0 || ratingOpen) && "fill-yellow-400 text-yellow-400")} />
+          )}
+          <span>{userRating > 0 ? `${userRating} 星` : "评分"}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">{rating.toFixed(1)}</span>
+        </Button>
+
+        {ratingOpen ? (
+          <div className="absolute bottom-full left-0 z-20 mb-2 flex items-center gap-0.5 rounded-md border border-border bg-card p-1 shadow-lg">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                aria-label={`${star} 星评分`}
+                className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-wait disabled:opacity-60"
+                disabled={busy !== null}
+                key={star}
+                onClick={() => onRate(star)}
+                title={`${star} 星`}
+                type="button"
+              >
+                <Star
+                  className={cn(
+                    "size-4",
+                    star <= userRating && "fill-yellow-400 text-yellow-400",
+                  )}
+                />
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function resolvePluginStats(
   plugin: { id: string; manifest: MarketPlugin["manifest"] },
   stats: Record<string, PluginStats>,
@@ -915,9 +1198,75 @@ function resolvePluginStats(
   return statsIds.map((id) => stats[id]).find(Boolean);
 }
 
+function pluginStatsPrimaryId(plugin: { id: string; manifest: MarketPlugin["manifest"] }): string {
+  return plugin.manifest.id?.trim() || plugin.id;
+}
+
+function createEmptyPluginStats(pluginId: string): PluginStats {
+  return {
+    plugin_id: pluginId,
+    likes: 0,
+    dislikes: 0,
+    downloads: 0,
+    rating: 0,
+    rating_count: 0,
+    comment_count: 0,
+  };
+}
+
+function createEmptyPluginUserState(): PluginUserState {
+  return {
+    liked: false,
+    disliked: false,
+    rating: 0,
+    comment: "",
+  };
+}
+
+function mergePluginUserState(
+  state: PluginUserState | undefined,
+  partialState: Partial<PluginUserState>,
+): PluginUserState {
+  return {
+    ...(state ?? createEmptyPluginUserState()),
+    ...partialState,
+  };
+}
+
+function mergePluginStats(pluginId: string, stats: PluginStats | undefined, partialStats: Partial<PluginStats>): PluginStats {
+  const definedPartialStats = Object.fromEntries(
+    Object.entries(partialStats).filter(([, value]) => value !== undefined),
+  ) as Partial<PluginStats>;
+  return {
+    ...(stats ?? createEmptyPluginStats(pluginId)),
+    ...definedPartialStats,
+    plugin_id: stats?.plugin_id ?? pluginId,
+  };
+}
+
+function mergePluginStatsMap(
+  current: Record<string, PluginStats>,
+  pluginId: string,
+  partialStats: Partial<PluginStats>,
+): Record<string, PluginStats> {
+  return {
+    ...current,
+    [pluginId]: mergePluginStats(pluginId, current[pluginId], partialStats),
+  };
+}
+
+function pluginCommentCount(stats: PluginStats | undefined): number | undefined {
+  if (!stats) {
+    return undefined;
+  }
+  return stats.comment_count
+    ?? stats.recent_ratings?.filter((rating) => rating.comment?.trim()).length
+    ?? stats.rating_count;
+}
+
 function pluginInlineStat(
   plugin: { id: string; manifest: MarketPlugin["manifest"] },
-  key: "downloads" | "rating" | "likes",
+  key: "downloads" | "rating" | "likes" | "comment_count",
 ): number | undefined {
   const value = (plugin as Partial<Record<typeof key, unknown>>)[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -970,11 +1319,13 @@ function PluginDetailDialog({
   plugin,
   stats,
   maibotVersion,
+  onStatsChange,
   onOpenChange,
 }: {
   plugin: DetailPlugin | null;
   stats?: PluginStats;
   maibotVersion?: string;
+  onStatsChange?: (pluginId: string, stats: Partial<PluginStats>) => void;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const repositoryUrl = plugin ? pluginRepositoryUrl(plugin.manifest) : undefined;
@@ -983,14 +1334,23 @@ function PluginDetailDialog({
   const downloads = stats?.downloads ?? (plugin ? pluginInlineStat(plugin, "downloads") : undefined) ?? 0;
   const rating = stats?.rating ?? (plugin ? pluginInlineStat(plugin, "rating") : undefined) ?? 0;
   const likes = stats?.likes ?? (plugin ? pluginInlineStat(plugin, "likes") : undefined) ?? 0;
+  const commentTotal = pluginCommentCount(stats) ?? (plugin ? pluginInlineStat(plugin, "comment_count") : undefined) ?? 0;
   const [readme, setReadme] = useState("");
   const [readmeLoading, setReadmeLoading] = useState(false);
   const [detailStats, setDetailStats] = useState<PluginStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [userLiked, setUserLiked] = useState(false);
+  const [userDisliked, setUserDisliked] = useState(false);
+  const [userRating, setUserRating] = useState(0);
+  const [userComment, setUserComment] = useState("");
+  const [statsAction, setStatsAction] = useState<"like" | "dislike" | "rating" | null>(null);
+  const [ratingPanelOpen, setRatingPanelOpen] = useState(false);
   const resolvedStats = detailStats ?? stats;
   const resolvedDownloads = resolvedStats?.downloads ?? downloads;
   const resolvedRating = resolvedStats?.rating ?? rating;
   const resolvedLikes = resolvedStats?.likes ?? likes;
+  const resolvedDislikes = resolvedStats?.dislikes ?? 0;
+  const resolvedComments = pluginCommentCount(resolvedStats) ?? commentTotal;
   const comments = resolvedStats?.recent_ratings?.filter((item) => item.comment?.trim()) ?? [];
   const keywords = plugin?.manifest.keywords ?? [];
   const categories = plugin?.manifest.categories ?? [];
@@ -999,6 +1359,11 @@ function PluginDetailDialog({
     if (!plugin) {
       setReadme("");
       setDetailStats(null);
+      setUserLiked(false);
+      setUserDisliked(false);
+      setUserRating(0);
+      setUserComment("");
+      setRatingPanelOpen(false);
       return;
     }
 
@@ -1007,6 +1372,12 @@ function PluginDetailDialog({
     setStatsLoading(true);
     setReadme("");
     setDetailStats(null);
+    setUserLiked(false);
+    setUserDisliked(false);
+    setUserRating(0);
+    setUserComment("");
+    setRatingPanelOpen(false);
+    const statsId = pluginStatsPrimaryId(plugin);
 
     void fetchPluginReadme(plugin.id, pluginRepositoryUrl(plugin.manifest))
       .then((result) => {
@@ -1025,7 +1396,7 @@ function PluginDetailDialog({
         }
       });
 
-    void fetchPluginStats(plugin.id)
+    void fetchPluginStats(statsId)
       .then((nextStats) => {
         if (!cancelled) {
           setDetailStats(nextStats);
@@ -1037,10 +1408,114 @@ function PluginDetailDialog({
         }
       });
 
+    void fetchPluginUserState(statsId)
+      .then((userState) => {
+        if (!cancelled && userState) {
+          setUserLiked(userState.liked);
+          setUserDisliked(userState.disliked);
+          setUserRating(userState.rating);
+          setUserComment(userState.comment);
+        }
+      })
+      .catch(() => undefined);
+
     return () => {
       cancelled = true;
     };
   }, [plugin]);
+
+  const applyStatsPartial = (pluginId: string, partialStats: Partial<PluginStats>) => {
+    setDetailStats((current) => mergePluginStats(pluginId, current ?? resolvedStats, partialStats));
+    onStatsChange?.(pluginId, partialStats);
+  };
+
+  const handlePluginLike = async () => {
+    if (!plugin || statsAction) {
+      return;
+    }
+    const statsId = pluginStatsPrimaryId(plugin);
+    setStatsAction("like");
+    try {
+      const result = await likePlugin(statsId);
+      if (!result.success) {
+        toast.error(result.error ?? "点赞失败");
+        return;
+      }
+      setUserLiked(result.liked === true);
+      setUserDisliked(result.disliked === true);
+      applyStatsPartial(statsId, {
+        likes: result.likes ?? resolvedLikes,
+        dislikes: result.dislikes ?? resolvedDislikes,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStatsAction(null);
+    }
+  };
+
+  const handlePluginDislike = async () => {
+    if (!plugin || statsAction) {
+      return;
+    }
+    const statsId = pluginStatsPrimaryId(plugin);
+    setStatsAction("dislike");
+    try {
+      const result = await dislikePlugin(statsId);
+      if (!result.success) {
+        toast.error(result.error ?? "点踩失败");
+        return;
+      }
+      setUserLiked(result.liked === true);
+      setUserDisliked(result.disliked === true);
+      applyStatsPartial(statsId, {
+        likes: result.likes ?? resolvedLikes,
+        dislikes: result.dislikes ?? resolvedDislikes,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStatsAction(null);
+    }
+  };
+
+  const handlePluginRating = async () => {
+    if (!plugin || statsAction) {
+      return;
+    }
+    if (userRating < 1 || userRating > 5) {
+      toast.error("请先选择 1-5 星评分");
+      return;
+    }
+
+    const statsId = pluginStatsPrimaryId(plugin);
+    setStatsAction("rating");
+    try {
+      const result = await ratePlugin(statsId, userRating, userComment.trim() || undefined);
+      if (!result.success) {
+        toast.error(result.error ?? "评分失败");
+        return;
+      }
+      const nextRating = result.user_rating ?? userRating;
+      setUserRating(nextRating);
+      setRatingPanelOpen(false);
+      applyStatsPartial(statsId, {
+        rating: result.rating ?? resolvedRating,
+        rating_count: result.rating_count ?? resolvedStats?.rating_count ?? 0,
+        comment_count: result.comment_count ?? resolvedComments,
+      });
+      void fetchPluginStats(statsId).then((nextStats) => {
+        if (nextStats) {
+          setDetailStats(nextStats);
+          onStatsChange?.(statsId, nextStats);
+        }
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStatsAction(null);
+    }
+  };
 
   return (
     <Dialog open={plugin !== null} onOpenChange={onOpenChange}>
@@ -1079,6 +1554,71 @@ function PluginDetailDialog({
                   <PluginDetailStat icon={<Download className="size-4" />} label="下载" value={resolvedDownloads.toLocaleString()} />
                   <PluginDetailStat icon={<Star className="size-4 fill-yellow-400 text-yellow-400" />} label="评分" value={resolvedRating.toFixed(1)} />
                   <PluginDetailStat icon={<ThumbsUp className="size-4" />} label="点赞" value={resolvedLikes.toLocaleString()} />
+                  <PluginDetailStat icon={<MessageSquare className="size-4" />} label="评论" value={resolvedComments.toLocaleString()} />
+                  <div className="mt-2 flex flex-wrap gap-2 border-t border-border pt-3">
+                    <Button
+                      disabled={statsAction !== null}
+                      onClick={handlePluginLike}
+                      size="sm"
+                      variant={userLiked ? "default" : "secondary"}
+                    >
+                      {statsAction === "like" ? <Loader2 className="animate-spin" /> : <ThumbsUp />}
+                      {userLiked ? "已点赞" : "点赞"}
+                    </Button>
+                    <Button
+                      disabled={statsAction !== null}
+                      onClick={handlePluginDislike}
+                      size="sm"
+                      variant={userDisliked ? "destructive" : "secondary"}
+                    >
+                      {statsAction === "dislike" ? <Loader2 className="animate-spin" /> : <ThumbsDown />}
+                      {userDisliked ? "已点踩" : "点踩"}
+                    </Button>
+                    <Button
+                      disabled={statsAction !== null}
+                      onClick={() => setRatingPanelOpen((open) => !open)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <Star />
+                      {userRating > 0 ? "改评分" : "评分"}
+                    </Button>
+                  </div>
+                  {ratingPanelOpen ? (
+                    <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                      <div className="flex items-center justify-center gap-1">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            className="rounded-md p-1 text-muted-foreground transition-colors hover:text-yellow-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                            key={star}
+                            onClick={() => setUserRating(star)}
+                            type="button"
+                          >
+                            <Star
+                              className={cn(
+                                "size-6",
+                                star <= userRating && "fill-yellow-400 text-yellow-400",
+                              )}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                      <textarea
+                        className="min-h-20 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
+                        maxLength={500}
+                        onChange={(event) => setUserComment(event.target.value)}
+                        placeholder="写下你的使用体验"
+                        value={userComment}
+                      />
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-muted-foreground">{userComment.length} / 500</span>
+                        <Button disabled={statsAction !== null || userRating === 0} onClick={handlePluginRating} size="sm">
+                          {statsAction === "rating" ? <Loader2 className="animate-spin" /> : <Save />}
+                          提交
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -1148,6 +1688,12 @@ function PluginDetailDialog({
                               <Star className="size-3 fill-yellow-400 text-yellow-400" />
                               {comment.rating.toFixed(1)}
                             </span>
+                            {typeof comment.likes === "number" ? (
+                              <span className="inline-flex items-center gap-1">
+                                <ThumbsUp className="size-3" />
+                                {comment.likes.toLocaleString()}
+                              </span>
+                            ) : null}
                           </div>
                           <p className="whitespace-pre-wrap break-words leading-relaxed">{comment.comment}</p>
                         </div>
