@@ -7,61 +7,36 @@ export type InterfaceScale = "compact" | "normal" | "comfortable";
 export interface AppearancePreference {
   accent: AccentColor;
   font: FontFamily;
+  liquidGlass: boolean;
+  liquidGlassTransparency: number;
   scale: InterfaceScale;
+  windowCornerRadius: number;
 }
 
 export interface AppearanceApi extends AppearancePreference {
   setAccent: (accent: AccentColor) => void;
   setFont: (font: FontFamily) => void;
+  setLiquidGlass: (enabled: boolean) => void;
+  setLiquidGlassTransparency: (transparency: number) => void;
   setScale: (scale: InterfaceScale) => void;
+  setWindowCornerRadius: (radius: number) => void;
   reset: () => void;
 }
 
 const STORAGE_KEY = "maibot-appearance";
 const CHANGE_EVENT = "maibot-appearance-change";
+export const LIQUID_GLASS_TRANSPARENCY_MIN = 20;
+export const LIQUID_GLASS_TRANSPARENCY_MAX = 98;
+export const WINDOW_CORNER_RADIUS_MIN = 12;
+export const WINDOW_CORNER_RADIUS_MAX = 32;
 
 const DEFAULT_APPEARANCE: AppearancePreference = {
   accent: "orange",
   font: "system",
+  liquidGlass: false,
+  liquidGlassTransparency: 62,
   scale: "normal",
-};
-
-const ACCENT_TOKENS: Record<AccentColor, { primary: string; primaryForeground: string; accent: string; accentForeground: string; ring: string }> = {
-  orange: {
-    primary: "oklch(0.71 0.175 52)",
-    primaryForeground: "oklch(0.99 0.008 80)",
-    accent: "oklch(0.962 0.02 70)",
-    accentForeground: "oklch(0.32 0.06 50)",
-    ring: "oklch(0.71 0.175 52 / 0.55)",
-  },
-  green: {
-    primary: "oklch(0.62 0.145 150)",
-    primaryForeground: "oklch(0.99 0.01 150)",
-    accent: "oklch(0.952 0.024 150)",
-    accentForeground: "oklch(0.25 0.07 150)",
-    ring: "oklch(0.62 0.145 150 / 0.55)",
-  },
-  blue: {
-    primary: "oklch(0.62 0.145 250)",
-    primaryForeground: "oklch(0.99 0.01 250)",
-    accent: "oklch(0.952 0.02 250)",
-    accentForeground: "oklch(0.25 0.07 250)",
-    ring: "oklch(0.62 0.145 250 / 0.55)",
-  },
-  pink: {
-    primary: "oklch(0.66 0.17 18)",
-    primaryForeground: "oklch(0.99 0.008 18)",
-    accent: "oklch(0.956 0.025 18)",
-    accentForeground: "oklch(0.3 0.07 18)",
-    ring: "oklch(0.66 0.17 18 / 0.55)",
-  },
-  neutral: {
-    primary: "oklch(0.5 0.02 70)",
-    primaryForeground: "oklch(0.99 0.005 80)",
-    accent: "oklch(0.95 0.004 75)",
-    accentForeground: "oklch(0.24 0.018 55)",
-    ring: "oklch(0.5 0.02 70 / 0.45)",
-  },
+  windowCornerRadius: 16,
 };
 
 const FONT_TOKENS: Record<FontFamily, string> = {
@@ -76,13 +51,55 @@ const SCALE_TOKENS: Record<InterfaceScale, string> = {
   comfortable: "16px",
 };
 
-function isAppearancePreference(value: unknown): value is AppearancePreference {
-  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  return (
-    (record.accent === "orange" || record.accent === "green" || record.accent === "blue" || record.accent === "pink" || record.accent === "neutral") &&
-    (record.font === "system" || record.font === "rounded" || record.font === "serif") &&
-    (record.scale === "compact" || record.scale === "normal" || record.scale === "comfortable")
+const LEGACY_INLINE_COLOR_TOKENS = [
+  "--primary",
+  "--primary-foreground",
+  "--accent",
+  "--accent-foreground",
+  "--ring",
+] as const;
+
+function isAccentColor(value: unknown): value is AccentColor {
+  return value === "orange" || value === "green" || value === "blue" || value === "pink" || value === "neutral";
+}
+
+function isFontFamily(value: unknown): value is FontFamily {
+  return value === "system" || value === "rounded" || value === "serif";
+}
+
+function isInterfaceScale(value: unknown): value is InterfaceScale {
+  return value === "compact" || value === "normal" || value === "comfortable";
+}
+
+function clampLiquidGlassTransparency(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_APPEARANCE.liquidGlassTransparency;
+  }
+  return Math.min(
+    LIQUID_GLASS_TRANSPARENCY_MAX,
+    Math.max(LIQUID_GLASS_TRANSPARENCY_MIN, Math.round(numeric)),
   );
+}
+
+function clampWindowCornerRadius(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_APPEARANCE.windowCornerRadius;
+  }
+  return Math.min(WINDOW_CORNER_RADIUS_MAX, Math.max(WINDOW_CORNER_RADIUS_MIN, Math.round(numeric)));
+}
+
+function normalizeAppearance(value: unknown): AppearancePreference {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    accent: isAccentColor(record.accent) ? record.accent : DEFAULT_APPEARANCE.accent,
+    font: isFontFamily(record.font) ? record.font : DEFAULT_APPEARANCE.font,
+    liquidGlass: typeof record.liquidGlass === "boolean" ? record.liquidGlass : DEFAULT_APPEARANCE.liquidGlass,
+    liquidGlassTransparency: clampLiquidGlassTransparency(record.liquidGlassTransparency),
+    scale: isInterfaceScale(record.scale) ? record.scale : DEFAULT_APPEARANCE.scale,
+    windowCornerRadius: clampWindowCornerRadius(record.windowCornerRadius),
+  };
 }
 
 function readStored(): AppearancePreference {
@@ -95,7 +112,7 @@ function readStored(): AppearancePreference {
       return DEFAULT_APPEARANCE;
     }
     const parsed = JSON.parse(raw);
-    return isAppearancePreference(parsed) ? parsed : DEFAULT_APPEARANCE;
+    return normalizeAppearance(parsed);
   } catch {
     return DEFAULT_APPEARANCE;
   }
@@ -106,16 +123,42 @@ function applyAppearance(appearance: AppearancePreference): void {
     return;
   }
   const root = document.documentElement;
-  const accent = ACCENT_TOKENS[appearance.accent];
-  root.style.setProperty("--primary", accent.primary);
-  root.style.setProperty("--primary-foreground", accent.primaryForeground);
-  root.style.setProperty("--accent", accent.accent);
-  root.style.setProperty("--accent-foreground", accent.accentForeground);
-  root.style.setProperty("--ring", accent.ring);
+  const liquidGlassTransparency = clampLiquidGlassTransparency(appearance.liquidGlassTransparency);
+  const windowCornerRadius = clampWindowCornerRadius(appearance.windowCornerRadius);
+  const transparency = liquidGlassTransparency / 100;
+  const surfaceCover = 1 - transparency;
+  const glassCover = Math.min(1, surfaceCover + 0.34);
+  const frostBlur = Math.round(10 + transparency * 8);
+  LEGACY_INLINE_COLOR_TOKENS.forEach((token) => root.style.removeProperty(token));
   root.style.setProperty("--font-sans", FONT_TOKENS[appearance.font]);
   root.style.setProperty("font-size", SCALE_TOKENS[appearance.scale]);
+  root.style.setProperty("--app-window-radius", `${windowCornerRadius}px`);
+  root.style.setProperty("--liquid-glass-transparency", transparency.toFixed(2));
+  root.style.setProperty("--liquid-glass-bg-alpha", (0.2 + glassCover * 0.38).toFixed(3));
+  root.style.setProperty("--liquid-glass-card-alpha", (0.11 + glassCover * 0.28).toFixed(3));
+  root.style.setProperty("--liquid-glass-popover-alpha", (0.13 + glassCover * 0.32).toFixed(3));
+  root.style.setProperty("--liquid-glass-secondary-alpha", (0.09 + glassCover * 0.23).toFixed(3));
+  root.style.setProperty("--liquid-glass-muted-alpha", (0.08 + glassCover * 0.19).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-bg-alpha", (0.18 + glassCover * 0.4).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-card-alpha", (0.09 + glassCover * 0.24).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-popover-alpha", (0.12 + glassCover * 0.28).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-secondary-alpha", (0.08 + glassCover * 0.2).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-muted-alpha", (0.07 + glassCover * 0.16).toFixed(3));
+  root.style.setProperty("--liquid-glass-chrome-alpha", (0.15 + glassCover * 0.24).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-chrome-alpha", (0.12 + glassCover * 0.2).toFixed(3));
+  root.style.setProperty("--liquid-glass-edge-alpha", (0.11 + glassCover * 0.22).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-edge-alpha", (0.09 + glassCover * 0.17).toFixed(3));
+  root.style.setProperty("--liquid-glass-blur", `${Math.round(18 + glassCover * 30)}px`);
+  root.style.setProperty("--liquid-glass-window-frost", `${frostBlur}px`);
+  root.style.setProperty("--liquid-glass-saturate", (1.22 + glassCover * 0.55).toFixed(2));
+  root.style.setProperty("--liquid-glass-frost-alpha", (0.2 + surfaceCover * 0.18).toFixed(3));
+  root.style.setProperty("--liquid-glass-dark-frost-alpha", (0.16 + surfaceCover * 0.16).toFixed(3));
+  root.style.setProperty("--liquid-glass-layer-alpha", (0.24 + glassCover * 0.18).toFixed(3));
+  root.style.setProperty("--liquid-glass-compositor-opacity", Math.min(1, 0.84 + glassCover * 0.16).toFixed(3));
+  root.classList.toggle("liquid-glass", appearance.liquidGlass);
   root.dataset.accent = appearance.accent;
   root.dataset.font = appearance.font;
+  root.dataset.liquidGlass = appearance.liquidGlass ? "true" : "false";
   root.dataset.scale = appearance.scale;
 }
 
@@ -139,8 +182,8 @@ export function useAppearance(): AppearanceApi {
   useEffect(() => {
     const listener = (event: Event): void => {
       const detail = (event as CustomEvent<AppearancePreference>).detail;
-      if (isAppearancePreference(detail)) {
-        setAppearance(detail);
+      if (detail && typeof detail === "object") {
+        setAppearance(normalizeAppearance(detail));
       }
     };
     window.addEventListener(CHANGE_EVENT, listener);
@@ -159,7 +202,12 @@ export function useAppearance(): AppearanceApi {
     ...appearance,
     setAccent: (accent) => update({ accent }),
     setFont: (font) => update({ font }),
+    setLiquidGlass: (liquidGlass) => update({ liquidGlass }),
+    setLiquidGlassTransparency: (liquidGlassTransparency) =>
+      update({ liquidGlassTransparency: clampLiquidGlassTransparency(liquidGlassTransparency) }),
     setScale: (scale) => update({ scale }),
+    setWindowCornerRadius: (windowCornerRadius) =>
+      update({ windowCornerRadius: clampWindowCornerRadius(windowCornerRadius) }),
     reset: () => {
       setAppearance(DEFAULT_APPEARANCE);
       saveAppearance(DEFAULT_APPEARANCE);

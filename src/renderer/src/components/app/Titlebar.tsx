@@ -17,6 +17,7 @@ import type { ThemeApi } from "@/lib/use-theme";
 
 interface TitlebarProps {
   appVersion: string;
+  liquidGlass?: boolean;
   theme: ThemeApi;
 }
 
@@ -140,6 +141,7 @@ const titlebarBtn =
 
 export function Titlebar({
   appVersion,
+  liquidGlass = false,
   theme,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
@@ -157,10 +159,12 @@ export function Titlebar({
   return (
     <div
       className={cn(
-        "relative z-40 flex h-9 shrink-0 items-stretch border-b border-border bg-card",
+        "relative z-40 flex h-9 shrink-0 items-stretch border-b border-border",
+        liquidGlass ? "bg-transparent" : "bg-card",
         !state.isFocused && "opacity-90",
       )}
       data-app-region="drag"
+      data-liquid-titlebar={liquidGlass ? "true" : undefined}
     >
       {isMac ? <MacTrafficLights /> : null}
 

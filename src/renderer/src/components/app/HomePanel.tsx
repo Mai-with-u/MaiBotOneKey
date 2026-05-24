@@ -18,9 +18,9 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import emojiDropImage from "../../../../../emoji2.png";
-import maiDropImage from "../../../../../mai.png";
-import mai2DropImage from "../../../../../mai2.png";
+import emojiDropImage from "@/assets/home-drops/emoji2.png";
+import maiDropImage from "@/assets/home-drops/mai.png";
+import mai2DropImage from "@/assets/home-drops/mai2.png";
 import maiMascotImage from "@/assets/mai2.png";
 import type {
   DesktopSnapshot,
@@ -55,6 +55,7 @@ type CompactChatState = "idle" | "connecting" | "connected" | "error";
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const QQ_WEBUI_PORT_STORAGE_PREFIX = "maibot.qqWebuiPort";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
+const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
 
 export function adapterPluginIdForBackend(backend: QqBackend): string {
   return backend === "snowluma" ? "maibot-team.snowluma-adapter" : "maibot-team.napcat-adapter";
@@ -741,6 +742,22 @@ function HomeStatsPanel({
 
   return (
     <div className="grid gap-3 self-start">
+      <button
+        className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-card p-3.5 text-left transition-colors hover:border-primary/45 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        onClick={() => void window.maibotDesktop?.openExternal(MAIBOT_OFFICIAL_DOCS_URL)}
+        type="button"
+      >
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <ExternalLink className="size-4.5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold">官方文档</span>
+            <span className="block truncate text-[11px] text-muted-foreground">docs.mai-mai.org</span>
+          </span>
+        </span>
+        <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+      </button>
       <aside className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
         <div className="flex items-center gap-3">
           <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1219,7 +1236,7 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
   return (
     <div
       aria-hidden="true"
-      className="fixed right-0 bottom-0 z-20 hidden h-28 w-32 overflow-hidden md:block"
+      className="fixed z-20 hidden h-28 w-32 overflow-hidden md:block"
       data-mascot-stage="true"
       onClick={onClick}
       onPointerCancel={onPointerUp}
@@ -1229,6 +1246,10 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       ref={stageRef}
+      style={{
+        right: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
+        bottom: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
+      }}
     >
       <img
         alt=""

@@ -1,9 +1,11 @@
 ﻿import {
   AlertTriangle,
+  ChevronDown,
   CheckCircle2,
   CircleAlert,
   ClipboardCheck,
   Download,
+  Droplets,
   FolderOpen,
   GitBranch,
   HardDrive,
@@ -76,7 +78,16 @@ import {
   setClosePreference,
   type ClosePreference,
 } from "@/lib/close-preference";
-import { useAppearance, type AccentColor, type FontFamily, type InterfaceScale } from "@/lib/use-appearance";
+import {
+  LIQUID_GLASS_TRANSPARENCY_MAX,
+  LIQUID_GLASS_TRANSPARENCY_MIN,
+  WINDOW_CORNER_RADIUS_MAX,
+  WINDOW_CORNER_RADIUS_MIN,
+  useAppearance,
+  type AccentColor,
+  type FontFamily,
+  type InterfaceScale,
+} from "@/lib/use-appearance";
 import { useShortcut } from "@/lib/use-shortcut";
 import { useTheme, type ThemePreference } from "@/lib/use-theme";
 import { cn } from "@/lib/utils";
@@ -746,6 +757,7 @@ export function SettingsStatusPanel({
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
   const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
+  const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
   const [moduleUpdateResult, setModuleUpdateResult] = useState<ModuleUpdateResult | null>(null);
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
@@ -777,6 +789,7 @@ export function SettingsStatusPanel({
   const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
   const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
+  const environmentServicesContentId = useId();
   const recentLogEntries = snapshot.recentLogs ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
   const maibotUpdateBlocked = Boolean(
@@ -1112,7 +1125,7 @@ export function SettingsStatusPanel({
     setError(null);
     try {
       if (!window.maibotDesktop?.modules) {
-        throw new Error("妗岄潰妗ユ湭灏辩华锛屾棤娉曚繚瀛樻ā鍧楁洿鏂版簮");
+        throw new Error("桌面桥未就绪，无法保存模块更新源");
       }
 
       const config = await window.maibotDesktop.modules.saveSourceConfig({
@@ -1381,6 +1394,117 @@ export function SettingsStatusPanel({
   useShortcut("Mod+Enter", saveQqBackend, { enabled: canSaveQqBackend, allowInEditable: true });
   useShortcut("Mod+Shift+R", repair, { enabled: busy === null });
 
+  const environmentServicesPanel = (
+    <>
+      <Button
+        aria-controls={environmentServicesContentId}
+        aria-expanded={environmentServicesExpanded}
+        className="h-auto w-full justify-between gap-3 whitespace-normal rounded-lg border-border bg-muted/40 px-3 py-3 text-left"
+        onClick={() => setEnvironmentServicesExpanded((expanded) => !expanded)}
+        type="button"
+        variant="outline"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <ClipboardCheck className="size-4" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">
+              {environmentServicesExpanded ? "收起环境与服务" : "展开环境与服务"}
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {attentionChecks.length > 0 ? `${attentionChecks.length} 项待处理` : "环境检查正常"} · 服务{" "}
+              {services.length} 个
+            </span>
+          </span>
+        </span>
+        <ChevronDown
+          className={cn("size-4 shrink-0 transition-transform", environmentServicesExpanded && "rotate-180")}
+        />
+      </Button>
+
+      {environmentServicesExpanded ? (
+        <div className="space-y-4" id={environmentServicesContentId}>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">环境检查</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                检查运行目录、基础依赖和必要工具是否可用。
+              </p>
+            </div>
+            <Button disabled={busy !== null} onClick={repair} variant="outline">
+              {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
+              准备基础目录
+              <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
+            </Button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {initState.checks.map((check) => (
+              <div
+                className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5"
+                key={check.id}
+              >
+                {check.status === "ok" ? (
+                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
+                ) : (
+                  <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{check.label}</span>
+                    <Badge variant={initVariant[check.status]}>
+                      {check.status === "ok" ? "正常" : check.status === "warning" ? "确认" : "错误"}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground" title={check.path}>
+                    {check.detail}
+                  </p>
+                </div>
+                {check.actionUrl ? (
+                  <Button
+                    className="h-7 shrink-0 px-2 text-[11px]"
+                    onClick={() => openExternal(check.actionUrl ?? "")}
+                    size="sm"
+                    title={check.actionLabel ?? "打开下载页面"}
+                    variant="outline"
+                  >
+                    <Download className="size-3" />
+                    {check.actionLabel ?? "下载"}
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                <Network className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">服务状态</p>
+                <p className="text-xs text-muted-foreground">
+                  固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
+                </p>
+              </div>
+            </div>
+            {services.map((service) => (
+              <ServiceDetail
+                commandBusy={busy === `command:${service.id}`}
+                commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
+                key={service.id}
+                onOpenPath={openPath}
+                onResetCommand={resetCommandConfig}
+                onSaveCommand={saveCommandConfig}
+                service={service}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <>
     <section className="h-full overflow-auto bg-background px-6 py-6">
@@ -1423,10 +1547,6 @@ export function SettingsStatusPanel({
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="appearance">
                   <Palette className="size-3" />
                   外观
-                </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="checks">
-                  <ClipboardCheck className="size-3" />
-                  环境与服务
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="account">
                   <UserRound className="size-3" />
@@ -1710,6 +1830,8 @@ export function SettingsStatusPanel({
                     </Button>
                   </div>
                 </div>
+
+                {environmentServicesPanel}
               </TabsContent>
 
               <TabsContent className="space-y-4" value="appearance">
@@ -1753,13 +1875,104 @@ export function SettingsStatusPanel({
                 </div>
 
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Droplets className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">液态玻璃模式</p>
+                        <p className="text-xs text-muted-foreground">启用实时折射、高光和透明窗口外观。</p>
+                      </div>
+                    </div>
+                    <label
+                      className={cn(
+                        "flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                        appearance.liquidGlass
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                      )}
+                    >
+                      <Checkbox
+                        checked={appearance.liquidGlass}
+                        onCheckedChange={(checked) => appearance.setLiquidGlass(checked === true)}
+                      />
+                      开启液态玻璃模式
+                    </label>
+                  </div>
+
+                  <div
+                    className={cn(
+                      "grid gap-2 rounded-md border border-border bg-card/70 p-3 transition-opacity",
+                      !appearance.liquidGlass && "opacity-55",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">玻璃透度</p>
+                        <p className="text-xs text-muted-foreground">数值越高，窗口外观越通透。</p>
+                      </div>
+                      <Badge className="shrink-0" variant="secondary">
+                        {appearance.liquidGlassTransparency}%
+                      </Badge>
+                    </div>
+                    <input
+                      aria-label="玻璃透度"
+                      className="h-2 w-full cursor-pointer accent-primary disabled:cursor-not-allowed"
+                      disabled={!appearance.liquidGlass}
+                      max={LIQUID_GLASS_TRANSPARENCY_MAX}
+                      min={LIQUID_GLASS_TRANSPARENCY_MIN}
+                      onChange={(event) => appearance.setLiquidGlassTransparency(Number(event.currentTarget.value))}
+                      step={1}
+                      type="range"
+                      value={appearance.liquidGlassTransparency}
+                    />
+                    <div className="flex justify-between text-[11px] text-muted-foreground">
+                      <span>更厚</span>
+                      <span>更透</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Palette className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">窗口圆角</p>
+                        <p className="text-xs text-muted-foreground">调整外壳四角，默认保持微微圆润。</p>
+                      </div>
+                    </div>
+                    <Badge className="shrink-0" variant="secondary">
+                      {appearance.windowCornerRadius}px
+                    </Badge>
+                  </div>
+                  <input
+                    aria-label="窗口圆角"
+                    className="h-2 w-full cursor-pointer accent-primary"
+                    max={WINDOW_CORNER_RADIUS_MAX}
+                    min={WINDOW_CORNER_RADIUS_MIN}
+                    onChange={(event) => appearance.setWindowCornerRadius(Number(event.currentTarget.value))}
+                    step={1}
+                    type="range"
+                    value={appearance.windowCornerRadius}
+                  />
+                  <div className="flex justify-between text-[11px] text-muted-foreground">
+                    <span>尖角</span>
+                    <span>圆角</span>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <Palette className="size-4" />
                     </span>
                     <div className="min-w-0">
                       <p className="text-sm font-medium">主题色</p>
-                      <p className="text-xs text-muted-foreground">影响按钮、选中态、焦点环和强调色。</p>
+                      <p className="text-xs text-muted-foreground">影响按钮、选中态、焦点环、底色、边框和强调色。</p>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1843,84 +2056,6 @@ export function SettingsStatusPanel({
                       已自动保存
                     </Button>
                   </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent className="space-y-4" value="checks">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">环境检查</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      检查运行目录、基础依赖和必要工具是否可用。
-                    </p>
-                  </div>
-                  <Button disabled={busy !== null} onClick={repair} variant="outline">
-                    {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
-                    准备基础目录
-                    <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
-                  </Button>
-                </div>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {initState.checks.map((check) => (
-                    <div
-                      className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5"
-                      key={check.id}
-                    >
-                      {check.status === "ok" ? (
-                        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
-                      ) : (
-                        <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium">{check.label}</span>
-                          <Badge variant={initVariant[check.status]}>
-                            {check.status === "ok" ? "正常" : check.status === "warning" ? "确认" : "错误"}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 truncate text-[11px] text-muted-foreground" title={check.path}>
-                          {check.detail}
-                        </p>
-                      </div>
-                      {check.actionUrl ? (
-                        <Button
-                          className="h-7 shrink-0 px-2 text-[11px]"
-                          onClick={() => openExternal(check.actionUrl ?? "")}
-                          size="sm"
-                          title={check.actionLabel ?? "打开下载页面"}
-                          variant="outline"
-                        >
-                          <Download className="size-3" />
-                          {check.actionLabel ?? "下载"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <Network className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">服务状态</p>
-                      <p className="text-xs text-muted-foreground">
-                        固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
-                      </p>
-                    </div>
-                  </div>
-                  {services.map((service) => (
-                    <ServiceDetail
-                      commandBusy={busy === `command:${service.id}`}
-                      commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
-                      key={service.id}
-                      onOpenPath={openPath}
-                      onResetCommand={resetCommandConfig}
-                      onSaveCommand={saveCommandConfig}
-                      service={service}
-                    />
-                  ))}
                 </div>
               </TabsContent>
 
