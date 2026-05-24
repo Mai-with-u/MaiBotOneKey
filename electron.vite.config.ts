@@ -5,9 +5,27 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
 export default defineConfig({
   main: {
+    build: {
+      rollupOptions: {
+        output: {
+          chunkFileNames: "chunks/[name]-[hash].cjs",
+          entryFileNames: "[name].cjs",
+          format: "cjs",
+        },
+      },
+    },
     plugins: [externalizeDepsPlugin()],
   },
   preload: {
+    build: {
+      rollupOptions: {
+        output: {
+          chunkFileNames: "chunks/[name]-[hash].cjs",
+          entryFileNames: "[name].cjs",
+          format: "cjs",
+        },
+      },
+    },
     plugins: [externalizeDepsPlugin()],
   },
   renderer: {

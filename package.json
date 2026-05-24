@@ -1,11 +1,11 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "MotricSeven",
   "license": "GPL-3.0-only",
   "type": "module",
-  "main": "out/main/index.js",
+  "main": "out/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.renderer.config.ts",
@@ -101,7 +101,6 @@
           "!MaiBot/config/**",
           "!MaiBot/data/**",
           "!MaiBot/maibot_statistics.html",
-          "!MaiBot/plugins/sengokucola_better-image/**",
           "!MaiBot/plugins/__init__.py",
           "!MaiBot/plugins/napcat-adapter/.git/**",
           "!MaiBot/plugins/snowluma-adapter/.git/**",
