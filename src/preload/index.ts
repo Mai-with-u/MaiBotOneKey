@@ -6,6 +6,7 @@ import type {
   InitRepairResult,
   InitState,
   LogEntry,
+  Live2dModelImportResult,
   LocalChatConnectionState,
   LocalChatConnectRequest,
   LocalChatEvent,
@@ -17,15 +18,30 @@ import type {
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   MaiBotInstalledPlugin,
+  MaiBotPluginBlueprintCreateRequest,
+  MaiBotPluginBlueprintCreateResult,
+  MaiBotPluginBlueprintParseResult,
+  MaiBotPluginBuilderBlueprintExportRequest,
+  MaiBotPluginBuilderBlueprintExportResult,
+  MaiBotPluginBuilderBlueprintImportResult,
+  MaiBotPluginBuilderLibraryDeleteResult,
+  MaiBotPluginBuilderLibraryListResult,
+  MaiBotPluginBuilderLibraryLoadResult,
+  MaiBotPluginBuilderLibrarySaveRequest,
+  MaiBotPluginBuilderLibrarySaveResult,
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
+  MaiBotPluginDownloadResult,
   MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
+  MaiBotPluginRatingResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  MaiBotPluginUserState,
+  MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
   ModuleUpdateResult,
@@ -155,6 +171,12 @@ const desktopBridge: DesktopBridge = {
     resetAll: () =>
       ipcRenderer.invoke("launcher:resetAll") as Promise<LauncherResetResult>,
   },
+  live2d: {
+    getLibraryRoot: () => ipcRenderer.invoke("live2d:getLibraryRoot") as Promise<string>,
+    openLibrary: () => ipcRenderer.invoke("live2d:openLibrary") as Promise<void>,
+    importModel: (sourcePath?: string) =>
+      ipcRenderer.invoke("live2d:importModel", sourcePath) as Promise<Live2dModelImportResult | null>,
+  },
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) =>
       ipcRenderer.invoke("plugins:listMarket", serviceUrl, options) as Promise<MaiBotPluginListResult>,
@@ -166,6 +188,24 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
     uninstall: (pluginId: string) =>
       ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
+    createFromBlueprint: (request: MaiBotPluginBlueprintCreateRequest) =>
+      ipcRenderer.invoke("plugins:createFromBlueprint", request) as Promise<MaiBotPluginBlueprintCreateResult>,
+    parseToBlueprint: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:parseToBlueprint", pluginId) as Promise<MaiBotPluginBlueprintParseResult>,
+    listBuilderLibrary: () =>
+      ipcRenderer.invoke("plugins:listBuilderLibrary") as Promise<MaiBotPluginBuilderLibraryListResult>,
+    saveBuilderLibrary: (request: MaiBotPluginBuilderLibrarySaveRequest) =>
+      ipcRenderer.invoke("plugins:saveBuilderLibrary", request) as Promise<MaiBotPluginBuilderLibrarySaveResult>,
+    loadBuilderLibrary: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:loadBuilderLibrary", pluginId) as Promise<MaiBotPluginBuilderLibraryLoadResult>,
+    deleteBuilderLibrary: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:deleteBuilderLibrary", pluginId) as Promise<MaiBotPluginBuilderLibraryDeleteResult>,
+    exportBuilderBlueprint: (request: MaiBotPluginBuilderBlueprintExportRequest) =>
+      ipcRenderer.invoke("plugins:exportBuilderBlueprint", request) as Promise<MaiBotPluginBuilderBlueprintExportResult | null>,
+    importBuilderBlueprint: (sourcePath?: string) =>
+      ipcRenderer.invoke("plugins:importBuilderBlueprint", sourcePath) as Promise<MaiBotPluginBuilderBlueprintImportResult | null>,
+    openBuilderLibrary: () =>
+      ipcRenderer.invoke("plugins:openBuilderLibrary") as Promise<void>,
     getConfig: (pluginId: string, serviceUrl?: string) =>
       ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
     saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>
@@ -174,6 +214,16 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl) as Promise<MaiBotPluginReadmeResult>,
     getStats: (pluginId: string) =>
       ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
+    getUserState: (pluginId: string, userId: string) =>
+      ipcRenderer.invoke("plugins:getUserState", pluginId, userId) as Promise<MaiBotPluginUserState | null>,
+    like: (pluginId: string, userId: string) =>
+      ipcRenderer.invoke("plugins:like", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
+    dislike: (pluginId: string, userId: string) =>
+      ipcRenderer.invoke("plugins:dislike", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
+    rate: (pluginId: string, rating: number, comment: string | undefined, userId: string) =>
+      ipcRenderer.invoke("plugins:rate", pluginId, rating, comment, userId) as Promise<MaiBotPluginRatingResult>,
+    recordDownload: (pluginId: string, userId?: string, fingerprint?: string) =>
+      ipcRenderer.invoke("plugins:recordDownload", pluginId, userId, fingerprint) as Promise<MaiBotPluginDownloadResult>,
   },
   statistics: {
     getMaiBot: () =>

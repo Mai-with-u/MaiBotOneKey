@@ -115,6 +115,8 @@ export function configureRuntimePaths(): RuntimePaths {
     runtimeRoot: join(payloadRoot, "runtime"),
     defaultPythonOverridesRoot: defaults.pythonOverrides,
     pythonOverridesRoot: defaults.pythonOverrides,
+    live2dRoot: join(userDataRoot, "live2d"),
+    pluginBuilderRoot: join(userDataRoot, "plugin-builder", "plugins"),
     logsRoot: join(userDataRoot, "logs"),
   };
   applyRuntimeResourcePaths(paths, stored);

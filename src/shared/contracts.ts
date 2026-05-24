@@ -150,7 +150,17 @@ export interface RuntimePaths {
   runtimeRoot: string;
   defaultPythonOverridesRoot: string;
   pythonOverridesRoot: string;
+  live2dRoot: string;
+  pluginBuilderRoot: string;
   logsRoot: string;
+}
+
+export interface Live2dModelImportResult {
+  sourcePath: string;
+  modelPath: string;
+  modelUrl: string;
+  libraryRoot: string;
+  copied: boolean;
 }
 
 export interface LocalChatSendRequest {
@@ -454,6 +464,9 @@ export interface MaiBotPluginManifest {
   keywords?: string[];
   categories?: string[];
   host_application?: { min_version?: string; max_version?: string };
+  sdk?: { min_version?: string; max_version?: string };
+  dependencies?: string[];
+  capabilities?: string[];
   manifest_version?: number;
 }
 
@@ -466,6 +479,7 @@ export interface MaiBotMarketPlugin {
   downloads?: number;
   rating?: number;
   likes?: number;
+  comment_count?: number;
 }
 
 export interface MaiBotInstalledPlugin {
@@ -494,14 +508,54 @@ export interface MaiBotPluginStats {
   downloads: number;
   rating: number;
   rating_count: number;
+  comment_count: number;
   recent_ratings?: MaiBotPluginRating[];
 }
 
 export interface MaiBotPluginRating {
+  id?: string;
   user_id: string;
   rating: number;
   comment?: string;
   created_at: string;
+  updated_at?: string;
+  likes?: number;
+  dislikes?: number;
+}
+
+export interface MaiBotPluginUserState {
+  liked: boolean;
+  disliked: boolean;
+  rating: number;
+  comment: string;
+}
+
+export interface MaiBotPluginVoteResult {
+  success: boolean;
+  error?: string;
+  liked?: boolean;
+  disliked?: boolean;
+  likes?: number;
+  dislikes?: number;
+  remaining?: number;
+}
+
+export interface MaiBotPluginRatingResult {
+  success: boolean;
+  error?: string;
+  user_rating?: number;
+  rating?: number;
+  rating_count?: number;
+  comment_count?: number;
+  remaining?: number;
+}
+
+export interface MaiBotPluginDownloadResult {
+  success: boolean;
+  error?: string;
+  counted?: boolean;
+  downloads?: number;
+  remaining?: number;
 }
 
 export interface MaiBotPluginReadmeResult {
@@ -524,6 +578,192 @@ export interface MaiBotPluginOperationResult {
   plugin_name?: string;
   old_version?: string;
   new_version?: string;
+}
+
+export type MaiBotPluginBlueprintScalarType = "string" | "integer" | "float" | "boolean";
+
+export type MaiBotPluginBlueprintComponentKind = "tool" | "command" | "hook";
+
+export type MaiBotPluginBlueprintFlowNodeKind =
+  | "send_text"
+  | "read_config"
+  | "log_info"
+  | "set_variable"
+  | "if_condition"
+  | "compare"
+  | "boolean_logic"
+  | "math_operation"
+  | "join_text"
+  | "guard_config"
+  | "loop"
+  | "wait"
+  | "comment"
+  | "return_success";
+
+export interface MaiBotPluginBlueprintManifest {
+  pluginId: string;
+  folderName?: string;
+  name: string;
+  version: string;
+  description: string;
+  authorName: string;
+  authorUrl: string;
+  license: string;
+  repositoryUrl: string;
+  minHostVersion: string;
+  maxHostVersion: string;
+  minSdkVersion: string;
+  maxSdkVersion: string;
+  capabilities: string[];
+}
+
+export interface MaiBotPluginBlueprintParameter {
+  id: string;
+  name: string;
+  type: MaiBotPluginBlueprintScalarType;
+  description: string;
+  required: boolean;
+  defaultValue: string;
+}
+
+export interface MaiBotPluginBlueprintComponent {
+  id: string;
+  kind: MaiBotPluginBlueprintComponentKind;
+  name: string;
+  description: string;
+  detail?: string;
+  trigger?: string;
+  eventType?: string;
+  responseText?: string;
+  parameters?: MaiBotPluginBlueprintParameter[];
+  flowNodes?: MaiBotPluginBlueprintFlowNode[];
+  flowEdges?: MaiBotPluginBlueprintFlowEdge[];
+}
+
+export interface MaiBotPluginBlueprintFlowNode {
+  id: string;
+  kind: MaiBotPluginBlueprintFlowNodeKind;
+  label: string;
+  value?: string;
+  configPath?: string;
+  leftValue?: string;
+  rightValue?: string;
+  operator?: string;
+  targetName?: string;
+}
+
+export interface MaiBotPluginBlueprintFlowEdge {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+}
+
+export interface MaiBotPluginBlueprintConfigField {
+  id: string;
+  section: string;
+  name: string;
+  type: MaiBotPluginBlueprintScalarType;
+  label: string;
+  description: string;
+  defaultValue: string;
+}
+
+export interface MaiBotPluginBlueprint {
+  manifest: MaiBotPluginBlueprintManifest;
+  components: MaiBotPluginBlueprintComponent[];
+  configFields: MaiBotPluginBlueprintConfigField[];
+}
+
+export interface MaiBotPluginBlueprintFile {
+  relativePath: string;
+  content: string;
+}
+
+export interface MaiBotPluginBlueprintCreateRequest {
+  blueprint: MaiBotPluginBlueprint;
+  overwrite?: boolean;
+}
+
+export interface MaiBotPluginBlueprintCreateResult {
+  pluginId: string;
+  pluginPath: string;
+  files: MaiBotPluginBlueprintFile[];
+  overwritten: boolean;
+  createdAt: number;
+}
+
+export interface MaiBotPluginBlueprintParseResult {
+  pluginId: string;
+  pluginPath: string;
+  blueprint: MaiBotPluginBlueprint;
+  parsed: {
+    manifest: boolean;
+    configFields: number;
+    tools: number;
+    commands: number;
+    unsupportedDecorators: string[];
+  };
+}
+
+export interface MaiBotPluginBuilderLibraryItem {
+  pluginId: string;
+  name: string;
+  version: string;
+  description: string;
+  folderName: string;
+  path: string;
+  blueprintPath: string;
+  updatedAt: number;
+  createdAt?: number;
+  fileCount: number;
+}
+
+export interface MaiBotPluginBuilderLibraryListResult {
+  root: string;
+  plugins: MaiBotPluginBuilderLibraryItem[];
+}
+
+export interface MaiBotPluginBuilderLibrarySaveRequest {
+  blueprint: MaiBotPluginBlueprint;
+  overwrite?: boolean;
+}
+
+export interface MaiBotPluginBuilderLibrarySaveResult {
+  item: MaiBotPluginBuilderLibraryItem;
+  files: MaiBotPluginBlueprintFile[];
+  overwritten: boolean;
+  savedAt: number;
+}
+
+export interface MaiBotPluginBuilderLibraryLoadResult {
+  item: MaiBotPluginBuilderLibraryItem;
+  blueprint: MaiBotPluginBlueprint;
+  files: MaiBotPluginBlueprintFile[];
+}
+
+export interface MaiBotPluginBuilderLibraryDeleteResult {
+  pluginId: string;
+  path: string;
+  deletedAt: number;
+}
+
+export interface MaiBotPluginBuilderBlueprintExportRequest {
+  blueprint: MaiBotPluginBlueprint;
+}
+
+export interface MaiBotPluginBuilderBlueprintExportResult {
+  pluginId: string;
+  filePath: string;
+  exportedAt: number;
+}
+
+export interface MaiBotPluginBuilderBlueprintImportResult {
+  item: MaiBotPluginBuilderLibraryItem;
+  blueprint: MaiBotPluginBlueprint;
+  files: MaiBotPluginBlueprintFile[];
+  sourcePath: string;
+  overwritten: boolean;
+  importedAt: number;
 }
 
 export type MaiBotPluginConfigPrimitive = string | number | boolean | null;
@@ -846,12 +1086,30 @@ export interface DesktopBridge {
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;
   };
+  live2d: {
+    getLibraryRoot: () => Promise<string>;
+    openLibrary: () => Promise<void>;
+    importModel: (sourcePath?: string) => Promise<Live2dModelImportResult | null>;
+  };
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) => Promise<MaiBotPluginListResult>;
     listInstalled: (serviceUrl?: string) => Promise<MaiBotInstalledPlugin[]>;
     install: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     update: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
     uninstall: (pluginId: string) => Promise<MaiBotPluginOperationResult>;
+    createFromBlueprint: (request: MaiBotPluginBlueprintCreateRequest) => Promise<MaiBotPluginBlueprintCreateResult>;
+    parseToBlueprint: (pluginId: string) => Promise<MaiBotPluginBlueprintParseResult>;
+    listBuilderLibrary: () => Promise<MaiBotPluginBuilderLibraryListResult>;
+    saveBuilderLibrary: (
+      request: MaiBotPluginBuilderLibrarySaveRequest,
+    ) => Promise<MaiBotPluginBuilderLibrarySaveResult>;
+    loadBuilderLibrary: (pluginId: string) => Promise<MaiBotPluginBuilderLibraryLoadResult>;
+    deleteBuilderLibrary: (pluginId: string) => Promise<MaiBotPluginBuilderLibraryDeleteResult>;
+    exportBuilderBlueprint: (
+      request: MaiBotPluginBuilderBlueprintExportRequest,
+    ) => Promise<MaiBotPluginBuilderBlueprintExportResult | null>;
+    importBuilderBlueprint: (sourcePath?: string) => Promise<MaiBotPluginBuilderBlueprintImportResult | null>;
+    openBuilderLibrary: () => Promise<void>;
     getConfig: (pluginId: string, serviceUrl?: string) => Promise<MaiBotPluginConfigState>;
     saveConfig: (
       pluginId: string,
@@ -860,6 +1118,20 @@ export interface DesktopBridge {
     ) => Promise<MaiBotPluginConfigSaveResult>;
     getReadme: (pluginId: string, repositoryUrl?: string) => Promise<MaiBotPluginReadmeResult>;
     getStats: (pluginId: string) => Promise<MaiBotPluginStats | null>;
+    getUserState: (pluginId: string, userId: string) => Promise<MaiBotPluginUserState | null>;
+    like: (pluginId: string, userId: string) => Promise<MaiBotPluginVoteResult>;
+    dislike: (pluginId: string, userId: string) => Promise<MaiBotPluginVoteResult>;
+    rate: (
+      pluginId: string,
+      rating: number,
+      comment: string | undefined,
+      userId: string,
+    ) => Promise<MaiBotPluginRatingResult>;
+    recordDownload: (
+      pluginId: string,
+      userId?: string,
+      fingerprint?: string,
+    ) => Promise<MaiBotPluginDownloadResult>;
   };
   statistics: {
     getMaiBot: () => Promise<MaiBotStatisticSummary>;

@@ -28,6 +28,8 @@ const fallbackSnapshot: DesktopSnapshot = {
     runtimeRoot: "开发预览/runtime",
     defaultPythonOverridesRoot: "开发预览/python-overrides",
     pythonOverridesRoot: "开发预览/python-overrides",
+    live2dRoot: "开发预览/live2d",
+    pluginBuilderRoot: "开发预览/plugin-builder/plugins",
     logsRoot: "开发预览/logs",
   },
   services: [

@@ -1,23 +1,49 @@
 import type {
   MaiBotInstalledPlugin,
+  MaiBotPluginBlueprint,
+  MaiBotPluginBlueprintCreateResult,
+  MaiBotPluginBlueprintParseResult,
+  MaiBotPluginBuilderBlueprintExportResult,
+  MaiBotPluginBuilderBlueprintImportResult,
+  MaiBotPluginBuilderLibraryDeleteResult,
+  MaiBotPluginBuilderLibraryListResult,
+  MaiBotPluginBuilderLibraryLoadResult,
+  MaiBotPluginBuilderLibrarySaveResult,
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
+  MaiBotPluginDownloadResult,
   MaiBotMarketPlugin,
   MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginManifest,
   MaiBotPluginOperationResult,
+  MaiBotPluginRatingResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  MaiBotPluginUserState,
+  MaiBotPluginVoteResult,
   ServiceDescriptor,
 } from "@shared/contracts";
 
 export type PluginManifest = MaiBotPluginManifest;
+export type PluginBlueprint = MaiBotPluginBlueprint;
+export type PluginBlueprintCreateResponse = MaiBotPluginBlueprintCreateResult;
+export type PluginBlueprintParseResponse = MaiBotPluginBlueprintParseResult;
+export type PluginBuilderBlueprintExportResponse = MaiBotPluginBuilderBlueprintExportResult;
+export type PluginBuilderBlueprintImportResponse = MaiBotPluginBuilderBlueprintImportResult;
+export type PluginBuilderLibraryDeleteResponse = MaiBotPluginBuilderLibraryDeleteResult;
+export type PluginBuilderLibraryListResponse = MaiBotPluginBuilderLibraryListResult;
+export type PluginBuilderLibraryLoadResponse = MaiBotPluginBuilderLibraryLoadResult;
+export type PluginBuilderLibrarySaveResponse = MaiBotPluginBuilderLibrarySaveResult;
 export type MarketPlugin = MaiBotMarketPlugin;
 export type InstalledPlugin = MaiBotInstalledPlugin;
 export type PluginOperationResponse = MaiBotPluginOperationResult;
 export type PluginStats = MaiBotPluginStats;
+export type PluginUserState = MaiBotPluginUserState;
+export type PluginVoteResponse = MaiBotPluginVoteResult;
+export type PluginRatingResponse = MaiBotPluginRatingResult;
+export type PluginDownloadResponse = MaiBotPluginDownloadResult;
 export type PluginReadmeResult = MaiBotPluginReadmeResult;
 export type PluginConfigState = MaiBotPluginConfigState;
 export type PluginConfigValue = MaiBotPluginConfigValue;
@@ -181,6 +207,50 @@ export function updateMaiBotPlugin(
   });
 }
 
+export function createMaiBotPluginFromBlueprint(
+  blueprint: PluginBlueprint,
+  overwrite = false,
+): Promise<PluginBlueprintCreateResponse> {
+  return requirePluginBridge().createFromBlueprint({ blueprint, overwrite });
+}
+
+export function parseMaiBotPluginToBlueprint(pluginId: string): Promise<PluginBlueprintParseResponse> {
+  return requirePluginBridge().parseToBlueprint(pluginId);
+}
+
+export function listPluginBuilderLibrary(): Promise<PluginBuilderLibraryListResponse> {
+  return requirePluginBridge().listBuilderLibrary();
+}
+
+export function savePluginBuilderLibrary(
+  blueprint: PluginBlueprint,
+  overwrite = true,
+): Promise<PluginBuilderLibrarySaveResponse> {
+  return requirePluginBridge().saveBuilderLibrary({ blueprint, overwrite });
+}
+
+export function loadPluginBuilderLibrary(pluginId: string): Promise<PluginBuilderLibraryLoadResponse> {
+  return requirePluginBridge().loadBuilderLibrary(pluginId);
+}
+
+export function deletePluginBuilderLibrary(pluginId: string): Promise<PluginBuilderLibraryDeleteResponse> {
+  return requirePluginBridge().deleteBuilderLibrary(pluginId);
+}
+
+export function exportPluginBuilderBlueprint(
+  blueprint: PluginBlueprint,
+): Promise<PluginBuilderBlueprintExportResponse | null> {
+  return requirePluginBridge().exportBuilderBlueprint({ blueprint });
+}
+
+export function importPluginBuilderBlueprint(sourcePath?: string): Promise<PluginBuilderBlueprintImportResponse | null> {
+  return requirePluginBridge().importBuilderBlueprint(sourcePath);
+}
+
+export function openPluginBuilderLibrary(): Promise<void> {
+  return requirePluginBridge().openBuilderLibrary();
+}
+
 export function fetchPluginConfig(pluginId: string, service?: ServiceDescriptor): Promise<PluginConfigState> {
   return requirePluginBridge().getConfig(pluginId, service?.url);
 }
@@ -199,4 +269,75 @@ export function fetchPluginReadme(pluginId: string, repositoryUrl?: string): Pro
 
 export function fetchPluginStats(pluginId: string): Promise<PluginStats | null> {
   return requirePluginBridge().getStats(pluginId);
+}
+
+export function fetchPluginUserState(pluginId: string): Promise<PluginUserState | null> {
+  return requirePluginBridge().getUserState(pluginId, getPluginStatsUserId());
+}
+
+export function likePlugin(pluginId: string): Promise<PluginVoteResponse> {
+  return requirePluginBridge().like(pluginId, getPluginStatsUserId());
+}
+
+export function dislikePlugin(pluginId: string): Promise<PluginVoteResponse> {
+  return requirePluginBridge().dislike(pluginId, getPluginStatsUserId());
+}
+
+export function ratePlugin(
+  pluginId: string,
+  rating: number,
+  comment?: string,
+): Promise<PluginRatingResponse> {
+  return requirePluginBridge().rate(pluginId, rating, comment, getPluginStatsUserId());
+}
+
+export function recordPluginDownload(pluginId: string): Promise<PluginDownloadResponse> {
+  return requirePluginBridge().recordDownload(pluginId, getPluginStatsUserId(), generatePluginStatsFingerprint());
+}
+
+export function getPluginStatsUserId(): string {
+  const storageKey = "maibot_user_id";
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored) {
+      return stored;
+    }
+
+    const fingerprint = generatePluginStatsFingerprint();
+    const userId = `${fingerprint}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+    window.localStorage.setItem(storageKey, userId);
+    return userId;
+  } catch {
+    return `anon_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+  }
+}
+
+export function generatePluginStatsFingerprint(): string {
+  const nav = typeof navigator !== "undefined"
+    ? navigator as Navigator & { deviceMemory?: number }
+    : null;
+  const screenInfo = typeof screen !== "undefined" ? screen : null;
+  const features = [
+    nav?.userAgent ?? "",
+    nav?.language ?? "",
+    nav?.languages?.join(",") ?? "",
+    nav?.platform ?? "",
+    nav?.hardwareConcurrency ?? 0,
+    screenInfo?.width ?? 0,
+    screenInfo?.height ?? 0,
+    screenInfo?.colorDepth ?? 0,
+    screenInfo?.pixelDepth ?? 0,
+    new Date().getTimezoneOffset(),
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+    nav?.maxTouchPoints ?? 0,
+    nav?.deviceMemory ?? 0,
+  ].join("|");
+
+  let hash = 0;
+  for (let index = 0; index < features.length; index++) {
+    hash = ((hash << 5) - hash) + features.charCodeAt(index);
+    hash &= hash;
+  }
+
+  return `fp_${Math.abs(hash).toString(36)}`;
 }
