@@ -531,15 +531,22 @@ function MessagePlatformConnectCard({
 
 function LauncherUpdateCard({
   appVersion,
+  busy,
   latestTag,
+  onCheckUpdate,
+  onInstallUpdate,
   onOpenRelease,
 }: {
   appVersion: string;
+  busy?: "check" | "install" | null;
   latestTag?: string;
+  onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
   onOpenRelease: () => void;
 }): React.JSX.Element {
   const currentTag = `v${appVersion}`;
   const updateAvailable = latestTag ? compareVersionText(latestTag, currentTag) > 0 : false;
+  const busyRunning = busy !== null && busy !== undefined;
 
   return (
     <section className="rounded-lg border border-border bg-card p-3.5">
@@ -560,11 +567,21 @@ function LauncherUpdateCard({
         <DetailRow label="本地版本" value={currentTag} />
         <DetailRow label="最新版本" value={latestTag} />
       </div>
-      <div className="mt-3 flex justify-end">
-        <Button className="h-8 px-3 text-xs" onClick={onOpenRelease} size="sm" variant="secondary">
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onCheckUpdate} size="sm" variant="secondary">
+          {busy === "check" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+          检查更新
+        </Button>
+        <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onOpenRelease} size="sm" variant="secondary">
           <ExternalLink className="size-3.5" />
           查看更新
         </Button>
+        {updateAvailable ? (
+          <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onInstallUpdate} size="sm">
+            {busy === "install" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+            下载并安装
+          </Button>
+        ) : null}
       </div>
     </section>
   );
@@ -1425,6 +1442,44 @@ export function HomePanel({
     void window.maibotDesktop?.openExternal(url);
   }, [snapshot.appLatestTag]);
 
+  const checkLauncherUpdate = useCallback(async () => {
+    if (!window.maibotDesktop?.launcher) {
+      setError("桌面桥未就绪，无法检查启动器更新");
+      return;
+    }
+
+    setBusy("launcher:check");
+    setError(null);
+    try {
+      const update = await window.maibotDesktop.launcher.checkUpdate();
+      toast.success(update.available
+        ? `发现新版本 ${update.latestTag ?? update.latestVersion ?? ""}`
+        : "启动器已是最新版本");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
+
+  const installLauncherUpdate = useCallback(async () => {
+    if (!window.maibotDesktop?.launcher) {
+      setError("桌面桥未就绪，无法安装启动器更新");
+      return;
+    }
+
+    setBusy("launcher:update");
+    setError(null);
+    try {
+      const result = await window.maibotDesktop.launcher.downloadAndInstallUpdate();
+      toast.success(result.willQuit ? "安装器已启动，启动器即将退出" : "安装器已启动");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+      setBusy(null);
+    }
+  }, []);
+
   const openMessagePlatformDialog = useCallback(() => {
     setError(null);
     setMessagePlatformBackend(snapshot.initState.qqBackend ?? "napcat");
@@ -1563,7 +1618,10 @@ export function HomePanel({
               )}
               <LauncherUpdateCard
                 appVersion={snapshot.appVersion}
+                busy={busy === "launcher:check" ? "check" : busy === "launcher:update" ? "install" : null}
                 latestTag={snapshot.appLatestTag}
+                onCheckUpdate={() => void checkLauncherUpdate()}
+                onInstallUpdate={() => void installLauncherUpdate()}
                 onOpenRelease={openLauncherRelease}
               />
             </div>

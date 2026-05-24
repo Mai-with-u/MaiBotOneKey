@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -8,6 +8,8 @@ import type {
   DesktopSnapshot,
   InitRepairResult,
   InitState,
+  LauncherUpdateApplyResult,
+  LauncherUpdateInfo,
   LauncherResetResult,
   LogEntry,
   Live2dModelImportResult,
@@ -125,6 +127,28 @@ const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
 ]);
 const ONEKEY_REPOSITORY_URL = "https://github.com/DrSmoothl/MaiBotOneKey.git";
 const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/tags?per_page=100";
+const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/releases/latest";
+const ONEKEY_RELEASE_SOURCE = "DrSmoothl/MaiBotOneKey";
+
+interface GitHubReleaseAsset {
+  name?: unknown;
+  size?: unknown;
+  browser_download_url?: unknown;
+}
+
+interface GitHubReleasePayload {
+  tag_name?: unknown;
+  name?: unknown;
+  html_url?: unknown;
+  body?: unknown;
+  prerelease?: unknown;
+  draft?: unknown;
+  assets?: unknown;
+}
+
+interface LauncherUpdateInternalInfo extends LauncherUpdateInfo {
+  downloadUrl?: string;
+}
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
@@ -508,6 +532,114 @@ function pickLatestVersionTag(rawTags: string[]): string | undefined {
     .filter((tag): tag is ParsedVersionTag => Boolean(tag))
     .sort(compareParsedTags)
     .at(-1)?.tag;
+}
+
+function compareVersionTags(left: string | undefined, right: string | undefined): number {
+  const parsedLeft = left ? parseVersionTag(left) : undefined;
+  const parsedRight = right ? parseVersionTag(right) : undefined;
+  if (parsedLeft && parsedRight) {
+    return compareParsedTags(parsedLeft, parsedRight);
+  }
+  return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
+}
+
+function releaseTagToVersion(tag: string | undefined): string | undefined {
+  return tag?.trim().replace(/^v/iu, "") || undefined;
+}
+
+function sanitizeDownloadFileName(value: string): string {
+  const sanitized = basename(value)
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/gu, "-")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[. ]+$/u, "");
+  return sanitized || "MaiBot-OneKey-update.exe";
+}
+
+function selectLauncherUpdateAsset(rawAssets: unknown): GitHubReleaseAsset | undefined {
+  const assets = Array.isArray(rawAssets) ? rawAssets.filter((item): item is GitHubReleaseAsset => {
+    return Boolean(item && typeof item === "object");
+  }) : [];
+  const executableAssets = assets.filter((asset) => {
+    const name = typeof asset.name === "string" ? asset.name.toLowerCase() : "";
+    const url = typeof asset.browser_download_url === "string" ? asset.browser_download_url : "";
+    return name.endsWith(".exe") && !name.includes("uninstaller") && Boolean(url);
+  });
+  return executableAssets.find((asset) => String(asset.name ?? "").toLowerCase().includes("win"))
+    ?? executableAssets[0];
+}
+
+async function fetchLauncherUpdateInfo(currentVersion: string): Promise<LauncherUpdateInternalInfo> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(ONEKEY_LATEST_RELEASE_API_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+    }
+
+    const release = (await response.json()) as GitHubReleasePayload;
+    if (release.draft === true || typeof release.tag_name !== "string") {
+      throw new Error("Latest release metadata is incomplete");
+    }
+
+    const asset = selectLauncherUpdateAsset(release.assets);
+    const latestTag = release.tag_name;
+    const currentTag = `v${currentVersion}`;
+    const available = compareVersionTags(latestTag, currentTag) > 0;
+    return {
+      currentVersion,
+      latestTag,
+      latestVersion: releaseTagToVersion(latestTag),
+      releaseName: typeof release.name === "string" ? release.name : latestTag,
+      releaseUrl: typeof release.html_url === "string" ? release.html_url : "https://github.com/DrSmoothl/MaiBotOneKey/releases",
+      releaseNotes: typeof release.body === "string" ? release.body : undefined,
+      assetName: typeof asset?.name === "string" ? asset.name : undefined,
+      assetSize: typeof asset?.size === "number" ? asset.size : undefined,
+      available,
+      checkedAt: Date.now(),
+      source: ONEKEY_RELEASE_SOURCE,
+      downloadUrl: typeof asset?.browser_download_url === "string" ? asset.browser_download_url : undefined,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function publicLauncherUpdateInfo(update: LauncherUpdateInternalInfo): LauncherUpdateInfo {
+  const { downloadUrl: _downloadUrl, ...publicUpdate } = update;
+  return publicUpdate;
+}
+
+async function downloadLauncherUpdate(paths: RuntimePaths, update: LauncherUpdateInternalInfo): Promise<string> {
+  if (!update.downloadUrl || !update.assetName) {
+    throw new Error("最新版本没有可下载的 Windows 安装包");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(update.downloadUrl, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`安装包下载失败: HTTP ${response.status}`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (update.assetSize && buffer.length !== update.assetSize) {
+      throw new Error(`安装包大小校验失败: ${buffer.length} / ${update.assetSize}`);
+    }
+
+    const updatesRoot = join(paths.userDataRoot, "updates");
+    await mkdir(updatesRoot, { recursive: true });
+    const installerPath = join(updatesRoot, sanitizeDownloadFileName(update.assetName));
+    await writeFile(installerPath, buffer);
+    return installerPath;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function parsePackageVersion(version: string): ParsedVersionTag | undefined {
@@ -1075,7 +1207,7 @@ export function registerAppIpc({
       if (latestTag) {
         return {
           appLatestTag: latestTag,
-          appLatestSource: "DrSmoothl/MaiBotOneKey",
+          appLatestSource: ONEKEY_RELEASE_SOURCE,
         };
       }
     }
@@ -1094,7 +1226,7 @@ export function registerAppIpc({
       return latestTag
         ? {
             appLatestTag: latestTag,
-            appLatestSource: "DrSmoothl/MaiBotOneKey",
+            appLatestSource: ONEKEY_RELEASE_SOURCE,
           }
         : {};
     } catch {
@@ -1108,6 +1240,18 @@ export function registerAppIpc({
     ...remoteModuleVersionsCache,
     ...(await readLocalModuleVersions()),
   });
+
+  const checkLauncherUpdate = async (): Promise<LauncherUpdateInternalInfo> => {
+    const update = await fetchLauncherUpdateInfo(app.getVersion());
+    remoteAppVersionCache = update.latestTag
+      ? {
+          appLatestTag: update.latestTag,
+          appLatestSource: update.source,
+        }
+      : {};
+    await broadcastSnapshot();
+    return update;
+  };
 
   const buildSnapshot = async (options: { refreshDependencies?: boolean } = {}): Promise<DesktopSnapshot> => ({
     paths,
@@ -1578,6 +1722,33 @@ export function registerAppIpc({
       return result;
     },
   );
+
+  ipcMain.handle("launcher:checkUpdate", async (): Promise<LauncherUpdateInfo> => {
+    return publicLauncherUpdateInfo(await checkLauncherUpdate());
+  });
+
+  ipcMain.handle("launcher:downloadAndInstallUpdate", async (): Promise<LauncherUpdateApplyResult> => {
+    const update = await checkLauncherUpdate();
+    if (!update.available) {
+      throw new Error("当前启动器已经是最新版本");
+    }
+
+    const installerPath = await downloadLauncherUpdate(paths, update);
+    const child = spawn(installerPath, [], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
+    logStore.append("desktop", "system", `启动器更新安装器已启动: ${installerPath}`);
+    setTimeout(() => requestQuit(), 800);
+    return {
+      update: publicLauncherUpdateInfo(update),
+      installerPath,
+      started: true,
+      willQuit: true,
+    };
+  });
 
   ipcMain.handle("plugins:listMarket", async (
     _event,

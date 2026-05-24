@@ -5,6 +5,8 @@ import type {
   DesktopSnapshot,
   InitRepairResult,
   InitState,
+  LauncherUpdateApplyResult,
+  LauncherUpdateInfo,
   LogEntry,
   Live2dModelImportResult,
   LocalChatConnectionState,
@@ -166,6 +168,10 @@ const desktopBridge: DesktopBridge = {
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) =>
       ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
+    checkUpdate: () =>
+      ipcRenderer.invoke("launcher:checkUpdate") as Promise<LauncherUpdateInfo>,
+    downloadAndInstallUpdate: () =>
+      ipcRenderer.invoke("launcher:downloadAndInstallUpdate") as Promise<LauncherUpdateApplyResult>,
     resetSettings: () =>
       ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
     resetAll: () =>

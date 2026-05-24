@@ -279,6 +279,27 @@ export interface DesktopSnapshot {
   recentLogs: LogEntry[];
 }
 
+export interface LauncherUpdateInfo {
+  currentVersion: string;
+  latestTag?: string;
+  latestVersion?: string;
+  releaseName?: string;
+  releaseUrl?: string;
+  releaseNotes?: string;
+  assetName?: string;
+  assetSize?: number;
+  available: boolean;
+  checkedAt: number;
+  source: string;
+}
+
+export interface LauncherUpdateApplyResult {
+  update: LauncherUpdateInfo;
+  installerPath: string;
+  started: boolean;
+  willQuit: boolean;
+}
+
 export interface WindowState {
   isMaximized: boolean;
   isFullScreen: boolean;
@@ -1083,6 +1104,8 @@ export interface DesktopBridge {
   };
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) => Promise<NetworkProxySettings>;
+    checkUpdate: () => Promise<LauncherUpdateInfo>;
+    downloadAndInstallUpdate: () => Promise<LauncherUpdateApplyResult>;
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;
   };
