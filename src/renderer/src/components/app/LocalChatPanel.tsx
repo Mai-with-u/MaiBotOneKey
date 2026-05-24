@@ -2,6 +2,7 @@
   Bot,
   CircleAlert,
   ChevronDown,
+  FolderOpen,
   FileText,
   ImageIcon,
   Loader2,
@@ -13,6 +14,7 @@
   Send,
   Settings,
   Smile,
+  Upload,
   UserRound,
   X,
 } from "lucide-react";
@@ -52,11 +54,24 @@ interface ChatMessage {
   plannerTools?: LocalChatMessageEvent["plannerTools"];
 }
 
+interface Live2dSpeechEvent {
+  id: string;
+  text: string;
+}
+
+type Live2dWebviewElement = HTMLElement & {
+  executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>;
+};
+
 const DEFAULT_USER_NAME = "本地用户";
 const USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const USER_AVATAR_STORAGE_KEY = "maibot.localChat.userAvatar";
 const BOT_AVATAR_STORAGE_KEY = "maibot.localChat.botAvatar";
 const PLANNER_VISIBLE_STORAGE_KEY = "maibot.localChat.showPlanner";
+const LIVE2D_ENABLED_STORAGE_KEY = "maibot.localChat.live2d.enabled";
+const LIVE2D_MODEL_URL_STORAGE_KEY = "maibot.localChat.live2d.modelUrl";
+const DEFAULT_LIVE2D_MODEL_URL =
+  "https://raw.githubusercontent.com/guansss/pixi-live2d-display/master/test/assets/haru/haru_greeter_t03.model3.json";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_VOICE_BYTES = 16 * 1024 * 1024;
@@ -158,6 +173,14 @@ function voiceDataUrl(voice: LocalChatVoiceAttachment): string {
 
 function readPlannerVisible(): boolean {
   return localStorage.getItem(PLANNER_VISIBLE_STORAGE_KEY) !== "0";
+}
+
+function readLive2dEnabled(): boolean {
+  return localStorage.getItem(LIVE2D_ENABLED_STORAGE_KEY) === "1";
+}
+
+function readLive2dModelUrl(): string {
+  return localStorage.getItem(LIVE2D_MODEL_URL_STORAGE_KEY) ?? DEFAULT_LIVE2D_MODEL_URL;
 }
 
 function readImageFile(file: File): Promise<LocalChatImageAttachment> {
@@ -293,6 +316,499 @@ function AvatarButton({
   );
 }
 
+function normalizeLive2dSource(value: string): string {
+  const source = value.trim();
+  if (!source) {
+    return "";
+  }
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/u.test(source)) {
+    return source;
+  }
+  if (/^[a-zA-Z]:[\\/]/u.test(source)) {
+    return encodeURI(`file:///${source.replace(/\\/gu, "/")}`);
+  }
+  if (source.startsWith("\\\\")) {
+    return encodeURI(`file:${source.replace(/\\/gu, "/")}`);
+  }
+  return source;
+}
+
+function isLocalLive2dModelPath(value: string): boolean {
+  const source = value.trim().replace(/^["']|["']$/gu, "");
+  return /^[a-zA-Z]:[\\/]/u.test(source) || source.startsWith("\\\\");
+}
+
+function isLive2dModelSource(source: string): boolean {
+  const cleanSource = source.toLowerCase().split(/[?#]/u)[0];
+  return cleanSource.endsWith(".model3.json") || cleanSource.endsWith(".model.json");
+}
+
+function buildLive2dViewerHtml(modelUrl: string): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html,
+    body,
+    #stage {
+      height: 100%;
+      width: 100%;
+    }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      color: #7a6a56;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #stage {
+      display: block;
+    }
+    #status {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      box-sizing: border-box;
+      text-align: center;
+      font-size: 12px;
+      line-height: 1.7;
+      color: rgba(122, 106, 86, 0.78);
+    }
+    #detail {
+      margin-top: 6px;
+      max-width: 220px;
+      word-break: break-word;
+      color: rgba(122, 106, 86, 0.58);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <div id="status">
+    <div>
+      <div id="message">正在载入 Live2D</div>
+      <div id="detail"></div>
+    </div>
+  </div>
+  <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/dylanNew/live2d/webgl/Live2D/lib/live2d.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/index.min.js"></script>
+  <script>
+    const modelUrl = ${JSON.stringify(modelUrl)};
+    const message = document.getElementById("message");
+    const detail = document.getElementById("detail");
+    const status = document.getElementById("status");
+    const canvas = document.getElementById("stage");
+
+    function setStatus(text, extra) {
+      message.textContent = text;
+      detail.textContent = extra || "";
+    }
+
+    let live2dModel = null;
+    let speaking = null;
+    let mouthOpen = 0;
+    let queuedSpeech = "";
+    let mouthParameterIds = [];
+    let mouthParameterLogged = false;
+
+    function isPauseChar(char) {
+      return /[\\s，,。.!！?？;；:：、~～…\\n\\r]/u.test(char);
+    }
+
+    function isStrongMouthChar(char) {
+      return /[aeiouAEIOUāáǎàōóǒòēéěèīíǐìūúǔùǖǘǚǜ啊呀哇哈喔哦噢诶欸哎嗨爱]/u.test(char);
+    }
+
+    function createSpeechTimeline(text) {
+      const content = String(text || "").replace(/\\s+/gu, " ").trim().slice(0, 260);
+      const frames = [];
+      let cursor = 0;
+
+      for (const char of Array.from(content)) {
+        if (isPauseChar(char)) {
+          cursor += /[。.!！?？…]/u.test(char) ? 170 : 95;
+          continue;
+        }
+
+        const isAscii = /[A-Za-z0-9]/u.test(char);
+        const duration = isAscii ? 82 : 118;
+        const amplitude = isStrongMouthChar(char) ? 0.92 : isAscii ? 0.68 : 0.78;
+        frames.push({
+          start: cursor,
+          peak: cursor + duration * 0.38,
+          end: cursor + duration,
+          amplitude,
+        });
+        cursor += duration;
+      }
+
+      return {
+        frames,
+        total: Math.min(Math.max(cursor + 180, 420), 12000),
+      };
+    }
+
+    function speechValueAt(timeline, elapsed) {
+      for (const frame of timeline.frames) {
+        if (elapsed < frame.start || elapsed > frame.end) {
+          continue;
+        }
+
+        if (elapsed <= frame.peak) {
+          const progress = (elapsed - frame.start) / Math.max(frame.peak - frame.start, 1);
+          return Math.sin(progress * Math.PI * 0.5) * frame.amplitude;
+        }
+
+        const progress = (elapsed - frame.peak) / Math.max(frame.end - frame.peak, 1);
+        return Math.cos(progress * Math.PI * 0.5) * frame.amplitude;
+      }
+      return 0;
+    }
+
+    function listParameterIds(coreModel) {
+      const ids = [];
+      const candidateLists = [
+        coreModel && coreModel._parameterIds,
+        coreModel && coreModel.parameterIds,
+        coreModel && coreModel.parameters && coreModel.parameters.ids,
+        coreModel && coreModel._model && coreModel._model.parameters && coreModel._model.parameters.ids,
+      ];
+      for (const list of candidateLists) {
+        if (!Array.isArray(list)) {
+          continue;
+        }
+        for (const id of list) {
+          const text = typeof id === "string" ? id : id && typeof id.id === "string" ? id.id : String(id || "");
+          if (text && !ids.includes(text)) {
+            ids.push(text);
+          }
+        }
+      }
+      if (typeof coreModel.getParameterCount === "function" && typeof coreModel.getParameterId === "function") {
+        const count = coreModel.getParameterCount();
+        for (let index = 0; index < count; index += 1) {
+          const id = coreModel.getParameterId(index);
+          const text = typeof id === "string" ? id : id && typeof id.id === "string" ? id.id : String(id || "");
+          if (text && !ids.includes(text)) {
+            ids.push(text);
+          }
+        }
+      }
+      return ids;
+    }
+
+    function resolveMouthParameterIds(coreModel) {
+      const ids = listParameterIds(coreModel);
+      const preferred = [
+        "ParamMouthOpenY",
+        "PARAM_MOUTH_OPEN_Y",
+        "ParamMouthOpen",
+        "PARAM_MOUTH_OPEN",
+        "MouthOpen",
+        "MouthOpenY",
+        "ParamMouthA",
+        "PARAM_MOUTH_A",
+      ];
+      const matched = [
+        ...preferred.filter((id) => ids.includes(id)),
+        ...ids.filter((id) => /mouth.*open|open.*mouth|口|くち|kuchi/iu.test(id)),
+      ];
+      const unique = [...new Set(matched)];
+      return unique.length > 0 ? unique : preferred;
+    }
+
+    function setMouthValueById(coreModel, id, value) {
+      let changed = false;
+      if (typeof coreModel.setParameterValueById === "function") {
+        try {
+          coreModel.setParameterValueById(id, value);
+          changed = true;
+        } catch {}
+      }
+      if (typeof coreModel.setParamFloat === "function") {
+        try {
+          coreModel.setParamFloat(id, value);
+          changed = true;
+        } catch {}
+      }
+      if (typeof coreModel.getParameterIndex === "function" && typeof coreModel.setParameterValueByIndex === "function") {
+        try {
+          const index = coreModel.getParameterIndex(id);
+          if (typeof index === "number" && index >= 0) {
+            coreModel.setParameterValueByIndex(index, value);
+            changed = true;
+          }
+        } catch {}
+      }
+      return changed;
+    }
+
+    function setMouthParameter(value) {
+      if (!live2dModel) {
+        return;
+      }
+
+      const coreModel = live2dModel.internalModel && live2dModel.internalModel.coreModel;
+      if (!coreModel) {
+        return;
+      }
+
+      const safeValue = Math.max(0, Math.min(value, 1));
+      if (mouthParameterIds.length === 0) {
+        mouthParameterIds = resolveMouthParameterIds(coreModel);
+      }
+
+      let changed = false;
+      for (const id of mouthParameterIds) {
+        changed = setMouthValueById(coreModel, id, safeValue) || changed;
+      }
+      for (const id of ["ParamMouthForm", "PARAM_MOUTH_FORM"]) {
+        setMouthValueById(coreModel, id, safeValue > 0.08 ? 0.25 : 0);
+      }
+
+      if (!changed && !mouthParameterLogged) {
+        mouthParameterLogged = true;
+        console.warn("[maibot-live2d] No writable mouth parameter found", listParameterIds(coreModel));
+      }
+    }
+
+    function speak(text) {
+      const content = String(text || "").trim();
+      if (!content) {
+        return false;
+      }
+
+      if (!live2dModel) {
+        queuedSpeech = content;
+        return true;
+      }
+
+      speaking = {
+        startedAt: performance.now(),
+        timeline: createSpeechTimeline(content),
+      };
+      return true;
+    }
+
+    window.__maibotLive2D = {
+      speak,
+      stopSpeaking: () => {
+        speaking = null;
+        mouthOpen = 0;
+        setMouthParameter(0);
+      },
+    };
+
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "maibot-live2d:speak") {
+        speak(event.data.text);
+      }
+    });
+
+    async function boot() {
+      if (!window.PIXI || !window.PIXI.live2d) {
+        throw new Error("Live2D runtime failed to load");
+      }
+
+      const app = new PIXI.Application({
+        view: canvas,
+        resizeTo: window,
+        backgroundAlpha: 0,
+        antialias: true,
+        autoStart: true,
+      });
+
+      const model = await PIXI.live2d.Live2DModel.from(modelUrl, { autoInteract: true });
+      live2dModel = model;
+      app.stage.addChild(model);
+
+      const baseWidth = Math.max(model.width, 1);
+      const baseHeight = Math.max(model.height, 1);
+      const fitModel = () => {
+        const width = Math.max(window.innerWidth, 1);
+        const height = Math.max(window.innerHeight, 1);
+        const scale = Math.max(0.08, Math.min((width * 0.92) / baseWidth, (height * 0.94) / baseHeight));
+        model.scale.set(scale);
+        model.x = (width - baseWidth * scale) / 2;
+        model.y = height - baseHeight * scale - 6;
+      };
+
+      fitModel();
+      window.addEventListener("resize", fitModel);
+
+      app.stage.interactive = true;
+      app.stage.hitArea = app.renderer.screen;
+      app.stage.on("pointermove", (event) => {
+        if (typeof model.focus === "function") {
+          model.focus(event.data.global.x, event.data.global.y);
+        }
+      });
+
+      app.ticker.add(() => {
+        let target = 0;
+        if (speaking) {
+          const elapsed = performance.now() - speaking.startedAt;
+          target = speechValueAt(speaking.timeline, elapsed);
+          if (elapsed > speaking.timeline.total) {
+            speaking = null;
+          }
+        }
+
+        mouthOpen += (target - mouthOpen) * 0.38;
+        if (!speaking && mouthOpen < 0.015) {
+          mouthOpen = 0;
+        }
+        setMouthParameter(mouthOpen);
+      }, undefined, window.PIXI && window.PIXI.UPDATE_PRIORITY ? window.PIXI.UPDATE_PRIORITY.LOW : -25);
+
+      if (queuedSpeech) {
+        const text = queuedSpeech;
+        queuedSpeech = "";
+        speak(text);
+      }
+
+      status.hidden = true;
+    }
+
+    boot().catch((error) => {
+      setStatus("Live2D 载入失败", error && error.message ? error.message : String(error));
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function buildLive2dWebviewSource(modelUrl: string): string {
+  const source = normalizeLive2dSource(modelUrl);
+  if (!source) {
+    return "";
+  }
+  return isLive2dModelSource(source)
+    ? `data:text/html;charset=utf-8,${encodeURIComponent(buildLive2dViewerHtml(source))}`
+    : source;
+}
+
+function LocalChatLive2DPanel({
+  active,
+  modelUrl,
+  onOpenSettings,
+  onReload,
+  reloadKey,
+  speech,
+}: {
+  active: boolean;
+  modelUrl: string;
+  onOpenSettings: () => void;
+  onReload: () => void;
+  reloadKey: number;
+  speech: Live2dSpeechEvent | null;
+}): React.JSX.Element {
+  const webviewRef = useRef<Live2dWebviewElement | null>(null);
+  const pendingSpeechRef = useRef<Live2dSpeechEvent | null>(null);
+  const lastSpeechIdRef = useRef<string | null>(null);
+  const webviewSource = useMemo(() => buildLive2dWebviewSource(modelUrl), [modelUrl]);
+  const hasModel = modelUrl.trim().length > 0;
+
+  const sendSpeech = useCallback((nextSpeech: Live2dSpeechEvent) => {
+    pendingSpeechRef.current = nextSpeech;
+    const webview = webviewRef.current;
+    if (!webview?.executeJavaScript) {
+      return;
+    }
+
+    const script = `window.__maibotLive2D && window.__maibotLive2D.speak(${JSON.stringify(nextSpeech.text)});`;
+    void webview.executeJavaScript(script, false)
+      .then(() => {
+        if (pendingSpeechRef.current?.id === nextSpeech.id) {
+          pendingSpeechRef.current = null;
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!active || !webviewSource || !speech || speech.id === lastSpeechIdRef.current) {
+      return;
+    }
+    lastSpeechIdRef.current = speech.id;
+    sendSpeech(speech);
+  }, [active, sendSpeech, speech, webviewSource]);
+
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (!webview) {
+      return undefined;
+    }
+
+    const replayPendingSpeech = () => {
+      if (pendingSpeechRef.current) {
+        sendSpeech(pendingSpeechRef.current);
+      }
+    };
+
+    webview.addEventListener("dom-ready", replayPendingSpeech);
+    webview.addEventListener("did-finish-load", replayPendingSpeech);
+    return () => {
+      webview.removeEventListener("dom-ready", replayPendingSpeech);
+      webview.removeEventListener("did-finish-load", replayPendingSpeech);
+    };
+  }, [reloadKey, sendSpeech, webviewSource]);
+
+  return (
+    <aside className="hidden min-h-0 border-r border-border bg-card/65 lg:flex lg:flex-col">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        <Bot className="size-4 text-primary" />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold">Live2D</span>
+        {hasModel ? (
+          <Button className="size-7" onClick={onReload} size="icon" title="重载 Live2D" variant="ghost">
+            <RefreshCw />
+          </Button>
+        ) : null}
+        <Button className="size-7" onClick={onOpenSettings} size="icon" title="替换 Live2D 形象" variant="ghost">
+          <Settings />
+        </Button>
+      </div>
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-background/45">
+        {active && webviewSource ? (
+          <webview
+            className="absolute inset-0 size-full bg-transparent"
+            key={`${webviewSource}:${reloadKey}`}
+            partition="maibot-live2d"
+            ref={webviewRef}
+            src={webviewSource}
+            webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
+          />
+        ) : (
+          <div className="grid size-full place-items-center px-5 text-center">
+            <div className="grid gap-3">
+              <span className="mx-auto grid size-16 place-items-center rounded-full border border-dashed border-border bg-card text-primary">
+                <Bot className="size-7" />
+              </span>
+              <div>
+                <p className="text-sm font-medium">{hasModel ? "Live2D 准备中" : "Live2D 待设置"}</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {hasModel ? "切到随便聊聊后加载形象。" : "添加模型地址后会在这里显示。"}
+                </p>
+              </div>
+              <Button className="mx-auto h-8 px-2.5 text-xs" onClick={onOpenSettings} size="sm" variant="secondary">
+                <Settings />
+                设置形象
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 export function LocalChatPanel({
   active,
   maibotService,
@@ -322,6 +838,12 @@ export function LocalChatPanel({
   const [isTyping, setIsTyping] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showPlanner, setShowPlanner] = useState(readPlannerVisible);
+  const [live2dEnabled, setLive2dEnabled] = useState(readLive2dEnabled);
+  const [live2dModelUrl, setLive2dModelUrl] = useState(readLive2dModelUrl);
+  const [live2dDraftUrl, setLive2dDraftUrl] = useState(readLive2dModelUrl);
+  const [live2dLibraryRoot, setLive2dLibraryRoot] = useState("");
+  const [live2dReloadKey, setLive2dReloadKey] = useState(0);
+  const [live2dSpeech, setLive2dSpeech] = useState<Live2dSpeechEvent | null>(null);
   const [recording, setRecording] = useState(false);
 
   useEffect(() => {
@@ -331,6 +853,29 @@ export function LocalChatPanel({
   useEffect(() => {
     localStorage.setItem(PLANNER_VISIBLE_STORAGE_KEY, showPlanner ? "1" : "0");
   }, [showPlanner]);
+
+  useEffect(() => {
+    localStorage.setItem(LIVE2D_ENABLED_STORAGE_KEY, live2dEnabled ? "1" : "0");
+  }, [live2dEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem(LIVE2D_MODEL_URL_STORAGE_KEY, live2dModelUrl);
+  }, [live2dModelUrl]);
+
+  useEffect(() => {
+    if (settingsOpen) {
+      setLive2dDraftUrl(live2dModelUrl);
+    }
+  }, [live2dModelUrl, settingsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+    void window.maibotDesktop?.live2d.getLibraryRoot()
+      .then(setLive2dLibraryRoot)
+      .catch(() => setLive2dLibraryRoot(""));
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (userAvatar) {
@@ -393,6 +938,9 @@ export function LocalChatPanel({
       setIsTyping(false);
       const message = toChatMessage(event);
       setMessages((current) => appendMessage(current, message));
+      if (message.role === "bot" && message.kind !== "planner" && message.final !== false && message.content.trim()) {
+        setLive2dSpeech({ id: message.id, text: message.content });
+      }
     });
 
     void connect();
@@ -538,6 +1086,59 @@ export function LocalChatPanel({
     }
   }, [recording, stopRecordingTracks, stopVoiceRecording]);
 
+  const importLive2dModel = useCallback(async (sourcePath?: string) => {
+    try {
+      const result = await window.maibotDesktop?.live2d.importModel(sourcePath);
+      if (!result) {
+        return;
+      }
+      setLive2dEnabled(true);
+      setLive2dDraftUrl(result.modelUrl);
+      setLive2dModelUrl(result.modelUrl);
+      setLive2dLibraryRoot(result.libraryRoot);
+      setLive2dReloadKey((current) => current + 1);
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  const openLive2dLibrary = useCallback(async () => {
+    try {
+      await window.maibotDesktop?.live2d.openLibrary();
+      const root = await window.maibotDesktop?.live2d.getLibraryRoot();
+      if (root) {
+        setLive2dLibraryRoot(root);
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  const applyLive2dModel = useCallback(async () => {
+    const nextModelUrl = live2dDraftUrl.trim();
+    if (isLocalLive2dModelPath(nextModelUrl)) {
+      await importLive2dModel(nextModelUrl);
+      return;
+    }
+
+    setLive2dModelUrl(nextModelUrl);
+    setLive2dReloadKey((current) => current + 1);
+  }, [importLive2dModel, live2dDraftUrl]);
+
+  const clearLive2dModel = useCallback(() => {
+    setLive2dDraftUrl("");
+    setLive2dModelUrl("");
+    setLive2dReloadKey((current) => current + 1);
+  }, []);
+
+  const restoreDefaultLive2dModel = useCallback(() => {
+    setLive2dEnabled(true);
+    setLive2dDraftUrl(DEFAULT_LIVE2D_MODEL_URL);
+    setLive2dModelUrl(DEFAULT_LIVE2D_MODEL_URL);
+    setLive2dReloadKey((current) => current + 1);
+  }, []);
+
   useEffect(() => () => {
     recorderRef.current?.state === "recording" && recorderRef.current.stop();
     stopRecordingTracks();
@@ -630,6 +1231,18 @@ export function LocalChatPanel({
         </div>
       ) : null}
 
+      <div className={cn("grid min-h-0 flex-1 grid-cols-1", live2dEnabled && "lg:grid-cols-[260px_minmax(0,1fr)]")}>
+        {live2dEnabled ? (
+          <LocalChatLive2DPanel
+            active={active}
+            modelUrl={live2dModelUrl}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onReload={() => setLive2dReloadKey((current) => current + 1)}
+            reloadKey={live2dReloadKey}
+            speech={live2dSpeech}
+          />
+        ) : null}
+        <div className="flex min-h-0 flex-col">
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="mx-auto flex max-w-4xl flex-col gap-3">
           {messages.length === 0 ? (
@@ -1005,11 +1618,13 @@ export function LocalChatPanel({
           </div>
         </div>
       </div>
+        </div>
+      </div>
       </section>
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-      <DialogContent size="md">
+      <DialogContent size="lg">
         <DialogHeader
-          description="设置简单聊聊的显示名称和头像。"
+          description="设置简单聊聊的显示名称、头像和 Live2D 形象。"
           icon={<Settings className="size-4" />}
           title="随便聊聊设置"
           tone="primary"
@@ -1055,6 +1670,82 @@ export function LocalChatPanel({
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-medium text-muted-foreground">Bot 头像</p>
                 <p className="mt-1 text-xs text-muted-foreground">用于随便聊聊中的 MaiBot 消息头像。</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-background p-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Bot className="size-4 text-primary" />
+                Live2D 形象
+              </div>
+              <label className="flex items-center gap-1.5 rounded-md border border-border bg-muted/35 px-2 py-1 text-[11px] text-muted-foreground">
+                <Checkbox
+                  checked={live2dEnabled}
+                  onCheckedChange={(checked) => setLive2dEnabled(checked === true)}
+                />
+                显示
+              </label>
+            </div>
+            <div className="grid gap-3">
+              <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                <span>该功能暂时未开发，默认不会启用。</span>
+              </div>
+              <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                <span>模型或展示页地址</span>
+                <Input
+                  className="h-9 text-sm text-foreground"
+                  monospace
+                  onChange={(event) => setLive2dDraftUrl(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void applyLive2dModel();
+                    }
+                  }}
+                  placeholder="C:\Users\...\model.model3.json 或 https://example.com/model.model3.json"
+                  value={live2dDraftUrl}
+                />
+              </label>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                本地模型会导入到启动器 Live2D 资源库，网络地址和自建展示页仍可直接使用。
+              </p>
+              {live2dLibraryRoot ? (
+                <code className="block truncate rounded-md border border-border bg-muted/45 px-2 py-1.5 text-[11px] text-muted-foreground">
+                  {live2dLibraryRoot}
+                </code>
+              ) : null}
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button onClick={() => void importLive2dModel()} size="sm" variant="outline">
+                  <Upload />
+                  导入本地模型
+                </Button>
+                <Button onClick={() => void openLive2dLibrary()} size="sm" variant="outline">
+                  <FolderOpen />
+                  资源文件夹
+                </Button>
+                <Button onClick={clearLive2dModel} size="sm" variant="ghost">
+                  <X />
+                  清空
+                </Button>
+                <Button onClick={restoreDefaultLive2dModel} size="sm" variant="outline">
+                  <Bot />
+                  默认
+                </Button>
+                <Button
+                  disabled={!live2dModelUrl.trim()}
+                  onClick={() => setLive2dReloadKey((current) => current + 1)}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RefreshCw />
+                  重载
+                </Button>
+                <Button onClick={() => void applyLive2dModel()} size="sm">
+                  应用
+                </Button>
               </div>
             </div>
           </div>

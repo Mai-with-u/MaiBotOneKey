@@ -1,5 +1,8 @@
-import { app, BrowserWindow, Menu, nativeImage, shell, Tray } from "electron";
-import { join } from "node:path";
+import { app, BrowserWindow, Menu, nativeImage, net, protocol, session, shell, Tray } from "electron";
+import { stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { RuntimePaths } from "../shared/contracts";
 import { registerAppIpc } from "./ipc/app";
 import { registerPtyIpc } from "./ipc/pty";
 import { PtySessionManager } from "./pty/pty-session-manager";
@@ -32,6 +35,59 @@ let tray: Tray | null = null;
 let appIpcDisposables: ReturnType<typeof registerAppIpc> | null = null;
 let allowQuit = false;
 let quitRequested = false;
+
+const LIVE2D_ASSET_SCHEME = "maibot-live2d";
+const LIVE2D_WEBVIEW_PARTITION = "maibot-live2d";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: LIVE2D_ASSET_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
+
+function isPathInside(root: string, target: string): boolean {
+  const relativePath = relative(resolve(root), resolve(target));
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function resolveLive2dAssetPath(paths: RuntimePaths, url: string): string | null {
+  const parsed = new URL(url);
+  if (parsed.protocol !== `${LIVE2D_ASSET_SCHEME}:` || parsed.hostname !== "assets") {
+    return null;
+  }
+
+  const relativePath = decodeURIComponent(parsed.pathname).replace(/^\/+/u, "");
+  const target = resolve(paths.live2dRoot, relativePath);
+  return isPathInside(paths.live2dRoot, target) ? target : null;
+}
+
+function registerLive2dResourceProtocol(paths: RuntimePaths): void {
+  const handler = async (request: Request): Promise<Response> => {
+    const target = resolveLive2dAssetPath(paths, request.url);
+    if (!target) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    try {
+      const fileStat = await stat(target);
+      if (!fileStat.isFile()) {
+        return new Response("Not found", { status: 404 });
+      }
+      return net.fetch(pathToFileURL(target).toString());
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  };
+
+  protocol.handle(LIVE2D_ASSET_SCHEME, handler);
+  session.fromPartition(LIVE2D_WEBVIEW_PARTITION).protocol.handle(LIVE2D_ASSET_SCHEME, handler);
+}
 
 function createFallbackIcon(): Electron.NativeImage {
   return nativeImage.createFromDataURL(
@@ -74,7 +130,7 @@ function createMainWindow(): BrowserWindow {
     height: 820,
     minWidth: 1080,
     minHeight: 720,
-    resizable: true,
+    resizable: false,
     show: false,
     backgroundColor: "#00000000",
     transparent: true,
@@ -83,7 +139,7 @@ function createMainWindow(): BrowserWindow {
     titleBarStyle: process.platform === "darwin" ? "hidden" : "default",
     trafficLightPosition: process.platform === "darwin" ? { x: -100, y: -100 } : undefined,
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -206,6 +262,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
   app.quit();
 } else {
   app.whenReady().then(async () => {
+    registerLive2dResourceProtocol(runtimePaths);
     await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
       logStore.append("desktop", "system", `network proxy apply failed: ${String(error)}`);
     });
