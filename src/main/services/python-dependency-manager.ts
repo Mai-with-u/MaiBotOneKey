@@ -86,7 +86,7 @@ function toDetail(error: unknown): string {
 
 function assertManagedPackage(packageName: ManagedPythonPackageName): void {
   if (!MANAGED_PACKAGES.some((item) => item.name === packageName)) {
-    throw new Error(`涓嶆敮鎸佹洿鏂版 Python 渚濊禆: ${packageName}`);
+    throw new Error(`Updating this Python dependency is not supported: ${packageName}`);
   }
 }
 
@@ -428,20 +428,20 @@ export class PythonDependencyManager {
       }
 
       if (hasMissingUploadTimes(versions)) {
-        output.push(`娓呭崕 Simple 绱㈠紩缂哄皯閮ㄥ垎鍙戝竷鏃堕棿锛屽皾璇曚粠 ${PYPI_SIMPLE_INDEX}/${packageName}/ 琛ラ綈鎺掑簭淇℃伅`);
+        output.push(`清华 Simple 索引缺少部分发布时间，尝试从 ${PYPI_SIMPLE_INDEX}/${packageName}/ 补齐排序信息`);
         try {
           const supplemental = await fetchSimpleVersions(packageName, PYPI_SIMPLE_INDEX);
           versions = mergeVersionLists(versions, supplemental);
           output.push("发布时间补齐完成，仍以清华源作为安装源");
         } catch (metadataError) {
-          output.push(`鍙戝竷鏃堕棿琛ラ綈澶辫触锛屽皢鎸夊彲鐢ㄦ椂闂翠笌鐗堟湰鍙锋帓搴? ${toDetail(metadataError)}`);
+          output.push(`Release time backfill failed; sorting by available time and version: ${toDetail(metadataError)}`);
         }
       }
 
       output.push(
         hasMissingUploadTimes(versions)
-          ? `鎵惧埌 ${versions.length} 涓増鏈紝宸叉寜鍙敤鍙戝竷鏃堕棿闄嶅簭鎺掑垪锛涚己澶卞彂甯冩椂闂寸殑鐗堟湰鐢ㄧ増鏈彿琛ヤ綅`
-          : `鎵惧埌 ${versions.length} 涓増鏈紝宸叉寜鍙戝竷鏃堕棿闄嶅簭鎺掑垪`,
+          ? `Found ${versions.length} versions, sorted by available release time descending; versions without release time use version number as fallback`
+          : `Found ${versions.length} versions, sorted by available release time descending`,
       );
       return {
         packageName,
@@ -451,7 +451,7 @@ export class PythonDependencyManager {
         fetchedAt: Date.now(),
       };
     } catch (error) {
-      output.push(`璇诲彇鐗堟湰鍒楄〃澶辫触: ${toDetail(error)}`);
+      output.push(`读取版本列表失败: ${toDetail(error)}`);
       throw new Error(output.join("\n"));
     }
   }
@@ -459,7 +459,7 @@ export class PythonDependencyManager {
   async installVersion(request: PythonPackageInstallRequest): Promise<PythonPackageInstallResult> {
     assertManagedPackage(request.packageName);
     if (!request.version.trim()) {
-      throw new Error("璇烽€夋嫨瑕佸畨瑁呯殑鐗堟湰");
+      throw new Error("Please select a version to install");
     }
 
     const targetDir = this.getOverridesRoot();
@@ -545,10 +545,10 @@ export class PythonDependencyManager {
           : undefined;
 
     if (!sourceFile) {
-      throw new Error(`鏈壘鍒?MaiBot 渚濊禆澹版槑鏂囦欢: ${requirementsPath} 鎴?${pyprojectPath}`);
+      throw new Error(`MaiBot dependency declaration not found: ${requirementsPath} or ${pyprojectPath}`);
     }
     if (sourceFile === pyprojectPath && pyprojectDependencies.length === 0) {
-      throw new Error(`MaiBot pyproject.toml 娌℃湁鍙敤鐨?[project.dependencies]: ${pyprojectPath}`);
+      throw new Error(`MaiBot pyproject.toml has no usable [project.dependencies]: ${pyprojectPath}`);
     }
 
     if (pyprojectDependencies.length > 0) {

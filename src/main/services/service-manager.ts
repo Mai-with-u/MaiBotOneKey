@@ -1042,8 +1042,8 @@ export class ServiceManager extends EventEmitter {
             return qq ? [napcatNode, napcatNodeEntry, "-q", qq] : [napcatNode, napcatNodeEntry];
           }
           if (process.platform === "win32" && existsSync(napcatLauncherPath)) {
-            // 閫氳繃 cmd.exe 璋冪敤纾佺洏涓婄殑 napcat-launch.cmd锛堝凡鍥哄畾 chcp 65001锛夛紝
-            // argv 鍚勫厓绱犵嫭绔嬩紶閫掞紝涓嶄細瑙﹀彂 cmd /C 瀛楃涓叉嫾鎺ョ殑寮曞彿姝т箟銆?
+            // 通过 cmd.exe 调用磁盘上的 napcat-launch.cmd（已固定 chcp 65001），
+            // argv entries are passed independently and do not trigger cmd /C string quote issues.
             const args = ["/D", "/S", "/C", napcatLauncherName];
             if (qq) {
               args.push("-q", qq);
@@ -1317,7 +1317,7 @@ export class ServiceManager extends EventEmitter {
   private getRuntimePathDefinition(key: RuntimePathKey): RuntimePathDefinition {
     const definition = this.getRuntimePathDefinitions().find((item) => item.key === key);
     if (!definition) {
-      throw new Error(`鏈煡璺緞閰嶇疆: ${key}`);
+      throw new Error(`Unknown path config: ${key}`);
     }
     return definition;
   }
@@ -1374,14 +1374,14 @@ export class ServiceManager extends EventEmitter {
       const { token } = await this.initManager.readNapCatWebUiToken();
       return token ? `http://127.0.0.1:6099/webui?token=${encodeURIComponent(token)}` : fallback;
     } catch {
-      // 浠讳綍璇诲彇寮傚父閮界洿鎺ュ洖閫€鍒版櫘閫氱櫥褰曢〉锛岄伩鍏嶉樆濉炰富闈㈡澘銆?
+      // Any read error falls back to the normal login page, avoiding a blocked main panel.
       return fallback;
     }
   }
 
   /**
-   * MaiBot Core WebUI 鏀寔 `/auth?token=<access_token>` 鐩存帴鐧诲綍锛?
-   * webui.json 杩樻湭鐢熸垚鎴栧瓧娈电己澶辨椂鐩存帴鍥為€€涓烘牴鍦板潃锛岀敱鐢ㄦ埛璧版櫘閫氱櫥褰曟祦绋嬨€?
+   * MaiBot Core WebUI supports direct login through `/auth?token=<access_token>`.
+   * If webui.json has not been generated or fields are missing, return the root URL for normal login.
    */
   private async resolveMaiBotUrl(fallback: string): Promise<string> {
     try {
@@ -1507,7 +1507,7 @@ export class ServiceManager extends EventEmitter {
         : shouldRestart
           ? `进程退出，准备自动重启: ${event.exitCode}`
           : `进程异常退出: ${event.exitCode}`,
-      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `杩涚▼寮傚父閫€鍑? ${event.exitCode}`,
+      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `Process exited unexpectedly: ${event.exitCode}`,
       stoppedAt: Date.now(),
     });
 
@@ -1646,7 +1646,7 @@ export class ServiceManager extends EventEmitter {
   private getDefinition(serviceId: ServiceId): ServiceDefinition {
     const definition = this.definitions.find((item) => item.id === serviceId);
     if (!definition) {
-      throw new Error(`鏈煡鏈嶅姟: ${serviceId}`);
+      throw new Error(`Unknown service: ${serviceId}`);
     }
     return definition;
   }
@@ -1654,7 +1654,7 @@ export class ServiceManager extends EventEmitter {
   private getState(serviceId: ServiceId): ServiceState {
     const state = this.states.get(serviceId);
     if (!state) {
-      throw new Error(`鏈煡鏈嶅姟鐘舵€? ${serviceId}`);
+      throw new Error(`Unknown service status: ${serviceId}`);
     }
     return state;
   }

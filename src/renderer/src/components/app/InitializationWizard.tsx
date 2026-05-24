@@ -164,12 +164,12 @@ export function InitializationWizard({
         return;
       }
       if (nextService?.status === "error") {
-        throw new Error(nextService.error ?? nextService.detail ?? "MaiBot Core 鍚姩澶辫触");
+        throw new Error(nextService.error ?? nextService.detail ?? "MaiBot Core failed to start");
       }
       await delay(WEBUI_READY_POLL_MS);
     }
 
-    throw new Error("MaiBot WebUI 鍚姩瓒呮椂锛岃鍦ㄧ粓绔〉鏌ョ湅鍚姩鏃ュ織");
+    throw new Error("MaiBot WebUI startup timed out; check the terminal page logs");
   }, [refreshSnapshot]);
 
   const close = useCallback(() => {

@@ -588,9 +588,16 @@ export function TerminalPanel({
             <ArrowDownToLine />
             底部
           </Button>
-          <Button className="h-7 px-2 text-xs" disabled={isRefreshing} onClick={refreshSessions} size="sm" variant="outline">
+          <Button
+            className="h-7 px-2 text-xs"
+            disabled={isRefreshing}
+            onClick={refreshSessions}
+            size="sm"
+            title="重新连接后台 PTY 会话"
+            variant="outline"
+          >
             {isRefreshing ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-            附加
+            重连
             <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
           </Button>
         </div>
