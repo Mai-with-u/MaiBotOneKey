@@ -1,4 +1,5 @@
 ﻿import {
+  Code2,
   FolderOpen,
   GripHorizontal,
   Home,
@@ -18,9 +19,11 @@ import type {
   ServiceDescriptor,
   ServiceId,
   ServiceStatus,
+  WindowState,
   WindowResizeEdge,
 } from "@shared/contracts";
 import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
+import { useAppearance } from "@/lib/use-appearance";
 import { useShortcut } from "@/lib/use-shortcut";
 import { useTheme } from "@/lib/use-theme";
 import { cn } from "@/lib/utils";
@@ -37,7 +40,9 @@ import { Toaster } from "@/components/ui/sonner";
 import maiMascotImage from "@/assets/mai2.png";
 import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
+import { LiquidGlassLayer } from "./LiquidGlassLayer";
 import { LocalChatPanel } from "./LocalChatPanel";
+import { PluginBuilderPanel } from "./PluginBuilderPanel";
 import { PluginMarketPanel } from "./PluginMarketPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
@@ -223,17 +228,21 @@ function ServiceChip({
 function FloatingShell({
   expanded,
   edge,
+  liquidGlass,
   maibotService,
   onExpand,
   onCollapse,
   onRestore,
+  onWindowState,
 }: {
   expanded: boolean;
   edge: "left" | "right" | null;
+  liquidGlass: boolean;
   maibotService: ServiceDescriptor | undefined;
   onExpand: () => void;
   onCollapse: () => void;
   onRestore: () => void;
+  onWindowState: (state: WindowState) => void;
 }): React.JSX.Element {
   const dragRef = useRef<{
     offsetX: number;
@@ -253,7 +262,11 @@ function FloatingShell({
   const dragFrameRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
 
-  const updateFloatingState = useCallback(() => undefined, []);
+  const updateFloatingState = useCallback((state?: WindowState) => {
+    if (state) {
+      onWindowState(state);
+    }
+  }, [onWindowState]);
 
   const suppressNextClickBriefly = useCallback(() => {
     suppressNextClickRef.current = true;
@@ -402,7 +415,13 @@ function FloatingShell({
           onPointerUp={(event) => finishDrag(event)}
           title="拖动悬浮条，点击展开"
         >
-          <div className="grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl">
+          <div
+            className={cn(
+              "grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 shadow-xl",
+              liquidGlass ? "bg-transparent" : "bg-card",
+            )}
+            data-liquid-edge-chip={liquidGlass ? "true" : undefined}
+          >
             <img
               alt=""
               className="h-14 max-w-none select-none object-cover"
@@ -417,8 +436,12 @@ function FloatingShell({
     return (
       <div className="grid h-screen place-items-center bg-transparent" data-floating-shell="true">
         <button
-          className="relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl active:cursor-grabbing"
+          className={cn(
+            "relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 shadow-xl active:cursor-grabbing",
+            liquidGlass ? "bg-transparent" : "bg-card",
+          )}
           data-app-region="no-drag"
+          data-liquid-floating-orb={liquidGlass ? "true" : undefined}
           onClick={expandFromClick}
           onPointerCancel={(event) => finishDrag(event)}
           onPointerDown={startDrag}
@@ -427,18 +450,31 @@ function FloatingShell({
           title="打开悬浮菜单"
           type="button"
         >
-          <span className="absolute inset-x-3 bottom-1 h-7 rounded-full bg-primary/10 blur-md" />
-          <img alt="" className="relative mt-3 w-20 select-none" draggable={false} src={maiMascotImage} />
+          <span className="absolute inset-x-3 bottom-1 h-7 rounded-full bg-primary/20 blur-md" />
+          <img alt="" className="relative mt-3 w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
         </button>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl" data-floating-shell="true">
+    <div
+      className={cn(
+        "flex h-screen min-h-0 flex-col overflow-hidden border border-border text-foreground shadow-2xl",
+        liquidGlass ? "bg-transparent" : "bg-background",
+      )}
+      data-floating-shell="true"
+      style={{
+        borderRadius: "var(--app-window-radius, 16px)",
+      }}
+    >
       <div
-        className="flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-card px-2 active:cursor-grabbing"
+        className={cn(
+          "flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border px-2 active:cursor-grabbing",
+          liquidGlass ? "bg-transparent" : "bg-card",
+        )}
         data-app-region="no-drag"
+        data-liquid-titlebar={liquidGlass ? "true" : undefined}
         onPointerCancel={(event) => finishDrag(event)}
         onPointerDown={startDrag}
         onPointerMove={drag}
@@ -476,6 +512,7 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingMode, setFloatingMode] = useState(false);
   const [floatingExpanded, setFloatingExpanded] = useState(false);
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
+  const appearance = useAppearance();
   const theme = useTheme();
 
   const refreshSnapshot = useCallback(async () => {
@@ -590,12 +627,6 @@ export function DesktopShell(): React.JSX.Element {
       async () => window.maibotDesktop?.services.stopAll() ?? [],
     );
   }, [runServiceAction]);
-  const refreshServices = useCallback(() => {
-    void runServiceAction(
-      "all:refresh",
-      async () => window.maibotDesktop?.services.refresh() ?? [],
-    );
-  }, [runServiceAction]);
   const startService = useCallback(
     (id: ServiceId) =>
       void runServiceAction(`${id}:start`, async () => {
@@ -649,6 +680,11 @@ export function DesktopShell(): React.JSX.Element {
     });
   }, []);
 
+  const syncWindowState = useCallback((state: WindowState) => {
+    setFloatingMode(state.isFloating === true);
+    setFloatingEdge(state.floatingEdge ?? null);
+  }, []);
+
   const selectTab = useCallback((value: string) => {
     if (value === "terminal" && !showTerminalTab) {
       setActiveTab("home");
@@ -662,6 +698,10 @@ export function DesktopShell(): React.JSX.Element {
     if (value === "pluginmanage") {
       setPluginMode("manage");
       setActiveTab("plugins");
+      return;
+    }
+    if (value === "pluginbuilder") {
+      setActiveTab("pluginbuilder");
       return;
     }
     setActiveTab(value);
@@ -686,6 +726,7 @@ export function DesktopShell(): React.JSX.Element {
   useShortcut("Mod+4", () => selectTab("terminal"), { enabled: showTerminalTab });
   useShortcut("Mod+5", () => selectTab("pluginmarket"));
   useShortcut("Mod+6", () => selectTab("pluginmanage"));
+  useShortcut("Mod+7", () => selectTab("pluginbuilder"));
   useShortcut("Mod+8", () => selectTab("settings"));
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
@@ -695,13 +736,21 @@ export function DesktopShell(): React.JSX.Element {
   if (floatingMode) {
     return (
       <TooltipProvider delayDuration={250}>
+        {floatingExpanded ? (
+          <LiquidGlassLayer
+            dark={theme.resolved === "dark"}
+            enabled={appearance.liquidGlass}
+          />
+        ) : null}
         <FloatingShell
           edge={floatingEdge}
           expanded={floatingExpanded}
+          liquidGlass={appearance.liquidGlass}
           maibotService={maibotService}
           onCollapse={() => setFloatingPanel(false)}
           onExpand={() => setFloatingPanel(true)}
           onRestore={restoreMainWindow}
+          onWindowState={syncWindowState}
         />
         <Toaster />
       </TooltipProvider>
@@ -711,14 +760,35 @@ export function DesktopShell(): React.JSX.Element {
   return (
     <TooltipProvider delayDuration={250}>
       <WindowResizeHandles />
-      <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
-        <Titlebar
-          appVersion={snapshot?.appVersion ?? "0.1.0"}
-          theme={theme}
+      <div
+        className={cn(
+          "relative flex h-screen min-h-0 flex-col overflow-hidden text-foreground",
+          appearance.liquidGlass ? "bg-transparent" : "bg-background",
+        )}
+        data-liquid-shell={appearance.liquidGlass ? "true" : undefined}
+        style={{
+          borderRadius: "var(--app-window-radius, 16px)",
+        }}
+      >
+        <LiquidGlassLayer
+          dark={theme.resolved === "dark"}
+          enabled={appearance.liquidGlass}
         />
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+          <Titlebar
+            appVersion={snapshot?.appVersion ?? "0.1.0"}
+            liquidGlass={appearance.liquidGlass}
+            theme={theme}
+          />
 
-        {/* Service strip */}
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
+          {/* Service strip */}
+          <div
+            className={cn(
+              "flex h-11 shrink-0 items-center gap-2 border-b border-border px-3",
+              appearance.liquidGlass ? "bg-transparent" : "bg-card",
+            )}
+            data-liquid-band={appearance.liquidGlass ? "true" : undefined}
+          >
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {visibleServiceChips.length === 0 ? (
               <span className="text-[11px] text-muted-foreground">
@@ -802,24 +872,6 @@ export function DesktopShell(): React.JSX.Element {
                 </span>
               </TooltipContent>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={refreshServices}
-                  disabled={actionBusy !== null}
-                  aria-label="刷新服务"
-                >
-                  {actionBusy === "all:refresh" ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <RefreshCw />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>刷新服务状态</TooltipContent>
-            </Tooltip>
           </div>
         </div>
 
@@ -836,7 +888,13 @@ export function DesktopShell(): React.JSX.Element {
             onValueChange={selectTab}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-background px-3">
+            <div
+              className={cn(
+                "flex h-10 shrink-0 items-center gap-3 border-b border-border px-3",
+                appearance.liquidGlass ? "bg-transparent" : "bg-background",
+              )}
+              data-liquid-band={appearance.liquidGlass ? "true" : undefined}
+            >
               <TabsList className="h-8">
                 <TabsTrigger value="home" className="gap-1.5">
                   <Home />
@@ -864,6 +922,11 @@ export function DesktopShell(): React.JSX.Element {
                   <Puzzle />
                   插件
                   <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
+                </TabsTrigger>
+                <TabsTrigger value="pluginbuilder" className="gap-1.5">
+                  <Code2 />
+                  编写器
+                  <Kbd keys="Mod+7" size="xs" tone="muted" className="ml-1" />
                 </TabsTrigger>
               </TabsList>
               <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -963,6 +1026,13 @@ export function DesktopShell(): React.JSX.Element {
             </TabsContent>
 
             <TabsContent
+              value="pluginbuilder"
+              className="min-h-0 flex-1 overflow-hidden outline-none"
+            >
+              <PluginBuilderPanel />
+            </TabsContent>
+
+            <TabsContent
               value="settings"
               className="min-h-0 flex-1 overflow-hidden outline-none"
             >
@@ -990,7 +1060,8 @@ export function DesktopShell(): React.JSX.Element {
         {snapshot ? (
           <InitializationWizard onOpenTab={setActiveTab} onSnapshot={setSnapshot} snapshot={snapshot} />
         ) : null}
-        <Toaster />
+          <Toaster />
+        </div>
       </div>
     </TooltipProvider>
   );
