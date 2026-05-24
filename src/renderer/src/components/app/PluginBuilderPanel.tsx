@@ -1151,47 +1151,18 @@ export function PluginBuilderPanel(): React.JSX.Element {
   return (
     <div className="h-full min-h-0 overflow-hidden bg-background">
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-5">
-          <div className="grid size-8 place-items-center rounded-md bg-secondary text-secondary-foreground">
-            <Workflow className="size-4" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold">插件编写器</h2>
-            <p className="truncate text-[11px] text-muted-foreground">{blueprint.manifest.pluginId}</p>
-          </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button onClick={openDocs} size="sm" variant="secondary">
-              <Braces />
-              SDK 文档
-            </Button>
-            {lastResult ? (
-              <Button onClick={openLastDirectory} size="sm" variant="secondary">
-                <FolderOpen />
-                生成目录
-              </Button>
-            ) : null}
-            <Button
-              aria-expanded={isFilePreviewOpen}
-              onClick={() => setIsFilePreviewOpen((open) => !open)}
-              size="sm"
-              variant="secondary"
-            >
-              {isFilePreviewOpen ? <PanelRightClose /> : <PanelRightOpen />}
-              {isFilePreviewOpen ? "收起文件" : "文件预览"}
-            </Button>
-            <Button disabled={!canSave} onClick={() => void savePlugin()} size="sm">
-              {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              {saveButtonText}
-            </Button>
-          </div>
-        </header>
-
         <PluginBuilderProjectBar
           builderLibrary={builderLibrary}
+          canGenerate={canSave}
           currentProject={localBuilderPlugin ?? null}
+          hasGeneratedPlugin={Boolean(lastResult)}
           installedPlugins={installedPlugins}
+          isFilePreviewOpen={isFilePreviewOpen}
           libraryBusy={libraryBusy}
           parsing={parsing}
+          pluginId={blueprint.manifest.pluginId}
+          saving={saving}
+          saveButtonText={saveButtonText}
           selectedBuilderPlugin={selectedBuilderPlugin}
           selectedBuilderPluginId={selectedBuilderPluginId}
           selectedPluginId={selectedPluginId}
@@ -1204,15 +1175,19 @@ export function PluginBuilderPanel(): React.JSX.Element {
           onDelete={() => void deleteFromBuilderLibrary()}
           onDuplicate={duplicateCurrentBuilderProject}
           onExport={() => void exportCurrentBuilderBlueprint()}
+          onGenerate={() => void savePlugin()}
           onImport={() => void importBuilderBlueprintFile()}
           onIssueSelect={selectBlueprintIssue}
           onLoad={() => void loadFromBuilderLibrary()}
+          onOpenDocs={openDocs}
+          onOpenLastDirectory={openLastDirectory}
           onOpenLibrary={openBuilderLibraryDirectory}
           onParse={() => void parseExistingPlugin()}
           onRedo={redoBlueprint}
           onSave={() => void saveToBuilderLibrary()}
           onSelectBuilderPlugin={setSelectedBuilderPluginId}
           onSelectInstalledPlugin={setSelectedPluginId}
+          onToggleFilePreview={() => setIsFilePreviewOpen((open) => !open)}
           onUndo={undoBlueprint}
         />
 
@@ -1323,13 +1298,19 @@ export function PluginBuilderPanel(): React.JSX.Element {
 function PluginBuilderProjectBar({
   builderLibrary,
   canExport,
+  canGenerate,
   canRedo,
   canUndo,
   currentProject,
+  hasGeneratedPlugin,
   installedPlugins,
+  isFilePreviewOpen,
   issues,
   libraryBusy,
   parsing,
+  pluginId,
+  saving,
+  saveButtonText,
   selectedBuilderPlugin,
   selectedBuilderPluginId,
   selectedPluginId,
@@ -1338,26 +1319,36 @@ function PluginBuilderProjectBar({
   onDelete,
   onDuplicate,
   onExport,
+  onGenerate,
   onImport,
   onIssueSelect,
   onLoad,
+  onOpenDocs,
+  onOpenLastDirectory,
   onOpenLibrary,
   onParse,
   onRedo,
   onSave,
   onSelectBuilderPlugin,
   onSelectInstalledPlugin,
+  onToggleFilePreview,
   onUndo,
 }: {
   builderLibrary: MaiBotPluginBuilderLibraryListResult | null;
   canExport: boolean;
+  canGenerate: boolean;
   canRedo: boolean;
   canUndo: boolean;
   currentProject: MaiBotPluginBuilderLibraryItem | null;
+  hasGeneratedPlugin: boolean;
   installedPlugins: InstalledPlugin[];
+  isFilePreviewOpen: boolean;
   issues: BlueprintIssue[];
   libraryBusy: boolean;
   parsing: boolean;
+  pluginId: string;
+  saving: boolean;
+  saveButtonText: string;
   selectedBuilderPlugin: MaiBotPluginBuilderLibraryItem | null;
   selectedBuilderPluginId: string;
   selectedPluginId: string;
@@ -1366,15 +1357,19 @@ function PluginBuilderProjectBar({
   onDelete: () => void;
   onDuplicate: () => void;
   onExport: () => void;
+  onGenerate: () => void;
   onImport: () => void;
   onIssueSelect: (issue: BlueprintIssue) => void;
   onLoad: () => void;
+  onOpenDocs: () => void;
+  onOpenLastDirectory: () => void;
   onOpenLibrary: () => void;
   onParse: () => void;
   onRedo: () => void;
   onSave: () => void;
   onSelectBuilderPlugin: (pluginId: string) => void;
   onSelectInstalledPlugin: (pluginId: string) => void;
+  onToggleFilePreview: () => void;
   onUndo: () => void;
 }): React.JSX.Element {
   const projectCount = builderLibrary?.plugins.length ?? 0;
@@ -1384,11 +1379,24 @@ function PluginBuilderProjectBar({
   const selectedTemplate = blueprintTemplates.find((template) => template.id === selectedTemplateId);
 
   return (
-    <section className="grid shrink-0 gap-2 border-b border-border bg-card/70 px-4 py-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Boxes className="size-4 text-muted-foreground" />
-        <Badge variant="secondary">{projectCount} local</Badge>
-        <div className="min-w-[220px] max-w-[360px] flex-1">
+    <section className="grid shrink-0 gap-2 border-b border-border bg-card/70 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex min-w-[190px] shrink-0 items-center gap-2">
+          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary text-secondary-foreground">
+            <Workflow className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">插件编写器</p>
+            <p className="truncate text-[11px] text-muted-foreground">{pluginId}</p>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+          <Boxes className="size-4" />
+          <Badge variant="secondary">{projectCount} local</Badge>
+        </div>
+
+        <div className="min-w-[260px] max-w-[420px] flex-1">
           <select
             className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/40"
             disabled={libraryBusy}
@@ -1408,37 +1416,61 @@ function PluginBuilderProjectBar({
           </select>
         </div>
 
-        <Button disabled={libraryBusy || !selectedBuilderPluginId} onClick={onLoad} size="sm" type="button" variant="secondary">
+        <Button className="shrink-0" disabled={libraryBusy || !selectedBuilderPluginId} onClick={onLoad} size="sm" type="button" variant="secondary">
           {libraryBusy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
           打开
         </Button>
-        <Button onClick={onCreateNew} size="sm" type="button" variant="secondary">
+        <Button className="shrink-0" onClick={onCreateNew} size="sm" type="button" variant="secondary">
           <Plus />
           新建
         </Button>
-        <Button disabled={libraryBusy} onClick={onSave} size="sm" type="button" variant="secondary">
+        <Button className="shrink-0" disabled={libraryBusy} onClick={onSave} size="sm" type="button" variant="secondary">
           {libraryBusy ? <Loader2 className="animate-spin" /> : <Save />}
           保存
         </Button>
-        <Button disabled={libraryBusy || !canExport} onClick={onExport} size="sm" type="button" variant="secondary">
+        <Button className="shrink-0" disabled={libraryBusy || !canExport} onClick={onExport} size="sm" type="button" variant="secondary">
           <Download />
           导出
         </Button>
-        <Button disabled={libraryBusy} onClick={onImport} size="sm" type="button" variant="secondary">
+        <Button className="shrink-0" disabled={libraryBusy} onClick={onImport} size="sm" type="button" variant="secondary">
           <Upload />
           导入
         </Button>
-        <Button disabled={!canUndo} onClick={onUndo} size="icon-sm" type="button" variant="secondary" aria-label="Undo">
+        <Button className="shrink-0" disabled={!canUndo} onClick={onUndo} size="icon-sm" type="button" variant="secondary" aria-label="Undo">
           <Undo2 />
         </Button>
-        <Button disabled={!canRedo} onClick={onRedo} size="icon-sm" type="button" variant="secondary" aria-label="Redo">
+        <Button className="shrink-0" disabled={!canRedo} onClick={onRedo} size="icon-sm" type="button" variant="secondary" aria-label="Redo">
           <Redo2 />
         </Button>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-border pl-2">
           <Badge variant={errorCount > 0 ? "danger" : issues.length > 0 ? "secondary" : "success"}>
             {issues.length === 0 ? "OK" : `${issues.length} issues`}
           </Badge>
+          <Button onClick={onOpenDocs} size="sm" type="button" variant="secondary">
+            <Braces />
+            SDK 文档
+          </Button>
+          {hasGeneratedPlugin ? (
+            <Button onClick={onOpenLastDirectory} size="sm" type="button" variant="secondary">
+              <FolderOpen />
+              生成目录
+            </Button>
+          ) : null}
+          <Button
+            aria-expanded={isFilePreviewOpen}
+            onClick={onToggleFilePreview}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {isFilePreviewOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            {isFilePreviewOpen ? "收起文件" : "文件预览"}
+          </Button>
+          <Button disabled={!canGenerate} onClick={onGenerate} size="sm" type="button">
+            {saving ? <Loader2 className="animate-spin" /> : <Save />}
+            {saveButtonText}
+          </Button>
           <Button onClick={() => setDetailsOpen((value) => !value)} size="sm" type="button" variant="ghost">
             {detailsOpen ? "收起工具" : "更多工具"}
           </Button>
