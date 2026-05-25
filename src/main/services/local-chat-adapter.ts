@@ -16,8 +16,8 @@ import type {
   LocalChatVoiceAttachment,
   RuntimePaths,
 } from "../../shared/contracts";
+import type { InitManager } from "./init-manager";
 
-const DEFAULT_WEBUI_ORIGIN = "http://127.0.0.1:8001";
 const DEFAULT_USER_ID = "onekey-local-user";
 const DEFAULT_WEBUI_USER_ID = `webui_user_${DEFAULT_USER_ID}`;
 const DEFAULT_USER_NAME = "本地用户";
@@ -58,6 +58,31 @@ function asString(value: unknown): string | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function dataUrlMimeType(dataUrl: string, fallback: string): string {
+  const match = /^data:([^;,]+)[;,]/iu.exec(dataUrl);
+  return match?.[1] ?? fallback;
+}
+
+function normalizeBase64Text(value: unknown): string | undefined {
+  const text = asString(value);
+  if (!text) {
+    return undefined;
+  }
+  const compact = text.replace(/\s+/gu, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)) {
+    return undefined;
+  }
+  try {
+    const decoded = Buffer.from(compact, "base64");
+    if (decoded.length === 0) {
+      return undefined;
+    }
+    return compact;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseSocketPayload(data: WebSocket.RawData): unknown | undefined {
@@ -215,6 +240,213 @@ function fileAttachments(value: unknown): LocalChatFileAttachment[] {
   });
 }
 
+interface RichSegmentContent {
+  content: string;
+  emojis: LocalChatImageAttachment[];
+  files: LocalChatFileAttachment[];
+  hasSegments: boolean;
+  images: LocalChatImageAttachment[];
+  voices: LocalChatVoiceAttachment[];
+}
+
+function uniqueImages(images: LocalChatImageAttachment[]): LocalChatImageAttachment[] {
+  const seen = new Set<string>();
+  return images.filter((image) => {
+    const key = image.dataUrl ?? `${image.mimeType}:${image.base64}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueFiles(files: LocalChatFileAttachment[]): LocalChatFileAttachment[] {
+  const seen = new Set<string>();
+  return files.filter((file) => {
+    const key = `${file.name}:${file.size}:${file.base64}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueVoices(voices: LocalChatVoiceAttachment[]): LocalChatVoiceAttachment[] {
+  const seen = new Set<string>();
+  return voices.filter((voice) => {
+    const key = voice.dataUrl ?? `${voice.mimeType}:${voice.base64}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function segmentText(segment: Record<string, unknown>): string {
+  const data = segment.data;
+  if (typeof data === "string") {
+    return data;
+  }
+  const record = asRecord(data);
+  return asString(record?.text) ?? asString(record?.content) ?? asString(record?.message) ?? "";
+}
+
+function segmentBinaryRecord(
+  segment: Record<string, unknown>,
+  fallbackMimeType: string,
+): Record<string, unknown> | undefined {
+  const data = segment.data;
+  const dataRecord = asRecord(data);
+  const mimeType = asString(segment.mimeType) ?? asString(segment.mime_type) ?? fallbackMimeType;
+
+  if (dataRecord) {
+    return {
+      ...dataRecord,
+      base64: dataRecord.base64
+        ?? dataRecord.binary_data_base64
+        ?? dataRecord.image_base64
+        ?? dataRecord.emoji_base64
+        ?? dataRecord.voice_base64,
+      data_url: dataRecord.data_url ?? dataRecord.dataUrl,
+      mime_type: dataRecord.mime_type ?? dataRecord.mimeType ?? mimeType,
+      name: dataRecord.name ?? segment.name,
+      size: dataRecord.size ?? segment.size,
+    };
+  }
+
+  const directBase64 = normalizeBase64Text(
+    segment.binary_data_base64
+      ?? segment.image_base64
+      ?? segment.emoji_base64
+      ?? segment.voice_base64,
+  );
+  if (directBase64) {
+    return {
+      base64: directBase64,
+      mime_type: mimeType,
+      name: asString(segment.name),
+      size: asNumber(segment.size),
+    };
+  }
+
+  const dataText = asString(data);
+  if (!dataText) {
+    return undefined;
+  }
+  if (dataText.startsWith("data:") && dataText.includes(",")) {
+    return {
+      data_url: dataText,
+      mime_type: dataUrlMimeType(dataText, mimeType),
+      name: asString(segment.name),
+      size: asNumber(segment.size),
+    };
+  }
+
+  const base64 = normalizeBase64Text(dataText);
+  if (!base64) {
+    return undefined;
+  }
+  return {
+    base64,
+    mime_type: mimeType,
+    name: asString(segment.name),
+    size: asNumber(segment.size),
+  };
+}
+
+function richSegmentContent(value: unknown): RichSegmentContent {
+  const empty: RichSegmentContent = {
+    content: "",
+    emojis: [],
+    files: [],
+    hasSegments: false,
+    images: [],
+    voices: [],
+  };
+  if (!Array.isArray(value) || value.length === 0) {
+    return empty;
+  }
+
+  const textParts: string[] = [];
+  const images: LocalChatImageAttachment[] = [];
+  const emojis: LocalChatImageAttachment[] = [];
+  const files: LocalChatFileAttachment[] = [];
+  const voices: LocalChatVoiceAttachment[] = [];
+
+  for (const item of value) {
+    const segment = asRecord(item);
+    const type = asString(segment?.type)?.toLowerCase();
+    if (!segment || !type) {
+      continue;
+    }
+
+    if (type === "text") {
+      const text = segmentText(segment);
+      if (text) {
+        textParts.push(text);
+      }
+      continue;
+    }
+
+    if (type === "image") {
+      const image = segmentBinaryRecord(segment, "image/png");
+      images.push(...imageAttachments(image ? [image] : []));
+      continue;
+    }
+
+    if (type === "emoji" || type === "face") {
+      const emoji = segmentBinaryRecord(segment, "image/gif");
+      emojis.push(...imageAttachments(emoji ? [emoji] : []));
+      continue;
+    }
+
+    if (type === "voice") {
+      const voice = segmentBinaryRecord(segment, "audio/wav");
+      voices.push(...voiceAttachments(voice ? [voice] : []));
+      continue;
+    }
+
+    if (type === "file") {
+      const dataRecord = asRecord(segment.data);
+      files.push(...fileAttachments(dataRecord ? [{
+        ...dataRecord,
+        mime_type: dataRecord.mime_type ?? dataRecord.mimeType ?? segment.mime_type ?? segment.mimeType,
+        name: dataRecord.name ?? segment.name,
+        size: dataRecord.size ?? segment.size,
+      }] : []));
+      continue;
+    }
+
+    if (type === "at") {
+      const record = asRecord(segment.data);
+      const name = asString(record?.target_user_nickname)
+        ?? asString(record?.target_user_cardname)
+        ?? asString(record?.target_user_id);
+      if (name) {
+        textParts.push(`@${name}`);
+      }
+    }
+  }
+
+  const hasParsedSegments = textParts.length > 0
+    || images.length > 0
+    || emojis.length > 0
+    || files.length > 0
+    || voices.length > 0;
+
+  return {
+    content: textParts.join("").trim(),
+    emojis: uniqueImages(emojis),
+    files: uniqueFiles(files),
+    hasSegments: hasParsedSegments,
+    images: uniqueImages(images),
+    voices: uniqueVoices(voices),
+  };
+}
+
 function plannerContent(data: Record<string, unknown>): string {
   const planner = asRecord(data.planner);
   const content = asString(data.content) ?? asString(planner?.content);
@@ -370,19 +602,21 @@ function splitReplyMessage(content: string): { content: string; hasReplyPrefix: 
 }
 
 function historyMessageToLocal(message: Record<string, unknown>): LocalChatMessageEvent | undefined {
-  const rawContent = asString(message.content);
-  const images = imageAttachments(message.images);
-  const emojis = imageAttachments(message.emojis);
-  const files = fileAttachments(message.files);
-  const voices = voiceAttachments(message.voices);
+  const rich = richSegmentContent(message.segments ?? message.message_segments);
+  const rawContent = rich.hasSegments ? rich.content : asString(message.content);
+  const images = uniqueImages([...imageAttachments(message.images), ...rich.images]);
+  const emojis = uniqueImages([...imageAttachments(message.emojis), ...rich.emojis]);
+  const files = uniqueFiles([...fileAttachments(message.files), ...rich.files]);
+  const voices = uniqueVoices([...voiceAttachments(message.voices), ...rich.voices]);
   const fallbackContent = [imagePlaceholder(images), emojiPlaceholder(emojis), voicePlaceholder(voices), filePlaceholder(files)]
     .filter(Boolean)
     .join("\n");
-  if (!rawContent && !fallbackContent) {
+  const displayContent = rich.hasSegments ? rich.content : (rawContent ?? fallbackContent);
+  if (!displayContent && !fallbackContent) {
     return undefined;
   }
 
-  const parsed = splitReplyMessage(rawContent ?? fallbackContent);
+  const parsed = splitReplyMessage(displayContent);
   const type = asString(message.type);
   const isBot = message.is_bot === true || type === "bot";
   return {
@@ -411,7 +645,10 @@ export class LocalChatAdapter extends EventEmitter {
   private runtimeSessionId: string | null = null;
   private monitorSessionId: string | null = null;
 
-  constructor(private readonly paths: RuntimePaths) {
+  constructor(
+    private readonly paths: RuntimePaths,
+    private readonly initManager: InitManager,
+  ) {
     super();
   }
 
@@ -588,22 +825,7 @@ export class LocalChatAdapter extends EventEmitter {
   }
 
   private async readWebUiOrigin(): Promise<string> {
-    const candidates = [
-      join(this.paths.maibotRoot, "data", "webui.json"),
-      join(this.paths.bundledModulesRoot, "MaiBot", "data", "webui.json"),
-    ];
-    for (const configPath of candidates) {
-      try {
-        const raw = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-        const port = asNumber(raw.webui_port) ?? asNumber(raw.port);
-        if (port) {
-          return `http://127.0.0.1:${port}`;
-        }
-      } catch {
-        // Try the next known location.
-      }
-    }
-    return DEFAULT_WEBUI_ORIGIN;
+    return this.initManager.readMaiBotWebUiEndpointSync().url;
   }
 
   private async readWebUiToken(): Promise<string | null> {
@@ -742,22 +964,24 @@ export class LocalChatAdapter extends EventEmitter {
       return;
     }
 
-    const images = imageAttachments(data.images);
-    const emojis = imageAttachments(data.emojis);
-    const files = fileAttachments(data.files);
-    const voices = voiceAttachments(data.voices);
-    const rawContent = asString(data.content);
+    const rich = richSegmentContent(data.segments ?? data.message_segments);
+    const images = uniqueImages([...imageAttachments(data.images), ...rich.images]);
+    const emojis = uniqueImages([...imageAttachments(data.emojis), ...rich.emojis]);
+    const files = uniqueFiles([...fileAttachments(data.files), ...rich.files]);
+    const voices = uniqueVoices([...voiceAttachments(data.voices), ...rich.voices]);
+    const rawContent = rich.hasSegments ? rich.content : asString(data.content);
     const fallbackContent = [imagePlaceholder(images), emojiPlaceholder(emojis), voicePlaceholder(voices), filePlaceholder(files)]
       .filter(Boolean)
       .join("\n");
-    if (!rawContent && !fallbackContent) {
+    const displayContent = rich.hasSegments ? rich.content : (rawContent ?? fallbackContent);
+    if (!displayContent && !fallbackContent) {
       return;
     }
 
     const sender = asRecord(data.sender);
     const isUser = eventName === "user_message" || sender?.is_bot === false;
     const role = eventName === "error" ? "error" : isUser ? "user" : eventName === "system" ? "system" : "bot";
-    const parsed = splitReplyMessage(rawContent ?? fallbackContent);
+    const parsed = splitReplyMessage(displayContent);
     const content = parsed.content;
     if (
       role === "user"

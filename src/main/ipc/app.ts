@@ -1364,7 +1364,7 @@ export function registerAppIpc({
     });
   let maibotPluginClient = createMaibotPluginClient();
   const pluginBuilderLibrary = new PluginBuilderLibrary(paths.pluginBuilderRoot);
-  const localChatAdapter = new LocalChatAdapter(paths);
+  const localChatAdapter = new LocalChatAdapter(paths, initManager);
 
   const assertServicesStoppedForResourceMove = (): void => {
     const active = serviceManager

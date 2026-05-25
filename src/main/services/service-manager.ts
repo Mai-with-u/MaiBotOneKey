@@ -560,6 +560,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async start(serviceId: ServiceId, resetRestartAttempts = true): Promise<ServiceDescriptor> {
+    this.definitions = this.createDefinitions();
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
     const sessionId = serviceSessionId(serviceId);
@@ -870,6 +871,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async refresh(): Promise<ServiceDescriptor[]> {
+    this.definitions = this.createDefinitions();
     this.attachLivePtySessions();
     this.reconcileExitedPtySessions();
 
@@ -985,6 +987,7 @@ export class ServiceManager extends EventEmitter {
   private createDefinitions(): ServiceDefinition[] {
     const python = this.getRuntimePath("python");
     const maibotRoot = this.paths.maibotRoot;
+    const maibotWebUi = this.initManager.readMaiBotWebUiEndpointSync();
     const napcatRoot = this.paths.napcatRoot;
     const qqBackend = this.initManager.getQqBackendSync();
     const snowlumaRoot = this.paths.snowlumaRoot;
@@ -1001,13 +1004,13 @@ export class ServiceManager extends EventEmitter {
       {
         id: "maibot",
         name: "MaiBot Core",
-        port: 8001,
-        ports: [8001],
-        url: "http://127.0.0.1:8001",
+        port: maibotWebUi.port,
+        ports: [maibotWebUi.port],
+        url: maibotWebUi.url,
         cwd: maibotRoot,
         defaultRequiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
-        conflictPorts: [8001],
-        readyPorts: [8001],
+        conflictPorts: [maibotWebUi.port],
+        readyPorts: [maibotWebUi.port],
         buildDefaultCommand: async () => [python, "bot.py"],
         buildDefaultCommandLine: async () => `${quoteCommandPart(python)} bot.py`,
       },

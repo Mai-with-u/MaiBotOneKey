@@ -35,6 +35,8 @@ const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
+const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
+const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
 const QQ_BACKEND_FILE = "qq-backend.json";
 const MESSAGE_PLATFORM_FILE = "message-platform.json";
 const PYTHON_OVERRIDES_IGNORED_ENTRIES = new Set([".keep", "resource.lock"]);
@@ -322,6 +324,46 @@ function asPositiveNumber(value: unknown, fallback: number): number {
 function asPositiveInt(value: unknown, fallback: number): number {
   const num = asPositiveNumber(value, fallback);
   return Math.max(1, Math.floor(num));
+}
+
+function asTcpPort(value: unknown, fallback: number): number {
+  const port = asPositiveInt(value, fallback);
+  return port <= 65535 ? port : fallback;
+}
+
+function localWebUiHost(host: string): string {
+  const normalized = host.trim();
+  if (!normalized || normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]" || normalized === "*") {
+    return MAIBOT_WEBUI_FALLBACK_HOST;
+  }
+  return normalized;
+}
+
+function hostForUrl(host: string): string {
+  const unwrapped = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return unwrapped.includes(":") ? `[${unwrapped}]` : unwrapped;
+}
+
+function buildMaiBotWebUiEndpoint(host = MAIBOT_WEBUI_FALLBACK_HOST, port = MAIBOT_WEBUI_FALLBACK_PORT): {
+  host: string;
+  port: number;
+  url: string;
+} {
+  const resolvedHost = localWebUiHost(host);
+  const resolvedPort = asTcpPort(port, MAIBOT_WEBUI_FALLBACK_PORT);
+  try {
+    return {
+      host: resolvedHost,
+      port: resolvedPort,
+      url: new URL(`http://${hostForUrl(resolvedHost)}:${resolvedPort}`).origin,
+    };
+  } catch {
+    return {
+      host: MAIBOT_WEBUI_FALLBACK_HOST,
+      port: MAIBOT_WEBUI_FALLBACK_PORT,
+      url: `http://${MAIBOT_WEBUI_FALLBACK_HOST}:${MAIBOT_WEBUI_FALLBACK_PORT}`,
+    };
+  }
 }
 
 function asListMode(value: unknown, fallback: NapcatChatListMode): NapcatChatListMode {
@@ -1800,6 +1842,38 @@ export class InitManager {
     }
 
     return { exists: sawExisting, error: firstError };
+  }
+
+  readMaiBotWebUiEndpointSync(): { host: string; port: number; url: string } {
+    const fallback = buildMaiBotWebUiEndpoint();
+    const candidates = uniqueExistingPaths([
+      this.botConfigPath(),
+      join(this.paths.bundledModulesRoot, "MaiBot", "config", "bot_config.toml"),
+    ]);
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = parseToml(readFileSync(candidate, "utf8"));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          continue;
+        }
+
+        const webui = (parsed as Record<string, unknown>)["webui"];
+        if (!webui || typeof webui !== "object" || Array.isArray(webui)) {
+          continue;
+        }
+
+        const config = webui as Record<string, unknown>;
+        return buildMaiBotWebUiEndpoint(
+          asString(config["host"], fallback.host),
+          asTcpPort(config["port"], fallback.port),
+        );
+      } catch {
+        continue;
+      }
+    }
+
+    return fallback;
   }
 
   /**
