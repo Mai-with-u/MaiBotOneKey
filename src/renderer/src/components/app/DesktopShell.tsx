@@ -1,4 +1,5 @@
 ﻿import {
+  ChevronDown,
   Code2,
   GripHorizontal,
   Home,
@@ -13,7 +14,8 @@
   Square,
   TerminalSquare,
 } from "lucide-react";
-import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
@@ -60,16 +62,21 @@ const statusText: Record<ServiceStatus, string> = {
   error: "异常",
 };
 
-const statusDotColor: Record<ServiceStatus, string> = {
-  stopped: "bg-muted-foreground/40",
-  starting: "bg-warning",
-  running: "bg-success",
-  stopping: "bg-warning",
-  error: "bg-destructive",
+const statusColor: Record<ServiceStatus, string> = {
+  stopped: "var(--retro-ink, var(--muted-foreground))",
+  starting: "var(--warning)",
+  running: "var(--retro-rust, var(--success))",
+  stopping: "var(--warning)",
+  error: "var(--destructive)",
 };
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
+const toolbarMenuItemClassName =
+  "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+const retroTopActionIconClassName =
+  "[&_svg]:!size-6 [&_svg]:fill-none [&_svg]:stroke-[3] [&_svg]:[stroke-linecap:square] [&_svg]:[stroke-linejoin:miter]";
+
 function createOpenCodeSessionId(): string {
   const randomId =
     globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -216,52 +223,57 @@ function ServiceControlButtons({
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={`启动 ${service.name}`}
-            disabled={!canStart || isTransitioning}
-            onClick={() => onStart(service.id)}
-            className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-          >
-            {busy && canStart ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <Play className="size-3" />
-            )}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>启动</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={`停止 ${service.name}`}
-            disabled={stopDisabled}
-            onClick={() => onStop(service.id)}
-            className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-          >
-            <Square className="size-3" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>停止</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={`重启 ${service.name}`}
-            disabled={isTransitioning}
-            onClick={() => onRestart(service.id)}
-            className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-          >
-            <RefreshCw className="size-3" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>重启</TooltipContent>
-      </Tooltip>
+      {canStart ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={`启动 ${service.name}`}
+              disabled={isTransitioning}
+              onClick={() => onStart(service.id)}
+              className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              {busy ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Play className="size-3" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>启动</TooltipContent>
+        </Tooltip>
+      ) : (
+        <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`停止 ${service.name}`}
+                disabled={stopDisabled}
+                onClick={() => onStop(service.id)}
+                className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <Square className="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>停止</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`重启 ${service.name}`}
+                disabled={isTransitioning}
+                onClick={() => onRestart(service.id)}
+                className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <RefreshCw className="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>重启</TooltipContent>
+          </Tooltip>
+        </>
+      )}
     </div>
   );
 }
@@ -269,12 +281,14 @@ function ServiceControlButtons({
 function ServiceTabControls({
   service,
   busy,
+  retro,
   onStart,
   onStop,
   onRestart,
 }: {
   service: ServiceDescriptor | undefined;
   busy: boolean;
+  retro: boolean;
   onStart: (id: ServiceId) => void;
   onStop: (id: ServiceId) => void;
   onRestart: (id: ServiceId) => void;
@@ -284,7 +298,7 @@ function ServiceTabControls({
   }
 
   return (
-    <div className="flex h-full shrink-0 items-center px-0.5">
+    <div className={cn("flex h-full shrink-0 items-center px-0.5", !retro && "border-l border-current/20")}>
       <ServiceControlButtons
         service={service}
         busy={busy}
@@ -619,6 +633,27 @@ function PluginCodingAgentPanel({
   );
 }
 
+const RETRO_TAB_ITEM_SELECTOR = "[data-retro-tab-item='true']";
+
+function retroTabItemForValue(list: HTMLElement, value: string): HTMLElement | null {
+  return Array.from(list.querySelectorAll<HTMLElement>(RETRO_TAB_ITEM_SELECTOR)).find(
+    (item) => item.dataset.retroTabValue === value,
+  ) ?? null;
+}
+
+function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | null): void {
+  if (!list || !item) {
+    list?.style.setProperty("--retro-tab-indicator-opacity", "0");
+    return;
+  }
+
+  const listRect = list.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  list.style.setProperty("--retro-tab-indicator-x", `${itemRect.left - listRect.left}px`);
+  list.style.setProperty("--retro-tab-indicator-width", `${itemRect.width}px`);
+  list.style.setProperty("--retro-tab-indicator-opacity", "1");
+}
+
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
@@ -632,8 +667,11 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingMode, setFloatingMode] = useState(false);
   const [floatingExpanded, setFloatingExpanded] = useState(false);
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
+  const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const theme = useTheme();
+  const liquidGlass = appearance.mode === "future";
+  const useRetroChrome = appearance.mode === "future-retro";
 
   const setPluginBuilderMode = useCallback((mode: PluginBuilderMode) => {
     setPluginBuilderModeState(mode);
@@ -696,8 +734,14 @@ export function DesktopShell(): React.JSX.Element {
     [services],
   );
   const maibotService = serviceById.get("maibot");
+  const qqBackendService = serviceById.get("napcat");
+  const qqBackendName =
+    qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
+  const canInterruptStartup =
+    actionBusy === "all:start" ||
+    services.some((service) => service.status === "starting");
 
   const openLogs = useCallback(() => {
     void window.maibotDesktop?.openLogsDirectory();
@@ -828,6 +872,58 @@ export function DesktopShell(): React.JSX.Element {
     setActiveTab(value);
   }, [pluginBuilderMode, showTerminalTab]);
 
+  const syncRetroTabIndicator = useCallback((value: string) => {
+    const list = retroTabsRef.current;
+    if (!list) {
+      return;
+    }
+    moveRetroTabIndicator(list, retroTabItemForValue(list, value));
+  }, []);
+
+  const handleRetroTabsPointerOver = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (!useRetroChrome) {
+      return;
+    }
+
+    const item = (event.target as HTMLElement).closest<HTMLElement>(RETRO_TAB_ITEM_SELECTOR);
+    if (!item || !retroTabsRef.current?.contains(item)) {
+      return;
+    }
+    moveRetroTabIndicator(retroTabsRef.current, item);
+  }, [useRetroChrome]);
+
+  const handleRetroTabsFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    if (!useRetroChrome) {
+      return;
+    }
+
+    const item = (event.target as HTMLElement).closest<HTMLElement>(RETRO_TAB_ITEM_SELECTOR);
+    if (!item || !retroTabsRef.current?.contains(item)) {
+      return;
+    }
+    moveRetroTabIndicator(retroTabsRef.current, item);
+  }, [useRetroChrome]);
+
+  const handleRetroTabsPointerDown = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (!useRetroChrome || event.button !== 0) {
+      return;
+    }
+
+    const list = retroTabsRef.current;
+    const item = (event.target as HTMLElement).closest<HTMLElement>(RETRO_TAB_ITEM_SELECTOR);
+    if (!list || !item || !list.contains(item)) {
+      return;
+    }
+
+    list.removeAttribute("data-retro-pressing");
+    void list.offsetWidth;
+    list.setAttribute("data-retro-pressing", "true");
+  }, [useRetroChrome]);
+
+  const handleRetroTabsPointerLeave = useCallback(() => {
+    syncRetroTabIndicator(activeTab);
+  }, [activeTab, syncRetroTabIndicator]);
+
   const openPluginConfig = useCallback((pluginId: string) => {
     setPluginMode("manage");
     setRequestedConfigPluginId(pluginId);
@@ -885,6 +981,45 @@ export function DesktopShell(): React.JSX.Element {
     }
   }, [activeTab, pluginBuilderMode]);
 
+  useEffect(() => {
+    if (!useRetroChrome) {
+      moveRetroTabIndicator(retroTabsRef.current, null);
+      return;
+    }
+
+    let frame = window.requestAnimationFrame(() => syncRetroTabIndicator(activeTab));
+    const sync = (): void => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => syncRetroTabIndicator(activeTab));
+    };
+    window.addEventListener("resize", sync);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", sync);
+    };
+  }, [activeTab, pluginBuilderMode, showTerminalTab, syncRetroTabIndicator, useRetroChrome]);
+
+  useEffect(() => {
+    const list = retroTabsRef.current;
+    if (!list || !useRetroChrome) {
+      return;
+    }
+
+    const clearPressing = (event: AnimationEvent): void => {
+      if (event.animationName === "retro-tab-indicator-press") {
+        list.removeAttribute("data-retro-pressing");
+      }
+    };
+
+    list.addEventListener("animationend", clearPressing);
+    list.addEventListener("animationcancel", clearPressing);
+    return () => {
+      list.removeAttribute("data-retro-pressing");
+      list.removeEventListener("animationend", clearPressing);
+      list.removeEventListener("animationcancel", clearPressing);
+    };
+  }, [useRetroChrome]);
+
   // Global shortcuts
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
@@ -897,13 +1032,13 @@ export function DesktopShell(): React.JSX.Element {
         {floatingExpanded ? (
           <LiquidGlassLayer
             dark={theme.resolved === "dark"}
-            enabled={appearance.liquidGlass}
+            enabled={liquidGlass}
           />
         ) : null}
         <FloatingShell
           edge={floatingEdge}
           expanded={floatingExpanded}
-          liquidGlass={appearance.liquidGlass}
+          liquidGlass={liquidGlass}
           maibotService={maibotService}
           onCollapse={() => setFloatingPanel(false)}
           onExpand={() => setFloatingPanel(true)}
@@ -921,22 +1056,23 @@ export function DesktopShell(): React.JSX.Element {
       <div
         className={cn(
           "relative flex h-screen min-h-0 flex-col overflow-hidden text-foreground",
-          appearance.liquidGlass ? "bg-transparent" : "bg-background",
-          !appearance.liquidGlass && "retro-shell",
+          liquidGlass ? "bg-transparent" : "bg-background",
+          useRetroChrome && "retro-shell",
         )}
-        data-liquid-shell={appearance.liquidGlass ? "true" : undefined}
+        data-liquid-shell={liquidGlass ? "true" : undefined}
         style={{
           borderRadius: "var(--app-window-radius, 16px)",
         }}
       >
         <LiquidGlassLayer
           dark={theme.resolved === "dark"}
-          enabled={appearance.liquidGlass}
+          enabled={liquidGlass}
         />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
           <Titlebar
             appVersion={snapshot?.appVersion ?? "0.1.0"}
-            liquidGlass={appearance.liquidGlass}
+            liquidGlass={liquidGlass}
+            retro={useRetroChrome}
             theme={theme}
           />
 
@@ -955,40 +1091,69 @@ export function DesktopShell(): React.JSX.Element {
             >
               <div
                 className={cn(
-                  "flex h-12 shrink-0 items-stretch gap-0 border-b border-border pl-6 pr-5",
-                  appearance.liquidGlass ? "bg-transparent" : "bg-card",
+                  useRetroChrome
+                    ? "flex h-12 shrink-0 items-stretch gap-0 border-b-3 border-[var(--retro-tabbar-line)] pl-6 pr-5"
+                    : "flex h-10 shrink-0 items-center gap-3 border-b border-border px-3",
+                  liquidGlass ? "bg-transparent" : "bg-card",
                 )}
-                data-liquid-band={appearance.liquidGlass ? "true" : undefined}
+                data-liquid-band={liquidGlass ? "true" : undefined}
               >
-                <TabsList className="retro-tabs h-full">
-                  <TabsTrigger value="home" className="gap-1.5 px-5">
-                    <Home data-retro-fill="true" />
+                <TabsList
+                  className={cn(useRetroChrome ? "retro-tabs h-full" : "h-8 bg-card")}
+                  onFocusCapture={handleRetroTabsFocus}
+                  onPointerDown={handleRetroTabsPointerDown}
+                  onPointerLeave={handleRetroTabsPointerLeave}
+                  onPointerOver={handleRetroTabsPointerOver}
+                  ref={retroTabsRef}
+                >
+                  <TabsTrigger
+                    data-retro-active={useRetroChrome && activeTab === "home" ? "true" : undefined}
+                    data-retro-tab-item={useRetroChrome ? "true" : undefined}
+                    data-retro-tab-value={useRetroChrome ? "home" : undefined}
+                    value="home"
+                    className={cn("gap-1.5", useRetroChrome && "px-5")}
+                  >
+                    <Home data-retro-fill={useRetroChrome ? "true" : undefined} />
                     首页
                   </TabsTrigger>
                   <div
                     className={cn(
-                      "relative flex h-full shrink-0 items-center border-0 bg-transparent text-muted-foreground transition-colors after:absolute after:bottom-3 after:right-0 after:top-3 after:w-px after:bg-border/70 hover:text-foreground/90",
-                      activeTab === "maibot" && "bg-primary text-primary-foreground",
+                      useRetroChrome
+                        ? "relative flex h-full shrink-0 items-center border-0 bg-transparent text-muted-foreground transition-colors after:absolute after:bottom-3 after:right-0 after:top-3 after:w-px after:bg-border/70 hover:text-foreground/90"
+                        : "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
+                      activeTab === "maibot" && (
+                        useRetroChrome
+                          ? "text-primary-foreground"
+                          : "border-primary/45 bg-primary/15 text-primary shadow-sm"
+                      ),
                     )}
+                    data-retro-active={useRetroChrome && activeTab === "maibot" ? "true" : undefined}
+                    data-retro-tab-item={useRetroChrome ? "true" : undefined}
+                    data-retro-tab-value={useRetroChrome ? "maibot" : undefined}
                   >
                     <TabsTrigger
                       value="maibot"
-                      className="h-full flex-none gap-1.5 border-0 bg-transparent px-4 text-inherit after:hidden hover:text-inherit data-[state=active]:bg-transparent data-[state=active]:text-inherit"
+                      className={cn(
+                        "h-full flex-none gap-1.5 border-0 bg-transparent text-inherit hover:text-inherit",
+                        useRetroChrome
+                          ? "px-4 after:hidden data-[state=active]:bg-transparent data-[state=active]:text-inherit"
+                          : "px-2.5 data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none",
+                      )}
                     >
-                      <Radar className="text-[var(--retro-gold)]" />
+                      <Radar className={cn(useRetroChrome && "text-[var(--retro-gold)]")} />
                       MaiBot
                       <span
                         aria-hidden
-                        className={cn(
-                          "size-1.5 shrink-0 rounded-full",
-                          maibotService ? statusDotColor[maibotService.status] : "bg-muted-foreground/30",
-                        )}
+                        className="size-1.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: maibotService ? statusColor[maibotService.status] : "var(--muted-foreground)" }}
                       />
                       <span
                         className={cn(
                           "hidden shrink-0 text-[10.5px] font-normal tabular-nums xl:inline",
-                          activeTab === "maibot" ? "text-primary-foreground/80" : "text-muted-foreground",
+                          useRetroChrome && activeTab === "maibot" ? "text-primary-foreground/80" : undefined,
+                          !maibotService && "text-muted-foreground",
                         )}
+                        style={maibotService && !useRetroChrome ? { color: statusColor[maibotService.status] } : undefined}
                       >
                         {maibotService ? statusText[maibotService.status] : "未发现"}
                       </span>
@@ -996,77 +1161,201 @@ export function DesktopShell(): React.JSX.Element {
                     <ServiceTabControls
                       service={maibotService}
                       busy={actionBusy?.startsWith("maibot:") ?? false}
+                      retro={useRetroChrome}
                       onStart={startService}
                       onStop={stopService}
                       onRestart={restartService}
                     />
                   </div>
-                  <TabsTrigger value="localchat" className="gap-1.5 px-5">
+                  <TabsTrigger
+                    data-retro-active={useRetroChrome && activeTab === "localchat" ? "true" : undefined}
+                    data-retro-tab-item={useRetroChrome ? "true" : undefined}
+                    data-retro-tab-value={useRetroChrome ? "localchat" : undefined}
+                    value="localchat"
+                    className={cn("gap-1.5", useRetroChrome && "px-5")}
+                  >
                     <MessageSquare />
                     聊聊
                   </TabsTrigger>
                   {showTerminalTab ? (
-                    <TabsTrigger value="terminal" className="gap-1.5 px-5">
+                    <TabsTrigger
+                      data-retro-active={useRetroChrome && activeTab === "terminal" ? "true" : undefined}
+                      data-retro-tab-item={useRetroChrome ? "true" : undefined}
+                      data-retro-tab-value={useRetroChrome ? "terminal" : undefined}
+                      value="terminal"
+                      className={cn("gap-1.5", useRetroChrome && "px-5")}
+                    >
                       <TerminalSquare />
                       终端
                     </TabsTrigger>
                   ) : null}
-                  <TabsTrigger value="plugins" className="gap-1.5 px-5">
+                  <TabsTrigger
+                    data-retro-active={useRetroChrome && activeTab === "plugins" ? "true" : undefined}
+                    data-retro-tab-item={useRetroChrome ? "true" : undefined}
+                    data-retro-tab-value={useRetroChrome ? "plugins" : undefined}
+                    value="plugins"
+                    className={cn("gap-1.5", useRetroChrome && "px-5")}
+                  >
                     <Puzzle />
                     插件
                   </TabsTrigger>
                   {pluginBuilderMode !== "disabled" ? (
-                    <TabsTrigger value="pluginbuilder" className="gap-1.5 px-5">
+                    <TabsTrigger
+                      data-retro-active={useRetroChrome && activeTab === "pluginbuilder" ? "true" : undefined}
+                      data-retro-tab-item={useRetroChrome ? "true" : undefined}
+                      data-retro-tab-value={useRetroChrome ? "pluginbuilder" : undefined}
+                      value="pluginbuilder"
+                      className={cn("gap-1.5", useRetroChrome && "px-5")}
+                    >
                       <Code2 />
                       编写器
                     </TabsTrigger>
                   ) : null}
                 </TabsList>
-              <div className="ml-auto flex shrink-0 items-center gap-1 py-1">
+              <div className={cn("ml-auto flex shrink-0 items-center gap-1", useRetroChrome && "py-1")}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       aria-label="设置"
                       className={cn(
-                        "retro-top-action text-primary-foreground [&_svg]:fill-none [&_svg]:stroke-primary-foreground [&_svg]:stroke-[3]",
-                        activeTab === "settings"
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-[var(--retro-ink)] bg-[var(--retro-ink)] text-primary-foreground hover:bg-[var(--retro-ink)]",
+                        useRetroChrome
+                          ? [
+                              cn("retro-top-action text-primary-foreground [&_svg]:stroke-primary-foreground", retroTopActionIconClassName),
+                              activeTab === "settings"
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-[var(--retro-ink)] bg-[var(--retro-ink)] text-primary-foreground hover:bg-[var(--retro-ink)]",
+                            ]
+                          : "size-7",
                       )}
                       onClick={() => selectTab("settings")}
                       size="icon-sm"
-                      variant="secondary"
+                      variant={useRetroChrome ? "secondary" : activeTab === "settings" ? "default" : "secondary"}
                     >
-                      <Settings className="size-5" />
+                      <Settings />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
                     设置
                   </TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label="启动全部服务"
-                      className="retro-top-action w-16 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90"
-                      disabled={actionBusy !== null}
-                      onClick={startAll}
-                      size="sm"
-                      variant="secondary"
-                    >
-                      {actionBusy === "all:start" ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <Play />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <span className="flex items-center gap-1">
-                      启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
-                    </span>
-                  </TooltipContent>
-                </Tooltip>
+                {useRetroChrome ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="启动全部服务"
+                        className={cn("retro-top-action w-16 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90", retroTopActionIconClassName)}
+                        disabled={actionBusy !== null}
+                        onClick={startAll}
+                        size="sm"
+                        variant="secondary"
+                      >
+                        {actionBusy === "all:start" ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <Play />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span className="flex items-center gap-1">
+                        启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <div className="flex shrink-0 items-center">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          aria-label="启动全部服务"
+                          className="h-7 w-8 rounded-r-none px-0 text-[11px]"
+                          disabled={actionBusy !== null}
+                          onClick={startAll}
+                          size="sm"
+                          variant="default"
+                        >
+                          {actionBusy === "all:start" ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <Play />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <span className="flex items-center gap-1">
+                          启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
+                        </span>
+                      </TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuPrimitive.Root>
+                      <DropdownMenuPrimitive.Trigger asChild>
+                        <Button
+                          aria-label="选择要启动的服务"
+                          className="-ml-px h-7 w-5 rounded-l-none border-l border-primary-foreground/25 px-0 text-[11px]"
+                          disabled={actionBusy !== null}
+                          size="sm"
+                          variant="default"
+                        >
+                          <ChevronDown className="size-3" />
+                        </Button>
+                      </DropdownMenuPrimitive.Trigger>
+                      <DropdownMenuPrimitive.Portal>
+                        <DropdownMenuPrimitive.Content
+                          align="end"
+                          className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg shadow-black/15"
+                          sideOffset={6}
+                        >
+                          <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
+                            <Play className="size-3.5" />
+                            <span className="flex-1">启动全部服务</span>
+                            <Kbd keys="Mod+Shift+S" size="xs" />
+                          </DropdownMenuPrimitive.Item>
+                          <DropdownMenuPrimitive.Item
+                            className={toolbarMenuItemClassName}
+                            disabled={!maibotService}
+                            onSelect={() => startService("maibot")}
+                          >
+                            <Play className="size-3.5" />
+                            启动 MaiBot
+                          </DropdownMenuPrimitive.Item>
+                          <DropdownMenuPrimitive.Item
+                            className={toolbarMenuItemClassName}
+                            disabled={!qqBackendService}
+                            onSelect={() => startService("napcat")}
+                          >
+                            <Play className="size-3.5" />
+                            启动 {qqBackendName}
+                          </DropdownMenuPrimitive.Item>
+                        </DropdownMenuPrimitive.Content>
+                      </DropdownMenuPrimitive.Portal>
+                    </DropdownMenuPrimitive.Root>
+                  </div>
+                )}
+                {!useRetroChrome ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="停止全部"
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={stopAll}
+                        disabled={actionBusy !== null && !canInterruptStartup}
+                        className="size-7"
+                      >
+                        {actionBusy === "all:stop" ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <Square />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span className="flex items-center gap-1">
+                        停止全部 <Kbd keys="Mod+Shift+X" size="xs" tone="inverse" />
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1074,7 +1363,7 @@ export function DesktopShell(): React.JSX.Element {
                       size="icon-sm"
                       variant="ghost"
                       onClick={openLogs}
-                      className="retro-top-action border-border bg-card"
+                      className={cn(useRetroChrome ? cn("retro-top-action border-border bg-card", retroTopActionIconClassName) : "size-7")}
                     >
                       <ListTree />
                     </Button>

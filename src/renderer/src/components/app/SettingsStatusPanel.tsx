@@ -8,7 +8,6 @@
   Download,
   Droplets,
   FolderOpen,
-  GitBranch,
   HardDrive,
   ImageIcon,
   Loader2,
@@ -22,7 +21,6 @@
   ShieldCheck,
   TerminalSquare,
   Trash2,
-  Type,
   UserRound,
   Wrench,
 } from "lucide-react";
@@ -36,8 +34,6 @@ import type {
   LogEntry,
   MaiBotDataResetResult,
   ManagedPythonPackageName,
-  ModuleSourceConfig,
-  ModuleSourcePreset,
   NetworkProxySettings,
   OpenCodeSettings,
   PluginBuilderMode,
@@ -88,6 +84,8 @@ import {
   WINDOW_CORNER_RADIUS_MIN,
   useAppearance,
   type AccentColor,
+  type AppearanceApi,
+  type AppearanceMode,
   type FontFamily,
   type InterfaceScale,
 } from "@/lib/use-appearance";
@@ -168,6 +166,12 @@ const scaleOptions: Array<{ value: InterfaceScale; label: string; description: s
   { value: "compact", label: "紧凑", description: "显示更多内容，控件和文字更小。" },
   { value: "normal", label: "标准", description: "默认的信息密度与字号。" },
   { value: "comfortable", label: "宽松", description: "字号更大，留白更多。" },
+];
+
+const appearanceModeOptions: Array<{ value: AppearanceMode; label: string; description: string }> = [
+  { value: "future-retro", label: "未来复古", description: "纸面颗粒、硬朗描边和控制台式切角。" },
+  { value: "modern", label: "现代", description: "干净卡片、主题色和更通用的桌面应用质感。" },
+  { value: "future", label: "未来", description: "透明玻璃、模糊折射和更轻的空间层次。" },
 ];
 
 const defaultNetworkProxySettings: NetworkProxySettings = {
@@ -275,6 +279,164 @@ function PathField({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function AppearanceAccentControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">主题色</p>
+        <p className="mt-1 text-xs text-muted-foreground">用于按钮、重点数字和选中状态。</p>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-5">
+        {accentOptions.map((option) => (
+          <button
+            aria-pressed={appearance.accent === option.value}
+            className={cn(
+              "flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors",
+              appearance.accent === option.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+            key={option.value}
+            onClick={() => appearance.setAccent(option.value)}
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              className="size-4 shrink-0 rounded-sm border border-foreground/20"
+              style={{ background: option.color }}
+            />
+            <span className="truncate">{option.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AppearanceFontControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">字体</p>
+        <p className="mt-1 text-xs text-muted-foreground">调整界面文字的整体气质。</p>
+      </div>
+      <RadioGroup
+        className="grid gap-2"
+        onValueChange={(value) => appearance.setFont(value as FontFamily)}
+        value={appearance.font}
+      >
+        {fontOptions.map((option) => (
+          <label
+            className={cn(
+              "flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+              appearance.font === option.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+            key={option.value}
+          >
+            <RadioGroupItem className="mt-0.5" value={option.value} />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{option.label}</span>
+              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </RadioGroup>
+    </div>
+  );
+}
+
+function AppearanceScaleControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">界面密度</p>
+        <p className="mt-1 text-xs text-muted-foreground">控制字号和控件间距。</p>
+      </div>
+      <RadioGroup
+        className="grid gap-2"
+        onValueChange={(value) => appearance.setScale(value as InterfaceScale)}
+        value={appearance.scale}
+      >
+        {scaleOptions.map((option) => (
+          <label
+            className={cn(
+              "flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+              appearance.scale === option.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+            key={option.value}
+          >
+            <RadioGroupItem className="mt-0.5" value={option.value} />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{option.label}</span>
+              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </RadioGroup>
+    </div>
+  );
+}
+
+function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <label className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <span className="flex items-center justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">窗口圆角</span>
+          <span className="mt-1 block text-xs text-muted-foreground">影响主窗口和浮窗边角。</span>
+        </span>
+        <Badge className="shrink-0" variant="secondary">
+          {appearance.windowCornerRadius}px
+        </Badge>
+      </span>
+      <input
+        className="w-full accent-primary"
+        max={WINDOW_CORNER_RADIUS_MAX}
+        min={WINDOW_CORNER_RADIUS_MIN}
+        onChange={(event) => appearance.setWindowCornerRadius(Number(event.target.value))}
+        type="range"
+        value={appearance.windowCornerRadius}
+      />
+      <span className="flex justify-between font-mono text-[10px] text-muted-foreground">
+        <span>{WINDOW_CORNER_RADIUS_MIN}px</span>
+        <span>{WINDOW_CORNER_RADIUS_MAX}px</span>
+      </span>
+    </label>
+  );
+}
+
+function AppearanceGlassControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <label className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <span className="flex items-center justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">玻璃透度</span>
+          <span className="mt-1 block text-xs text-muted-foreground">数值越高，背景越透明。</span>
+        </span>
+        <Badge className="shrink-0" variant="secondary">
+          {appearance.liquidGlassTransparency}%
+        </Badge>
+      </span>
+      <input
+        className="w-full accent-primary"
+        max={LIQUID_GLASS_TRANSPARENCY_MAX}
+        min={LIQUID_GLASS_TRANSPARENCY_MIN}
+        onChange={(event) => appearance.setLiquidGlassTransparency(Number(event.target.value))}
+        type="range"
+        value={appearance.liquidGlassTransparency}
+      />
+      <span className="flex justify-between font-mono text-[10px] text-muted-foreground">
+        <span>{LIQUID_GLASS_TRANSPARENCY_MIN}%</span>
+        <span>{LIQUID_GLASS_TRANSPARENCY_MAX}%</span>
+      </span>
+    </label>
   );
 }
 
@@ -686,10 +848,6 @@ export function SettingsStatusPanel({
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
   const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
-  const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
-  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
-  const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
-  const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
   const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
   const [pythonVersionsOpen, setPythonVersionsOpen] = useState(false);
   const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
@@ -776,26 +934,6 @@ export function SettingsStatusPanel({
         if (mounted) {
           setPythonDepsState(state);
         }
-      })
-      .catch(() => undefined);
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    window.maibotDesktop?.modules
-      .getSourceConfig()
-      .then((config) => {
-        if (!mounted) {
-          return;
-        }
-        setModuleSourceConfig(config);
-        setModuleSourcePreset(config.preset);
-        setCustomMaiBotUrl(config.maibotUrl);
-        setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
       })
       .catch(() => undefined);
 
@@ -1013,31 +1151,6 @@ export function SettingsStatusPanel({
       setBusy(null);
     }
   }, [refreshSnapshot]);
-
-  const saveModuleSourceConfig = useCallback(async () => {
-    setBusy("module:source");
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.modules) {
-        throw new Error("桌面桥未就绪，无法保存模块更新源");
-      }
-
-      const config = await window.maibotDesktop.modules.saveSourceConfig({
-        preset: moduleSourcePreset,
-        maibotUrl: customMaiBotUrl,
-        napcatAdapterUrl: customNapcatAdapterUrl,
-      });
-      setModuleSourceConfig(config);
-      setModuleSourcePreset(config.preset);
-      setCustomMaiBotUrl(config.maibotUrl);
-      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
-      toast.success("更新源已保存");
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
   const openPythonVersions = useCallback(async (packageName: ManagedPythonPackageName) => {
     setPythonVersionsOpen(true);
@@ -1545,10 +1658,6 @@ export function SettingsStatusPanel({
                   <UserRound className="size-3" />
                   协议端选择
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="modules">
-                  <Download className="size-3" />
-                  模块更新
-                </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="paths">
                   <ShieldCheck className="size-3" />
                   实例路径
@@ -1999,7 +2108,7 @@ export function SettingsStatusPanel({
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-2"
+                    className="grid gap-2 md:grid-cols-3"
                     disabled={busy !== null}
                     onValueChange={(value) => {
                       if (busy === null) {
@@ -2034,101 +2143,6 @@ export function SettingsStatusPanel({
                       </label>
                     ))}
                   </RadioGroup>
-
-                  <p className="text-xs text-muted-foreground">
-                    安装包和 EXE 文件图标仍由打包配置决定，切换后会立即刷新运行中的窗口与托盘。
-                  </p>
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Droplets className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">液态玻璃模式</p>
-                        <p className="text-xs text-muted-foreground">启用实时折射、高光和透明窗口外观。</p>
-                      </div>
-                    </div>
-                    <label
-                      className={cn(
-                        "flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
-                        appearance.liquidGlass
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                      )}
-                    >
-                      <Checkbox
-                        checked={appearance.liquidGlass}
-                        onCheckedChange={(checked) => appearance.setLiquidGlass(checked === true)}
-                      />
-                      开启液态玻璃模式
-                    </label>
-                  </div>
-
-                  <div
-                    className={cn(
-                      "grid gap-2 rounded-md border border-border bg-card/70 p-3 transition-opacity",
-                      !appearance.liquidGlass && "opacity-55",
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">玻璃透度</p>
-                        <p className="text-xs text-muted-foreground">数值越高，窗口外观越通透。</p>
-                      </div>
-                      <Badge className="shrink-0" variant="secondary">
-                        {appearance.liquidGlassTransparency}%
-                      </Badge>
-                    </div>
-                    <input
-                      aria-label="玻璃透度"
-                      className="h-2 w-full cursor-pointer accent-primary disabled:cursor-not-allowed"
-                      disabled={!appearance.liquidGlass}
-                      max={LIQUID_GLASS_TRANSPARENCY_MAX}
-                      min={LIQUID_GLASS_TRANSPARENCY_MIN}
-                      onChange={(event) => appearance.setLiquidGlassTransparency(Number(event.currentTarget.value))}
-                      step={1}
-                      type="range"
-                      value={appearance.liquidGlassTransparency}
-                    />
-                    <div className="flex justify-between text-[11px] text-muted-foreground">
-                      <span>更厚</span>
-                      <span>更透</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Palette className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">窗口圆角</p>
-                        <p className="text-xs text-muted-foreground">调整外壳四角，默认保持微微圆润。</p>
-                      </div>
-                    </div>
-                    <Badge className="shrink-0" variant="secondary">
-                      {appearance.windowCornerRadius}px
-                    </Badge>
-                  </div>
-                  <input
-                    aria-label="窗口圆角"
-                    className="h-2 w-full cursor-pointer accent-primary"
-                    max={WINDOW_CORNER_RADIUS_MAX}
-                    min={WINDOW_CORNER_RADIUS_MIN}
-                    onChange={(event) => appearance.setWindowCornerRadius(Number(event.currentTarget.value))}
-                    step={1}
-                    type="range"
-                    value={appearance.windowCornerRadius}
-                  />
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>尖角</span>
-                    <span>圆角</span>
-                  </div>
                 </div>
 
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
@@ -2137,75 +2151,102 @@ export function SettingsStatusPanel({
                       <Palette className="size-4" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium">主题色</p>
-                      <p className="text-xs text-muted-foreground">影响按钮、选中态、焦点环、底色、边框和强调色。</p>
+                      <p className="text-sm font-medium">外观风格</p>
+                      <p className="text-xs text-muted-foreground">选择整体视觉方向；每种风格有独立的配置项。</p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {accentOptions.map((option) => (
-                      <button
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-3"
+                    onValueChange={(value) => appearance.setMode(value as AppearanceMode)}
+                    value={appearance.mode}
+                  >
+                    {appearanceModeOptions.map((option) => (
+                      <label
                         className={cn(
-                          "flex h-10 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:border-primary/50",
-                          appearance.accent === option.value ? "border-primary ring-2 ring-ring/35" : "border-border",
+                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          appearance.mode === option.value
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
                         )}
                         key={option.value}
-                        onClick={() => appearance.setAccent(option.value)}
-                        type="button"
                       >
-                        <span className="size-4 rounded-full border border-black/10" style={{ background: option.color }} />
-                        {option.label}
-                      </button>
+                        <RadioGroupItem className="mt-0.5" value={option.value} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                      </label>
                     ))}
-                  </div>
+                  </RadioGroup>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2">
+                {appearance.mode === "future-retro" ? (
+                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                          <Palette className="size-4" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">未来复古配置</p>
+                          <p className="text-xs text-muted-foreground">控制纸张纹理、仪表盘边角和界面密度。</p>
+                        </div>
+                      </div>
+                      <label className="flex shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                        <Checkbox
+                          checked={appearance.retroPaperTexture}
+                          onCheckedChange={(checked) => appearance.setRetroPaperTexture(checked === true)}
+                        />
+                        纸张颗粒
+                      </label>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <AppearanceRadiusControl appearance={appearance} />
+                      <AppearanceScaleControl appearance={appearance} />
+                    </div>
+                  </div>
+                ) : null}
+
+                {appearance.mode === "modern" ? (
                   <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Type className="size-4" />
+                        <Palette className="size-4" />
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium">字体</p>
-                        <p className="text-xs text-muted-foreground">调整界面文字的整体字形。</p>
+                        <p className="text-sm font-medium">现代配置</p>
+                        <p className="text-xs text-muted-foreground">控制主题色、字体、圆角和信息密度。</p>
                       </div>
                     </div>
-                    <RadioGroup onValueChange={(value) => appearance.setFont(value as FontFamily)} value={appearance.font}>
-                      {fontOptions.map((option) => (
-                        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 text-sm" key={option.value}>
-                          <RadioGroupItem className="mt-0.5" value={option.value} />
-                          <span>
-                            <span className="block font-medium">{option.label}</span>
-                            <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </RadioGroup>
+                    <AppearanceAccentControl appearance={appearance} />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <AppearanceFontControl appearance={appearance} />
+                      <AppearanceScaleControl appearance={appearance} />
+                    </div>
+                    <AppearanceRadiusControl appearance={appearance} />
                   </div>
+                ) : null}
 
+                {appearance.mode === "future" ? (
                   <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Settings className="size-4" />
+                        <Droplets className="size-4" />
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium">界面密度</p>
-                        <p className="text-xs text-muted-foreground">调整全局字号基准，影响信息密度。</p>
+                        <p className="text-sm font-medium">未来配置</p>
+                        <p className="text-xs text-muted-foreground">液态玻璃会自动启用；可调玻璃透度、主题色和界面密度。</p>
                       </div>
                     </div>
-                    <RadioGroup onValueChange={(value) => appearance.setScale(value as InterfaceScale)} value={appearance.scale}>
-                      {scaleOptions.map((option) => (
-                        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 text-sm" key={option.value}>
-                          <RadioGroupItem className="mt-0.5" value={option.value} />
-                          <span>
-                            <span className="block font-medium">{option.label}</span>
-                            <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </RadioGroup>
+                    <AppearanceGlassControl appearance={appearance} />
+                    <AppearanceAccentControl appearance={appearance} />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <AppearanceScaleControl appearance={appearance} />
+                      <AppearanceRadiusControl appearance={appearance} />
+                    </div>
                   </div>
-                </div>
+                ) : null}
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
                   <div className="min-w-0">
@@ -2281,75 +2322,6 @@ export function SettingsStatusPanel({
                     {busy === "snowluma:reset" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
                     重置 SnowLuma
                   </Button>
-                </div>
-              </TabsContent>
-
-              <TabsContent className="space-y-3" value="modules">
-                <p className="text-xs text-muted-foreground">
-                  这里只配置模块更新源；执行更新请回到首页的 MaiBot 版本卡片。
-                </p>
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
-                          <GitBranch className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">模块更新源</p>
-                          <p className="truncate font-mono text-[11px] text-muted-foreground" title={snapshot.paths.maibotRoot}>
-                            {snapshot.paths.maibotRoot}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <Badge variant="secondary">首页更新使用</Badge>
-                  </div>
-                  <div className="grid gap-3 rounded-md border border-border bg-card/60 p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto] lg:items-end">
-                    <label className="grid gap-1.5 text-xs font-medium">
-                      更新源
-                      <select
-                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        disabled={busy !== null}
-                        value={moduleSourcePreset}
-                        onChange={(event) => {
-                          const preset = event.target.value as ModuleSourcePreset;
-                          setModuleSourcePreset(preset);
-                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
-                          if (option) {
-                            setCustomMaiBotUrl(option.maibotUrl);
-                          }
-                        }}
-                      >
-                        {moduleSourceConfig?.options.map((option) => (
-                          <option key={option.preset} value={option.preset}>
-                            {option.label}
-                          </option>
-                        ))}
-                        <option value="custom">自定义</option>
-                      </select>
-                    </label>
-                    <label className="grid gap-1.5 text-xs font-medium">
-                      MaiBot 仓库
-                      <Input
-                        disabled={busy !== null || moduleSourcePreset !== "custom"}
-                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
-                        value={customMaiBotUrl}
-                      />
-                    </label>
-                    <Button
-                      disabled={busy !== null || !moduleSourceConfig}
-                      onClick={saveModuleSourceConfig}
-                      size="sm"
-                      variant="secondary"
-                    >
-                      {busy === "module:source" ? <Loader2 className="animate-spin" /> : <Save />}
-                      保存更新源
-                    </Button>
-                  </div>
-                  <div className="rounded-md border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground">
-                    首页执行更新时会使用这里保存的仓库地址；更新仍会保留 MaiBot/data 等用户运行数据。
-                  </div>
                 </div>
               </TabsContent>
 
@@ -2603,7 +2575,7 @@ export function SettingsStatusPanel({
       />
       <DialogBody className="space-y-3 text-sm">
         <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          会重置关闭行为、服务命令、运行时工具路径、依赖源、模块更新源、资源路径选择和 QQ 后端选择。完成后界面会刷新并重新进入启动引导。
+          会重置关闭行为、服务命令、运行时工具路径、依赖源、首页更新源、资源路径选择和 QQ 后端选择。完成后界面会刷新并重新进入启动引导。
         </div>
         {resourceMoveBlocked ? (
           <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">

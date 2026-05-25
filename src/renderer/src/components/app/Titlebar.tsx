@@ -17,6 +17,7 @@ import type { ThemeApi } from "@/lib/use-theme";
 interface TitlebarProps {
   appVersion: string;
   liquidGlass?: boolean;
+  retro?: boolean;
   theme: ThemeApi;
 }
 
@@ -141,6 +142,7 @@ const titlebarBtn =
 export function Titlebar({
   appVersion,
   liquidGlass = false,
+  retro = false,
   theme,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
@@ -158,7 +160,8 @@ export function Titlebar({
   return (
     <div
       className={cn(
-        "relative z-40 flex h-12 shrink-0 items-stretch border-b border-border",
+        "relative z-40 flex h-12 shrink-0 items-stretch border-b-2",
+        retro ? "border-[var(--retro-titlebar-line)]" : "border-border",
         liquidGlass ? "bg-transparent" : "bg-card",
         !state.isFocused && "opacity-90",
       )}
@@ -178,7 +181,7 @@ export function Titlebar({
           isMac ? "justify-center px-3" : "px-1",
         )}
       >
-        <span className="retro-title truncate text-lg leading-none">
+        <span className={cn("retro-title truncate leading-none", retro ? "text-xl" : "text-lg")}>
           MaiBot OneKey
         </span>
       </div>

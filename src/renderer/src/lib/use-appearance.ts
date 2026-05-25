@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type AccentColor = "orange" | "green" | "blue" | "pink" | "neutral";
+export type AppearanceMode = "future-retro" | "modern" | "future";
 export type FontFamily = "system" | "rounded" | "serif";
 export type InterfaceScale = "compact" | "normal" | "comfortable";
 
@@ -9,6 +10,8 @@ export interface AppearancePreference {
   font: FontFamily;
   liquidGlass: boolean;
   liquidGlassTransparency: number;
+  mode: AppearanceMode;
+  retroPaperTexture: boolean;
   scale: InterfaceScale;
   windowCornerRadius: number;
 }
@@ -18,6 +21,8 @@ export interface AppearanceApi extends AppearancePreference {
   setFont: (font: FontFamily) => void;
   setLiquidGlass: (enabled: boolean) => void;
   setLiquidGlassTransparency: (transparency: number) => void;
+  setMode: (mode: AppearanceMode) => void;
+  setRetroPaperTexture: (enabled: boolean) => void;
   setScale: (scale: InterfaceScale) => void;
   setWindowCornerRadius: (radius: number) => void;
   reset: () => void;
@@ -35,6 +40,8 @@ const DEFAULT_APPEARANCE: AppearancePreference = {
   font: "system",
   liquidGlass: false,
   liquidGlassTransparency: 62,
+  mode: "future-retro",
+  retroPaperTexture: true,
   scale: "normal",
   windowCornerRadius: 16,
 };
@@ -67,6 +74,10 @@ function isFontFamily(value: unknown): value is FontFamily {
   return value === "system" || value === "rounded" || value === "serif";
 }
 
+function isAppearanceMode(value: unknown): value is AppearanceMode {
+  return value === "future-retro" || value === "modern" || value === "future";
+}
+
 function isInterfaceScale(value: unknown): value is InterfaceScale {
   return value === "compact" || value === "normal" || value === "comfortable";
 }
@@ -92,11 +103,20 @@ function clampWindowCornerRadius(value: unknown): number {
 
 function normalizeAppearance(value: unknown): AppearancePreference {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const mode = isAppearanceMode(record.mode)
+    ? record.mode
+    : record.liquidGlass === true
+      ? "future"
+      : DEFAULT_APPEARANCE.mode;
   return {
     accent: isAccentColor(record.accent) ? record.accent : DEFAULT_APPEARANCE.accent,
     font: isFontFamily(record.font) ? record.font : DEFAULT_APPEARANCE.font,
-    liquidGlass: typeof record.liquidGlass === "boolean" ? record.liquidGlass : DEFAULT_APPEARANCE.liquidGlass,
+    liquidGlass: mode === "future",
     liquidGlassTransparency: clampLiquidGlassTransparency(record.liquidGlassTransparency),
+    mode,
+    retroPaperTexture: typeof record.retroPaperTexture === "boolean"
+      ? record.retroPaperTexture
+      : DEFAULT_APPEARANCE.retroPaperTexture,
     scale: isInterfaceScale(record.scale) ? record.scale : DEFAULT_APPEARANCE.scale,
     windowCornerRadius: clampWindowCornerRadius(record.windowCornerRadius),
   };
@@ -123,6 +143,8 @@ function applyAppearance(appearance: AppearancePreference): void {
     return;
   }
   const root = document.documentElement;
+  const mode = isAppearanceMode(appearance.mode) ? appearance.mode : DEFAULT_APPEARANCE.mode;
+  const liquidGlass = mode === "future";
   const liquidGlassTransparency = clampLiquidGlassTransparency(appearance.liquidGlassTransparency);
   const windowCornerRadius = clampWindowCornerRadius(appearance.windowCornerRadius);
   const transparency = liquidGlassTransparency / 100;
@@ -155,10 +177,12 @@ function applyAppearance(appearance: AppearancePreference): void {
   root.style.setProperty("--liquid-glass-dark-frost-alpha", (0.16 + surfaceCover * 0.16).toFixed(3));
   root.style.setProperty("--liquid-glass-layer-alpha", (0.24 + glassCover * 0.18).toFixed(3));
   root.style.setProperty("--liquid-glass-compositor-opacity", Math.min(1, 0.84 + glassCover * 0.16).toFixed(3));
-  root.classList.toggle("liquid-glass", appearance.liquidGlass);
+  root.classList.toggle("liquid-glass", liquidGlass);
+  root.dataset.appearanceMode = mode;
   root.dataset.accent = appearance.accent;
   root.dataset.font = appearance.font;
-  root.dataset.liquidGlass = appearance.liquidGlass ? "true" : "false";
+  root.dataset.liquidGlass = liquidGlass ? "true" : "false";
+  root.dataset.retroPaperTexture = appearance.retroPaperTexture ? "true" : "false";
   root.dataset.scale = appearance.scale;
 }
 
@@ -192,7 +216,7 @@ export function useAppearance(): AppearanceApi {
 
   const update = useCallback((partial: Partial<AppearancePreference>) => {
     setAppearance((current) => {
-      const next = { ...current, ...partial };
+      const next = normalizeAppearance({ ...current, ...partial });
       saveAppearance(next);
       return next;
     });
@@ -202,9 +226,11 @@ export function useAppearance(): AppearanceApi {
     ...appearance,
     setAccent: (accent) => update({ accent }),
     setFont: (font) => update({ font }),
-    setLiquidGlass: (liquidGlass) => update({ liquidGlass }),
+    setLiquidGlass: (liquidGlass) => update({ mode: liquidGlass ? "future" : "modern" }),
     setLiquidGlassTransparency: (liquidGlassTransparency) =>
       update({ liquidGlassTransparency: clampLiquidGlassTransparency(liquidGlassTransparency) }),
+    setMode: (mode) => update({ mode }),
+    setRetroPaperTexture: (retroPaperTexture) => update({ retroPaperTexture }),
     setScale: (scale) => update({ scale }),
     setWindowCornerRadius: (windowCornerRadius) =>
       update({ windowCornerRadius: clampWindowCornerRadius(windowCornerRadius) }),

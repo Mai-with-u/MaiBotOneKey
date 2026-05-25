@@ -8,6 +8,7 @@ import {
   Maximize2,
   PackageCheck,
   Play,
+  Radar,
   RefreshCw,
   Server,
   Settings,
@@ -31,6 +32,7 @@ import type {
   ModuleBranchOption,
   ModuleSourceConfig,
   ModuleSourcePreset,
+  ModuleSourceUpdate,
   ModuleTagOption,
   ModuleUpdateTarget,
   QqBackend,
@@ -49,6 +51,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
+import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
@@ -127,16 +130,34 @@ const statusText: Record<ServiceStatus, string> = {
   error: "异常",
 };
 
-const statusVariant: Record<ServiceStatus, React.ComponentProps<typeof Badge>["variant"]> = {
-  stopped: "outline",
-  starting: "warning",
-  running: "success",
-  stopping: "warning",
-  error: "danger",
+const statusColor: Record<ServiceStatus, string> = {
+  stopped: "var(--retro-ink, var(--muted-foreground))",
+  starting: "var(--warning)",
+  running: "var(--retro-rust, var(--success))",
+  stopping: "var(--warning)",
+  error: "var(--destructive)",
 };
 
 function valueOrFallback(value: string | undefined): string {
   return value && value.trim().length > 0 ? value : "未读取";
+}
+
+function ServiceStatusText({
+  status,
+  className,
+}: {
+  status: ServiceStatus;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs font-medium leading-none", className)}
+      style={{ color: statusColor[status] }}
+    >
+      <span aria-hidden className="size-1.5 rounded-full bg-current" />
+      {statusText[status]}
+    </span>
+  );
 }
 
 function formatStatNumber(value: number | undefined): string | undefined {
@@ -188,15 +209,23 @@ function DetailRow({
   label,
   value,
   className,
+  retro = false,
 }: {
   label: string;
   value: string | undefined;
   className?: string;
+  retro?: boolean;
 }): React.JSX.Element {
   return (
     <div className={cn("flex items-center justify-between gap-3", className)}>
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="retro-value min-w-0 truncate text-right" title={value}>
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          retro ? "retro-value text-right" : "font-mono font-semibold",
+        )}
+        title={value}
+      >
         {valueOrFallback(value)}
       </span>
     </div>
@@ -207,15 +236,17 @@ function ChoiceSwitch<T extends string>({
   value,
   options,
   onChange,
+  retro = false,
 }: {
   value: T;
   options: Array<{ value: T; label: string; version: string | undefined }>;
   onChange: (value: T) => void;
+  retro?: boolean;
 }): React.JSX.Element {
   return (
     <div
       className={cn(
-        "retro-control grid gap-2 p-1",
+        retro ? "retro-control grid gap-2 p-1" : "grid gap-2 rounded-lg border border-border bg-muted/30 p-1",
         options.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
       )}
     >
@@ -225,8 +256,9 @@ function ChoiceSwitch<T extends string>({
         return (
           <button
             className={cn(
-              "grid min-h-14 min-w-0 gap-1 rounded-sm border border-transparent px-3 py-2 text-left text-xs transition-colors",
-              selected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted",
+              "grid min-h-14 min-w-0 gap-1 px-3 py-2 text-left text-xs transition-colors",
+              retro ? "rounded-sm border border-transparent" : "rounded-md",
+              selected ? cn("bg-primary text-primary-foreground", !retro && "shadow-sm") : "text-foreground hover:bg-muted",
               disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
             )}
             disabled={disabled}
@@ -249,10 +281,12 @@ function LocalChatQuickCard({
   active,
   maibotService,
   onOpenFull,
+  retro,
 }: {
   active: boolean;
   maibotService: ServiceDescriptor | undefined;
   onOpenFull: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   const [state, setState] = useState<CompactChatState>("idle");
   const [messages, setMessages] = useState<LocalChatMessageEvent[]>([]);
@@ -343,9 +377,9 @@ function LocalChatQuickCard({
     .slice(-12);
 
   return (
-    <section className="retro-panel p-3.5 pl-5">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="retro-title text-lg text-foreground">Local Chat</p>
+    <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
+      <div className={cn("mb-3 flex items-center gap-2", retro ? "justify-between" : "justify-end")}>
+        {retro ? <p className="retro-title text-2xl text-foreground">Local Chat</p> : null}
         <div className="flex shrink-0 items-center gap-2">
           <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
             {statusLabel}
@@ -355,7 +389,12 @@ function LocalChatQuickCard({
           </Button>
         </div>
       </div>
-      <div className="retro-control mb-3 grid max-h-32 min-h-24 gap-2 overflow-y-auto p-3 [scrollbar-width:thin]">
+      <div
+        className={cn(
+          "mb-3 grid max-h-32 gap-2 overflow-y-auto p-3 [scrollbar-width:thin]",
+          retro ? "retro-control min-h-24" : "min-h-20 rounded-md border border-border bg-muted/30",
+        )}
+      >
         {visibleMessages.length > 0 ? (
           visibleMessages.map((message) => (
             <div
@@ -364,12 +403,13 @@ function LocalChatQuickCard({
             >
               <p
                 className={cn(
-                  "max-w-[82%] truncate rounded-sm border px-2.5 py-1.5 text-xs",
+                  "max-w-[82%] truncate px-2.5 py-1.5 text-xs",
+                  retro ? "rounded-sm border" : "rounded-md",
                   message.role === "user"
-                    ? "border-primary bg-primary text-primary-foreground"
+                    ? cn("bg-primary text-primary-foreground", retro && "border-primary")
                     : message.role === "error"
-                      ? "border-destructive/30 bg-destructive/10 text-destructive"
-                      : "border-border bg-card text-foreground",
+                      ? cn("bg-destructive/10 text-destructive", retro && "border-destructive/30")
+                      : cn("bg-card text-foreground", retro && "border-border"),
                 )}
                 title={message.text}
               >
@@ -397,7 +437,7 @@ function LocalChatQuickCard({
           value={draft}
         />
         <Button
-          className="h-9 shrink-0 px-3 text-xs"
+          className={cn("shrink-0 px-3 text-xs", retro ? "h-9" : "h-8")}
           disabled={!connected || !draft.trim() || sending}
           onClick={() => void sendQuickMessage()}
           size="sm"
@@ -416,12 +456,14 @@ function ServiceCardControls({
   onStart,
   onStop,
   onRestart,
+  retro,
 }: {
   service: ServiceDescriptor;
   busy: boolean;
   onStart: (id: ServiceId) => void;
   onStop: (id: ServiceId) => void;
   onRestart: (id: ServiceId) => void;
+  retro: boolean;
 }): React.JSX.Element {
   const isTransitioning = service.status === "starting" || service.status === "stopping" || busy;
   const isStarting = service.status === "starting";
@@ -433,34 +475,34 @@ function ServiceCardControls({
     <div className="flex shrink-0 items-center gap-1">
       <Button
         aria-label={`启动 ${service.name}`}
-        className="size-8"
+        className={cn(retro ? "size-8" : "size-7")}
         disabled={!canStart || isTransitioning}
         onClick={() => onStart(service.id)}
         size="icon"
         title="启动"
-        variant="secondary"
+        variant={retro ? "secondary" : "ghost"}
       >
         {busy && canStart ? <Loader2 className="animate-spin" /> : <Play />}
       </Button>
       <Button
         aria-label={`停止 ${service.name}`}
-        className="size-8"
+        className={cn(retro ? "size-8" : "size-7")}
         disabled={stopDisabled}
         onClick={() => onStop(service.id)}
         size="icon"
         title="停止"
-        variant="secondary"
+        variant={retro ? "secondary" : "ghost"}
       >
         <Square />
       </Button>
       <Button
         aria-label={`重启 ${service.name}`}
-        className="size-8"
+        className={cn(retro ? "size-8" : "size-7")}
         disabled={isTransitioning}
         onClick={() => onRestart(service.id)}
         size="icon"
         title="重启"
-        variant="secondary"
+        variant={retro ? "secondary" : "ghost"}
       >
         <RefreshCw />
       </Button>
@@ -474,6 +516,7 @@ function ServiceSummary({
   serviceControls,
   webuiAction,
   adapterAction,
+  retro,
 }: {
   icon: React.ReactNode;
   service: ServiceDescriptor | undefined;
@@ -497,18 +540,19 @@ function ServiceSummary({
     label: string;
     onClick: () => void;
   };
+  retro: boolean;
 }): React.JSX.Element {
   return (
-    <div className="retro-panel grid gap-3 p-3.5 pl-5">
+    <div className={cn(retro ? "retro-panel grid gap-3 p-3.5 pl-5" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {icon ? (
-            <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
+            <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
               {icon}
             </span>
           ) : null}
           <div className="min-w-0">
-            <p className="retro-title truncate text-xl">{service?.name ?? "未知服务"}</p>
+            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>{service?.name ?? "未知服务"}</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -518,21 +562,18 @@ function ServiceSummary({
               onRestart={serviceControls.onRestart}
               onStart={serviceControls.onStart}
               onStop={serviceControls.onStop}
+              retro={retro}
               service={service}
             />
           ) : null}
-          {service ? (
-            <Badge dot variant={statusVariant[service.status]}>
-              {statusText[service.status]}
-            </Badge>
-          ) : null}
+          {service ? <ServiceStatusText status={service.status} /> : null}
         </div>
       </div>
       {(webuiAction || adapterAction) ? (
         <div className="grid gap-3 sm:grid-cols-2">
           {webuiAction ? (
-            <div className="retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2">
-              <p className="min-w-0 truncate text-xs font-semibold">{webuiAction.title}</p>
+            <div className={cn(retro ? "retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2" : "flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2")}>
+              <p className={cn("min-w-0 truncate font-bold", retro ? "text-base" : "text-xs")}>{webuiAction.title}</p>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <label aria-label="端口" className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <Input
@@ -556,9 +597,9 @@ function ServiceSummary({
             </div>
           ) : null}
           {adapterAction ? (
-            <div className="retro-control grid gap-3 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div className={cn(retro ? "retro-control grid gap-3 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" : "grid gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center")}>
               <div className="min-w-0">
-                <p className="truncate text-xs font-semibold">{adapterAction.title}</p>
+                <p className={cn("truncate font-bold", retro ? "text-base" : "text-xs")}>{adapterAction.title}</p>
                 {adapterAction.description ? (
                   <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
                     {adapterAction.description}
@@ -579,22 +620,31 @@ function ServiceSummary({
 
 function MessagePlatformConnectCard({
   onClick,
+  retro,
 }: {
   onClick: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   return (
     <button
-      className="retro-panel grid gap-3 p-3.5 pl-5 text-left transition-colors hover:border-primary"
+      className={cn(
+        "grid gap-3 text-left transition-colors hover:border-primary",
+        retro
+          ? "retro-panel p-3.5 pl-5"
+          : "rounded-lg border border-dashed border-primary/45 bg-card p-3.5 hover:bg-primary/5",
+      )}
       onClick={onClick}
       type="button"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
+          <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
             <Server className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="retro-title truncate text-xl">Message Platform</p>
+            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>
+              {retro ? "Message Platform" : "连接到消息软件平台......."}
+            </p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               新增 QQ-NapCat 或 QQ-SnowLuma，自动写入连接配置并启动后端。
             </p>
@@ -602,9 +652,9 @@ function MessagePlatformConnectCard({
         </div>
         <Badge variant="warning">待配置</Badge>
       </div>
-      <div className="retro-control flex items-center justify-between gap-3 p-3">
+      <div className={cn(retro ? "retro-control flex items-center justify-between gap-3 p-3" : "flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3")}>
         <span className="text-xs text-muted-foreground">选择一个消息平台开始初始化</span>
-        <span className="inline-flex h-7 items-center gap-1 rounded-sm bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground">
+        <span className={cn("inline-flex h-7 items-center gap-1 bg-primary px-2.5 text-[11px] text-primary-foreground", retro ? "rounded-sm font-semibold" : "rounded-md font-medium")}>
           新增平台
           <ArrowRight className="size-3.5" />
         </span>
@@ -620,6 +670,7 @@ function LauncherUpdateCard({
   onCheckUpdate,
   onInstallUpdate,
   onOpenRelease,
+  retro,
 }: {
   appVersion: string;
   busy?: "check" | "install" | null;
@@ -627,20 +678,23 @@ function LauncherUpdateCard({
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
   onOpenRelease: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   const currentTag = `v${appVersion}`;
   const updateAvailable = latestTag ? compareVersionText(latestTag, currentTag) > 0 : false;
   const busyRunning = busy !== null && busy !== undefined;
 
   return (
-    <section className="retro-panel p-3.5 pl-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <p className="retro-title text-lg text-foreground">OneKey Launcher</p>
-        {updateAvailable ? <Badge variant="warning">可更新</Badge> : <Badge variant="outline">已同步</Badge>}
-      </div>
-      <div className="retro-control grid gap-2 p-3 text-xs">
-        <DetailRow label="本地版本" value={currentTag} />
-        <DetailRow label="最新版本" value={latestTag} />
+    <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
+      {retro ? (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="retro-title text-2xl text-foreground">OneKey Launcher</p>
+          {updateAvailable ? <Badge variant="warning">可更新</Badge> : <Badge variant="outline">已同步</Badge>}
+        </div>
+      ) : null}
+      <div className={cn(retro ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs")}>
+        <DetailRow label="本地版本" value={currentTag} retro={retro} />
+        <DetailRow label="最新版本" value={latestTag} retro={retro} />
       </div>
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onCheckUpdate} size="sm" variant="secondary">
@@ -669,6 +723,7 @@ function MaiBotOverviewCard({
   latestPrerelease,
   updateBusy,
   onUpdate,
+  retro,
 }: {
   service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
@@ -676,42 +731,63 @@ function MaiBotOverviewCard({
   latestPrerelease: string | undefined;
   updateBusy?: boolean;
   onUpdate: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   const hasNewVersion =
     compareVersionText(latestStable, localVersion) > 0 ||
     compareVersionText(latestPrerelease, localVersion) > 0;
 
   return (
-    <div className="retro-panel grid min-w-0 gap-4 p-4 pl-6">
+    <div className={cn(retro ? "retro-panel grid min-w-0 gap-4 p-4 pl-6" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5")}>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="retro-title truncate text-3xl leading-none text-foreground">{service?.name ?? "MaiBot Core"}</p>
+        <div className={cn("min-w-0", !retro && "flex items-center gap-3")}>
+          {!retro ? (
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+              <Radar className="size-4.5" />
+            </span>
+          ) : null}
+          <div className="min-w-0">
+            <p className={cn("truncate", retro ? "retro-title text-[3rem] leading-none text-foreground" : "text-sm font-semibold")}>
+              {service?.name ?? "MaiBot Core"}
+            </p>
+          </div>
         </div>
-        {service ? (
-          <Badge dot variant={statusVariant[service.status]}>
-            {statusText[service.status]}
-          </Badge>
-        ) : null}
+        {service ? <ServiceStatusText status={service.status} /> : null}
       </div>
 
-      <div className="grid min-w-0 gap-3 border-t border-border/70 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+      <div
+        className={cn(
+          "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
+          retro ? "border-t border-border/70 pt-4" : "rounded-md border border-border bg-muted/30 p-3",
+        )}
+      >
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-muted-foreground">MAIBOT 版本</p>
-          <p className="retro-value mt-2 truncate text-3xl leading-none" title={localVersion}>
+          <p className={cn("text-xs text-muted-foreground", retro && "font-semibold")}>{retro ? "MAIBOT 版本" : "MaiBot 版本"}</p>
+          <p
+            className={cn(retro ? "retro-value mt-2 truncate text-3xl leading-none" : "mt-1 truncate font-mono text-base font-semibold")}
+            title={localVersion}
+          >
             {valueOrFallback(localVersion)}
           </p>
         </div>
         <div className="grid min-w-0 gap-1 sm:min-w-44">
           <Button
             aria-label="更新 MaiBot"
-            className="relative mt-1 size-10 justify-self-end px-0"
+            className={cn("relative mt-1 justify-self-end", retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]")}
             disabled={updateBusy}
             onClick={onUpdate}
-            size="icon"
+            size={retro ? "icon" : "sm"}
             variant="secondary"
           >
             {hasNewVersion ? (
-              <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning ring-2 ring-card" />
+              <span
+                className={cn(
+                  "absolute bg-warning",
+                  retro
+                    ? "right-[var(--retro-stroke)] top-[var(--retro-stroke)] size-2 rounded-none"
+                    : "right-1 top-1 size-2 rounded-full",
+                )}
+              />
             ) : null}
             {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
           </Button>
@@ -725,10 +801,12 @@ function HomeStatsPanel({
   snapshot,
   services,
   onOpenQuickActions,
+  retro,
 }: {
   snapshot: DesktopSnapshot;
   services: ServiceDescriptor[];
   onOpenQuickActions: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   const [maibotStats, setMaibotStats] = useState<MaiBotStatisticSummary | null>(null);
   const topChats = maibotStats?.chatStats.slice(0, 2) ?? [];
@@ -761,30 +839,35 @@ function HomeStatsPanel({
   }, [snapshot.paths.maibotRoot]);
 
   return (
-    <div className="grid gap-4 self-start">
+    <div className={cn("grid self-start", retro ? "gap-4" : "gap-3")}>
       <button
-        className="retro-panel retro-panel-bare flex w-full items-center justify-between gap-3 p-4 text-left transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={cn(
+          "flex w-full items-center justify-between gap-3 text-left transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          retro
+            ? "retro-panel retro-panel-bare p-4"
+            : "rounded-lg border border-border bg-card p-3.5 hover:border-primary/45 hover:bg-accent/45",
+        )}
         onClick={() => void window.maibotDesktop?.openExternal(MAIBOT_OFFICIAL_DOCS_URL)}
         type="button"
       >
         <span className="flex min-w-0 items-center gap-3">
-          <span className="grid size-11 shrink-0 place-items-center border border-primary bg-primary/10 text-primary">
+          <span className={cn("grid shrink-0 place-items-center bg-primary/10 text-primary", retro ? "size-11 border border-primary" : "size-8 rounded-md")}>
             <ExternalLink className="size-4.5" />
           </span>
           <span className="min-w-0">
-            <span className="retro-title block text-lg">官方文档</span>
-            <span className="block truncate font-mono text-xs text-foreground">docs.mai-mai.org</span>
+            <span className={cn("block", retro ? "retro-title text-xl" : "text-sm font-semibold")}>官方文档</span>
+            <span className={cn("block truncate", retro ? "font-mono text-xs text-foreground" : "text-[11px] text-muted-foreground")}>docs.mai-mai.org</span>
           </span>
         </span>
-        <ArrowRight className="size-5 shrink-0 text-primary" />
+        <ArrowRight className={cn("shrink-0", retro ? "size-5 text-primary" : "size-4 text-muted-foreground")} />
       </button>
-      <aside className="retro-panel grid gap-4 p-4 pl-6">
+      <aside className={cn(retro ? "retro-panel grid gap-4 p-4 pl-6" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
         <div className="flex items-center gap-3">
-          <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
+          <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
             <PackageCheck className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="retro-title text-xl">统计信息</p>
+            <p className={cn(retro ? "retro-title text-2xl" : "text-sm font-semibold")}>统计信息</p>
           </div>
         </div>
 
@@ -792,48 +875,54 @@ function HomeStatsPanel({
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
             {maibotStats?.periodLabel ? (
-              <span className="rounded-sm bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+              <span className={cn("bg-muted px-2 py-0.5 text-[10px] text-muted-foreground", retro ? "rounded-sm" : "rounded-full")}>
                 {maibotStats.periodLabel}
               </span>
             ) : null}
           </div>
-          <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} />
-          <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} />
-          <DetailRow label="总花费" value={maibotStats?.totalCost} />
-          <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} />
+          <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} retro={retro} />
+          <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} retro={retro} />
+          <DetailRow label="总花费" value={maibotStats?.totalCost} retro={retro} />
+          <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} retro={retro} />
         </div>
 
-        <div className="retro-rule grid gap-2 pt-3 text-xs">
+        <div className={cn("grid gap-2 pt-3 text-xs", retro ? "retro-rule" : "border-t border-border")}>
           <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
-          <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} />
-          <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} />
-          <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} />
+          <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} retro={retro} />
+          <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} retro={retro} />
+          <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} retro={retro} />
           {topChats.map((chat) => (
             <DetailRow
               key={chat.name}
               label={chat.name}
               value={formatStatNumber(chat.messageCount)}
+              retro={retro}
             />
           ))}
         </div>
       </aside>
-      <section className="retro-panel retro-panel-action min-h-[72px] p-0 pl-[88px] pr-4">
-        <div className="flex min-h-[72px] items-center justify-between gap-3">
+      <section className={cn(retro ? "retro-panel retro-panel-action min-h-[72px] p-0 pl-[88px] pr-4" : "rounded-lg border border-border bg-card p-3.5")}>
+        <div className={cn("flex items-center justify-between gap-3", retro && "min-h-[72px]")}>
           <div className="flex min-w-0 items-center gap-3">
+            {!retro ? (
+              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                <Wrench className="size-4.5" />
+              </span>
+            ) : null}
             <div className="min-w-0">
-              <p className="retro-title text-lg">快捷操作</p>
+              <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>快捷操作</p>
               <p className="text-[11px] text-muted-foreground">路径、数据库和配置导入。</p>
             </div>
           </div>
           <Button
             aria-label="打开快捷操作"
-            className="size-10 border-0 bg-transparent text-primary hover:bg-transparent hover:text-primary active:bg-transparent"
+            className={cn(retro ? "size-10 border-0 bg-transparent text-primary hover:bg-transparent hover:text-primary active:bg-transparent" : "size-8")}
             onClick={onOpenQuickActions}
             size="icon"
             title="打开快捷操作"
-            variant="ghost"
+            variant={retro ? "ghost" : "secondary"}
           >
-            <ArrowRight className="size-7" />
+            <ArrowRight className={cn(retro ? "size-7" : "size-3.5")} />
           </Button>
         </div>
       </section>
@@ -959,9 +1048,11 @@ function alphaBoundsForImage(src: string): Promise<ImageAlphaBounds> {
 function ElasticMascot({
   onLongPress,
   onSecretTap,
+  placement = "fixed",
 }: {
   onLongPress: () => void;
   onSecretTap: () => void;
+  placement?: "fixed" | "retro-column";
 }): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -1267,7 +1358,10 @@ function ElasticMascot({
   return (
     <div
       aria-label="MaiBot 形象"
-      className="fixed z-20 hidden h-28 w-32 overflow-hidden md:block"
+      className={cn(
+        "z-20 hidden h-28 w-32 overflow-hidden md:block",
+        placement === "retro-column" ? "retro-mascot-frame relative self-start" : "fixed",
+      )}
       data-mascot-stage="true"
       onClick={onClick}
       onKeyDown={onKeyDown}
@@ -1279,15 +1373,20 @@ function ElasticMascot({
       onPointerUp={onPointerUp}
       ref={stageRef}
       role="button"
-      style={{
-        right: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
-        bottom: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
-      }}
+      style={placement === "fixed"
+        ? {
+          right: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
+          bottom: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
+        }
+        : undefined}
       tabIndex={0}
     >
       <img
         alt=""
-        className="pointer-events-none absolute right-[-46px] bottom-[-40px] w-32 select-none"
+        className={cn(
+          "pointer-events-none absolute bottom-[-40px] w-32 select-none",
+          placement === "retro-column" ? "left-8" : "right-[-46px]",
+        )}
         draggable={false}
         src={maiMascotImage}
         style={{
@@ -1358,6 +1457,7 @@ export function HomePanel({
   const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
   const [moduleSourceExpanded, setModuleSourceExpanded] = useState(false);
+  const [moduleSourceSaving, setModuleSourceSaving] = useState(false);
   const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
   const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
   const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
@@ -1366,6 +1466,8 @@ export function HomePanel({
   const [maibotRefsLoading, setMaibotRefsLoading] = useState(false);
   const [selectedMaiBotBranch, setSelectedMaiBotBranch] = useState("main");
   const [selectedMaiBotTag, setSelectedMaiBotTag] = useState("");
+  const appearance = useAppearance();
+  const useRetroHome = appearance.mode === "future-retro";
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
@@ -1460,6 +1562,29 @@ export function HomePanel({
     setCustomNapcatAdapterUrl(currentNapcatAdapterUrl);
   }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
+  const saveModuleSourceConfig = useCallback(async (update?: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
+    if (!window.maibotDesktop?.modules) {
+      throw new Error("桌面桥未就绪，无法保存模块更新源");
+    }
+
+    setModuleSourceSaving(true);
+    try {
+      const config = await window.maibotDesktop.modules.saveSourceConfig({
+        preset: update?.preset ?? moduleSourcePreset,
+        maibotUrl: update?.maibotUrl ?? customMaiBotUrl,
+        napcatAdapterUrl: update?.napcatAdapterUrl ?? customNapcatAdapterUrl,
+      });
+      setModuleSourceConfig(config);
+      setModuleSourcePreset(config.preset);
+      setCustomMaiBotUrl(config.maibotUrl);
+      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+      setError(null);
+      return config;
+    } finally {
+      setModuleSourceSaving(false);
+    }
+  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
+
   const loadMaiBotRefs = useCallback(async () => {
     if (!window.maibotDesktop?.modules || maibotRefsLoading) {
       return;
@@ -1467,6 +1592,9 @@ export function HomePanel({
 
     setMaibotRefsLoading(true);
     try {
+      if (moduleSourceConfig) {
+        await saveModuleSourceConfig();
+      }
       const [branches, tags] = await Promise.all([
         window.maibotDesktop.modules.listMaiBotBranches(),
         window.maibotDesktop.modules.listMaiBotTags(),
@@ -1491,7 +1619,7 @@ export function HomePanel({
     } finally {
       setMaibotRefsLoading(false);
     }
-  }, [maibotRefsLoading]);
+  }, [maibotRefsLoading, moduleSourceConfig, saveModuleSourceConfig]);
 
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
@@ -1618,15 +1746,7 @@ export function HomePanel({
     setBusy("maibot:update");
     setError(null);
     try {
-      const config = await window.maibotDesktop.modules.saveSourceConfig({
-        preset: moduleSourcePreset,
-        maibotUrl: customMaiBotUrl,
-        napcatAdapterUrl: customNapcatAdapterUrl,
-      });
-      setModuleSourceConfig(config);
-      setModuleSourcePreset(config.preset);
-      setCustomMaiBotUrl(config.maibotUrl);
-      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+      await saveModuleSourceConfig();
       await window.maibotDesktop.modules.updateMaiBot(target);
       toast.success("MaiBot 更新完成");
       setUpdateDialog(null);
@@ -1637,13 +1757,11 @@ export function HomePanel({
       setBusy(null);
     }
   }, [
-    customMaiBotUrl,
-    customNapcatAdapterUrl,
     maibotChannel,
     maibotTargets.stable,
     maibotTargets.test,
-    moduleSourcePreset,
     refreshSnapshot,
+    saveModuleSourceConfig,
     selectedMaiBotBranch,
     selectedMaiBotTag,
   ]);
@@ -1674,15 +1792,23 @@ export function HomePanel({
 
   return (
     <>
-      <div className={cn("h-full overflow-auto px-5 py-4 pb-24", active ? "block" : "hidden")}>
-        <div className="mx-auto grid max-w-[1480px] gap-4">
-          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="grid min-w-0 gap-4">
+      <div className={cn("h-full overflow-auto px-5 py-4", useRetroHome && "pb-24", !useRetroHome && "bg-background", active ? "block" : "hidden")}>
+        <div className={cn("mx-auto grid", useRetroHome ? "max-w-[1480px] gap-4" : "max-w-6xl gap-4")}>
+          <div
+            className={cn(
+              "grid",
+              useRetroHome
+                ? "grid-cols-[minmax(0,1fr)_minmax(300px,360px)] items-stretch gap-4"
+                : "grid-cols-[minmax(0,1fr)_minmax(280px,320px)] items-start gap-3",
+            )}
+          >
+            <div className={cn("grid min-w-0", useRetroHome ? "gap-4" : "gap-3")}>
               <MaiBotOverviewCard
                 latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
                 latestStable={snapshot.moduleVersions.maibotLatestStableTag}
                 localVersion={snapshot.moduleVersions.maibotLocal}
                 onUpdate={openMaiBotUpdate}
+                retro={useRetroHome}
                 service={maibot}
                 updateBusy={busy === "maibot:update"}
               />
@@ -1690,6 +1816,7 @@ export function HomePanel({
                 active={active}
                 maibotService={maibot}
                 onOpenFull={() => onOpenTab("localchat")}
+                retro={useRetroHome}
               />
               {messagePlatformConfigured ? (
                 <ServiceSummary
@@ -1699,6 +1826,7 @@ export function HomePanel({
                     onClick: () => onOpenPluginConfig(adapterPluginId),
                   }}
                   icon={null}
+                  retro={useRetroHome}
                   service={napcat}
                   serviceControls={napcat ? {
                     busy: serviceActionBusy?.startsWith(`${napcat.id}:`) ?? false,
@@ -1716,7 +1844,7 @@ export function HomePanel({
                   }}
                 />
               ) : (
-                <MessagePlatformConnectCard onClick={openMessagePlatformDialog} />
+                <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroHome} />
               )}
               <LauncherUpdateCard
                 appVersion={snapshot.appVersion}
@@ -1725,15 +1853,33 @@ export function HomePanel({
                 onCheckUpdate={() => void checkLauncherUpdate()}
                 onInstallUpdate={() => void installLauncherUpdate()}
                 onOpenRelease={openLauncherRelease}
+                retro={useRetroHome}
               />
             </div>
-            <HomeStatsPanel
-              onOpenQuickActions={() => setQuickActionsOpen(true)}
-              services={services}
-              snapshot={snapshot}
-            />
+            {useRetroHome ? (
+              <div className="flex min-h-full flex-col gap-4">
+                <HomeStatsPanel
+                  onOpenQuickActions={() => setQuickActionsOpen(true)}
+                  retro={useRetroHome}
+                  services={services}
+                  snapshot={snapshot}
+                />
+                <ElasticMascot
+                  onLongPress={onEnterFloatingMode}
+                  onSecretTap={handleMascotSecretTap}
+                  placement="retro-column"
+                />
+              </div>
+            ) : (
+              <HomeStatsPanel
+                onOpenQuickActions={() => setQuickActionsOpen(true)}
+                retro={useRetroHome}
+                services={services}
+                snapshot={snapshot}
+              />
+            )}
           </div>
-          <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} />
+          {!useRetroHome ? <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} /> : null}
         </div>
       </div>
 
@@ -1746,8 +1892,8 @@ export function HomePanel({
             tone="primary"
           />
           <DialogBody className="space-y-4">
-            <div className="retro-control flex items-center gap-4 p-4">
-              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-sm bg-background">
+            <div className={cn(useRetroHome ? "retro-control flex items-center gap-4 p-4" : "flex items-center gap-4 rounded-lg border border-border bg-muted/35 p-4")}>
+              <div className={cn("relative h-24 w-24 shrink-0 overflow-hidden bg-background", useRetroHome ? "rounded-sm" : "rounded-md")}>
                 <img
                   alt=""
                   className="absolute -right-7 -bottom-6 w-28 select-none"
@@ -1809,7 +1955,7 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && messagePlatformDialogOpen ? (
-              <div className="rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
@@ -1828,7 +1974,7 @@ export function HomePanel({
               ] as const).map((option) => (
                 <button
                   className={cn(
-                    "rounded-sm border p-3 text-left transition-colors",
+                    cn(useRetroHome ? "rounded-sm" : "rounded-lg", "border p-3 text-left transition-colors"),
                     messagePlatformBackend === option.backend
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
@@ -1855,7 +2001,7 @@ export function HomePanel({
               />
             </label>
             {qqBackendBusy ? (
-              <div className="rounded-sm border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 QQ 后端正在运行，请先停止后再新增或切换消息平台。
               </div>
             ) : null}
@@ -1890,18 +2036,18 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && updateDialog === "maibot" ? (
-              <div className="rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
-            <div className="retro-control grid gap-2 p-3 text-xs">
-              <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} />
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+              <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} />
-              <DetailRow label="测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} />
+              <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} retro={useRetroHome} />
+              <DetailRow label="测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
-              <div className="rounded-sm border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
+              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再执行更新。
               </div>
             ) : null}
@@ -1919,14 +2065,15 @@ export function HomePanel({
                   { value: "test", label: "测试版", version: maibotTargets.test },
                   { value: "other", label: "其他版本", version: maibotRefsLoading ? undefined : maibotTargets.other },
                 ]}
+                retro={useRetroHome}
               />
             </div>
             {maibotChannel === "other" ? (
-              <div className="retro-control grid gap-3 p-3 md:grid-cols-2">
+              <div className={cn(useRetroHome ? "retro-control grid gap-3 p-3 md:grid-cols-2" : "grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2")}>
                 <label className="grid gap-1.5 text-xs font-medium">
                   分支
                   <select
-                    className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
                     disabled={busy !== null || maibotRefsLoading}
                     onChange={(event) => {
                       setSelectedMaiBotBranch(event.target.value);
@@ -1947,7 +2094,7 @@ export function HomePanel({
                 <label className="grid gap-1.5 text-xs font-medium">
                   Tag
                   <select
-                    className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
                     disabled={busy !== null || maibotRefsLoading}
                     onChange={(event) => {
                       setSelectedMaiBotTag(event.target.value);
@@ -1967,7 +2114,7 @@ export function HomePanel({
                 </label>
               </div>
             ) : null}
-            <div className="retro-control grid gap-3 p-3">
+            <div className={cn(useRetroHome ? "retro-control grid gap-3 p-3" : "grid gap-3 rounded-lg border border-border bg-muted/40 p-3")}>
               <button
                 className="flex w-full items-center justify-between gap-3 text-left"
                 onClick={() => setModuleSourceExpanded((expanded) => !expanded)}
@@ -1983,16 +2130,23 @@ export function HomePanel({
                     <label className="grid gap-1.5 text-xs font-medium">
                       源预设
                       <select
-                        className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        disabled={busy !== null || !moduleSourceConfig}
+                        className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
+                        disabled={busy !== null || moduleSourceSaving || !moduleSourceConfig}
                         onChange={(event) => {
                           const preset = event.target.value as ModuleSourcePreset;
-                          setModuleSourcePreset(preset);
                           const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
+                          const nextMaiBotUrl = option?.maibotUrl ?? customMaiBotUrl;
+                          const nextNapcatAdapterUrl = option?.napcatAdapterUrl ?? customNapcatAdapterUrl;
+                          setModuleSourcePreset(preset);
                           if (option) {
-                            setCustomMaiBotUrl(option.maibotUrl);
-                            setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
+                            setCustomMaiBotUrl(nextMaiBotUrl);
+                            setCustomNapcatAdapterUrl(nextNapcatAdapterUrl);
                           }
+                          void saveModuleSourceConfig({
+                            preset,
+                            maibotUrl: nextMaiBotUrl,
+                            napcatAdapterUrl: nextNapcatAdapterUrl,
+                          }).catch((nextError: unknown) => setError(messageFromError(nextError)));
                         }}
                         value={moduleSourcePreset}
                       >
@@ -2007,21 +2161,32 @@ export function HomePanel({
                     <label className="grid gap-1.5 text-xs font-medium">
                       MaiBot 仓库
                       <Input
-                        disabled={busy !== null || moduleSourcePreset !== "custom"}
+                        disabled={busy !== null || moduleSourceSaving || moduleSourcePreset !== "custom"}
+                        onBlur={(event) => {
+                          if (moduleSourcePreset === "custom") {
+                            void saveModuleSourceConfig({
+                              preset: "custom",
+                              maibotUrl: event.currentTarget.value,
+                              napcatAdapterUrl: customNapcatAdapterUrl,
+                            }).catch((nextError: unknown) => setError(messageFromError(nextError)));
+                          }
+                        }}
                         onChange={(event) => setCustomMaiBotUrl(event.target.value)}
                         value={customMaiBotUrl}
                       />
                     </label>
                     <Button
-                      disabled={busy !== null}
+                      disabled={busy !== null || moduleSourceSaving}
                       onClick={() => {
-                        void reloadModuleSourceOptions();
-                        void loadMaiBotRefs();
+                        void (async () => {
+                          await reloadModuleSourceOptions();
+                          await loadMaiBotRefs();
+                        })().catch((nextError: unknown) => setError(messageFromError(nextError)));
                       }}
                       size="sm"
                       variant="ghost"
                     >
-                      <RefreshCw />
+                      <RefreshCw className={cn((maibotRefsLoading || moduleSourceSaving) && "animate-spin")} />
                       刷新
                     </Button>
                   </div>
@@ -2035,6 +2200,7 @@ export function HomePanel({
             <Button
               disabled={
                 busy !== null ||
+                moduleSourceSaving ||
                 maibotUpdateBlocked ||
                 !maibotTargets[maibotChannel] ||
                 (maibotChannel === "other" && maibotRefsLoading)
@@ -2064,18 +2230,18 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && updateDialog === "dashboard" ? (
-              <div className="rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
-            <div className="retro-control grid gap-2 p-3 text-xs">
-              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} />
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="最新正式版" value={dashboardTargets.stable} />
-              <DetailRow label="最新测试版" value={dashboardTargets.test} />
+              <DetailRow label="最新正式版" value={dashboardTargets.stable} retro={useRetroHome} />
+              <DetailRow label="最新测试版" value={dashboardTargets.test} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
-              <div className="rounded-sm border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
+              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再更新 WebUI 覆盖依赖。
               </div>
             ) : null}
@@ -2088,6 +2254,7 @@ export function HomePanel({
                   { value: "stable", label: "最新正式版", version: dashboardTargets.stable },
                   { value: "test", label: "最新测试版", version: dashboardTargets.test },
                 ]}
+                retro={useRetroHome}
               />
             </div>
           </DialogBody>

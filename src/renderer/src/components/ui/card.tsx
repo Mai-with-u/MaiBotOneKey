@@ -5,7 +5,7 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
   return (
     <div
       className={cn(
-        "retro-panel retro-panel-bare text-card-foreground",
+        "rounded-xl border border-border bg-card text-card-foreground",
         className,
       )}
       {...props}
@@ -26,7 +26,7 @@ export function CardTitle({
 }: React.HTMLAttributes<HTMLHeadingElement>): React.JSX.Element {
   return (
     <h3
-      className={cn("text-sm font-semibold leading-none", className)}
+      className={cn("text-sm font-semibold leading-none tracking-tight", className)}
       {...props}
     />
   );

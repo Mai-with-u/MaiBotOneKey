@@ -56,7 +56,7 @@ export function DialogContent({
         className={cn(
           "!fixed top-1/2 left-1/2 z-[100] grid w-[calc(100%-2rem)] max-h-[calc(100vh-3rem)]",
           "-translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)_auto]",
-          "retro-panel retro-panel-bare overflow-hidden text-card-foreground outline-none",
+          "overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           sizeStyles[size],
@@ -68,7 +68,7 @@ export function DialogContent({
         {showCloseButton ? (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute right-3 top-3 grid size-7 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="absolute right-3 top-3 grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <XIcon className="size-4" />
             <span className="sr-only">关闭</span>
@@ -114,7 +114,7 @@ export function DialogHeader({
       {icon ? (
         <span
           className={cn(
-            "grid size-9 shrink-0 place-items-center rounded-sm border border-current/20",
+            "grid size-9 shrink-0 place-items-center rounded-lg",
             headerTone[tone],
           )}
         >
@@ -122,7 +122,7 @@ export function DialogHeader({
         </span>
       ) : null}
       <div className="min-w-0 flex-1 pr-8">
-        <DialogPrimitive.Title className="text-base font-semibold leading-tight">
+        <DialogPrimitive.Title className="text-base font-semibold leading-tight tracking-tight">
           {title}
         </DialogPrimitive.Title>
         {description ? (
