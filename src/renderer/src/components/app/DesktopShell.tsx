@@ -9,13 +9,16 @@
   Puzzle,
   Radar,
   RefreshCw,
+  Server,
   Settings,
   Square,
   TerminalSquare,
 } from "lucide-react";
 import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import type {
   DesktopSnapshot,
+  PluginBuilderMode,
   ServiceDescriptor,
   ServiceId,
   ServiceStatus,
@@ -65,6 +68,49 @@ const statusDotColor: Record<ServiceStatus, string> = {
   stopping: "bg-warning",
   error: "bg-destructive",
 };
+
+const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
+const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
+
+function createOpenCodeSessionId(): string {
+  const randomId =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${OPENCODE_TERMINAL_SESSION_PREFIX}${randomId}`;
+}
+
+function joinDesktopPath(platform: NodeJS.Platform | undefined, root: string, ...segments: string[]): string {
+  const separator = platform === "win32" || root.includes("\\") ? "\\" : "/";
+  const cleanRoot = root.replace(/[\\/]+$/u, "");
+  const cleanSegments = segments.map((segment) => segment.replace(/^[\\/]+|[\\/]+$/gu, ""));
+  return [cleanRoot, ...cleanSegments].filter(Boolean).join(separator);
+}
+
+function opencodeExecutablePath(snapshot: DesktopSnapshot | null): string {
+  const platform = snapshot?.platform;
+  const filename = platform === "win32" ? "opencode.exe" : "opencode";
+  return joinDesktopPath(platform, snapshot?.paths.runtimeRoot ?? "runtime", "opencode", filename);
+}
+
+function opencodeLaunchEnv(snapshot: DesktopSnapshot): Record<string, string> {
+  const useBundledPluginInstructions = snapshot.openCodeSettings.useBundledPluginInstructions !== false;
+  const config: { autoupdate: false; instructions?: string[] } = { autoupdate: false };
+  const env: Record<string, string> = {};
+
+  if (useBundledPluginInstructions) {
+    config.instructions = [snapshot.paths.opencodePluginInstructionsPath];
+    env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
+  }
+
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
+  return env;
+}
+
+function readPluginBuilderMode(): PluginBuilderMode {
+  if (typeof window === "undefined") {
+    return "agent";
+  }
+  return window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY) === "nodes" ? "nodes" : "agent";
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -140,18 +186,20 @@ function WindowResizeHandles(): React.JSX.Element {
   );
 }
 
-function ServiceChip({
+function ServiceControlButtons({
   service,
   busy,
   onStart,
   onStop,
   onRestart,
+  className,
 }: {
   service: ServiceDescriptor;
   busy: boolean;
   onStart: (id: ServiceId) => void;
   onStop: (id: ServiceId) => void;
   onRestart: (id: ServiceId) => void;
+  className?: string;
 }): React.JSX.Element {
   const isTransitioning =
     service.status === "starting" || service.status === "stopping" || busy;
@@ -164,63 +212,87 @@ function ServiceChip({
   const stopDisabled = !canStop || (busy && !isStarting) || service.status === "stopping";
 
   return (
-    <div className="flex h-7 min-w-0 shrink-0 items-center gap-2 rounded-full border border-border bg-card pr-1 pl-2.5">
-      <span
-        aria-hidden
-        className={cn("size-1.5 shrink-0 rounded-full", statusDotColor[service.status])}
+    <div
+      className={cn("flex shrink-0 items-center gap-0.5", className)}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`启动 ${service.name}`}
+            disabled={!canStart || isTransitioning}
+            onClick={() => onStart(service.id)}
+            className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            {busy && canStart ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Play className="size-3" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>启动</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`停止 ${service.name}`}
+            disabled={stopDisabled}
+            onClick={() => onStop(service.id)}
+            className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            <Square className="size-3" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>停止</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`重启 ${service.name}`}
+            disabled={isTransitioning}
+            onClick={() => onRestart(service.id)}
+            className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            <RefreshCw className="size-3" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>重启</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+function ServiceTabControls({
+  service,
+  busy,
+  onStart,
+  onStop,
+  onRestart,
+}: {
+  service: ServiceDescriptor | undefined;
+  busy: boolean;
+  onStart: (id: ServiceId) => void;
+  onStop: (id: ServiceId) => void;
+  onRestart: (id: ServiceId) => void;
+}): React.JSX.Element | null {
+  if (!service) {
+    return null;
+  }
+
+  return (
+    <div className="flex h-full shrink-0 items-center border-l border-current/20 px-0.5">
+      <ServiceControlButtons
+        service={service}
+        busy={busy}
+        onStart={onStart}
+        onStop={onStop}
+        onRestart={onRestart}
       />
-      <span className="min-w-0 truncate text-[12px] font-medium">{service.name}</span>
-      <span className="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">
-        {statusText[service.status]}
-      </span>
-      <div className="ml-1 flex shrink-0 items-center gap-0.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`启动 ${service.name}`}
-              disabled={!canStart || isTransitioning}
-              onClick={() => onStart(service.id)}
-              className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              {busy && canStart ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Play className="size-3" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>启动</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`停止 ${service.name}`}
-              disabled={stopDisabled}
-              onClick={() => onStop(service.id)}
-              className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <Square className="size-3" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>停止</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`重启 ${service.name}`}
-              disabled={isTransitioning}
-              onClick={() => onRestart(service.id)}
-              className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <RefreshCw className="size-3" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>重启</TooltipContent>
-        </Tooltip>
-      </div>
     </div>
   );
 }
@@ -502,10 +574,59 @@ function FloatingShell({
   );
 }
 
+function PluginCodingAgentPanel({
+  isStartingOpenCode,
+  onStartOpenCode,
+  openCodePath,
+}: {
+  isStartingOpenCode: boolean;
+  onStartOpenCode: () => void;
+  openCodePath: string;
+}): React.JSX.Element {
+  return (
+    <section className="flex h-full min-h-0 bg-background">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 overflow-auto px-6 py-6">
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                <Code2 className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold">内置 Coding Agent</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  当前编写器默认使用代码代理模式，适合直接用自然语言描述插件需求。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid min-h-[360px] flex-1 place-items-center rounded-lg border border-dashed border-border bg-card/70 p-6 text-center">
+          <div className="max-w-md">
+            <Code2 className="mx-auto size-8 text-primary" />
+            <h3 className="mt-3 text-sm font-semibold">Coding Agent 工作区</h3>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              OpenCode 会在 MaiBot 目录中启动，终端页会自动切到对应会话。
+            </p>
+            <Button className="mt-4" disabled={isStartingOpenCode} onClick={onStartOpenCode} size="sm" variant="default">
+              {isStartingOpenCode ? <Loader2 className="size-4 animate-spin" /> : <TerminalSquare className="size-4" />}
+              启动 OpenCode
+            </Button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
   const [pluginMode, setPluginMode] = useState<"market" | "manage">("manage");
+  const [pluginBuilderMode, setPluginBuilderModeState] = useState<PluginBuilderMode>(() => readPluginBuilderMode());
+  const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
+  const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
   const [requestedConfigPluginId, setRequestedConfigPluginId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -514,6 +635,11 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const appearance = useAppearance();
   const theme = useTheme();
+
+  const setPluginBuilderMode = useCallback((mode: PluginBuilderMode) => {
+    setPluginBuilderModeState(mode);
+    window.localStorage.setItem(PLUGIN_BUILDER_MODE_STORAGE_KEY, mode);
+  }, []);
 
   const refreshSnapshot = useCallback(async () => {
     const next = await getDesktopSnapshot();
@@ -569,15 +695,17 @@ export function DesktopShell(): React.JSX.Element {
   const messagePlatformReady =
     snapshot?.initState.messagePlatformConfigured === true &&
     Boolean(snapshot.initState.qqAccount?.trim());
-  const visibleServiceChips = services.filter(
-    (service) => service.id === "maibot" || messagePlatformReady,
-  );
   const serviceById = useMemo(
     () => new Map(services.map((s) => [s.id, s])),
     [services],
   );
   const maibotService = serviceById.get("maibot");
+  const qqBackendService = serviceById.get("napcat");
+  const showQqBackendTab = messagePlatformReady && Boolean(qqBackendService);
+  const qqBackendDefaultUrl =
+    snapshot?.initState.qqBackend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui";
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
+  const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
   const canInterruptStartup =
     actionBusy === "all:start" ||
     services.some((service) => service.status === "starting");
@@ -690,6 +818,10 @@ export function DesktopShell(): React.JSX.Element {
       setActiveTab("home");
       return;
     }
+    if (value === "qqbackend" && !showQqBackendTab) {
+      setActiveTab("home");
+      return;
+    }
     if (value === "pluginmarket") {
       setPluginMode("market");
       setActiveTab("plugins");
@@ -705,7 +837,7 @@ export function DesktopShell(): React.JSX.Element {
       return;
     }
     setActiveTab(value);
-  }, [showTerminalTab]);
+  }, [showQqBackendTab, showTerminalTab]);
 
   const openPluginConfig = useCallback((pluginId: string) => {
     setPluginMode("manage");
@@ -713,21 +845,55 @@ export function DesktopShell(): React.JSX.Element {
     setActiveTab("plugins");
   }, []);
 
+  const openTerminalSession = useCallback((sessionId: string) => {
+    setTerminalFocusSessionId(sessionId);
+    setActiveTab("terminal");
+  }, []);
+
+  const startOpenCode = useCallback(async () => {
+    const bridge = window.maibotDesktop;
+    if (!bridge?.pty) {
+      toast.error("Electron 终端桥接未连接");
+      return;
+    }
+    if (!snapshot) {
+      toast.error("桌面状态还没有准备好");
+      return;
+    }
+    if (snapshot.terminalSettings.useEmbeddedTerminal !== true) {
+      toast.error("请先在设置中启用内嵌终端");
+      return;
+    }
+
+    setIsStartingOpenCode(true);
+    try {
+      const session = await bridge.pty.start({
+        id: createOpenCodeSessionId(),
+        title: "OpenCode 编写器",
+        cwd: snapshot.paths.maibotRoot,
+        command: [openCodePath, snapshot.paths.maibotRoot],
+        encoding: "utf8",
+        env: opencodeLaunchEnv(snapshot),
+      });
+      openTerminalSession(session.id);
+      toast.success("OpenCode 已在终端中启动");
+    } catch (error) {
+      toast.error(`OpenCode 启动失败：${errorMessage(error)}`);
+    } finally {
+      setIsStartingOpenCode(false);
+    }
+  }, [openCodePath, openTerminalSession, snapshot]);
+
   useEffect(() => {
     if (activeTab === "terminal" && !showTerminalTab) {
       setActiveTab("home");
     }
-  }, [activeTab, showTerminalTab]);
+    if (activeTab === "qqbackend" && !showQqBackendTab) {
+      setActiveTab("home");
+    }
+  }, [activeTab, showQqBackendTab, showTerminalTab]);
 
-  // Shortcuts
-  useShortcut("Mod+1", () => selectTab("home"));
-  useShortcut("Mod+2", () => selectTab("maibot"));
-  useShortcut("Mod+3", () => selectTab("localchat"));
-  useShortcut("Mod+4", () => selectTab("terminal"), { enabled: showTerminalTab });
-  useShortcut("Mod+5", () => selectTab("pluginmarket"));
-  useShortcut("Mod+6", () => selectTab("pluginmanage"));
-  useShortcut("Mod+7", () => selectTab("pluginbuilder"));
-  useShortcut("Mod+8", () => selectTab("settings"));
+  // Global shortcuts
   useShortcut("Mod+L", openLogs);
   useShortcut("Mod+Shift+S", startAll);
   useShortcut("Mod+Shift+X", stopAll);
@@ -781,155 +947,177 @@ export function DesktopShell(): React.JSX.Element {
             theme={theme}
           />
 
-          {/* Service strip */}
-          <div
-            className={cn(
-              "flex h-11 shrink-0 items-center gap-2 border-b border-border px-3",
-              appearance.liquidGlass ? "bg-transparent" : "bg-card",
-            )}
-            data-liquid-band={appearance.liquidGlass ? "true" : undefined}
-          >
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {visibleServiceChips.length === 0 ? (
-              <span className="text-[11px] text-muted-foreground">
-                等待服务发现…
-              </span>
-            ) : (
-              visibleServiceChips.map((service) => (
-                <ServiceChip
-                  key={service.id}
-                  service={service}
-                  busy={actionBusy?.startsWith(`${service.id}:`) ?? false}
-                  onStart={startService}
-                  onStop={stopService}
-                  onRestart={restartService}
-                />
-              ))
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  className="h-7 px-2.5 text-[11px]"
-                  onClick={() => selectTab("settings")}
-                  size="sm"
-                  variant={activeTab === "settings" ? "default" : "secondary"}
-                >
-                  <Settings />
-                  设置
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <span className="flex items-center gap-1">
-                  设置 <Kbd keys="Mod+8" size="xs" tone="inverse" />
-                </span>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={startAll}
-                  disabled={actionBusy !== null}
-                  className="h-7 px-2.5 text-[11px]"
-                >
-                  {actionBusy === "all:start" ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <Play />
-                  )}
-                  启动全部
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <span className="flex items-center gap-1">
-                  启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
-                </span>
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={stopAll}
-                  disabled={actionBusy !== null && !canInterruptStartup}
-                  className="h-7 px-2 text-[11px]"
-                >
-                  {actionBusy === "all:stop" ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <Square />
-                  )}
-                  停止
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <span className="flex items-center gap-1">
-                  停止全部 <Kbd keys="Mod+Shift+X" size="xs" tone="inverse" />
-                </span>
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </div>
+          {actionError ? (
+            <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive">
+              {actionError}
+            </div>
+          ) : null}
 
-        {actionError ? (
-          <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive">
-            {actionError}
-          </div>
-        ) : null}
-
-        {/* Main */}
-        <main className="flex min-h-0 flex-1 flex-col">
-          <Tabs
-            value={activeTab}
-            onValueChange={selectTab}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <div
-              className={cn(
-                "flex h-10 shrink-0 items-center gap-3 border-b border-border px-3",
-                appearance.liquidGlass ? "bg-transparent" : "bg-background",
-              )}
-              data-liquid-band={appearance.liquidGlass ? "true" : undefined}
+          {/* Main */}
+          <main className="flex min-h-0 flex-1 flex-col">
+            <Tabs
+              value={activeTab}
+              onValueChange={selectTab}
+              className="flex min-h-0 flex-1 flex-col"
             >
-              <TabsList className="h-8">
-                <TabsTrigger value="home" className="gap-1.5">
-                  <Home />
-                  首页
-                  <Kbd keys="Mod+1" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
-                <TabsTrigger value="maibot" className="gap-1.5">
-                  <Radar />
-                  MaiBot
-                  <Kbd keys="Mod+2" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
-                <TabsTrigger value="localchat" className="gap-1.5">
-                  <MessageSquare />
-                  随便聊聊
-                  <Kbd keys="Mod+3" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
-                {showTerminalTab ? (
-                  <TabsTrigger value="terminal" className="gap-1.5">
-                    <TerminalSquare />
-                    终端
-                    <Kbd keys="Mod+4" size="xs" tone="muted" className="ml-1" />
+              <div
+                className={cn(
+                  "flex h-10 shrink-0 items-center gap-3 border-b border-border px-3",
+                  appearance.liquidGlass ? "bg-transparent" : "bg-card",
+                )}
+                data-liquid-band={appearance.liquidGlass ? "true" : undefined}
+              >
+                <TabsList className="h-8 bg-card">
+                  <TabsTrigger value="home" className="gap-1.5">
+                    <Home />
+                    首页
                   </TabsTrigger>
-                ) : null}
-                <TabsTrigger value="plugins" className="gap-1.5">
-                  <Puzzle />
-                  插件
-                  <Kbd keys="Mod+5" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
-                <TabsTrigger value="pluginbuilder" className="gap-1.5">
-                  <Code2 />
-                  编写器
-                  <Kbd keys="Mod+7" size="xs" tone="muted" className="ml-1" />
-                </TabsTrigger>
-              </TabsList>
+                  <div
+                    className={cn(
+                      "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
+                      activeTab === "maibot" && "border-primary/45 bg-primary/15 text-primary shadow-sm",
+                    )}
+                  >
+                    <TabsTrigger
+                      value="maibot"
+                      className="h-full flex-none gap-1.5 border-0 bg-transparent px-2.5 text-inherit hover:text-inherit data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none"
+                    >
+                      <Radar />
+                      MaiBot
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          maibotService ? statusDotColor[maibotService.status] : "bg-muted-foreground/30",
+                        )}
+                      />
+                      <span className="hidden shrink-0 text-[10.5px] font-normal text-muted-foreground tabular-nums xl:inline">
+                        {maibotService ? statusText[maibotService.status] : "未发现"}
+                      </span>
+                    </TabsTrigger>
+                    <ServiceTabControls
+                      service={maibotService}
+                      busy={actionBusy?.startsWith("maibot:") ?? false}
+                      onStart={startService}
+                      onStop={stopService}
+                      onRestart={restartService}
+                    />
+                  </div>
+                  <TabsTrigger value="localchat" className="gap-1.5">
+                    <MessageSquare />
+                    聊聊
+                  </TabsTrigger>
+                  {showTerminalTab ? (
+                    <TabsTrigger value="terminal" className="gap-1.5">
+                      <TerminalSquare />
+                      终端
+                    </TabsTrigger>
+                  ) : null}
+                  <TabsTrigger value="plugins" className="gap-1.5">
+                    <Puzzle />
+                    插件
+                  </TabsTrigger>
+                  <TabsTrigger value="pluginbuilder" className="gap-1.5">
+                    <Code2 />
+                    编写器
+                  </TabsTrigger>
+                  {showQqBackendTab ? (
+                    <div
+                      className={cn(
+                        "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
+                        activeTab === "qqbackend" && "border-primary/45 bg-primary/15 text-primary shadow-sm",
+                      )}
+                    >
+                      <TabsTrigger
+                        value="qqbackend"
+                        className="h-full flex-none gap-1.5 border-0 bg-transparent px-2.5 text-inherit hover:text-inherit data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none"
+                      >
+                        <Server />
+                        {qqBackendService?.name ?? "QQ 后端"}
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "size-1.5 shrink-0 rounded-full",
+                            qqBackendService ? statusDotColor[qqBackendService.status] : "bg-muted-foreground/30",
+                          )}
+                        />
+                        <span className="hidden shrink-0 text-[10.5px] font-normal text-muted-foreground tabular-nums xl:inline">
+                          {qqBackendService ? statusText[qqBackendService.status] : "未发现"}
+                        </span>
+                      </TabsTrigger>
+                      <ServiceTabControls
+                        service={qqBackendService}
+                        busy={actionBusy?.startsWith("napcat:") ?? false}
+                        onStart={startService}
+                        onStop={stopService}
+                        onRestart={restartService}
+                      />
+                    </div>
+                  ) : null}
+                </TabsList>
               <div className="ml-auto flex shrink-0 items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      className="h-7 px-2.5 text-[11px]"
+                      onClick={() => selectTab("settings")}
+                      size="sm"
+                      variant={activeTab === "settings" ? "default" : "secondary"}
+                    >
+                      <Settings />
+                      设置
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    设置
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={startAll}
+                      disabled={actionBusy !== null}
+                      className="h-7 px-2.5 text-[11px]"
+                    >
+                      {actionBusy === "all:start" ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <Play />
+                      )}
+                      启动全部
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <span className="flex items-center gap-1">
+                      启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={stopAll}
+                      disabled={actionBusy !== null && !canInterruptStartup}
+                      className="h-7 px-2 text-[11px]"
+                    >
+                      {actionBusy === "all:stop" ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <Square />
+                      )}
+                      停止
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <span className="flex items-center gap-1">
+                      停止全部 <Kbd keys="Mod+Shift+X" size="xs" tone="inverse" />
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1004,6 +1192,7 @@ export function DesktopShell(): React.JSX.Element {
                 <TerminalPanel
                   active={activeTab === "terminal"}
                   recentLogs={snapshot?.recentLogs ?? []}
+                  requestedSessionId={terminalFocusSessionId}
                   services={services}
                   terminalSettings={snapshot?.terminalSettings}
                   maibotRoot={snapshot?.paths.maibotRoot}
@@ -1029,8 +1218,35 @@ export function DesktopShell(): React.JSX.Element {
               value="pluginbuilder"
               className="min-h-0 flex-1 overflow-hidden outline-none"
             >
-              <PluginBuilderPanel />
+              {pluginBuilderMode === "nodes" ? (
+                <PluginBuilderPanel
+                  isStartingOpenCode={isStartingOpenCode}
+                  onStartOpenCode={startOpenCode}
+                  openCodePath={openCodePath}
+                />
+              ) : (
+                <PluginCodingAgentPanel
+                  isStartingOpenCode={isStartingOpenCode}
+                  onStartOpenCode={startOpenCode}
+                  openCodePath={openCodePath}
+                />
+              )}
             </TabsContent>
+
+            {showQqBackendTab ? (
+              <TabsContent
+                forceMount
+                value="qqbackend"
+                className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+              >
+                <WebviewPanel
+                  active={activeTab === "qqbackend"}
+                  emptyText={`${qqBackendService?.name ?? "QQ 后端"} 启动后会在这里载入 WebUI。`}
+                  title={`${qqBackendService?.name ?? "QQ 后端"} WebUI`}
+                  url={qqBackendService?.url ?? qqBackendDefaultUrl}
+                />
+              </TabsContent>
+            ) : null}
 
             <TabsContent
               value="settings"
@@ -1040,6 +1256,8 @@ export function DesktopShell(): React.JSX.Element {
                 <SettingsStatusPanel
                   onOpenPluginConfig={openPluginConfig}
                   onSnapshot={setSnapshot}
+                  onPluginBuilderModeChange={setPluginBuilderMode}
+                  pluginBuilderMode={pluginBuilderMode}
                   snapshot={snapshot}
                 />
               ) : (

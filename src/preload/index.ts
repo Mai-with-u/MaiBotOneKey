@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   CloseAction,
+  AppIconId,
+  AppIconSettings,
   DesktopBridge,
   DesktopSnapshot,
   InitRepairResult,
@@ -48,6 +50,7 @@ import type {
   ManagedPythonPackageName,
   ModuleUpdateResult,
   NetworkProxySettings,
+  OpenCodeSettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -168,6 +171,10 @@ const desktopBridge: DesktopBridge = {
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) =>
       ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
+    saveOpenCodeSettings: (settings: OpenCodeSettings) =>
+      ipcRenderer.invoke("launcher:saveOpenCodeSettings", settings) as Promise<OpenCodeSettings>,
+    selectAppIcon: (iconId: AppIconId) =>
+      ipcRenderer.invoke("launcher:selectAppIcon", iconId) as Promise<AppIconSettings>,
     checkUpdate: () =>
       ipcRenderer.invoke("launcher:checkUpdate") as Promise<LauncherUpdateInfo>,
     downloadAndInstallUpdate: () =>
@@ -301,6 +308,7 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("pty:start", request) as Promise<PtySessionSnapshot>,
     stop: (request: PtyStopRequest) => ipcRenderer.invoke("pty:stop", request) as Promise<void>,
     kill: (sessionId: string) => ipcRenderer.invoke("pty:kill", sessionId) as Promise<void>,
+    close: (sessionId: string) => ipcRenderer.invoke("pty:close", sessionId) as Promise<void>,
     input: (request: PtyInputRequest) => ipcRenderer.invoke("pty:input", request) as Promise<void>,
     resize: (request: PtyResizeRequest) =>
       ipcRenderer.invoke("pty:resize", request) as Promise<void>,

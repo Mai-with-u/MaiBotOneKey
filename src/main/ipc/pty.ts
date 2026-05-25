@@ -59,6 +59,10 @@ export function registerPtyIpc({ manager, getMainWindow }: RegisterPtyIpcOptions
     manager.kill(sessionId);
   });
 
+  ipcMain.handle("pty:close", (_event, sessionId: string): void => {
+    manager.close(sessionId);
+  });
+
   ipcMain.handle("pty:clear", (_event, sessionId: string): void => {
     manager.clear(sessionId);
   });

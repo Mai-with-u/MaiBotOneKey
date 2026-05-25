@@ -496,6 +496,12 @@ export class PtySessionManager extends EventEmitter {
     this.getRequired(sessionId).kill();
   }
 
+  close(sessionId: string): void {
+    const session = this.getRequired(sessionId);
+    session.kill();
+    this.sessions.delete(sessionId);
+  }
+
   clear(sessionId: string): void {
     this.getRequired(sessionId).clear();
   }

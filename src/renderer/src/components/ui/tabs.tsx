@@ -26,11 +26,11 @@ export function TabsTrigger({
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "inline-flex h-7 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-xs font-medium leading-none transition-colors",
+        "inline-flex h-7 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-transparent px-3 text-xs font-medium leading-none transition-colors",
         "text-muted-foreground hover:text-foreground/90",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
         "disabled:pointer-events-none disabled:opacity-50",
-        "data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+        "data-[state=active]:border-primary/45 data-[state=active]:bg-primary/15 data-[state=active]:text-primary data-[state=active]:shadow-sm",
         "[&_svg]:size-3.5 [&_svg]:shrink-0",
         className,
       )}

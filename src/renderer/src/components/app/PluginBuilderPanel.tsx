@@ -1,11 +1,13 @@
 import {
   Boxes,
   Braces,
+  Check,
+  ChevronDown,
   Code2,
   Download,
   FileJson,
   FolderOpen,
-  Hammer,
+  AlertTriangle,
   Link2,
   Loader2,
   MessageSquare,
@@ -14,7 +16,6 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  RefreshCw,
   Redo2,
   Save,
   Settings2,
@@ -42,14 +43,22 @@ import type {
 import {
   buildMaiBotPluginBlueprintFiles,
   defaultMaiBotPluginFolderName,
+  isValidMaiBotPluginVersion,
   validateMaiBotPluginBlueprint,
 } from "@shared/plugin-blueprint";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   createMaiBotPluginFromBlueprint,
@@ -59,8 +68,6 @@ import {
   importPluginBuilderBlueprint,
   listPluginBuilderLibrary,
   loadPluginBuilderLibrary,
-  openPluginBuilderLibrary,
-  parseMaiBotPluginToBlueprint,
   savePluginBuilderLibrary,
   type InstalledPlugin,
   type PluginBlueprintCreateResponse,
@@ -139,8 +146,8 @@ const flowNodeLibraryGroups: Array<{
 ];
 const flowNodeTypes = flowNodeLibraryGroups.flatMap((group) => group.items);
 
-const hookEventTypes = ["ON_MESSAGE", "ON_START", "ON_STOP"];
 const BLUEPRINT_HISTORY_LIMIT = 50;
+const BUILDER_LIBRARY_AUTOSAVE_DELAY_MS = 1200;
 const COMPONENT_DRAG_MIME = "application/x-maibot-builder-component-kind";
 const FLOW_NODE_DRAG_MIME = "application/x-maibot-builder-flow-node-kind";
 
@@ -153,16 +160,15 @@ interface BlueprintIssue {
   nodeId?: string;
 }
 
-type BlueprintTemplateId = "hello_command" | "config_greeting" | "keyword_hook";
-
-const blueprintTemplates: Array<{ id: BlueprintTemplateId; label: string; description: string }> = [
-  { id: "hello_command", label: "Hello World 示例插件", description: "用户输入 /hello 时自动回复" },
-  { id: "config_greeting", label: "读取配置问候", description: "从 config.toml 读取回复文本" },
-  { id: "keyword_hook", label: "关键词 Hook", description: "收到消息事件时按关键词回复" },
-];
+type BlueprintAutoSaveStatus = "idle" | "saving" | "saved" | "error";
 
 function nextId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
 function createFlowNode(kind: MaiBotPluginBlueprintFlowNodeKind): MaiBotPluginBlueprintFlowNode {
@@ -215,7 +221,7 @@ function createFlowNode(kind: MaiBotPluginBlueprintFlowNodeKind): MaiBotPluginBl
     return {
       id: nextId("flow"),
       kind,
-      label: "??",
+      label: "且",
       leftValue: "True",
       operator: "and",
       rightValue: "False",
@@ -305,7 +311,7 @@ function inspectBlueprintIssues(blueprint: MaiBotPluginBlueprint, validationErro
       id: "no-components",
       level: "warning",
       title: "还没有入口组件",
-      detail: "至少添加一个 Tool、Command 或 Hook，插件才能运行。",
+      detail: "至少添加一个 Tool 或 Command，插件才能运行。",
     });
   }
 
@@ -407,7 +413,6 @@ function createDefaultBlueprint(): MaiBotPluginBlueprint {
         kind: "tool",
         name: "send_greeting",
         description: "Send a greeting to current chat",
-        detail: "Call this when you want to greet the user.",
         responseText: "Hello, nice to meet you.",
         parameters: [
           {
@@ -440,131 +445,90 @@ function createDefaultBlueprint(): MaiBotPluginBlueprint {
   };
 }
 
-function createTemplateBlueprint(templateId: BlueprintTemplateId): MaiBotPluginBlueprint {
-  const blueprint = createDefaultBlueprint();
-  if (templateId === "hello_command") {
-    return {
-      ...blueprint,
-      manifest: {
-        ...blueprint.manifest,
-        pluginId: "com.example.hello-command",
-        folderName: "com_example_hello_command",
-        name: "Hello Command",
-        description: "Command plugin that replies to /hello",
-        capabilities: ["send.text"],
-      },
-      components: [
-        {
-          id: nextId("command"),
-          kind: "command",
-          name: "hello",
-          description: "Reply when user enters /hello",
-          trigger: "^/hello$",
-          responseText: "Hello, I am ready.",
-          flowNodes: [
-            { id: "tpl-hello-send", kind: "send_text", label: "Reply greeting", value: "Hello, I am ready." },
-            { id: "tpl-hello-return", kind: "return_success", label: "Finish success" },
-          ],
-          flowEdges: [{ id: "tpl-hello-edge", fromNodeId: "tpl-hello-send", toNodeId: "tpl-hello-return" }],
-        },
-      ],
-      configFields: [],
-    };
+function builderLibraryHasIdentity(
+  library: MaiBotPluginBuilderLibraryListResult | null,
+  pluginId: string,
+): boolean {
+  const normalizedPluginId = pluginId.trim();
+  const folderName = defaultMaiBotPluginFolderName(normalizedPluginId);
+  return library?.plugins.some((plugin) => plugin.pluginId === normalizedPluginId || plugin.folderName === folderName) ?? false;
+}
+
+function nextBuilderBlueprintIdentity(
+  library: MaiBotPluginBuilderLibraryListResult | null,
+  basePluginId: string,
+  baseName: string,
+): { pluginId: string; name: string } {
+  const cleanBasePluginId = basePluginId.trim() || "com.example.visual-plugin";
+  const cleanBaseName = baseName.trim() || "Visual Plugin";
+
+  for (let index = 1; index < 10000; index += 1) {
+    const suffix = index === 1 ? "" : `-${index}`;
+    const pluginId = `${cleanBasePluginId}${suffix}`;
+    if (!builderLibraryHasIdentity(library, pluginId)) {
+      return {
+        pluginId,
+        name: index === 1 ? cleanBaseName : `${cleanBaseName} ${index}`,
+      };
+    }
   }
-  if (templateId === "config_greeting") {
-    return {
-      ...blueprint,
-      manifest: {
-        ...blueprint.manifest,
-        pluginId: "com.example.config-greeting",
-        folderName: "com_example_config_greeting",
-        name: "Config Greeting",
-        description: "Read greeting from config and send it",
-        capabilities: ["send.text", "config.get"],
-      },
-      components: [
-        {
-          id: nextId("command"),
-          kind: "command",
-          name: "greeting",
-          description: "输入 /greeting 后读取配置问候语",
-          trigger: "^/greeting$",
-          responseText: "你好",
-          flowNodes: [
-            { id: "tpl-config-read", kind: "read_config", label: "读取问语设置", configPath: "greeting.message" },
-            { id: "tpl-config-send", kind: "send_text", label: "发问候语", value: "你好" },
-            { id: "tpl-config-return", kind: "return_success", label: "Finish success" },
-          ],
-          flowEdges: [
-            { id: "tpl-config-edge-1", fromNodeId: "tpl-config-read", toNodeId: "tpl-config-send" },
-            { id: "tpl-config-edge-2", fromNodeId: "tpl-config-send", toNodeId: "tpl-config-return" },
-          ],
-        },
-      ],
-      configFields: [
-        {
-          id: nextId("field"),
-          section: "greeting",
-          name: "message",
-          type: "string",
-          label: "问语",
-          description: "Greeting text replied by the bot",
-          defaultValue: "Hello, nice to meet you.",
-        },
-      ],
-    };
-  }
+
+  const fallbackSuffix = Date.now().toString(36);
+  return {
+    pluginId: `${cleanBasePluginId}-${fallbackSuffix}`,
+    name: `${cleanBaseName} ${fallbackSuffix}`,
+  };
+}
+
+function withBuilderBlueprintIdentity(
+  blueprint: MaiBotPluginBlueprint,
+  identity: { pluginId: string; name: string },
+): MaiBotPluginBlueprint {
   return {
     ...blueprint,
     manifest: {
       ...blueprint.manifest,
-      pluginId: "com.example.keyword-reply",
-      folderName: "com_example_keyword_reply",
-      name: "Keyword Reply",
-      description: "收到消息事件后执行关键词回复流程",
-      capabilities: ["send.text", "event.message"],
+      pluginId: identity.pluginId,
+      folderName: defaultMaiBotPluginFolderName(identity.pluginId),
+      name: identity.name,
     },
-    components: [
-      {
-        id: nextId("hook"),
-        kind: "hook",
-        name: "keyword_reply",
-        description: "收到消息后执行回复辑",
-        eventType: "ON_MESSAGE",
-        responseText: "关键词已收到",
-        flowNodes: [
-          { id: "tpl-keyword-note", kind: "comment", label: "??", value: "Add keyword checks here" },
-          { id: "tpl-keyword-send", kind: "send_text", label: "Reply message", value: "Keyword received." },
-          { id: "tpl-keyword-return", kind: "return_success", label: "Finish success" },
-        ],
-        flowEdges: [
-          { id: "tpl-keyword-edge-1", fromNodeId: "tpl-keyword-note", toNodeId: "tpl-keyword-send" },
-          { id: "tpl-keyword-edge-2", fromNodeId: "tpl-keyword-send", toNodeId: "tpl-keyword-return" },
-        ],
-      },
-    ],
-    configFields: [],
   };
 }
 
-export function PluginBuilderPanel(): React.JSX.Element {
+function createNewBuilderBlueprint(library: MaiBotPluginBuilderLibraryListResult | null): MaiBotPluginBlueprint {
+  const blueprint = createDefaultBlueprint();
+  return withBuilderBlueprintIdentity(
+    blueprint,
+    nextBuilderBlueprintIdentity(library, blueprint.manifest.pluginId, blueprint.manifest.name),
+  );
+}
+
+export function PluginBuilderPanel({
+  isStartingOpenCode = false,
+  onStartOpenCode,
+  openCodePath,
+}: {
+  isStartingOpenCode?: boolean;
+  onStartOpenCode?: () => void;
+  openCodePath?: string;
+} = {}): React.JSX.Element {
   const [blueprint, setBlueprintState] = useState<MaiBotPluginBlueprint>(() => createDefaultBlueprint());
   const [blueprintPast, setBlueprintPast] = useState<MaiBotPluginBlueprint[]>([]);
   const [blueprintFuture, setBlueprintFuture] = useState<MaiBotPluginBlueprint[]>([]);
-  const [overwrite, setOverwrite] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [parsing, setParsing] = useState(false);
+  const [confirmOverwriteOpen, setConfirmOverwriteOpen] = useState(false);
   const [libraryBusy, setLibraryBusy] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<BlueprintAutoSaveStatus>("idle");
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
   const [builderLibrary, setBuilderLibrary] = useState<MaiBotPluginBuilderLibraryListResult | null>(null);
   const [selectedBuilderPluginId, setSelectedBuilderPluginId] = useState("");
-  const [selectedPluginId, setSelectedPluginId] = useState("");
   const [lastResult, setLastResult] = useState<PluginBlueprintCreateResponse | null>(null);
   const [activeFile, setActiveFile] = useState("_manifest.json");
-  const [isManifestPanelOpen, setIsManifestPanelOpen] = useState(true);
   const [isFilePreviewOpen, setIsFilePreviewOpen] = useState(false);
   const [activeComponentId, setActiveComponentId] = useState<string | null>(null);
   const [focusedFlowNodeId, setFocusedFlowNodeId] = useState<string | null>(null);
+  const didAutoLoadBuilderRef = useRef(false);
+  const lastAutoSavedBlueprintRef = useRef("");
 
   const setBlueprint = useCallback((action: React.SetStateAction<MaiBotPluginBlueprint>) => {
     setBlueprintState((current) => {
@@ -609,6 +573,7 @@ export function PluginBuilderPanel(): React.JSX.Element {
   }, []);
 
   const files = useMemo(() => buildMaiBotPluginBlueprintFiles(blueprint), [blueprint]);
+  const serializedBlueprint = useMemo(() => JSON.stringify(blueprint), [blueprint]);
   const errors = useMemo(() => validateMaiBotPluginBlueprint(blueprint), [blueprint]);
   const blueprintIssues = useMemo(() => inspectBlueprintIssues(blueprint, errors), [blueprint, errors]);
   const selectedFile = files.find((file) => file.relativePath === activeFile) ?? files[0];
@@ -621,21 +586,12 @@ export function PluginBuilderPanel(): React.JSX.Element {
       || plugin.path.split(/[\\/]+/u).at(-1) === folderName
     );
   }, [blueprint.manifest.folderName, blueprint.manifest.pluginId, installedPlugins]);
-  const saveButtonText = existingPlugin ? "Update and overwrite" : "Generate plugin";
-  const localBuilderPlugin = useMemo(() => {
-    const pluginId = blueprint.manifest.pluginId.trim();
-    const folderName = (blueprint.manifest.folderName ?? defaultMaiBotPluginFolderName(pluginId)).trim();
-    return builderLibrary?.plugins.find((plugin) => plugin.pluginId === pluginId || plugin.folderName === folderName);
-  }, [blueprint.manifest.folderName, blueprint.manifest.pluginId, builderLibrary]);
+  const saveButtonText = "生成插件";
   const selectedBuilderPlugin = useMemo(
     () => builderLibrary?.plugins.find((plugin) => plugin.pluginId === selectedBuilderPluginId) ?? null,
     [builderLibrary, selectedBuilderPluginId],
   );
-  const activeComponent = useMemo(
-    () => blueprint.components.find((component) => component.id === activeComponentId) ?? null,
-    [activeComponentId, blueprint.components],
-  );
-  const canSave = !saving && errors.length === 0 && (!existingPlugin || overwrite);
+  const canSave = !saving && errors.length === 0;
 
   useEffect(() => {
     if (!selectedFile && files[0]) {
@@ -645,8 +601,7 @@ export function PluginBuilderPanel(): React.JSX.Element {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) {
+      if (isEditableKeyboardTarget(event.target)) {
         return;
       }
       if (!(event.ctrlKey || event.metaKey)) {
@@ -668,7 +623,6 @@ export function PluginBuilderPanel(): React.JSX.Element {
     try {
       const installed = await fetchInstalledPlugins();
       setInstalledPlugins(installed);
-      setSelectedPluginId((current) => current || installed[0]?.id || "");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -692,6 +646,55 @@ export function PluginBuilderPanel(): React.JSX.Element {
     void loadBuilderLibrary();
   }, [loadBuilderLibrary]);
 
+  useEffect(() => {
+    if (didAutoLoadBuilderRef.current || !builderLibrary) {
+      return undefined;
+    }
+    if (builderLibrary.plugins.length === 0) {
+      didAutoLoadBuilderRef.current = true;
+      return undefined;
+    }
+    if (!selectedBuilderPluginId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    didAutoLoadBuilderRef.current = true;
+    setLibraryBusy(true);
+    void loadPluginBuilderLibrary(selectedBuilderPluginId)
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        setBlueprintState(result.blueprint);
+        lastAutoSavedBlueprintRef.current = JSON.stringify(result.blueprint);
+        setAutoSaveStatus("idle");
+        setBlueprintPast([]);
+        setBlueprintFuture([]);
+        setSelectedBuilderPluginId(result.item.pluginId);
+        setLastResult(null);
+        setActiveFile("_manifest.json");
+        setActiveComponentId(null);
+        setFocusedFlowNodeId(null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        didAutoLoadBuilderRef.current = false;
+        toast.error(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLibraryBusy(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [builderLibrary, selectedBuilderPluginId]);
+
   const updateManifest = useCallback((patch: Partial<MaiBotPluginBlueprint["manifest"]>) => {
     setBlueprint((current) => ({
       ...current,
@@ -701,16 +704,13 @@ export function PluginBuilderPanel(): React.JSX.Element {
 
   const updatePluginId = useCallback((pluginId: string) => {
     setBlueprint((current) => {
-      const previousDefaultFolder = defaultMaiBotPluginFolderName(current.manifest.pluginId);
       const nextDefaultFolder = defaultMaiBotPluginFolderName(pluginId);
-      const keepCustomFolder =
-        current.manifest.folderName && current.manifest.folderName !== previousDefaultFolder;
       return {
         ...current,
         manifest: {
           ...current.manifest,
           pluginId,
-          folderName: keepCustomFolder ? current.manifest.folderName : nextDefaultFolder,
+          folderName: nextDefaultFolder,
         },
       };
     });
@@ -721,22 +721,8 @@ export function PluginBuilderPanel(): React.JSX.Element {
       ...current,
       components: [
         ...current.components,
-        kind === "tool"
+        kind === "command"
           ? {
-              id: nextId("tool"),
-              kind: "tool",
-              name: "new_tool",
-              description: "新的工具节点",
-              detail: "工具的详细说明",
-              responseText: "工具已执行。",
-              parameters: [],
-              flowNodes: [
-                createFlowNode("send_text"),
-                createFlowNode("return_success"),
-              ],
-            }
-          : kind === "command"
-            ? {
               id: nextId("command"),
               kind: "command",
               name: "new_command",
@@ -748,13 +734,13 @@ export function PluginBuilderPanel(): React.JSX.Element {
                 createFlowNode("return_success"),
               ],
             }
-            : {
-              id: nextId("hook"),
-              kind: "hook",
-              name: "message_hook",
-              description: "收到消息时触发",
-              eventType: "ON_MESSAGE",
-              responseText: "Hook 已触发。",
+          : {
+              id: nextId("tool"),
+              kind: "tool",
+              name: "new_tool",
+              description: "新的工具节点",
+              responseText: "工具已执行。",
+              parameters: [],
               flowNodes: [
                 createFlowNode("send_text"),
                 createFlowNode("return_success"),
@@ -919,7 +905,7 @@ export function PluginBuilderPanel(): React.JSX.Element {
           section: "settings",
           name: "value",
           type: "string",
-          label: "??",
+          label: "字段",
           description: "配置说明",
           defaultValue: "",
         },
@@ -941,14 +927,10 @@ export function PluginBuilderPanel(): React.JSX.Element {
     }));
   }, []);
 
-  const savePlugin = useCallback(async () => {
-    if (errors.length > 0) {
-      toast.error(errors[0]);
-      return;
-    }
+  const generatePlugin = useCallback(async (allowOverwrite: boolean) => {
     setSaving(true);
     try {
-      const result = await createMaiBotPluginFromBlueprint(blueprint, overwrite);
+      const result = await createMaiBotPluginFromBlueprint(blueprint, allowOverwrite);
       setLastResult(result);
       toast.success(result.overwritten ? "插件已更新并覆盖" : "插件已生成");
     } catch (error) {
@@ -956,32 +938,19 @@ export function PluginBuilderPanel(): React.JSX.Element {
     } finally {
       setSaving(false);
     }
-  }, [blueprint, errors, overwrite]);
+  }, [blueprint]);
 
-  const parseExistingPlugin = useCallback(async () => {
-    if (!selectedPluginId) {
-      toast.error("请选择要解析的插件");
+  const savePlugin = useCallback(() => {
+    if (errors.length > 0) {
+      toast.error(errors[0]);
       return;
     }
-    setParsing(true);
-    try {
-      const result = await parseMaiBotPluginToBlueprint(selectedPluginId);
-      setBlueprint(result.blueprint);
-      setOverwrite(true);
-      setLastResult(null);
-      setActiveFile("_manifest.json");
-      const unsupported = result.parsed.unsupportedDecorators.length > 0
-        ? `，暂未节点化：${result.parsed.unsupportedDecorators.join(", ")}`
-        : "";
-      toast.success(
-        `已解析 ${result.parsed.tools} 个 Tool、${result.parsed.commands} 个 Command、${result.parsed.configFields} 个配置项${unsupported}`,
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setParsing(false);
+    if (existingPlugin) {
+      setConfirmOverwriteOpen(true);
+      return;
     }
-  }, [selectedPluginId]);
+    void generatePlugin(false);
+  }, [errors, existingPlugin, generatePlugin]);
 
   const saveToBuilderLibrary = useCallback(async () => {
     if (errors.length > 0) {
@@ -991,6 +960,8 @@ export function PluginBuilderPanel(): React.JSX.Element {
     setLibraryBusy(true);
     try {
       const result = await savePluginBuilderLibrary(blueprint, true);
+      lastAutoSavedBlueprintRef.current = JSON.stringify(blueprint);
+      setAutoSaveStatus("saved");
       await loadBuilderLibrary();
       setSelectedBuilderPluginId(result.item.pluginId);
       toast.success(result.overwritten ? "已更新编写器本地插件" : "已保存到编写器本地插件库");
@@ -1001,30 +972,36 @@ export function PluginBuilderPanel(): React.JSX.Element {
     }
   }, [blueprint, errors, loadBuilderLibrary]);
 
-  const loadFromBuilderLibrary = useCallback(async () => {
-    if (!selectedBuilderPluginId) {
-      toast.error("请择本地插件");
+  const loadFromBuilderLibrary = useCallback(async (pluginId: string) => {
+    if (!pluginId) {
+      setSelectedBuilderPluginId("");
       return;
     }
+    setSelectedBuilderPluginId(pluginId);
     setLibraryBusy(true);
     try {
-      const result = await loadPluginBuilderLibrary(selectedBuilderPluginId);
-      setBlueprint(result.blueprint);
+      const result = await loadPluginBuilderLibrary(pluginId);
+      setBlueprintState(result.blueprint);
+      lastAutoSavedBlueprintRef.current = JSON.stringify(result.blueprint);
+      setAutoSaveStatus("idle");
+      setBlueprintPast([]);
+      setBlueprintFuture([]);
       setSelectedBuilderPluginId(result.item.pluginId);
-      setOverwrite(true);
       setLastResult(null);
       setActiveFile("_manifest.json");
-      toast.success(`已打弢 ${result.item.name}`);
+      setActiveComponentId(null);
+      setFocusedFlowNodeId(null);
+      toast.success(`已打开 ${result.item.name}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setLibraryBusy(false);
     }
-  }, [selectedBuilderPluginId]);
+  }, []);
 
   const deleteFromBuilderLibrary = useCallback(async () => {
     if (!selectedBuilderPluginId) {
-      toast.error("请择本地插件");
+      toast.error("请选择本地插件");
       return;
     }
     setLibraryBusy(true);
@@ -1040,59 +1017,46 @@ export function PluginBuilderPanel(): React.JSX.Element {
     }
   }, [loadBuilderLibrary, selectedBuilderPluginId]);
 
-  const createNewBuilderProject = useCallback(() => {
-    setBlueprint(createDefaultBlueprint());
-    setSelectedBuilderPluginId("");
-    setOverwrite(false);
-    setLastResult(null);
-    setActiveFile("_manifest.json");
-    setActiveComponentId(null);
-    setFocusedFlowNodeId(null);
-    setIsManifestPanelOpen(true);
-    toast.success("Created a new plugin blueprint");
-  }, []);
-
-  const applyBlueprintTemplate = useCallback((templateId: BlueprintTemplateId) => {
-    setBlueprint(createTemplateBlueprint(templateId));
-    setSelectedBuilderPluginId("");
-    setOverwrite(false);
-    setLastResult(null);
-    setActiveFile("_manifest.json");
-    setActiveComponentId(null);
-    setFocusedFlowNodeId(null);
-    toast.success("Applied plugin template");
-  }, []);
-
-  const selectBlueprintIssue = useCallback((issue: BlueprintIssue) => {
-    if (issue.componentId) {
-      setActiveComponentId(issue.componentId);
-      setFocusedFlowNodeId(issue.nodeId ?? null);
-      setIsManifestPanelOpen(true);
-      return;
+  useEffect(() => {
+    const selectedPluginMatchesBlueprint = selectedBuilderPlugin?.pluginId === blueprint.manifest.pluginId.trim();
+    if (
+      !selectedBuilderPluginId
+      || !selectedBuilderPlugin
+      || !selectedPluginMatchesBlueprint
+      || errors.length > 0
+      || serializedBlueprint === lastAutoSavedBlueprintRef.current
+    ) {
+      return undefined;
     }
+
+    setAutoSaveStatus("saving");
+    const timeoutId = window.setTimeout(() => {
+      void savePluginBuilderLibrary(blueprint, true)
+        .then((result) => {
+          lastAutoSavedBlueprintRef.current = serializedBlueprint;
+          setSelectedBuilderPluginId(result.item.pluginId);
+          setAutoSaveStatus("saved");
+          void loadBuilderLibrary();
+        })
+        .catch((error) => {
+          setAutoSaveStatus("error");
+          toast.error(error instanceof Error ? error.message : String(error));
+        });
+    }, BUILDER_LIBRARY_AUTOSAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [blueprint, errors.length, loadBuilderLibrary, selectedBuilderPlugin, selectedBuilderPluginId, serializedBlueprint]);
+
+  const createNewBuilderProject = useCallback(() => {
+    setBlueprint(createNewBuilderBlueprint(builderLibrary));
+    setSelectedBuilderPluginId("");
+    setAutoSaveStatus("idle");
+    setLastResult(null);
+    setActiveFile("_manifest.json");
     setActiveComponentId(null);
     setFocusedFlowNodeId(null);
-    setIsManifestPanelOpen(true);
-  }, []);
-
-  const duplicateCurrentBuilderProject = useCallback(() => {
-    const suffix = Date.now().toString(36).slice(-4);
-    const basePluginId = blueprint.manifest.pluginId.replace(/\.copy(?:-[a-z0-9]+)?$/u, "");
-    const nextPluginId = `${basePluginId}.copy-${suffix}`;
-    setBlueprint((current) => ({
-      ...current,
-      manifest: {
-        ...current.manifest,
-        pluginId: nextPluginId,
-        folderName: defaultMaiBotPluginFolderName(nextPluginId),
-        name: `${current.manifest.name || "Visual Plugin"} Copy`,
-      },
-    }));
-    setSelectedBuilderPluginId("");
-    setOverwrite(false);
-    setLastResult(null);
-    toast.success("已复制为新蓝图，保存后会成为独立本地项目");
-  }, [blueprint.manifest.pluginId]);
+    toast.success("Created a new plugin blueprint");
+  }, [builderLibrary]);
 
   const exportCurrentBuilderBlueprint = useCallback(async () => {
     if (errors.length > 0) {
@@ -1121,8 +1085,9 @@ export function PluginBuilderPanel(): React.JSX.Element {
       }
       await loadBuilderLibrary();
       setBlueprint(result.blueprint);
+      lastAutoSavedBlueprintRef.current = JSON.stringify(result.blueprint);
+      setAutoSaveStatus("idle");
       setSelectedBuilderPluginId(result.item.pluginId);
-      setOverwrite(true);
       setLastResult(null);
       setActiveFile("_manifest.json");
       setActiveComponentId(null);
@@ -1133,10 +1098,6 @@ export function PluginBuilderPanel(): React.JSX.Element {
       setLibraryBusy(false);
     }
   }, [loadBuilderLibrary]);
-
-  const openBuilderLibraryDirectory = useCallback(() => {
-    void openPluginBuilderLibrary();
-  }, []);
 
   const openLastDirectory = useCallback(() => {
     if (lastResult) {
@@ -1149,44 +1110,38 @@ export function PluginBuilderPanel(): React.JSX.Element {
   }, []);
 
   return (
+    <>
     <div className="h-full min-h-0 overflow-hidden bg-background">
       <div className="flex h-full min-h-0 flex-col">
         <PluginBuilderProjectBar
+          autoSaveStatus={autoSaveStatus}
           builderLibrary={builderLibrary}
           canGenerate={canSave}
-          currentProject={localBuilderPlugin ?? null}
           hasGeneratedPlugin={Boolean(lastResult)}
-          installedPlugins={installedPlugins}
           isFilePreviewOpen={isFilePreviewOpen}
+          isStartingOpenCode={isStartingOpenCode}
           libraryBusy={libraryBusy}
-          parsing={parsing}
+          openCodePath={openCodePath}
           pluginId={blueprint.manifest.pluginId}
           saving={saving}
           saveButtonText={saveButtonText}
           selectedBuilderPlugin={selectedBuilderPlugin}
           selectedBuilderPluginId={selectedBuilderPluginId}
-          selectedPluginId={selectedPluginId}
           canExport={errors.length === 0}
           canRedo={blueprintFuture.length > 0}
           canUndo={blueprintPast.length > 0}
           issues={blueprintIssues}
-          onApplyTemplate={applyBlueprintTemplate}
           onCreateNew={createNewBuilderProject}
           onDelete={() => void deleteFromBuilderLibrary()}
-          onDuplicate={duplicateCurrentBuilderProject}
           onExport={() => void exportCurrentBuilderBlueprint()}
           onGenerate={() => void savePlugin()}
           onImport={() => void importBuilderBlueprintFile()}
-          onIssueSelect={selectBlueprintIssue}
-          onLoad={() => void loadFromBuilderLibrary()}
           onOpenDocs={openDocs}
           onOpenLastDirectory={openLastDirectory}
-          onOpenLibrary={openBuilderLibraryDirectory}
-          onParse={() => void parseExistingPlugin()}
+          onStartOpenCode={onStartOpenCode}
           onRedo={redoBlueprint}
           onSave={() => void saveToBuilderLibrary()}
-          onSelectBuilderPlugin={setSelectedBuilderPluginId}
-          onSelectInstalledPlugin={setSelectedPluginId}
+          onSelectBuilderPlugin={(pluginId) => void loadFromBuilderLibrary(pluginId)}
           onToggleFilePreview={() => setIsFilePreviewOpen((open) => !open)}
           onUndo={undoBlueprint}
         />
@@ -1194,70 +1149,14 @@ export function PluginBuilderPanel(): React.JSX.Element {
         <div
           className={cn(
             "grid min-h-0 flex-1 overflow-hidden",
-            isManifestPanelOpen && isFilePreviewOpen && "grid-cols-[340px_minmax(520px,1fr)_minmax(360px,0.85fr)]",
-            isManifestPanelOpen && !isFilePreviewOpen && "grid-cols-[340px_minmax(520px,1fr)]",
-            !isManifestPanelOpen && isFilePreviewOpen && "grid-cols-[52px_minmax(520px,1fr)_minmax(360px,0.85fr)]",
-            !isManifestPanelOpen && !isFilePreviewOpen && "grid-cols-[52px_minmax(520px,1fr)]",
+            isFilePreviewOpen ? "grid-cols-[minmax(520px,1fr)_minmax(360px,0.85fr)]" : "grid-cols-[minmax(520px,1fr)]",
           )}
         >
-          <aside className="min-h-0 overflow-auto border-r border-border bg-card">
-            {isManifestPanelOpen ? (
-              <div className="flex min-h-full flex-col">
-                <div className="sticky top-0 z-20 flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
-                  <FileJson className="size-4 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-semibold">
-                    {activeComponent ? "组件元信息" : "Manifest"}
-                  </span>
-                  <Button
-                    aria-label="折叠左侧元信息面板"
-                    onClick={() => setIsManifestPanelOpen(false)}
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <PanelLeftClose className="size-3.5" />
-                  </Button>
-                </div>
-                <div className="grid gap-4 p-4">
-                  {activeComponent ? (
-                    <ComponentMetaEditor
-                      component={activeComponent}
-                      onAddParameter={addParameter}
-                      onBack={() => setActiveComponentId(null)}
-                      onChange={updateComponent}
-                      onParameterChange={updateParameter}
-                      onParameterRemove={removeParameter}
-                      onRemove={removeComponent}
-                    />
-                  ) : (
-                    <ManifestEditor
-                      blueprint={blueprint}
-                      errors={errors}
-                      onManifestChange={updateManifest}
-                      onPluginIdChange={updatePluginId}
-                      onOverwriteChange={setOverwrite}
-                      overwrite={overwrite}
-                      existingPluginName={existingPlugin?.manifest.name ?? existingPlugin?.id}
-                    />
-                  )}
-                </div>
-              </div>
-            ) : (
-              <button
-                aria-label="展开左侧元信息面板"
-                className="grid h-full w-full place-items-start justify-center p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                onClick={() => setIsManifestPanelOpen(true)}
-                type="button"
-              >
-                <PanelLeftOpen className="mt-2 size-4" />
-              </button>
-            )}
-          </aside>
-
           <section className={cn("min-h-0 overflow-hidden bg-background", isFilePreviewOpen && "border-r border-border")}>
             <FreeBlueprintCanvas
               activeComponentId={activeComponentId}
               blueprint={blueprint}
+              errors={errors}
               focusedFlowNodeId={focusedFlowNodeId}
               onAddComponent={addComponent}
               onAddConfigField={addConfigField}
@@ -1272,8 +1171,10 @@ export function PluginBuilderPanel(): React.JSX.Element {
               onFlowNodeRemove={removeFlowNode}
               onOpenComponent={(componentId) => setActiveComponentId(componentId)}
               onFlowNodeFocused={() => setFocusedFlowNodeId(null)}
+              onManifestChange={updateManifest}
               onParameterChange={updateParameter}
               onParameterRemove={removeParameter}
+              onPluginIdChange={updatePluginId}
               onReturnToPlugin={() => setActiveComponentId(null)}
             />
           </section>
@@ -1292,134 +1193,139 @@ export function PluginBuilderPanel(): React.JSX.Element {
         </div>
       </div>
     </div>
+    <Dialog
+      open={confirmOverwriteOpen}
+      onOpenChange={(next) => {
+        if (!next && !saving) {
+          setConfirmOverwriteOpen(false);
+        }
+      }}
+    >
+      <DialogContent size="md">
+        <DialogHeader
+          description="检测到当前插件 ID 已经安装。覆盖会删除原插件目录，再写入这次蓝图生成的新文件。"
+          icon={<AlertTriangle className="size-4" />}
+          title="覆盖已有插件？"
+          tone="warning"
+        />
+        <DialogBody className="space-y-3 text-sm">
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <p className="font-medium">{existingPlugin?.manifest.name ?? existingPlugin?.id ?? blueprint.manifest.name}</p>
+            <p className="mt-1 truncate text-xs text-muted-foreground">{existingPlugin?.path ?? blueprint.manifest.pluginId}</p>
+          </div>
+          <p className="text-muted-foreground">
+            覆盖不是合并更新：旧插件目录会被整体删除，目录里的额外文件或手工修改不会保留。
+          </p>
+        </DialogBody>
+        <DialogFooter>
+          <Button disabled={saving} onClick={() => setConfirmOverwriteOpen(false)} size="sm" type="button" variant="ghost">
+            取消
+          </Button>
+          <Button
+            disabled={saving}
+            onClick={() => {
+              setConfirmOverwriteOpen(false);
+              void generatePlugin(true);
+            }}
+            size="sm"
+            type="button"
+            variant="destructive"
+          >
+            {saving ? <Loader2 className="animate-spin" /> : <Save />}
+            确认覆盖并生成
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
 function PluginBuilderProjectBar({
+  autoSaveStatus,
   builderLibrary,
   canExport,
   canGenerate,
   canRedo,
   canUndo,
-  currentProject,
   hasGeneratedPlugin,
-  installedPlugins,
   isFilePreviewOpen,
+  isStartingOpenCode,
   issues,
   libraryBusy,
-  parsing,
+  openCodePath,
   pluginId,
   saving,
   saveButtonText,
   selectedBuilderPlugin,
   selectedBuilderPluginId,
-  selectedPluginId,
-  onApplyTemplate,
   onCreateNew,
   onDelete,
-  onDuplicate,
   onExport,
   onGenerate,
   onImport,
-  onIssueSelect,
-  onLoad,
   onOpenDocs,
   onOpenLastDirectory,
-  onOpenLibrary,
-  onParse,
+  onStartOpenCode,
   onRedo,
   onSave,
   onSelectBuilderPlugin,
-  onSelectInstalledPlugin,
   onToggleFilePreview,
   onUndo,
 }: {
+  autoSaveStatus: BlueprintAutoSaveStatus;
   builderLibrary: MaiBotPluginBuilderLibraryListResult | null;
   canExport: boolean;
   canGenerate: boolean;
   canRedo: boolean;
   canUndo: boolean;
-  currentProject: MaiBotPluginBuilderLibraryItem | null;
   hasGeneratedPlugin: boolean;
-  installedPlugins: InstalledPlugin[];
   isFilePreviewOpen: boolean;
+  isStartingOpenCode: boolean;
   issues: BlueprintIssue[];
   libraryBusy: boolean;
-  parsing: boolean;
+  openCodePath?: string;
   pluginId: string;
   saving: boolean;
   saveButtonText: string;
   selectedBuilderPlugin: MaiBotPluginBuilderLibraryItem | null;
   selectedBuilderPluginId: string;
-  selectedPluginId: string;
-  onApplyTemplate: (templateId: BlueprintTemplateId) => void;
   onCreateNew: () => void;
   onDelete: () => void;
-  onDuplicate: () => void;
   onExport: () => void;
   onGenerate: () => void;
   onImport: () => void;
-  onIssueSelect: (issue: BlueprintIssue) => void;
-  onLoad: () => void;
   onOpenDocs: () => void;
   onOpenLastDirectory: () => void;
-  onOpenLibrary: () => void;
-  onParse: () => void;
+  onStartOpenCode?: () => void;
   onRedo: () => void;
   onSave: () => void;
   onSelectBuilderPlugin: (pluginId: string) => void;
-  onSelectInstalledPlugin: (pluginId: string) => void;
   onToggleFilePreview: () => void;
   onUndo: () => void;
 }): React.JSX.Element {
-  const projectCount = builderLibrary?.plugins.length ?? 0;
   const errorCount = issues.filter((issue) => issue.level === "error").length;
-  const [selectedTemplateId, setSelectedTemplateId] = useState<BlueprintTemplateId>("hello_command");
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const selectedTemplate = blueprintTemplates.find((template) => template.id === selectedTemplateId);
 
   return (
     <section className="grid shrink-0 gap-2 border-b border-border bg-card/70 px-3 py-2">
       <div className="flex min-w-0 items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="flex min-w-[190px] shrink-0 items-center gap-2">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary text-secondary-foreground">
-            <Workflow className="size-4" />
-          </span>
+        <div className="flex min-w-[170px] shrink-0 items-center">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">插件编写器</p>
             <p className="truncate text-[11px] text-muted-foreground">{pluginId}</p>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-          <Boxes className="size-4" />
-          <Badge variant="secondary">{projectCount} local</Badge>
-        </div>
-
         <div className="min-w-[260px] max-w-[420px] flex-1">
-          <select
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/40"
+          <BuilderProjectSelect
+            builderLibrary={builderLibrary}
             disabled={libraryBusy}
-            onChange={(event) => onSelectBuilderPlugin(event.target.value)}
+            onChange={onSelectBuilderPlugin}
+            selectedPlugin={selectedBuilderPlugin}
             value={selectedBuilderPluginId}
-          >
-            <option value="">未保存的新蓝图</option>
-            {projectCount > 0 ? (
-              builderLibrary!.plugins.map((plugin) => (
-                <option key={plugin.pluginId} value={plugin.pluginId}>
-                  {plugin.name || plugin.pluginId}
-                </option>
-              ))
-            ) : (
-              <option disabled value="__empty">暂无本地蓝图</option>
-            )}
-          </select>
+          />
         </div>
 
-        <Button className="shrink-0" disabled={libraryBusy || !selectedBuilderPluginId} onClick={onLoad} size="sm" type="button" variant="secondary">
-          {libraryBusy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
-          打开
-        </Button>
         <Button className="shrink-0" onClick={onCreateNew} size="sm" type="button" variant="secondary">
           <Plus />
           新建
@@ -1427,6 +1333,10 @@ function PluginBuilderProjectBar({
         <Button className="shrink-0" disabled={libraryBusy} onClick={onSave} size="sm" type="button" variant="secondary">
           {libraryBusy ? <Loader2 className="animate-spin" /> : <Save />}
           保存
+        </Button>
+        <Button className="shrink-0" disabled={libraryBusy || !selectedBuilderPluginId} onClick={onDelete} size="sm" type="button" variant="secondary">
+          <Trash2 />
+          删除
         </Button>
         <Button className="shrink-0" disabled={libraryBusy || !canExport} onClick={onExport} size="sm" type="button" variant="secondary">
           <Download />
@@ -1444,6 +1354,11 @@ function PluginBuilderProjectBar({
         </Button>
 
         <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-border pl-2">
+          {autoSaveStatus !== "idle" ? (
+            <Badge variant={autoSaveStatus === "error" ? "danger" : autoSaveStatus === "saving" ? "secondary" : "success"}>
+              {autoSaveStatus === "saving" ? "自动保存中" : autoSaveStatus === "saved" ? "已自动保存" : "自动保存失败"}
+            </Badge>
+          ) : null}
           <Badge variant={errorCount > 0 ? "danger" : issues.length > 0 ? "secondary" : "success"}>
             {issues.length === 0 ? "OK" : `${issues.length} issues`}
           </Badge>
@@ -1451,6 +1366,12 @@ function PluginBuilderProjectBar({
             <Braces />
             SDK 文档
           </Button>
+          {onStartOpenCode ? (
+            <Button disabled={isStartingOpenCode} onClick={onStartOpenCode} size="sm" title={openCodePath} type="button" variant="secondary">
+              {isStartingOpenCode ? <Loader2 className="animate-spin" /> : <TerminalSquare />}
+              OpenCode
+            </Button>
+          ) : null}
           {hasGeneratedPlugin ? (
             <Button onClick={onOpenLastDirectory} size="sm" type="button" variant="secondary">
               <FolderOpen />
@@ -1471,105 +1392,157 @@ function PluginBuilderProjectBar({
             {saving ? <Loader2 className="animate-spin" /> : <Save />}
             {saveButtonText}
           </Button>
-          <Button onClick={() => setDetailsOpen((value) => !value)} size="sm" type="button" variant="ghost">
-            {detailsOpen ? "收起工具" : "更多工具"}
-          </Button>
         </div>
       </div>
+    </section>
+  );
+}
 
-      {detailsOpen ? (
-        <div className="grid gap-2 rounded-md border border-border bg-background/60 p-2 lg:grid-cols-[minmax(240px,1fr)_minmax(240px,1fr)_minmax(260px,1fr)]">
-          <div className="grid gap-2">
-            <p className="truncate text-[11px] text-muted-foreground">
-              {selectedBuilderPlugin
-                ? `${selectedBuilderPlugin.pluginId} / v${selectedBuilderPlugin.version} / ${formatBuilderDate(selectedBuilderPlugin.updatedAt)}`
-                : builderLibrary?.root ?? "Blueprints are stored in an independent builder resource folder."}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={libraryBusy} onClick={onDuplicate} size="sm" type="button" variant="secondary">
-                <FileJson />
-                复制
-              </Button>
-              <Button disabled={libraryBusy || !selectedBuilderPluginId} onClick={onDelete} size="sm" type="button" variant="secondary">
-                <Trash2 />
-                删除
-              </Button>
-              <Button onClick={onOpenLibrary} size="sm" type="button" variant="secondary">
-                <FolderOpen />
-                目录
-              </Button>
-            </div>
-          </div>
+function BuilderProjectSelect({
+  builderLibrary,
+  disabled,
+  onChange,
+  selectedPlugin,
+  value,
+}: {
+  builderLibrary: MaiBotPluginBuilderLibraryListResult | null;
+  disabled: boolean;
+  onChange: (pluginId: string) => void;
+  selectedPlugin: MaiBotPluginBuilderLibraryItem | null;
+  value: string;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const plugins = builderLibrary?.plugins ?? [];
+  const selectedLabel = selectedPlugin?.name || selectedPlugin?.pluginId || "未保存的新蓝图";
+  const selectedMeta = selectedPlugin?.pluginId ?? "保存后会加入本地蓝图库";
 
-          <div className="grid gap-2">
-            <div className="grid grid-cols-[1fr_auto] gap-2">
-              <select
-                className="h-9 min-w-0 rounded-md border border-input bg-background px-2 text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/40"
-                onChange={(event) => setSelectedTemplateId(event.target.value as BlueprintTemplateId)}
-                value={selectedTemplateId}
-              >
-                {blueprintTemplates.map((template) => (
-                  <option key={template.id} value={template.id}>{template.label}</option>
-                ))}
-              </select>
-              <Button onClick={() => onApplyTemplate(selectedTemplateId)} size="sm" type="button" variant="secondary">
-                套用
-              </Button>
-            </div>
-            <p className="truncate text-[11px] text-muted-foreground">{selectedTemplate?.description}</p>
-          </div>
+  const updateMenuPosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    setMenuStyle({
+      left: rect.left,
+      top: rect.bottom + 6,
+      width: rect.width,
+    });
+  }, []);
 
-          <div className="grid gap-2">
-            <div className="grid grid-cols-[1fr_auto] gap-2">
-              <select
-                className="h-9 min-w-0 rounded-md border border-input bg-background px-2 text-xs outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/40"
-                disabled={parsing || installedPlugins.length === 0}
-                onChange={(event) => onSelectInstalledPlugin(event.target.value)}
-                value={selectedPluginId}
-              >
-                {installedPlugins.length === 0 ? (
-                  <option value="">暂无已安装插件</option>
-                ) : (
-                  installedPlugins.map((plugin) => (
-                    <option key={plugin.id} value={plugin.id}>
-                      {plugin.manifest.name || plugin.id}
-                    </option>
-                  ))
-                )}
-              </select>
-              <Button disabled={parsing || installedPlugins.length === 0} onClick={onParse} size="sm" type="button" variant="secondary">
-                {parsing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                解析
-              </Button>
+  useLayoutEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [open, updateMenuPosition]);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  const selectProject = useCallback((pluginId: string) => {
+    setOpen(false);
+    onChange(pluginId);
+  }, [onChange]);
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        aria-expanded={open}
+        className={cn(
+          "flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background px-3 text-left outline-none transition-[border-color,box-shadow,background]",
+          "hover:border-primary/50 hover:bg-accent/35 focus-visible:ring-2 focus-visible:ring-ring/40",
+          open && "border-primary/60 ring-2 ring-primary/15",
+          disabled && "cursor-not-allowed opacity-60",
+        )}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        ref={triggerRef}
+        type="button"
+      >
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{selectedLabel}</span>
+        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open ? (
+        <div
+          className="fixed z-50 overflow-hidden rounded-md border border-border bg-popover shadow-xl shadow-black/30"
+          style={menuStyle}
+        >
+          <button
+            className={cn(
+              "flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-accent",
+              !value && "bg-primary/15 text-primary",
+            )}
+            onClick={() => selectProject("")}
+            type="button"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold">未保存的新蓝图</span>
+              <span className="block truncate text-[11px] text-muted-foreground">当前草稿</span>
+            </span>
+            {!value ? <Check className="size-4 shrink-0" /> : null}
+          </button>
+
+          {plugins.length > 0 ? (
+            <div className="max-h-72 overflow-auto border-t border-border py-1">
+              {plugins.map((plugin) => {
+                const selected = value === plugin.pluginId;
+                return (
+                  <button
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-accent",
+                      selected && "bg-primary/15 text-primary",
+                    )}
+                    key={plugin.pluginId}
+                    onClick={() => selectProject(plugin.pluginId)}
+                    type="button"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{plugin.name || plugin.pluginId}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">{plugin.pluginId}</span>
+                    </span>
+                    {selected ? <Check className="size-4 shrink-0" /> : null}
+                  </button>
+                );
+              })}
             </div>
-            <div className="max-h-28 overflow-auto rounded-md border border-border bg-background/70 p-2">
-              {issues.length === 0 ? (
-                <p className="text-[11px] text-muted-foreground">蓝图检查通过。</p>
-              ) : (
-                <div className="grid gap-1">
-                  {issues.slice(0, 8).map((issue) => (
-                    <button
-                      className="grid w-full gap-0.5 rounded-md px-1.5 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      key={issue.id}
-                      onClick={() => onIssueSelect(issue)}
-                      title={issue.detail}
-                      type="button"
-                    >
-                      <span className={cn("font-semibold", issue.level === "error" ? "text-danger" : "text-warning-foreground")}>
-                        {issue.level === "error" ? "错误" : "提示"}
-                      </span>
-                      <span className="truncate">{issue.title}</span>
-                      <span className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{issue.detail}</span>
-                    </button>
-                  ))}
-                  {issues.length > 8 ? <p className="text-[11px] text-muted-foreground">+{issues.length - 8} more</p> : null}
-                </div>
-              )}
-            </div>
-          </div>
+          ) : (
+            <div className="border-t border-border px-3 py-3 text-xs text-muted-foreground">暂无本地蓝图</div>
+          )}
         </div>
       ) : null}
-    </section>
+
+      <span className="sr-only">{selectedMeta}</span>
+    </div>
   );
 }
 
@@ -1601,7 +1574,7 @@ function explainPreviewFile(blueprint: MaiBotPluginBlueprint, relativePath: stri
       title: "config.toml：给用户修改的设置",
       detail: blueprint.configFields.length > 0
         ? `这里会生成 ${blueprint.configFields.length} 个配置项，读取配置积木会从这里取值。`
-        : "当前还没有配置项，可以在左侧 Manifest 元信息里添加。",
+        : "当前还没有配置项，选中 Config 节点后可以在左侧属性面板添加。",
     };
   }
   if (relativePath === "plugin.py") {
@@ -1611,7 +1584,7 @@ function explainPreviewFile(blueprint: MaiBotPluginBlueprint, relativePath: stri
     return {
       title: "plugin.py：真正运行的插件代码",
       detail: components.length > 0
-        ? components.slice(0, 3).join("；")
+        ? components.slice(0, 3).join("，")
         : "当前还没有入口组件，生成后会只有基础插件结构。",
     };
   }
@@ -1631,7 +1604,7 @@ function buildPreviewSteps(blueprint: MaiBotPluginBlueprint, relativePath: strin
   }
   if (relativePath === "config.toml") {
     if (blueprint.configFields.length === 0) {
-      return ["还没有配置项，可以在左侧元信息面板添加。"];
+      return ["还没有配置项，选中 Config 节点后可以在属性面板添加。"];
     }
     return blueprint.configFields.slice(0, 6).map((field) => `${field.label || field.name || field.id} = ${String(field.defaultValue ?? "")}`);
   }
@@ -1651,18 +1624,12 @@ function buildPreviewSteps(blueprint: MaiBotPluginBlueprint, relativePath: strin
 function ManifestEditor({
   blueprint,
   errors,
-  existingPluginName,
-  overwrite,
   onManifestChange,
-  onOverwriteChange,
   onPluginIdChange,
 }: {
   blueprint: MaiBotPluginBlueprint;
   errors: string[];
-  existingPluginName?: string;
-  overwrite: boolean;
   onManifestChange: (patch: Partial<MaiBotPluginBlueprint["manifest"]>) => void;
-  onOverwriteChange: (value: boolean) => void;
   onPluginIdChange: (value: string) => void;
 }): React.JSX.Element {
   const updateCapability = (index: number, value: string): void => {
@@ -1683,22 +1650,43 @@ function ManifestEditor({
       capabilities: blueprint.manifest.capabilities.filter((_, itemIndex) => itemIndex !== index),
     });
   };
+  const manifest = blueprint.manifest;
+  const folderName = manifest.folderName ?? defaultMaiBotPluginFolderName(manifest.pluginId);
+  const invalidVersions = {
+    plugin: !isValidMaiBotPluginVersion(manifest.version),
+    minHost: !isValidMaiBotPluginVersion(manifest.minHostVersion),
+    maxHost: !isValidMaiBotPluginVersion(manifest.maxHostVersion),
+    minSdk: !isValidMaiBotPluginVersion(manifest.minSdkVersion),
+    maxSdk: !isValidMaiBotPluginVersion(manifest.maxSdkVersion),
+  };
 
   return (
     <section className="grid gap-3">
-      <SectionTitle icon={<FileJson />} title="Manifest" trailing={<Badge variant={errors.length ? "danger" : "secondary"}>{errors.length ? "需要处理" : "有效"}</Badge>} />
       <Field label="插件 ID">
         <Input monospace onChange={(event) => onPluginIdChange(event.target.value)} value={blueprint.manifest.pluginId} />
       </Field>
       <Field label="目录名">
-        <Input monospace onChange={(event) => onManifestChange({ folderName: event.target.value })} value={blueprint.manifest.folderName ?? ""} />
+        <Input
+          aria-readonly
+          className="cursor-default bg-muted/20 text-muted-foreground"
+          monospace
+          readOnly
+          title="目录名由插件 ID 自动生成"
+          value={folderName}
+        />
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="名称">
           <Input onChange={(event) => onManifestChange({ name: event.target.value })} value={blueprint.manifest.name} />
         </Field>
         <Field label="版本">
-          <Input monospace onChange={(event) => onManifestChange({ version: event.target.value })} value={blueprint.manifest.version} />
+          <Input
+            invalid={invalidVersions.plugin}
+            monospace
+            onChange={(event) => onManifestChange({ version: event.target.value })}
+            placeholder="1.0.0"
+            value={blueprint.manifest.version}
+          />
         </Field>
       </div>
       <Field label="描述">
@@ -1724,18 +1712,42 @@ function ManifestEditor({
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="MaiBot 最低版本">
-          <Input monospace onChange={(event) => onManifestChange({ minHostVersion: event.target.value })} value={blueprint.manifest.minHostVersion} />
+          <Input
+            invalid={invalidVersions.minHost}
+            monospace
+            onChange={(event) => onManifestChange({ minHostVersion: event.target.value })}
+            placeholder="1.0.0"
+            value={blueprint.manifest.minHostVersion}
+          />
         </Field>
         <Field label="MaiBot 最高版本">
-          <Input monospace onChange={(event) => onManifestChange({ maxHostVersion: event.target.value })} value={blueprint.manifest.maxHostVersion} />
+          <Input
+            invalid={invalidVersions.maxHost}
+            monospace
+            onChange={(event) => onManifestChange({ maxHostVersion: event.target.value })}
+            placeholder="1.99.99"
+            value={blueprint.manifest.maxHostVersion}
+          />
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <Field label="SDK 最低版本">
-          <Input monospace onChange={(event) => onManifestChange({ minSdkVersion: event.target.value })} value={blueprint.manifest.minSdkVersion} />
+          <Input
+            invalid={invalidVersions.minSdk}
+            monospace
+            onChange={(event) => onManifestChange({ minSdkVersion: event.target.value })}
+            placeholder="2.0.0"
+            value={blueprint.manifest.minSdkVersion}
+          />
         </Field>
         <Field label="SDK 最高版本">
-          <Input monospace onChange={(event) => onManifestChange({ maxSdkVersion: event.target.value })} value={blueprint.manifest.maxSdkVersion} />
+          <Input
+            invalid={invalidVersions.maxSdk}
+            monospace
+            onChange={(event) => onManifestChange({ maxSdkVersion: event.target.value })}
+            placeholder="2.99.99"
+            value={blueprint.manifest.maxSdkVersion}
+          />
         </Field>
       </div>
       <Field label="能力">
@@ -1785,15 +1797,6 @@ function ManifestEditor({
           </Button>
         </div>
       </Field>
-      <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 text-xs">
-        <span className="min-w-0">
-          <span className="block truncate font-medium">{existingPluginName ? "更新并覆盖已有插件" : "覆盖已有目录"}</span>
-          {existingPluginName ? (
-            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{existingPluginName}</span>
-          ) : null}
-        </span>
-        <Checkbox checked={overwrite} onCheckedChange={(checked) => onOverwriteChange(checked === true)} />
-      </label>
       {errors.length > 0 ? (
         <div className="grid gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {errors.slice(0, 3).map((error) => <span key={error}>{error}</span>)}
@@ -1823,7 +1826,7 @@ function ComponentMetaEditor({
   return (
     <section className="grid gap-3">
       <SectionTitle
-        icon={component.kind === "tool" ? <Wrench /> : component.kind === "command" ? <TerminalSquare /> : <MessageSquare />}
+        icon={component.kind === "tool" ? <Wrench /> : <TerminalSquare />}
         title={componentKindLabel(component.kind)}
         trailing={
           <Button onClick={onBack} size="sm" type="button" variant="secondary">
@@ -1839,7 +1842,6 @@ function ComponentMetaEditor({
         >
           <option value="tool">Tool</option>
           <option value="command">Command</option>
-          <option value="hook">Hook</option>
         </select>
       </Field>
       <Field label="名称">
@@ -1852,23 +1854,7 @@ function ComponentMetaEditor({
         <Field label="触发正则">
           <Input monospace onChange={(event) => onChange(component.id, { trigger: event.target.value })} value={component.trigger ?? ""} />
         </Field>
-      ) : component.kind === "hook" ? (
-        <Field label="事件类型">
-          <select
-            className="h-9 rounded-md border border-input bg-card px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            onChange={(event) => onChange(component.id, { eventType: event.target.value })}
-            value={component.eventType ?? "ON_MESSAGE"}
-          >
-            {hookEventTypes.map((eventType) => (
-              <option key={eventType} value={eventType}>{eventType}</option>
-            ))}
-          </select>
-        </Field>
-      ) : (
-        <Field label="详情">
-          <Input onChange={(event) => onChange(component.id, { detail: event.target.value })} value={component.detail ?? ""} />
-        </Field>
-      )}
+      ) : null}
       <Field label="默认返回文本">
         <Input onChange={(event) => onChange(component.id, { responseText: event.target.value })} value={component.responseText ?? ""} />
       </Field>
@@ -1905,10 +1891,6 @@ function ComponentEditor({
 }): React.JSX.Element {
   return (
     <section className="grid gap-3">
-      <SectionTitle
-        icon={<Boxes />}
-        title="组件库"
-      />
       <ComponentLibrarySection title="入口组件">
         <ComponentLibraryButton
           description="给 AI 可以调用的小工具"
@@ -1923,13 +1905,6 @@ function ComponentEditor({
           icon={<TerminalSquare className="size-3.5" />}
           label="命令 Command"
           onClick={() => onAdd("command")}
-        />
-        <ComponentLibraryButton
-          description="收到消息等事件发生时自动触发"
-          dragData={{ mime: COMPONENT_DRAG_MIME, value: "hook" }}
-          icon={<MessageSquare className="size-3.5" />}
-          label="事件 Hook"
-          onClick={() => onAdd("hook")}
         />
       </ComponentLibrarySection>
     </section>
@@ -2177,8 +2152,14 @@ function FlowNodeEditor({
 
 function componentKindLabel(kind: MaiBotPluginBlueprintComponentKind): string {
   if (kind === "tool") return "Tool";
-  if (kind === "command") return "Command";
-  return "Hook";
+  return "Command";
+}
+
+function blueprintEntrySummary(toolCount: number, commandCount: number): string {
+  return [
+    toolCount > 0 ? `${toolCount} Tool` : "",
+    commandCount > 0 ? `${commandCount} Command` : "",
+  ].filter(Boolean).join(" / ");
 }
 
 function flowNodeLabel(kind: MaiBotPluginBlueprintFlowNodeKind): string {
@@ -2191,7 +2172,7 @@ function flowNodePlainDescription(kind: MaiBotPluginBlueprintFlowNodeKind): stri
 
 function flowNodeFriendlySummary(node: MaiBotPluginBlueprintFlowNode): string {
   if (node.kind === "send_text") return `发送：${node.value || "一段文字"}`;
-  if (node.kind === "read_config") return `读取设置：${node.configPath || "未填写路径"}`;
+  if (node.kind === "read_config") return `读取配置：${node.configPath || "未填写路径"}`;
   if (node.kind === "log_info") return `日志：${node.value || "一条日志"}`;
   if (node.kind === "set_variable") return `记住 ${node.targetName || node.configPath || "变量"} = ${node.value || "值"}`;
   if (node.kind === "if_condition") return `如果不满足：${node.value || "条件"}，就停止`;
@@ -2209,11 +2190,11 @@ function flowNodeFriendlySummary(node: MaiBotPluginBlueprintFlowNode): string {
   if (node.kind === "wait") return `等待 ${node.value || "1"} 秒`;
   if (node.kind === "comment") return node.value || "只是一句说明";
   if (node.kind === "return_success") return "告诉 MaiBot：流程已经成功结束";
-  return flowNodeLabel(node.kind);
+  return node.label || flowNodeLabel(node.kind);
 }
 
 function flowNodeBeginnerTip(kind: MaiBotPluginBlueprintFlowNodeKind): string {
-  if (kind === "send_text") return "最常用的积木：让机器人回复一段文字，可以放在命令或 Hook 流程里。";
+  if (kind === "send_text") return "最常用的积木：让机器人回复一段文字，可以放在命令或工具流程里。";
   if (kind === "read_config") return "从 config.toml 读取设置，适合把回复文案、开关、数字交给用户修改。";
   if (kind === "log_info") return "调试用积木：把当前执行到哪里写进日志，方便排查问题。";
   if (kind === "set_variable") return "把一个值存起来，后面的积木可以继续使用这个变量名。";
@@ -2259,15 +2240,29 @@ function ParameterRow({
   return (
     <div className="grid gap-2 rounded-md border border-border bg-background p-2">
       <div className="grid grid-cols-[1fr_92px_32px] gap-2">
-        <Input monospace onChange={(event) => onChange({ name: event.target.value })} value={parameter.name} />
+        <Input
+          monospace
+          onChange={(event) => onChange({ name: event.target.value })}
+          placeholder="参数名，例如 text"
+          value={parameter.name}
+        />
         <TypeSelect onChange={(type) => onChange({ type })} value={parameter.type} />
         <Button aria-label="移除参数" onClick={onRemove} size="icon-sm" type="button" variant="ghost">
           <Trash2 className="size-3.5" />
         </Button>
       </div>
-      <Input onChange={(event) => onChange({ description: event.target.value })} value={parameter.description} />
+      <Input
+        onChange={(event) => onChange({ description: event.target.value })}
+        placeholder="参数说明，例如要复读的文本"
+        value={parameter.description}
+      />
       <div className="grid grid-cols-[1fr_auto] gap-2">
-        <Input monospace onChange={(event) => onChange({ defaultValue: event.target.value })} value={parameter.defaultValue} />
+        <Input
+          monospace
+          onChange={(event) => onChange({ defaultValue: event.target.value })}
+          placeholder="默认值，可留空"
+          value={parameter.defaultValue}
+        />
         <label className="flex h-9 items-center gap-2 rounded-md border border-border bg-card px-2 text-xs">
           <Checkbox checked={parameter.required} onCheckedChange={(checked) => onChange({ required: checked === true })} />
           必填
@@ -2322,7 +2317,7 @@ function ConfigFieldEditor({
   );
 }
 
-type BlueprintCanvasNodeKind = "manifest" | "lifecycle" | "config" | "component";
+type BlueprintCanvasNodeKind = "manifest" | "config" | "component";
 
 type BlueprintCanvasNode = {
   id: string;
@@ -2343,15 +2338,60 @@ type BlueprintCanvasEdge = {
   toNodeId: string;
 };
 
-const BLUEPRINT_CANVAS_WIDTH = 1600;
-const BLUEPRINT_CANVAS_HEIGHT = 1080;
+const BLUEPRINT_CANVAS_MIN_WIDTH = 1400;
+const BLUEPRINT_CANVAS_MIN_HEIGHT = 900;
+const BLUEPRINT_CANVAS_PADDING = 360;
 const BLUEPRINT_CANVAS_MIN_SCALE = 0.45;
 const BLUEPRINT_CANVAS_MAX_SCALE = 1.8;
 const BLUEPRINT_CANVAS_SCALE_STEP = 0.0015;
 
+type BlueprintCanvasBounds = {
+  minX: number;
+  minY: number;
+  width: number;
+  height: number;
+};
+
+type BlueprintCanvasViewport = {
+  clientHeight: number;
+  clientWidth: number;
+  scrollLeft: number;
+  scrollTop: number;
+};
+
+function getBlueprintCanvasBounds(
+  nodeIds: string[],
+  positions: Record<string, BlueprintNodePosition>,
+  fallbackPositions: Record<string, BlueprintNodePosition>,
+  nodeWidth: number,
+  nodeHeight: number,
+): BlueprintCanvasBounds {
+  const resolved = nodeIds
+    .map((id) => positions[id] ?? fallbackPositions[id])
+    .filter((position): position is BlueprintNodePosition => Boolean(position));
+
+  if (resolved.length === 0) {
+    return { minX: -BLUEPRINT_CANVAS_PADDING, minY: -BLUEPRINT_CANVAS_PADDING, width: BLUEPRINT_CANVAS_MIN_WIDTH, height: BLUEPRINT_CANVAS_MIN_HEIGHT };
+  }
+
+  const minNodeX = Math.min(...resolved.map((position) => position.x));
+  const minNodeY = Math.min(...resolved.map((position) => position.y));
+  const maxNodeX = Math.max(...resolved.map((position) => position.x + nodeWidth));
+  const maxNodeY = Math.max(...resolved.map((position) => position.y + nodeHeight));
+  const minX = minNodeX - BLUEPRINT_CANVAS_PADDING;
+  const minY = minNodeY - BLUEPRINT_CANVAS_PADDING;
+  return {
+    minX,
+    minY,
+    width: Math.max(BLUEPRINT_CANVAS_MIN_WIDTH, maxNodeX - minNodeX + BLUEPRINT_CANVAS_PADDING * 2),
+    height: Math.max(BLUEPRINT_CANVAS_MIN_HEIGHT, maxNodeY - minNodeY + BLUEPRINT_CANVAS_PADDING * 2),
+  };
+}
+
 function FreeBlueprintCanvas({
   activeComponentId,
   blueprint,
+  errors,
   focusedFlowNodeId,
   onAddComponent,
   onAddConfigField,
@@ -2365,13 +2405,16 @@ function FreeBlueprintCanvas({
   onFlowNodeChange,
   onFlowNodeFocused,
   onFlowNodeRemove,
+  onManifestChange,
   onOpenComponent,
   onParameterChange,
   onParameterRemove,
+  onPluginIdChange,
   onReturnToPlugin,
 }: {
   activeComponentId: string | null;
   blueprint: MaiBotPluginBlueprint;
+  errors: string[];
   focusedFlowNodeId: string | null;
   onAddComponent: (kind: MaiBotPluginBlueprintComponentKind) => void;
   onAddConfigField: () => void;
@@ -2385,24 +2428,28 @@ function FreeBlueprintCanvas({
   onFlowNodeChange: (componentId: string, nodeId: string, patch: Partial<MaiBotPluginBlueprintFlowNode>) => void;
   onFlowNodeFocused: () => void;
   onFlowNodeRemove: (componentId: string, nodeId: string) => void;
+  onManifestChange: (patch: Partial<MaiBotPluginBlueprint["manifest"]>) => void;
   onOpenComponent: (componentId: string) => void;
   onParameterChange: (componentId: string, parameterId: string, patch: Partial<MaiBotPluginBlueprintParameter>) => void;
   onParameterRemove: (componentId: string, parameterId: string) => void;
+  onPluginIdChange: (value: string) => void;
   onReturnToPlugin: () => void;
 }): React.JSX.Element {
   const toolCount = blueprint.components.filter((component) => component.kind === "tool").length;
   const commandCount = blueprint.components.filter((component) => component.kind === "command").length;
-  const hookCount = blueprint.components.filter((component) => component.kind === "hook").length;
+  const blueprintSummary = blueprintEntrySummary(toolCount, commandCount);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const panStateRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
   const pendingDropPositionRef = useRef<BlueprintNodePosition | null>(null);
   const [positions, setPositions] = useState<Record<string, BlueprintNodePosition>>({});
-  const [selectedNodeId, setSelectedNodeId] = useState("manifest");
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [canvasEdges, setCanvasEdges] = useState<BlueprintCanvasEdge[]>([]);
   const [isCanvasDropTarget, setIsCanvasDropTarget] = useState(false);
   const [linkingNodeId, setLinkingNodeId] = useState<string | null>(null);
   const [viewportScale, setViewportScale] = useState(1);
+  const [canvasViewport, setCanvasViewport] = useState<BlueprintCanvasViewport>({ clientHeight: 0, clientWidth: 0, scrollLeft: 0, scrollTop: 0 });
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
   const [libraryPanelOpen, setLibraryPanelOpen] = useState(true);
 
@@ -2412,12 +2459,6 @@ function FreeBlueprintCanvas({
       kind: "manifest",
       title: blueprint.manifest.name || "Manifest",
       subtitle: blueprint.manifest.pluginId,
-    },
-    {
-      id: "lifecycle",
-      kind: "lifecycle",
-      title: "Lifecycle",
-      subtitle: "on_load / on_unload / on_config_update",
     },
     {
       id: "config",
@@ -2437,17 +2478,42 @@ function FreeBlueprintCanvas({
   const defaultPositions = useMemo<Record<string, BlueprintNodePosition>>(() => {
     const next: Record<string, BlueprintNodePosition> = {
       manifest: { x: 32, y: 42 },
-      lifecycle: { x: 328, y: 42 },
-      config: { x: 328, y: 210 },
+      config: { x: 328, y: 42 },
     };
     blueprint.components.forEach((component, index) => {
       next[component.id] = {
         x: 32 + (index % 2) * 296,
-        y: 384 + Math.floor(index / 2) * 168,
+        y: 250 + Math.floor(index / 2) * 168,
       };
     });
     return next;
   }, [blueprint.components]);
+
+  const nodeIdList = useMemo(() => nodes.map((node) => node.id), [nodes]);
+  const canvasBounds = useMemo(
+    () => getBlueprintCanvasBounds(nodeIdList, positions, defaultPositions, 260, 144),
+    [defaultPositions, nodeIdList, positions],
+  );
+  const previousCanvasBoundsRef = useRef(canvasBounds);
+  const pendingZoomScrollRef = useRef<{ logicalX: number; logicalY: number; viewportX: number; viewportY: number; scale: number } | null>(null);
+
+  const updateCanvasViewport = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    setCanvasViewport({
+      clientHeight: canvas.clientHeight,
+      clientWidth: canvas.clientWidth,
+      scrollLeft: canvas.scrollLeft,
+      scrollTop: canvas.scrollTop,
+    });
+  }, []);
+
+  const bindCanvasRef = useCallback((node: HTMLDivElement | null) => {
+    canvasRef.current = node;
+    setCanvasElement(node);
+  }, []);
 
   useEffect(() => {
     setPositions((current) => {
@@ -2466,16 +2532,26 @@ function FreeBlueprintCanvas({
     });
   }, [defaultPositions, nodes]);
 
-  const nodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
+  useEffect(() => {
+    requestAnimationFrame(updateCanvasViewport);
+  }, [canvasBounds, updateCanvasViewport, viewportScale]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const pending = pendingZoomScrollRef.current;
+    if (!canvas || !pending || Math.abs(pending.scale - viewportScale) > 0.001) {
+      return;
+    }
+    pendingZoomScrollRef.current = null;
+    canvas.scrollLeft = pending.logicalX * viewportScale - pending.viewportX;
+    canvas.scrollTop = pending.logicalY * viewportScale - pending.viewportY;
+    updateCanvasViewport();
+  }, [updateCanvasViewport, viewportScale]);
+
+  const nodeIds = useMemo(() => new Set(nodeIdList), [nodeIdList]);
   const visibleEdges = useMemo<BlueprintCanvasEdge[]>(() => {
     const defaults: BlueprintCanvasEdge[] = [
-      { id: "manifest-lifecycle", fromNodeId: "manifest", toNodeId: "lifecycle" },
       { id: "manifest-config", fromNodeId: "manifest", toNodeId: "config" },
-      ...blueprint.components.map((component) => ({
-        id: `lifecycle-${component.id}`,
-        fromNodeId: "lifecycle",
-        toNodeId: component.id,
-      })),
     ];
     const edgeKeys = new Set(defaults.map((edge) => `${edge.fromNodeId}:${edge.toNodeId}`));
     const custom = canvasEdges.filter((edge) => {
@@ -2487,7 +2563,7 @@ function FreeBlueprintCanvas({
       return true;
     });
     return [...defaults, ...custom];
-  }, [blueprint.components, canvasEdges, nodeIds]);
+  }, [canvasEdges, nodeIds]);
 
   const pointerToCanvasPoint = useCallback((event: React.PointerEvent<HTMLElement>): BlueprintNodePosition | null => {
     const canvas = canvasRef.current;
@@ -2496,10 +2572,10 @@ function FreeBlueprintCanvas({
       return null;
     }
     return {
-      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale,
-      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale,
+      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale + canvasBounds.minX,
+      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale + canvasBounds.minY,
     };
-  }, [viewportScale]);
+  }, [canvasBounds.minX, canvasBounds.minY, viewportScale]);
 
   const dragEventToCanvasPoint = useCallback((event: React.DragEvent<HTMLElement>): BlueprintNodePosition | null => {
     const canvas = canvasRef.current;
@@ -2508,10 +2584,10 @@ function FreeBlueprintCanvas({
       return null;
     }
     return {
-      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale,
-      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale,
+      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale + canvasBounds.minX,
+      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale + canvasBounds.minY,
     };
-  }, [viewportScale]);
+  }, [canvasBounds.minX, canvasBounds.minY, viewportScale]);
 
   const startMove = useCallback((event: React.PointerEvent<HTMLDivElement>, nodeId: string) => {
     const position = positions[nodeId];
@@ -2532,6 +2608,7 @@ function FreeBlueprintCanvas({
     if (panState && canvasRef.current) {
       canvasRef.current.scrollLeft = panState.scrollLeft - (event.clientX - panState.x);
       canvasRef.current.scrollTop = panState.scrollTop - (event.clientY - panState.y);
+      updateCanvasViewport();
       return;
     }
 
@@ -2540,13 +2617,13 @@ function FreeBlueprintCanvas({
     if (!dragState || !point) {
       return;
     }
-    const nextX = Math.max(12, Math.min(BLUEPRINT_CANVAS_WIDTH - 260, point.x - dragState.offsetX));
-    const nextY = Math.max(12, Math.min(BLUEPRINT_CANVAS_HEIGHT - 140, point.y - dragState.offsetY));
+    const nextX = point.x - dragState.offsetX;
+    const nextY = point.y - dragState.offsetY;
     setPositions((current) => ({
       ...current,
       [dragState.id]: { x: nextX, y: nextY },
     }));
-  }, [pointerToCanvasPoint]);
+  }, [pointerToCanvasPoint, updateCanvasViewport]);
 
   const stopMove = useCallback(() => {
     dragStateRef.current = null;
@@ -2554,7 +2631,9 @@ function FreeBlueprintCanvas({
   }, []);
 
   const startPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 1 || !canvasRef.current) {
+    const target = event.target as HTMLElement;
+    const isBlankCanvasDrag = event.button === 0 && !target.closest("[data-blueprint-node]");
+    if ((!isBlankCanvasDrag && event.button !== 1) || !canvasRef.current) {
       return;
     }
     event.preventDefault();
@@ -2585,16 +2664,12 @@ function FreeBlueprintCanvas({
     const viewportY = clientY - rect.top;
     const logicalX = (canvas.scrollLeft + viewportX) / viewportScale;
     const logicalY = (canvas.scrollTop + viewportY) / viewportScale;
+    pendingZoomScrollRef.current = { logicalX, logicalY, viewportX, viewportY, scale: nextScale };
     setViewportScale(nextScale);
-    requestAnimationFrame(() => {
-      canvas.scrollLeft = logicalX * nextScale - viewportX;
-      canvas.scrollTop = logicalY * nextScale - viewportY;
-    });
-  }, [viewportScale]);
+  }, [updateCanvasViewport, viewportScale]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
+    if (!canvasElement) {
       return undefined;
     }
     const handleWheel = (event: WheelEvent): void => {
@@ -2602,9 +2677,9 @@ function FreeBlueprintCanvas({
       event.stopPropagation();
       zoomCanvasAt(event.clientX, event.clientY, event.deltaY);
     };
-    canvas.addEventListener("wheel", handleWheel, { passive: false });
-    return () => canvas.removeEventListener("wheel", handleWheel);
-  }, [zoomCanvasAt]);
+    canvasElement.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvasElement.removeEventListener("wheel", handleWheel);
+  }, [canvasElement, zoomCanvasAt]);
 
   const startLink = useCallback((event: React.DragEvent<HTMLButtonElement>, nodeId: string) => {
     setLinkingNodeId(nodeId);
@@ -2629,7 +2704,7 @@ function FreeBlueprintCanvas({
 
   const dropComponentOnCanvas = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     const componentKind = event.dataTransfer.getData(COMPONENT_DRAG_MIME) as MaiBotPluginBlueprintComponentKind;
-    if (componentKind !== "tool" && componentKind !== "command" && componentKind !== "hook") {
+    if (componentKind !== "tool" && componentKind !== "command") {
       return;
     }
     event.preventDefault();
@@ -2638,23 +2713,67 @@ function FreeBlueprintCanvas({
     const point = dragEventToCanvasPoint(event);
     if (point) {
       pendingDropPositionRef.current = {
-        x: Math.max(12, Math.min(BLUEPRINT_CANVAS_WIDTH - 260, point.x - 120)),
-        y: Math.max(12, Math.min(BLUEPRINT_CANVAS_HEIGHT - 140, point.y - 58)),
+        x: point.x - 120,
+        y: point.y - 58,
       };
     }
     onAddComponent(componentKind);
   }, [dragEventToCanvasPoint, onAddComponent]);
 
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
+  const selectedNode = selectedNodeId ? nodes.find((node) => node.id === selectedNodeId) ?? null : null;
   const activeComponent = activeComponentId
     ? blueprint.components.find((component) => component.id === activeComponentId) ?? null
     : null;
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if ((event.key !== "Delete" && event.key !== "Backspace") || isEditableKeyboardTarget(event.target)) {
+        return;
+      }
+      if (selectedNode?.kind !== "component" || !selectedNode.component) {
+        return;
+      }
+      event.preventDefault();
+      onComponentRemove(selectedNode.component.id);
+      setSelectedNodeId(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onComponentRemove, selectedNode]);
+
+  const clearSelectionOnCanvasPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement;
+    if (!target.closest("[data-blueprint-node]")) {
+      setSelectedNodeId(null);
+    }
+  }, []);
+  const manifestMetaEditor = (
+    <ManifestEditor
+      blueprint={blueprint}
+      errors={errors}
+      onManifestChange={onManifestChange}
+      onPluginIdChange={onPluginIdChange}
+    />
+  );
 
   if (activeComponent) {
     return (
       <ComponentSubBlueprintCanvas
         component={activeComponent}
         focusedFlowNodeId={focusedFlowNodeId}
+        metaEditor={(
+          <ComponentMetaEditor
+            component={activeComponent}
+            onAddParameter={onAddParameter}
+            onBack={onReturnToPlugin}
+            onChange={onComponentChange}
+            onParameterChange={onParameterChange}
+            onParameterRemove={onParameterRemove}
+            onRemove={onComponentRemove}
+          />
+        )}
         onAddFlowNode={(kind) => onAddFlowNode(activeComponent.id, kind)}
         onChangeFlowNode={(nodeId, patch) => onFlowNodeChange(activeComponent.id, nodeId, patch)}
         onConnectFlowNode={(fromNodeId, toNodeId) => onConnectFlowNode(activeComponent.id, fromNodeId, toNodeId)}
@@ -2669,40 +2788,26 @@ function FreeBlueprintCanvas({
     <div
       className={cn(
         "grid h-full min-h-0",
-        propertyPanelOpen && libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_320px_320px]",
-        propertyPanelOpen && !libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_320px_48px]",
-        !propertyPanelOpen && libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_48px_320px]",
-        !propertyPanelOpen && !libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_48px_48px]",
+        propertyPanelOpen && libraryPanelOpen && "grid-cols-[320px_minmax(420px,1fr)_320px]",
+        propertyPanelOpen && !libraryPanelOpen && "grid-cols-[320px_minmax(420px,1fr)_48px]",
+        !propertyPanelOpen && libraryPanelOpen && "grid-cols-[48px_minmax(420px,1fr)_320px]",
+        !propertyPanelOpen && !libraryPanelOpen && "grid-cols-[48px_minmax(420px,1fr)_48px]",
       )}
     >
-      <div className="flex min-h-0 flex-col">
+      <div className="col-start-2 row-start-1 flex min-h-0 flex-col">
         <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold">Blueprint</h3>
-            <p className="truncate text-xs text-muted-foreground">
-              {toolCount} Tool / {commandCount} Command / {hookCount} Hook / {blueprint.configFields.length} Config
-            </p>
+            {blueprintSummary ? <p className="truncate text-xs text-muted-foreground">{blueprintSummary}</p> : null}
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Badge variant="secondary">{Math.round(viewportScale * 100)}%</Badge>
-            <Button onClick={() => onAddComponent("tool")} size="sm" type="button" variant="secondary">
-              <Wrench />
-              Tool
-            </Button>
-            <Button onClick={() => onAddComponent("command")} size="sm" type="button" variant="secondary">
-              <TerminalSquare />
-              Command
-            </Button>
-            <Button onClick={() => onAddComponent("hook")} size="sm" type="button" variant="secondary">
-              <MessageSquare />
-              Hook
-            </Button>
           </div>
         </div>
 
         <div
           className={cn(
-            "relative min-h-0 flex-1 cursor-default overflow-auto bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border))_1px,transparent_0)] bg-[length:24px_24px] transition-colors",
+            "relative min-h-0 flex-1 cursor-grab overflow-auto bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border))_1px,transparent_0)] bg-[length:24px_24px] transition-colors active:cursor-grabbing",
             isCanvasDropTarget && "bg-primary/5 outline outline-2 outline-primary/30",
           )}
           onDragLeave={(event) => {
@@ -2712,7 +2817,10 @@ function FreeBlueprintCanvas({
           }}
           onPointerLeave={stopMove}
           onPointerMove={moveNode}
-          onPointerDown={startPan}
+          onPointerDown={(event) => {
+            startPan(event);
+            clearSelectionOnCanvasPointerDown(event);
+          }}
           onPointerUp={stopMove}
           onDragOver={(event) => {
             if (Array.from(event.dataTransfer.types).includes(COMPONENT_DRAG_MIME)) {
@@ -2722,22 +2830,23 @@ function FreeBlueprintCanvas({
             }
           }}
           onDrop={dropComponentOnCanvas}
-          ref={canvasRef}
+          onScroll={updateCanvasViewport}
+          ref={bindCanvasRef}
         >
           <div
             className="relative"
             style={{
-              height: BLUEPRINT_CANVAS_HEIGHT * viewportScale,
-              width: BLUEPRINT_CANVAS_WIDTH * viewportScale,
+              height: canvasBounds.height * viewportScale,
+              width: canvasBounds.width * viewportScale,
             }}
           >
             <div
               className="absolute left-0 top-0"
               style={{
-                height: BLUEPRINT_CANVAS_HEIGHT,
+                height: canvasBounds.height,
                 transform: `scale(${viewportScale})`,
                 transformOrigin: "0 0",
-                width: BLUEPRINT_CANVAS_WIDTH,
+                width: canvasBounds.width,
               }}
             >
             <svg className="pointer-events-none absolute inset-0 size-full">
@@ -2752,10 +2861,10 @@ function FreeBlueprintCanvas({
                 if (!from || !to) {
                   return null;
                 }
-                const x1 = from.x + 240;
-                const y1 = from.y + 58;
-                const x2 = to.x;
-                const y2 = to.y + 58;
+                const x1 = from.x - canvasBounds.minX + 240;
+                const y1 = from.y - canvasBounds.minY + 58;
+                const x2 = to.x - canvasBounds.minX;
+                const y2 = to.y - canvasBounds.minY + 58;
                 const mid = Math.max(x1 + 48, (x1 + x2) / 2);
                 const fromNode = nodes.find((node) => node.id === edge.fromNodeId);
                 return (
@@ -2784,6 +2893,7 @@ function FreeBlueprintCanvas({
                     "group absolute w-60 rounded-lg border bg-card shadow-sm transition-[border-color,box-shadow]",
                     selected ? "border-primary shadow-md shadow-primary/10" : "border-border",
                   )}
+                  data-blueprint-node
                   key={node.id}
                   onClick={() => setSelectedNodeId(node.id)}
                   onDoubleClick={() => {
@@ -2798,7 +2908,7 @@ function FreeBlueprintCanvas({
                     }
                   }}
                   onDrop={(event) => dropLink(event, node.id)}
-                  style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
+                  style={{ transform: `translate(${position.x - canvasBounds.minX}px, ${position.y - canvasBounds.minY}px)` }}
                 >
                   <span className="pointer-events-none absolute left-2 right-2 top-full z-30 mt-1 hidden rounded-md border border-border bg-popover px-2 py-1.5 text-[11px] leading-relaxed text-popover-foreground shadow-md group-hover:block">
                     {node.subtitle || node.title}
@@ -2856,16 +2966,24 @@ function FreeBlueprintCanvas({
             })}
             </div>
           </div>
+          <BlueprintMiniMap
+            bounds={canvasBounds}
+            nodeHeight={112}
+            nodeIds={nodeIdList}
+            nodeWidth={240}
+            positions={positions}
+            viewport={canvasViewport}
+            viewportScale={viewportScale}
+          />
         </div>
       </div>
 
-      <aside className="min-h-0 overflow-auto border-l border-border bg-card">
+      <aside className="col-start-1 row-start-1 min-h-0 overflow-auto border-r border-border bg-card">
         <div className={cn("sticky top-0 z-10 flex h-12 items-center border-b border-border bg-card", propertyPanelOpen ? "gap-2 px-3" : "justify-center px-1")}>
           {propertyPanelOpen ? <Settings2 className="size-4 shrink-0 text-muted-foreground" /> : null}
           {propertyPanelOpen ? (
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">属性</p>
-              <p className="truncate text-xs text-muted-foreground">当前节点</p>
             </div>
           ) : null}
           <Button
@@ -2876,13 +2994,14 @@ function FreeBlueprintCanvas({
             type="button"
             variant="ghost"
           >
-            {propertyPanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            {propertyPanelOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
           </Button>
         </div>
         {propertyPanelOpen ? (
           <div className="p-4">
             <BlueprintNodePropertyWindow
               node={selectedNode}
+              metaEditor={manifestMetaEditor}
               configFields={blueprint.configFields}
               onAddConfigField={onAddConfigField}
               onConfigFieldChange={onConfigFieldChange}
@@ -2894,7 +3013,7 @@ function FreeBlueprintCanvas({
         ) : null}
       </aside>
 
-      <aside className="min-h-0 overflow-auto border-l border-border bg-card">
+      <aside className="col-start-3 row-start-1 min-h-0 overflow-auto border-l border-border bg-card">
         <div className={cn("sticky top-0 z-10 flex h-12 items-center border-b border-border bg-card", libraryPanelOpen ? "gap-2 px-3" : "justify-center px-1")}>
           {libraryPanelOpen ? <Boxes className="size-4 shrink-0 text-muted-foreground" /> : null}
           {libraryPanelOpen ? (
@@ -2926,6 +3045,7 @@ function FreeBlueprintCanvas({
 
 function BlueprintNodePropertyWindow({
   configFields,
+  metaEditor,
   node,
   onAddConfigField,
   onConfigFieldChange,
@@ -2934,15 +3054,16 @@ function BlueprintNodePropertyWindow({
   onRemoveComponent,
 }: {
   configFields: MaiBotPluginBlueprintConfigField[];
-  node: BlueprintCanvasNode | undefined;
+  metaEditor: React.ReactNode;
+  node: BlueprintCanvasNode | null;
   onAddConfigField: () => void;
   onConfigFieldChange: (id: string, patch: Partial<MaiBotPluginBlueprintConfigField>) => void;
   onConfigFieldRemove: (id: string) => void;
   onOpenComponent: (componentId: string) => void;
   onRemoveComponent: (id: string) => void;
 }): React.JSX.Element {
-  if (!node) {
-    return <></>;
+  if (!node || node.kind === "manifest") {
+    return <>{metaEditor}</>;
   }
 
   return (
@@ -2952,7 +3073,7 @@ function BlueprintNodePropertyWindow({
           {canvasNodeIcon(node)}
         </span>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">属</p>
+          <p className="truncate text-sm font-semibold">属性</p>
           <p className="truncate text-xs text-muted-foreground">{node.title || node.id}</p>
         </div>
       </div>
@@ -2983,15 +3104,80 @@ function BlueprintNodePropertyWindow({
             删除组件
           </Button>
         </div>
-      ) : node.kind === "manifest" ? (
-        <p className="rounded-md bg-muted/55 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          Manifest 元信息在左侧面板编辑，能力也在左侧下拉添加。
-        </p>
-      ) : (
-        <p className="rounded-md bg-muted/55 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          生命周期节点由编写器自动生成，用来把插件入口和组件连接起来。
-        </p>
-      )}
+      ) : null}
+    </div>
+  );
+}
+
+function BlueprintMiniMap({
+  bounds,
+  nodeHeight,
+  nodeIds,
+  nodeWidth,
+  positions,
+  viewport,
+  viewportScale,
+}: {
+  bounds: BlueprintCanvasBounds;
+  nodeHeight: number;
+  nodeIds: string[];
+  nodeWidth: number;
+  positions: Record<string, BlueprintNodePosition>;
+  viewport: BlueprintCanvasViewport;
+  viewportScale: number;
+}): React.JSX.Element {
+  const width = 160;
+  const height = 96;
+  const scale = Math.min(width / bounds.width, height / bounds.height);
+  const contentWidth = bounds.width * scale;
+  const contentHeight = bounds.height * scale;
+  const offsetX = (width - contentWidth) / 2;
+  const offsetY = (height - contentHeight) / 2;
+  const viewportRect = {
+    x: offsetX + (viewport.scrollLeft / viewportScale) * scale,
+    y: offsetY + (viewport.scrollTop / viewportScale) * scale,
+    width: Math.max(8, (viewport.clientWidth / viewportScale) * scale),
+    height: Math.max(8, (viewport.clientHeight / viewportScale) * scale),
+  };
+
+  return (
+    <div className="pointer-events-none sticky bottom-3 left-[calc(100%-176px)] z-20 mb-3 h-24 w-40 overflow-hidden rounded-md border border-border bg-card/90 shadow-md backdrop-blur">
+      <svg className="size-full">
+        <rect className="fill-background/80" height={height} width={width} x="0" y="0" />
+        <rect
+          className="fill-muted/25 stroke-border"
+          height={contentHeight}
+          rx="3"
+          width={contentWidth}
+          x={offsetX}
+          y={offsetY}
+        />
+        {nodeIds.map((id) => {
+          const position = positions[id];
+          if (!position) {
+            return null;
+          }
+          return (
+            <rect
+              className="fill-primary/70"
+              height={Math.max(3, nodeHeight * scale)}
+              key={id}
+              rx="1.5"
+              width={Math.max(5, nodeWidth * scale)}
+              x={offsetX + (position.x - bounds.minX) * scale}
+              y={offsetY + (position.y - bounds.minY) * scale}
+            />
+          );
+        })}
+        <rect
+          className="fill-primary/10 stroke-primary"
+          height={Math.min(contentHeight, viewportRect.height)}
+          rx="2"
+          width={Math.min(contentWidth, viewportRect.width)}
+          x={Math.max(offsetX, Math.min(offsetX + contentWidth - viewportRect.width, viewportRect.x))}
+          y={Math.max(offsetY, Math.min(offsetY + contentHeight - viewportRect.height, viewportRect.y))}
+        />
+      </svg>
     </div>
   );
 }
@@ -2999,6 +3185,7 @@ function BlueprintNodePropertyWindow({
 function ComponentSubBlueprintCanvas({
   component,
   focusedFlowNodeId,
+  metaEditor,
   onAddFlowNode,
   onChangeFlowNode,
   onConnectFlowNode,
@@ -3008,6 +3195,7 @@ function ComponentSubBlueprintCanvas({
 }: {
   component: MaiBotPluginBlueprintComponent;
   focusedFlowNodeId: string | null;
+  metaEditor: React.ReactNode;
   onAddFlowNode: (kind: MaiBotPluginBlueprintFlowNodeKind) => void;
   onChangeFlowNode: (nodeId: string, patch: Partial<MaiBotPluginBlueprintFlowNode>) => void;
   onConnectFlowNode: (fromNodeId: string, toNodeId: string) => void;
@@ -3019,42 +3207,110 @@ function ComponentSubBlueprintCanvas({
   const [positions, setPositions] = useState<Record<string, BlueprintNodePosition>>({});
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [isCanvasDropTarget, setIsCanvasDropTarget] = useState(false);
-  const [selectedFlowNodeId, setSelectedFlowNodeId] = useState<string | null>(nodes[0]?.id ?? null);
+  const [selectedFlowNodeId, setSelectedFlowNodeId] = useState<string | null>(focusedFlowNodeId);
   const [viewportScale, setViewportScale] = useState(1);
+  const [canvasViewport, setCanvasViewport] = useState<BlueprintCanvasViewport>({ clientHeight: 0, clientWidth: 0, scrollLeft: 0, scrollTop: 0 });
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
   const [libraryPanelOpen, setLibraryPanelOpen] = useState(true);
   const dragStateRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const panStateRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
   const pendingDropPositionRef = useRef<BlueprintNodePosition | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
-  const selectedFlowNode = nodes.find((node) => node.id === selectedFlowNodeId) ?? nodes[0] ?? null;
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
+  const selectedFlowNode = selectedFlowNodeId ? nodes.find((node) => node.id === selectedFlowNodeId) ?? null : null;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if ((event.key !== "Delete" && event.key !== "Backspace") || isEditableKeyboardTarget(event.target)) {
+        return;
+      }
+      if (!selectedFlowNode) {
+        return;
+      }
+      event.preventDefault();
+      onRemoveFlowNode(selectedFlowNode.id);
+      setSelectedFlowNodeId(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onRemoveFlowNode, selectedFlowNode]);
+
+  const defaultPositions = useMemo<Record<string, BlueprintNodePosition>>(() => {
+    const next: Record<string, BlueprintNodePosition> = {};
+    nodes.forEach((node, index) => {
+      next[node.id] = {
+        x: 36 + (index % 2) * 280,
+        y: 44 + Math.floor(index / 2) * 150,
+      };
+    });
+    return next;
+  }, [nodes]);
+
+  const flowNodeIds = useMemo(() => nodes.map((node) => node.id), [nodes]);
+  const canvasBounds = useMemo(
+    () => getBlueprintCanvasBounds(flowNodeIds, positions, defaultPositions, 240, 120),
+    [defaultPositions, flowNodeIds, positions],
+  );
+  const previousCanvasBoundsRef = useRef(canvasBounds);
+  const pendingZoomScrollRef = useRef<{ logicalX: number; logicalY: number; viewportX: number; viewportY: number; scale: number } | null>(null);
+
+  const updateCanvasViewport = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    setCanvasViewport({
+      clientHeight: canvas.clientHeight,
+      clientWidth: canvas.clientWidth,
+      scrollLeft: canvas.scrollLeft,
+      scrollTop: canvas.scrollTop,
+    });
+  }, []);
+
+  const bindCanvasRef = useCallback((node: HTMLDivElement | null) => {
+    canvasRef.current = node;
+    setCanvasElement(node);
+  }, []);
 
   useEffect(() => {
     setPositions((current) => {
       const next: Record<string, BlueprintNodePosition> = {};
-      nodes.forEach((node, index) => {
+      nodes.forEach((node) => {
         if (current[node.id]) {
           next[node.id] = current[node.id];
         } else if (pendingDropPositionRef.current) {
           next[node.id] = pendingDropPositionRef.current;
           pendingDropPositionRef.current = null;
         } else {
-          next[node.id] = {
-            x: 36 + (index % 2) * 280,
-            y: 44 + Math.floor(index / 2) * 150,
-          };
+          next[node.id] = defaultPositions[node.id] ?? { x: 36, y: 44 };
         }
       });
       return next;
     });
-  }, [nodes]);
+  }, [defaultPositions, nodes]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const previous = previousCanvasBoundsRef.current;
+    const deltaX = (previous.minX - canvasBounds.minX) * viewportScale;
+    const deltaY = (previous.minY - canvasBounds.minY) * viewportScale;
+    if (canvas && (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5)) {
+      canvas.scrollLeft += deltaX;
+      canvas.scrollTop += deltaY;
+    }
+    previousCanvasBoundsRef.current = canvasBounds;
+    updateCanvasViewport();
+  }, [canvasBounds, updateCanvasViewport, viewportScale]);
 
   useEffect(() => {
     setSelectedFlowNodeId((current) => {
+      if (!current) {
+        return null;
+      }
       if (current && nodes.some((node) => node.id === current)) {
         return current;
       }
-      return nodes[0]?.id ?? null;
+      return null;
     });
   }, [nodes]);
 
@@ -3065,6 +3321,22 @@ function ComponentSubBlueprintCanvas({
     }
   }, [focusedFlowNodeId, nodes, onFlowNodeFocused]);
 
+  useEffect(() => {
+    requestAnimationFrame(updateCanvasViewport);
+  }, [canvasBounds, updateCanvasViewport, viewportScale]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const pending = pendingZoomScrollRef.current;
+    if (!canvas || !pending || Math.abs(pending.scale - viewportScale) > 0.001) {
+      return;
+    }
+    pendingZoomScrollRef.current = null;
+    canvas.scrollLeft = pending.logicalX * viewportScale - pending.viewportX;
+    canvas.scrollTop = pending.logicalY * viewportScale - pending.viewportY;
+    updateCanvasViewport();
+  }, [updateCanvasViewport, viewportScale]);
+
   const pointerToCanvasPoint = useCallback((event: React.PointerEvent<HTMLElement>): BlueprintNodePosition | null => {
     const canvas = canvasRef.current;
     const rect = canvas?.getBoundingClientRect();
@@ -3072,10 +3344,10 @@ function ComponentSubBlueprintCanvas({
       return null;
     }
     return {
-      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale,
-      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale,
+      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale + canvasBounds.minX,
+      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale + canvasBounds.minY,
     };
-  }, [viewportScale]);
+  }, [canvasBounds.minX, canvasBounds.minY, viewportScale]);
 
   const dragEventToCanvasPoint = useCallback((event: React.DragEvent<HTMLElement>): BlueprintNodePosition | null => {
     const canvas = canvasRef.current;
@@ -3084,10 +3356,10 @@ function ComponentSubBlueprintCanvas({
       return null;
     }
     return {
-      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale,
-      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale,
+      x: (event.clientX - rect.left + canvas.scrollLeft) / viewportScale + canvasBounds.minX,
+      y: (event.clientY - rect.top + canvas.scrollTop) / viewportScale + canvasBounds.minY,
     };
-  }, [viewportScale]);
+  }, [canvasBounds.minX, canvasBounds.minY, viewportScale]);
 
   const startMove = useCallback((event: React.PointerEvent<HTMLDivElement>, nodeId: string) => {
     const point = pointerToCanvasPoint(event);
@@ -3108,6 +3380,7 @@ function ComponentSubBlueprintCanvas({
     if (panState && canvasRef.current) {
       canvasRef.current.scrollLeft = panState.scrollLeft - (event.clientX - panState.x);
       canvasRef.current.scrollTop = panState.scrollTop - (event.clientY - panState.y);
+      updateCanvasViewport();
       return;
     }
 
@@ -3119,11 +3392,11 @@ function ComponentSubBlueprintCanvas({
     setPositions((current) => ({
       ...current,
       [dragState.id]: {
-        x: Math.max(12, Math.min(BLUEPRINT_CANVAS_WIDTH - 240, point.x - dragState.offsetX)),
-        y: Math.max(12, Math.min(BLUEPRINT_CANVAS_HEIGHT - 120, point.y - dragState.offsetY)),
+        x: point.x - dragState.offsetX,
+        y: point.y - dragState.offsetY,
       },
     }));
-  }, [pointerToCanvasPoint]);
+  }, [pointerToCanvasPoint, updateCanvasViewport]);
 
   const stopMove = useCallback(() => {
     dragStateRef.current = null;
@@ -3131,7 +3404,9 @@ function ComponentSubBlueprintCanvas({
   }, []);
 
   const startPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 1 || !canvasRef.current) {
+    const target = event.target as HTMLElement;
+    const isBlankCanvasDrag = event.button === 0 && !target.closest("[data-flow-node]");
+    if ((!isBlankCanvasDrag && event.button !== 1) || !canvasRef.current) {
       return;
     }
     event.preventDefault();
@@ -3162,16 +3437,12 @@ function ComponentSubBlueprintCanvas({
     const viewportY = clientY - rect.top;
     const logicalX = (canvas.scrollLeft + viewportX) / viewportScale;
     const logicalY = (canvas.scrollTop + viewportY) / viewportScale;
+    pendingZoomScrollRef.current = { logicalX, logicalY, viewportX, viewportY, scale: nextScale };
     setViewportScale(nextScale);
-    requestAnimationFrame(() => {
-      canvas.scrollLeft = logicalX * nextScale - viewportX;
-      canvas.scrollTop = logicalY * nextScale - viewportY;
-    });
-  }, [viewportScale]);
+  }, [updateCanvasViewport, viewportScale]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
+    if (!canvasElement) {
       return undefined;
     }
     const handleWheel = (event: WheelEvent): void => {
@@ -3179,9 +3450,9 @@ function ComponentSubBlueprintCanvas({
       event.stopPropagation();
       zoomCanvasAt(event.clientX, event.clientY, event.deltaY);
     };
-    canvas.addEventListener("wheel", handleWheel, { passive: false });
-    return () => canvas.removeEventListener("wheel", handleWheel);
-  }, [zoomCanvasAt]);
+    canvasElement.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvasElement.removeEventListener("wheel", handleWheel);
+  }, [canvasElement, zoomCanvasAt]);
 
   const startLink = useCallback((event: React.DragEvent<HTMLButtonElement>, nodeId: string) => {
     setDraggingNodeId(nodeId);
@@ -3209,24 +3480,33 @@ function ComponentSubBlueprintCanvas({
     const point = dragEventToCanvasPoint(event);
     if (point) {
       pendingDropPositionRef.current = {
-        x: Math.max(12, Math.min(BLUEPRINT_CANVAS_WIDTH - 240, point.x - 112)),
-        y: Math.max(12, Math.min(BLUEPRINT_CANVAS_HEIGHT - 120, point.y - 48)),
+        x: point.x - 112,
+        y: point.y - 48,
       };
     }
     onAddFlowNode(kind);
   }, [dragEventToCanvasPoint, onAddFlowNode]);
+  const clearFlowSelectionOnCanvasPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement;
+    if (!target.closest("[data-flow-node]")) {
+      setSelectedFlowNodeId(null);
+    }
+  }, []);
 
   return (
     <div
       className={cn(
         "grid h-full min-h-0",
-        propertyPanelOpen && libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_320px_320px]",
-        propertyPanelOpen && !libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_320px_48px]",
-        !propertyPanelOpen && libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_48px_320px]",
-        !propertyPanelOpen && !libraryPanelOpen && "grid-cols-[minmax(420px,1fr)_48px_48px]",
+        propertyPanelOpen && libraryPanelOpen && "grid-cols-[320px_minmax(420px,1fr)_320px]",
+        propertyPanelOpen && !libraryPanelOpen && "grid-cols-[320px_minmax(420px,1fr)_48px]",
+        !propertyPanelOpen && libraryPanelOpen && "grid-cols-[48px_minmax(420px,1fr)_320px]",
+        !propertyPanelOpen && !libraryPanelOpen && "grid-cols-[48px_minmax(420px,1fr)_48px]",
       )}
     >
-      <div className="flex min-h-0 flex-col">
+      <div className="col-start-2 row-start-1 flex min-h-0 flex-col">
         <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
           <Button onClick={onReturnToPlugin} size="sm" type="button" variant="secondary">
             返回插件蓝图
@@ -3239,7 +3519,7 @@ function ComponentSubBlueprintCanvas({
         </div>
         <div
           className={cn(
-            "relative min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border))_1px,transparent_0)] bg-[length:24px_24px] transition-colors",
+            "relative min-h-0 flex-1 cursor-grab overflow-auto bg-[radial-gradient(circle_at_1px_1px,hsl(var(--border))_1px,transparent_0)] bg-[length:24px_24px] transition-colors active:cursor-grabbing",
             isCanvasDropTarget && "bg-primary/5 outline outline-2 outline-primary/30",
           )}
           onDragLeave={(event) => {
@@ -3249,7 +3529,10 @@ function ComponentSubBlueprintCanvas({
           }}
           onPointerLeave={stopMove}
           onPointerMove={moveNode}
-          onPointerDown={startPan}
+          onPointerDown={(event) => {
+            startPan(event);
+            clearFlowSelectionOnCanvasPointerDown(event);
+          }}
           onPointerUp={stopMove}
           onDragOver={(event) => {
             if (Array.from(event.dataTransfer.types).includes(FLOW_NODE_DRAG_MIME)) {
@@ -3259,22 +3542,23 @@ function ComponentSubBlueprintCanvas({
             }
           }}
           onDrop={dropFlowNodeOnCanvas}
-          ref={canvasRef}
+          onScroll={updateCanvasViewport}
+          ref={bindCanvasRef}
         >
           <div
             className="relative"
             style={{
-              height: BLUEPRINT_CANVAS_HEIGHT * viewportScale,
-              width: BLUEPRINT_CANVAS_WIDTH * viewportScale,
+              height: canvasBounds.height * viewportScale,
+              width: canvasBounds.width * viewportScale,
             }}
           >
             <div
               className="absolute left-0 top-0"
               style={{
-                height: BLUEPRINT_CANVAS_HEIGHT,
+                height: canvasBounds.height,
                 transform: `scale(${viewportScale})`,
                 transformOrigin: "0 0",
-                width: BLUEPRINT_CANVAS_WIDTH,
+                width: canvasBounds.width,
               }}
             >
             <svg className="pointer-events-none absolute inset-0 size-full">
@@ -3287,10 +3571,10 @@ function ComponentSubBlueprintCanvas({
                 const from = positions[edge.fromNodeId];
                 const to = positions[edge.toNodeId];
                 if (!from || !to) return null;
-                const x1 = from.x + 224;
-                const y1 = from.y + 54;
-                const x2 = to.x;
-                const y2 = to.y + 54;
+                const x1 = from.x - canvasBounds.minX + 224;
+                const y1 = from.y - canvasBounds.minY + 54;
+                const x2 = to.x - canvasBounds.minX;
+                const y2 = to.y - canvasBounds.minY + 54;
                 const mid = Math.max(x1 + 44, (x1 + x2) / 2);
                 const fromNode = nodes.find((node) => node.id === edge.fromNodeId);
                 return (
@@ -3318,9 +3602,10 @@ function ComponentSubBlueprintCanvas({
                     "group absolute w-56 rounded-lg border bg-card shadow-sm transition-[border-color,box-shadow]",
                     selected ? "border-primary shadow-md shadow-primary/10" : "border-border",
                   )}
+                  data-flow-node
                   key={node.id}
                   onClick={() => setSelectedFlowNodeId(node.id)}
-                  style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
+                  style={{ transform: `translate(${position.x - canvasBounds.minX}px, ${position.y - canvasBounds.minY}px)` }}
                   title={`${flowNodeLabel(node.kind)}\n${flowNodePlainDescription(node.kind)}\n${flowNodeFriendlySummary(node)}`}
                 >
                   <span className="pointer-events-none absolute left-2 right-2 top-full z-30 mt-1 hidden rounded-md border border-border bg-popover px-2 py-1.5 text-[11px] leading-relaxed text-popover-foreground shadow-md group-hover:block">
@@ -3369,16 +3654,24 @@ function ComponentSubBlueprintCanvas({
             })}
             </div>
           </div>
+          <BlueprintMiniMap
+            bounds={canvasBounds}
+            nodeHeight={96}
+            nodeIds={flowNodeIds}
+            nodeWidth={224}
+            positions={positions}
+            viewport={canvasViewport}
+            viewportScale={viewportScale}
+          />
         </div>
       </div>
 
-      <aside className="min-h-0 overflow-auto border-l border-border bg-card">
+      <aside className="col-start-1 row-start-1 min-h-0 overflow-auto border-r border-border bg-card">
         <div className={cn("sticky top-0 z-10 flex h-12 items-center border-b border-border bg-card", propertyPanelOpen ? "gap-2 px-3" : "justify-center px-1")}>
           {propertyPanelOpen ? <Settings2 className="size-4 shrink-0 text-muted-foreground" /> : null}
           {propertyPanelOpen ? (
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">属性</p>
-              <p className="truncate text-xs text-muted-foreground">当前积木</p>
             </div>
           ) : null}
           <Button
@@ -3389,28 +3682,30 @@ function ComponentSubBlueprintCanvas({
             type="button"
             variant="ghost"
           >
-            {propertyPanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            {propertyPanelOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
           </Button>
         </div>
         {propertyPanelOpen ? (
           <div className="p-4">
-            <FlowNodePropertyWindow
-              component={component}
-              node={selectedFlowNode}
-              nodes={nodes}
-              edges={component.flowEdges ?? []}
-              onChange={onChangeFlowNode}
-              onConnect={onConnectFlowNode}
-              onRemove={(nodeId) => {
-                onRemoveFlowNode(nodeId);
-                setSelectedFlowNodeId((current) => (current === nodeId ? null : current));
-              }}
-            />
+            {selectedFlowNode ? (
+              <FlowNodePropertyWindow
+                component={component}
+                node={selectedFlowNode}
+                nodes={nodes}
+                edges={component.flowEdges ?? []}
+                onChange={onChangeFlowNode}
+                onConnect={onConnectFlowNode}
+                onRemove={(nodeId) => {
+                  onRemoveFlowNode(nodeId);
+                  setSelectedFlowNodeId((current) => (current === nodeId ? null : current));
+                }}
+              />
+            ) : metaEditor}
           </div>
         ) : null}
       </aside>
 
-      <aside className="min-h-0 overflow-auto border-l border-border bg-card">
+      <aside className="col-start-3 row-start-1 min-h-0 overflow-auto border-l border-border bg-card">
         <div className={cn("sticky top-0 z-10 flex h-12 items-center border-b border-border bg-card", libraryPanelOpen ? "gap-2 px-3" : "justify-center px-1")}>
           {libraryPanelOpen ? <Boxes className="size-4 shrink-0 text-muted-foreground" /> : null}
           {libraryPanelOpen ? (
@@ -3467,7 +3762,7 @@ function FlowNodePropertyWindow({
 }: {
   component: MaiBotPluginBlueprintComponent;
   edges: MaiBotPluginBlueprintFlowEdge[];
-  node: MaiBotPluginBlueprintFlowNode | null;
+  node: MaiBotPluginBlueprintFlowNode;
   nodes: MaiBotPluginBlueprintFlowNode[];
   onChange: (nodeId: string, patch: Partial<MaiBotPluginBlueprintFlowNode>) => void;
   onConnect: (fromNodeId: string, toNodeId: string) => void;
@@ -3475,17 +3770,6 @@ function FlowNodePropertyWindow({
 }): React.JSX.Element {
   const nextById = useMemo(() => new Map(edges.map((edge) => [edge.fromNodeId, edge.toNodeId])), [edges]);
   const variables = useMemo(() => collectComponentVariables(component), [component]);
-
-  if (!node) {
-    return (
-      <div className="grid gap-3">
-        <div className="rounded-lg border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
-          选择一个积木后，可以在这里编辑日志、变量、赋值、循环等属性。
-        </div>
-        <VariablePanel variables={variables} />
-      </div>
-    );
-  }
 
   return (
     <div className="grid gap-3">
@@ -3647,7 +3931,7 @@ function FlowNodePropertyWindow({
           </div>
         ) : node.kind === "set_variable" || node.kind === "guard_config" ? (
           <div className="grid grid-cols-2 gap-2">
-            <Field label={node.kind === "set_variable" ? "给这个值起名" : "检查哪个设置"}>
+            <Field label={node.kind === "set_variable" ? "给这个值起名" : "检查哪一个设置"}>
               <Input
                 className="h-8 text-xs"
                 monospace
@@ -3814,7 +4098,6 @@ function collectComponentVariables(component: MaiBotPluginBlueprintComponent): A
 
 function canvasNodeIcon(node: BlueprintCanvasNode): React.ReactNode {
   if (node.kind === "manifest") return <FileJson className="size-4" />;
-  if (node.kind === "lifecycle") return <Hammer className="size-4" />;
   if (node.kind === "config") return <Settings2 className="size-4" />;
   if (node.component?.kind === "tool") return <Wrench className="size-4" />;
   if (node.component?.kind === "command") return <TerminalSquare className="size-4" />;
@@ -3823,21 +4106,17 @@ function canvasNodeIcon(node: BlueprintCanvasNode): React.ReactNode {
 
 function canvasNodeToneClass(node: BlueprintCanvasNode): string {
   if (node.kind === "manifest") return "bg-primary/15 text-primary";
-  if (node.kind === "lifecycle") return "bg-success/15 text-success";
   if (node.kind === "config") return "bg-warning/20 text-warning-foreground";
   if (node.component?.kind === "tool") return "bg-blue-500/12 text-blue-500";
-  if (node.component?.kind === "hook") return "bg-success/15 text-success";
   return "bg-secondary text-secondary-foreground";
 }
 
 function blueprintEdgeLabel(node: BlueprintCanvasNode | undefined): string {
   if (!node) return "连接";
   if (node.kind === "manifest") return "声明";
-  if (node.kind === "lifecycle") return "加载";
   if (node.kind === "config") return "设置";
   if (node.component?.kind === "tool") return "工具";
   if (node.component?.kind === "command") return "命令";
-  if (node.component?.kind === "hook") return "事件";
   return "下一步";
 }
 
@@ -3853,13 +4132,13 @@ function flowEdgeLabel(node: MaiBotPluginBlueprintFlowNode | undefined): string 
 function BlueprintCanvas({ blueprint }: { blueprint: MaiBotPluginBlueprint }): React.JSX.Element {
   const toolCount = blueprint.components.filter((component) => component.kind === "tool").length;
   const commandCount = blueprint.components.filter((component) => component.kind === "command").length;
-  const hookCount = blueprint.components.filter((component) => component.kind === "hook").length;
+  const blueprintSummary = blueprintEntrySummary(toolCount, commandCount);
   return (
     <div className="mx-auto grid max-w-4xl gap-5 p-5">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold">节点</h3>
-          <p className="truncate text-xs text-muted-foreground">{toolCount} Tool / {commandCount} Command / {hookCount} Hook / {blueprint.configFields.length} Config</p>
+          {blueprintSummary ? <p className="truncate text-xs text-muted-foreground">{blueprintSummary}</p> : null}
         </div>
         <Badge variant="secondary">{blueprint.manifest.version}</Badge>
       </div>
@@ -3875,9 +4154,6 @@ function BlueprintCanvas({ blueprint }: { blueprint: MaiBotPluginBlueprint }): R
         <Connector />
 
         <div className="grid gap-4 md:grid-cols-2">
-          <CanvasNode icon={<Hammer />} title="生命周期" tone="success" subtitle="on_load / on_unload / on_config_update">
-            <Badge variant="secondary">自动生成</Badge>
-          </CanvasNode>
           <CanvasNode icon={<Settings2 />} title="配置模型" tone="warning" subtitle="PluginConfigBase + config.toml">
             <div className="flex flex-wrap gap-1">
               {blueprint.configFields.slice(0, 4).map((field) => (
@@ -3893,16 +4169,15 @@ function BlueprintCanvas({ blueprint }: { blueprint: MaiBotPluginBlueprint }): R
         <div className="grid gap-3 md:grid-cols-2">
           {blueprint.components.map((component) => (
             <CanvasNode
-              icon={component.kind === "tool" ? <Wrench /> : component.kind === "command" ? <TerminalSquare /> : <MessageSquare />}
+              icon={component.kind === "tool" ? <Wrench /> : <TerminalSquare />}
               key={component.id}
               subtitle={component.description}
               title={component.name}
-              tone={component.kind === "tool" ? "info" : component.kind === "hook" ? "success" : "neutral"}
+              tone={component.kind === "tool" ? "info" : "neutral"}
             >
               <div className="flex flex-wrap gap-1">
                 <Badge variant="secondary">{componentKindLabel(component.kind)}</Badge>
                 {component.kind === "command" ? <Badge variant="secondary">{component.trigger || "^/command$"}</Badge> : null}
-                {component.kind === "hook" ? <Badge variant="secondary">{component.eventType || "ON_MESSAGE"}</Badge> : null}
                 {component.kind === "tool" ? <Badge variant="secondary">{component.parameters?.length ?? 0} 参数</Badge> : null}
                 <Badge variant="secondary">{component.flowNodes?.length ?? 0} 积木</Badge>
               </div>

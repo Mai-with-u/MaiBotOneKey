@@ -129,6 +129,26 @@ export interface TerminalSettings {
   fontSize: number;
 }
 
+export interface OpenCodeSettings {
+  useBundledPluginInstructions: boolean;
+}
+
+export type AppIconId = "soft" | "sprout" | "orbit" | "bean" | "classic";
+
+export interface AppIconOption {
+  id: AppIconId;
+  label: string;
+  description: string;
+  previewUrl?: string;
+}
+
+export interface AppIconSettings {
+  selectedIconId: AppIconId;
+  options: AppIconOption[];
+}
+
+export type PluginBuilderMode = "agent" | "nodes";
+
 export interface NetworkProxySettings {
   enabled: boolean;
   port: number;
@@ -148,6 +168,7 @@ export interface RuntimePaths {
   snowlumaRoot: string;
   bundledModulesRoot: string;
   runtimeRoot: string;
+  opencodePluginInstructionsPath: string;
   defaultPythonOverridesRoot: string;
   pythonOverridesRoot: string;
   live2dRoot: string;
@@ -267,6 +288,8 @@ export interface DesktopSnapshot {
   runtimePathConfigs: RuntimePathConfig[];
   runtimeResourcePathConfigs: RuntimeResourcePathConfig[];
   terminalSettings: TerminalSettings;
+  openCodeSettings: OpenCodeSettings;
+  appIconSettings: AppIconSettings;
   networkProxySettings: NetworkProxySettings;
   appVersion: string;
   appLatestTag?: string;
@@ -603,7 +626,7 @@ export interface MaiBotPluginOperationResult {
 
 export type MaiBotPluginBlueprintScalarType = "string" | "integer" | "float" | "boolean";
 
-export type MaiBotPluginBlueprintComponentKind = "tool" | "command" | "hook";
+export type MaiBotPluginBlueprintComponentKind = "tool" | "command";
 
 export type MaiBotPluginBlueprintFlowNodeKind =
   | "send_text"
@@ -652,7 +675,6 @@ export interface MaiBotPluginBlueprintComponent {
   kind: MaiBotPluginBlueprintComponentKind;
   name: string;
   description: string;
-  detail?: string;
   trigger?: string;
   eventType?: string;
   responseText?: string;
@@ -1104,6 +1126,8 @@ export interface DesktopBridge {
   };
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) => Promise<NetworkProxySettings>;
+    saveOpenCodeSettings: (settings: OpenCodeSettings) => Promise<OpenCodeSettings>;
+    selectAppIcon: (iconId: AppIconId) => Promise<AppIconSettings>;
     checkUpdate: () => Promise<LauncherUpdateInfo>;
     downloadAndInstallUpdate: () => Promise<LauncherUpdateApplyResult>;
     resetSettings: () => Promise<LauncherResetResult>;
@@ -1203,6 +1227,7 @@ export interface DesktopBridge {
     start: (request: PtyStartRequest) => Promise<PtySessionSnapshot>;
     stop: (request: PtyStopRequest) => Promise<void>;
     kill: (sessionId: string) => Promise<void>;
+    close: (sessionId: string) => Promise<void>;
     input: (request: PtyInputRequest) => Promise<void>;
     resize: (request: PtyResizeRequest) => Promise<void>;
     clear: (sessionId: string) => Promise<void>;

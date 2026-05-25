@@ -113,6 +113,9 @@ export function configureRuntimePaths(): RuntimePaths {
     snowlumaRoot: join(defaultResourceRoot, "modules", "SnowLuma"),
     bundledModulesRoot,
     runtimeRoot: join(payloadRoot, "runtime"),
+    opencodePluginInstructionsPath: app.isPackaged
+      ? join(payloadRoot, "runtime", "opencode", "plugin_code.md")
+      : join(installRoot, "resources", "opencode", "plugin_code.md"),
     defaultPythonOverridesRoot: defaults.pythonOverrides,
     pythonOverridesRoot: defaults.pythonOverrides,
     live2dRoot: join(userDataRoot, "live2d"),

@@ -5,6 +5,8 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   CloseAction,
+  AppIconId,
+  AppIconSettings,
   DesktopSnapshot,
   InitRepairResult,
   InitState,
@@ -52,6 +54,7 @@ import type {
   ModuleRuntimeVersions,
   ModuleUpdateResult,
   NetworkProxySettings,
+  OpenCodeSettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -85,11 +88,13 @@ import {
   validateMaiBotPluginBlueprint,
 } from "../../shared/plugin-blueprint";
 import { InitManager } from "../services/init-manager";
+import type { AppIconManager } from "../services/app-icon-manager";
 import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { NetworkProxyManager } from "../services/network-proxy-manager";
+import { OpenCodeSettingsManager } from "../services/opencode-settings-manager";
 import { PluginBuilderLibrary } from "../services/plugin-builder-library";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
@@ -106,6 +111,8 @@ const LAUNCHER_SETTING_FILES = [
   "module-sources.json",
   "python-dependency-source.json",
   "network-proxy.json",
+  "opencode-settings.json",
+  "app-icon-settings.json",
 ];
 const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "live2d", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
@@ -155,10 +162,13 @@ interface RegisterAppIpcOptions {
   initManager: InitManager;
   moduleUpdater: ModuleUpdater;
   networkProxyManager: NetworkProxyManager;
+  openCodeSettingsManager: OpenCodeSettingsManager;
   pythonDependencyManager: PythonDependencyManager;
   resourceLocationManager: ResourceLocationManager;
   serviceManager: ServiceManager;
   logStore: LogStore;
+  appIconManager: AppIconManager;
+  applyAppIcon: () => void;
   getMainWindow: () => BrowserWindow | null;
   requestQuit: () => void;
   showMainWindow: () => void;
@@ -726,9 +736,31 @@ function isStatisticStyleLine(line: string): boolean {
   return /^[a-z][\w-]*\s*:\s*[-\w.%#()'",\s]+$/iu.test(line);
 }
 
+function isChatStatisticHeading(line: string): boolean {
+  const normalized = line.trim().toLowerCase();
+  return (
+    line.includes("\u804A\u5929\u6D88\u606F\u7EDF\u8BA1") ||
+    /^(?:chat\s+)?message\s+statistics$/iu.test(normalized) ||
+    /^chat\s+statistics$/iu.test(normalized)
+  );
+}
+
+function isChatStatisticBoundary(line: string): boolean {
+  const normalized = line.trim().toLowerCase();
+  return (
+    line.includes("\u7EDF\u8BA1\u65F6\u6BB5") ||
+    line.includes("\u6309\u6A21\u578B\u5206\u7C7B\u7EDF\u8BA1") ||
+    line.includes("\u6309\u6A21\u5757\u5206\u7C7B\u7EDF\u8BA1") ||
+    line.includes("\u6309\u8BF7\u6C42\u7C7B\u578B\u5206\u7C7B\u7EDF\u8BA1") ||
+    line.includes("\u6570\u636E\u5206\u5E03\u56FE\u8868") ||
+    line.includes("\u6307\u6807\u8D8B\u52BF") ||
+    /^(?:statistics\s+period|model\s+statistics|module\s+statistics|request\s+type\s+statistics|data\s+distribution|metrics\s+trend|charts?)$/iu.test(normalized)
+  );
+}
+
 function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] {
   const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-  const startIndex = lines.findIndex((line) => line.includes("\u804A\u5929\u6D88\u606F\u7EDF\u8BA1") || line.toLowerCase().includes("chat"));
+  const startIndex = lines.findIndex(isChatStatisticHeading);
   if (startIndex < 0) {
     return [];
   }
@@ -737,6 +769,9 @@ function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] 
   for (const line of lines.slice(startIndex + 1)) {
     if (isStatisticStyleLine(line)) {
       continue;
+    }
+    if (isChatStatisticBoundary(line)) {
+      break;
     }
     if (line.startsWith("-") || line.includes("Token/") || line.toLowerCase().includes("cost")) {
       break;
@@ -806,10 +841,13 @@ export function registerAppIpc({
   initManager,
   moduleUpdater,
   networkProxyManager,
+  openCodeSettingsManager,
   pythonDependencyManager,
   resourceLocationManager,
   serviceManager,
   logStore,
+  appIconManager,
+  applyAppIcon,
   getMainWindow,
   requestQuit,
   showMainWindow,
@@ -1260,6 +1298,8 @@ export function registerAppIpc({
     runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
     runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
     terminalSettings: serviceManager.getTerminalSettings(),
+    openCodeSettings: openCodeSettingsManager.getSettings(),
+    appIconSettings: appIconManager.getSettings(),
     networkProxySettings: networkProxyManager.getSettings(),
     appVersion: app.getVersion(),
     appLatestTag: remoteAppVersionCache.appLatestTag,
@@ -1364,6 +1404,9 @@ export function registerAppIpc({
     await serviceManager.resetRuntimePathConfig("git");
     await serviceManager.saveTerminalSettings({ ...serviceManager.getTerminalSettings(), useEmbeddedTerminal: true });
     await networkProxyManager.resetSettings();
+    await openCodeSettingsManager.resetSettings();
+    appIconManager.reset();
+    applyAppIcon();
 
     for (const key of ["maibot", "napcat"] as const) {
       const config = resourceLocationManager.getPathConfigs().find((item) => item.key === key);
@@ -1722,6 +1765,28 @@ export function registerAppIpc({
       return result;
     },
   );
+
+  ipcMain.handle(
+    "launcher:saveOpenCodeSettings",
+    async (_event, settings: OpenCodeSettings): Promise<OpenCodeSettings> => {
+      const result = await openCodeSettingsManager.saveSettings(settings);
+      logStore.append(
+        "desktop",
+        "system",
+        result.useBundledPluginInstructions
+          ? "OpenCode 已启用内置插件编写说明"
+          : "OpenCode 已恢复项目默认说明",
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
+
+  ipcMain.handle("launcher:selectAppIcon", async (_event, iconId: AppIconId): Promise<AppIconSettings> => {
+    const result = await appIconManager.select(iconId);
+    applyAppIcon();
+    return result;
+  });
 
   ipcMain.handle("launcher:checkUpdate", async (): Promise<LauncherUpdateInfo> => {
     return publicLauncherUpdateInfo(await checkLauncherUpdate());

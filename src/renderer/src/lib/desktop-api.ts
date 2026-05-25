@@ -26,6 +26,7 @@ const fallbackSnapshot: DesktopSnapshot = {
     snowlumaRoot: "开发预览/modules/SnowLuma",
     bundledModulesRoot: "开发预览/modules",
     runtimeRoot: "开发预览/runtime",
+    opencodePluginInstructionsPath: "开发预览/resources/opencode/plugin_code.md",
     defaultPythonOverridesRoot: "开发预览/python-overrides",
     pythonOverridesRoot: "开发预览/python-overrides",
     live2dRoot: "开发预览/live2d",
@@ -123,6 +124,39 @@ const fallbackSnapshot: DesktopSnapshot = {
     useEmbeddedTerminal: true,
     fontSize: 12,
   },
+  openCodeSettings: {
+    useBundledPluginInstructions: true,
+  },
+  appIconSettings: {
+    selectedIconId: "sprout",
+    options: [
+      {
+        id: "soft",
+        label: "圆角头像",
+        description: "使用新的柔和圆角麦麦头像。",
+      },
+      {
+        id: "sprout",
+        label: "小芽头像",
+        description: "使用带小芽和圆滚滚脸型的麦麦头像。",
+      },
+      {
+        id: "orbit",
+        label: "环形小芽",
+        description: "使用带环形轨道装饰的小芽头像。",
+      },
+      {
+        id: "bean",
+        label: "橙团小芽",
+        description: "使用更近景、更圆润的橙团小芽头像。",
+      },
+      {
+        id: "classic",
+        label: "经典头像",
+        description: "使用原来的手绘麦麦头像。",
+      },
+    ],
+  },
   networkProxySettings: {
     enabled: false,
     port: 7890,
@@ -170,6 +204,8 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
     runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
+    openCodeSettings: snapshot.openCodeSettings ?? fallbackSnapshot.openCodeSettings,
+    appIconSettings: snapshot.appIconSettings ?? fallbackSnapshot.appIconSettings,
     networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,
     moduleVersions: {
       ...fallbackSnapshot.moduleVersions,

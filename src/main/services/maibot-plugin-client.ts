@@ -1145,8 +1145,7 @@ function parseToolComponent(
     id: `tool-${name}-${index}`,
     kind: "tool",
     name,
-    description: readDecoratorStringArg(argsText, ["description", "brief_description"]) || name,
-    detail: readDecoratorStringArg(argsText, ["detailed_description"]) || readDecoratorStringArg(argsText, ["description"]),
+    description: readDecoratorStringArg(argsText, ["description", "brief_description", "detailed_description"]) || name,
     responseText: readMethodMessage(methodText) || "工具已执行。",
     parameters: parseToolParameters(argsText, methodText),
   };

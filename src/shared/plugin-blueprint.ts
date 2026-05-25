@@ -29,6 +29,7 @@ const DEFAULT_HOST_MIN_VERSION = "1.0.0";
 const DEFAULT_HOST_MAX_VERSION = "1.99.99";
 const DEFAULT_SDK_MIN_VERSION = "2.0.0";
 const DEFAULT_SDK_MAX_VERSION = "2.99.99";
+const STRICT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 
 const RESERVED_PYTHON_IDENTIFIERS = new Set([
   "False",
@@ -99,6 +100,10 @@ export function sanitizeMaiBotPluginFolderName(value: string, pluginId: string):
   return folderName || fallback;
 }
 
+export function isValidMaiBotPluginVersion(version: unknown): version is string {
+  return typeof version === "string" && STRICT_VERSION_PATTERN.test(version.trim());
+}
+
 export function validateMaiBotPluginBlueprint(blueprint: MaiBotPluginBlueprint): string[] {
   const errors: string[] = [];
   const manifest = blueprint.manifest;
@@ -109,8 +114,17 @@ export function validateMaiBotPluginBlueprint(blueprint: MaiBotPluginBlueprint):
   if (!manifest.name.trim()) {
     errors.push("插件名称不能为空。");
   }
-  if (!/^\d+\.\d+\.\d+$/u.test(manifest.version.trim())) {
-    errors.push("插件版本需要是三段式语义版本，例如 1.0.0。");
+  const versionFields = [
+    { label: "插件版本", value: manifest.version, example: "1.0.0" },
+    { label: "MaiBot 最低版本", value: manifest.minHostVersion, example: "1.0.0" },
+    { label: "MaiBot 最高版本", value: manifest.maxHostVersion, example: "1.99.99" },
+    { label: "SDK 最低版本", value: manifest.minSdkVersion, example: "2.0.0" },
+    { label: "SDK 最高版本", value: manifest.maxSdkVersion, example: "2.99.99" },
+  ];
+  for (const field of versionFields) {
+    if (!isValidMaiBotPluginVersion(field.value)) {
+      errors.push(`${field.label}需要是三段式语义版本，例如 ${field.example}。`);
+    }
   }
   if (!isHttpUrl(manifest.authorUrl || DEFAULT_AUTHOR_URL)) {
     errors.push("作者 URL 需要是 http 或 https 地址。");
@@ -222,10 +236,6 @@ function buildPluginPython(blueprint: NormalizedBlueprint): string {
   if (blueprint.components.some((component) => component.kind === "tool")) {
     imports.add("Tool");
   }
-  if (blueprint.components.some((component) => component.kind === "hook")) {
-    imports.add("EventHandler");
-  }
-
   const lines: string[] = [
     `"""${blueprint.manifest.name}`,
     "",
@@ -244,9 +254,6 @@ function buildPluginPython(blueprint: NormalizedBlueprint): string {
   if (blueprint.components.some((component) => component.kind === "tool")) {
     typeImports.add("ToolParameterInfo");
     typeImports.add("ToolParamType");
-  }
-  if (blueprint.components.some((component) => component.kind === "hook")) {
-    typeImports.add("EventType");
   }
   if (typeImports.size > 0) {
     lines.push(`from maibot_sdk.types import ${[...typeImports].sort().join(", ")}`);
@@ -283,16 +290,14 @@ function buildPluginPython(blueprint: NormalizedBlueprint): string {
   lines.push("");
 
   if (blueprint.components.length === 0) {
-    lines.push("    # 在编写器里添加 Tool、Command 或 Hook 节点后会生成对应组件。");
+    lines.push("    # 在编写器里添加 Tool 或 Command 节点后会生成对应组件。");
     lines.push("    pass");
   } else {
     for (const component of blueprint.components) {
-      if (component.kind === "tool") {
-        lines.push(...buildToolMethod(component));
-      } else if (component.kind === "command") {
+      if (component.kind === "command") {
         lines.push(...buildCommandMethod(component));
       } else {
-        lines.push(...buildHookMethod(component));
+        lines.push(...buildToolMethod(component));
       }
       lines.push("");
     }
@@ -335,8 +340,7 @@ function buildToolMethod(component: MaiBotPluginBlueprintComponent): string[] {
   const lines = [
     "    @Tool(",
     `        "${escapePythonString(name)}",`,
-    `        brief_description="${escapePythonString(component.description || name)}",`,
-    `        detailed_description="${escapePythonString(component.detail || component.description || name)}",`,
+    `        description="${escapePythonString(component.description || name)}",`,
   ];
 
   if (parameters.length > 0) {
@@ -353,9 +357,13 @@ function buildToolMethod(component: MaiBotPluginBlueprintComponent): string[] {
   const signatureParameters = parameters.map((parameter) => (
     `${toPythonIdentifier(parameter.name)}: ${pythonTypeForScalar(parameter.type)} = ${pythonLiteralForScalar(parameter.defaultValue, parameter.type)}`
   ));
-  lines.push(`    async def ${handlerName}(self, ${[...signatureParameters, "**kwargs: Any"].join(", ")}) -> dict[str, Any]:`);
+  const hasStreamIdParameter = parameters.some((parameter) => toPythonIdentifier(parameter.name) === "stream_id");
+  const toolSignatureParameters = hasStreamIdParameter
+    ? signatureParameters
+    : [...signatureParameters, 'stream_id: str = ""'];
+  lines.push(`    async def ${handlerName}(self, ${[...toolSignatureParameters, "**kwargs: Any"].join(", ")}) -> dict[str, Any]:`);
   lines.push("        del kwargs");
-  lines.push(...buildFlowBody(component, "tool", name, component.responseText || "工具已执行"));
+  lines.push(...buildFlowBody(component, "tool", name, component.responseText || "工具已执行", parameters));
   return lines;
 }
 
@@ -368,28 +376,16 @@ function buildCommandMethod(component: MaiBotPluginBlueprintComponent): string[]
     `    async def ${handlerName}(self, stream_id: str = "", **kwargs: Any):`,
     "        del kwargs",
   ];
-  lines.push(...buildFlowBody(component, "command", name, component.responseText || "命令已执行"));
-  return lines;
-}
-
-function buildHookMethod(component: MaiBotPluginBlueprintComponent): string[] {
-  const name = toComponentName(component.name);
-  const handlerName = toPythonIdentifier(`handle_${name}`);
-  const eventType = normalizeEventType(component.eventType);
-  const lines = [
-    `    @EventHandler("${escapePythonString(name)}", description="${escapePythonString(component.description || name)}", event_type=EventType.${eventType})`,
-    `    async def ${handlerName}(self, message: Any = None, stream_id: str = "", **kwargs: Any):`,
-    "        del kwargs",
-  ];
-  lines.push(...buildFlowBody(component, "hook", name, component.responseText || "Hook 已触发"));
+  lines.push(...buildFlowBody(component, "command", name, component.responseText || "命令已执行", []));
   return lines;
 }
 
 function buildFlowBody(
   component: MaiBotPluginBlueprintComponent,
-  mode: "tool" | "command" | "hook",
+  mode: "tool" | "command",
   componentName: string,
   defaultMessage: string,
+  parameters: MaiBotPluginBlueprintParameter[],
 ): string[] {
   const nodes = orderedFlowNodes(component);
   if (nodes.length === 0) {
@@ -397,6 +393,7 @@ function buildFlowBody(
   }
 
   const lines: string[] = [`        message = "${escapePythonString(defaultMessage)}"`];
+  const availableVariables = collectAvailablePythonVariables(component, parameters);
   let returned = false;
   for (const node of nodes) {
     if (node.kind === "comment") {
@@ -412,6 +409,7 @@ function buildFlowBody(
       const value = node.value?.trim() || "";
       lines.push(`        ${variableName} = "${escapePythonString(value)}"`);
       lines.push(`        message = str(${variableName})`);
+      availableVariables.add(variableName);
     } else if (node.kind === "if_condition") {
       const condition = sanitizePythonExpression(node.value || "True", "True");
       const failureMessage = node.rightValue?.trim() || node.configPath?.trim() || "条件不满足";
@@ -425,6 +423,7 @@ function buildFlowBody(
       const targetName = toPythonIdentifier(node.targetName || node.configPath || "compare_result");
       lines.push(`        ${targetName} = (${left}) ${operator} (${right})`);
       lines.push(`        message = str(${targetName})`);
+      availableVariables.add(targetName);
     } else if (node.kind === "boolean_logic") {
       const operator = sanitizePythonOperator(node.operator, ["and", "or", "not"], "and");
       const left = sanitizePythonExpression(node.leftValue || "True", "True");
@@ -436,6 +435,7 @@ function buildFlowBody(
         lines.push(`        ${targetName} = (${left}) ${operator} (${right})`);
       }
       lines.push(`        message = str(${targetName})`);
+      availableVariables.add(targetName);
     } else if (node.kind === "math_operation") {
       const left = sanitizePythonExpression(node.leftValue || "0", "0");
       const operator = sanitizePythonOperator(node.operator, ["+", "-", "*", "/", "//", "%"], "+");
@@ -443,12 +443,14 @@ function buildFlowBody(
       const targetName = toPythonIdentifier(node.targetName || node.configPath || "math_result");
       lines.push(`        ${targetName} = (${left}) ${operator} (${right})`);
       lines.push(`        message = str(${targetName})`);
+      availableVariables.add(targetName);
     } else if (node.kind === "join_text") {
       const left = escapePythonString(node.leftValue ?? "");
       const right = escapePythonString(node.rightValue ?? "");
       const targetName = toPythonIdentifier(node.targetName || node.configPath || "joined_text");
       lines.push(`        ${targetName} = "${left}" + "${right}"`);
       lines.push(`        message = str(${targetName})`);
+      availableVariables.add(targetName);
     } else if (node.kind === "guard_config") {
       const configPath = normalizeConfigPath(node.configPath || "");
       if (configPath.length > 0) {
@@ -463,6 +465,7 @@ function buildFlowBody(
       const iterable = sanitizePythonExpression(node.value || "range(3)", "range(3)");
       lines.push(`        for ${variableName} in ${iterable}:`);
       lines.push(`            self.ctx.logger.info(f"${escapePythonString(variableName)}={${variableName}}")`);
+      availableVariables.add(variableName);
     } else if (node.kind === "wait") {
       const seconds = sanitizePythonExpression(node.value || "1", "1");
       lines.push(`        await asyncio.sleep(float(${seconds}))`);
@@ -471,10 +474,11 @@ function buildFlowBody(
       if (configPath.length > 0) {
         lines.push(`        config_value = self.config.${configPath.join(".")}`);
         lines.push("        message = str(config_value)");
+        availableVariables.add("config_value");
       }
     } else if (node.kind === "send_text") {
       const text = node.value?.trim() || defaultMessage;
-      lines.push(`        message = "${escapePythonString(text)}"`);
+      lines.push(`        message = ${pythonTextExpression(text, availableVariables)}`);
       lines.push("        if stream_id:");
       lines.push("            await self.ctx.send.text(message, stream_id)");
     } else if (node.kind === "return_success") {
@@ -489,7 +493,7 @@ function buildFlowBody(
 }
 
 function buildDefaultFlowBody(
-  mode: "tool" | "command" | "hook",
+  mode: "tool" | "command",
   componentName: string,
   defaultMessage: string,
 ): string[] {
@@ -502,28 +506,65 @@ function buildDefaultFlowBody(
   return lines;
 }
 
-function buildReturnLines(mode: "tool" | "command" | "hook", componentName: string): string[] {
+function buildReturnLines(mode: "tool" | "command", componentName: string): string[] {
   if (mode === "tool") {
     return [`        return {"success": True, "name": "${escapePythonString(componentName)}", "message": message}`];
-  }
-  if (mode === "hook") {
-    return ["        return True, True, message, None, None"];
   }
   return ["        return True, message, True"];
 }
 
 function buildFailureReturnLines(
-  mode: "tool" | "command" | "hook",
+  mode: "tool" | "command",
   componentName: string,
   indent = "        ",
 ): string[] {
   if (mode === "tool") {
     return [`${indent}return {"success": False, "name": "${escapePythonString(componentName)}", "message": message}`];
   }
-  if (mode === "hook") {
-    return [`${indent}return False, True, message, None, None`];
-  }
   return [`${indent}return False, message, True`];
+}
+
+function collectAvailablePythonVariables(
+  component: MaiBotPluginBlueprintComponent,
+  parameters: MaiBotPluginBlueprintParameter[],
+): Set<string> {
+  const variables = new Set(["message", "stream_id", "config_value"]);
+  for (const parameter of parameters) {
+    variables.add(toPythonIdentifier(parameter.name));
+  }
+  return variables;
+}
+
+function pythonTextExpression(value: string, availableVariables: Set<string>): string {
+  const trimmed = value.trim();
+  if (isPythonIdentifier(trimmed) && availableVariables.has(trimmed)) {
+    return `str(${trimmed})`;
+  }
+  if (/\{\{[^}]+\}\}/u.test(value)) {
+    return pythonTemplateExpression(value, availableVariables);
+  }
+  return `"${escapePythonString(value)}"`;
+}
+
+function pythonTemplateExpression(value: string, availableVariables: Set<string>): string {
+  let output = "";
+  let cursor = 0;
+  const pattern = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
+  for (const match of value.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    output += escapePythonFStringText(value.slice(cursor, index));
+    const variableName = match[1];
+    output += availableVariables.has(variableName)
+      ? `{${variableName}}`
+      : escapePythonFStringText(match[0]);
+    cursor = index + match[0].length;
+  }
+  output += escapePythonFStringText(value.slice(cursor));
+  return `f"${output}"`;
+}
+
+function isPythonIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) && !RESERVED_PYTHON_IDENTIFIERS.has(value);
 }
 
 function sanitizePythonComment(value: string): string {
@@ -576,11 +617,6 @@ function normalizeConfigPath(value: string): string[] {
     .filter(Boolean);
 }
 
-function normalizeEventType(value: string | undefined): string {
-  const normalized = (value || "ON_MESSAGE").trim().toUpperCase().replace(/[^A-Z0-9_]+/gu, "_");
-  return normalized || "ON_MESSAGE";
-}
-
 function buildConfigToml(blueprint: NormalizedBlueprint): string {
   const sections = buildConfigSections(blueprint.configFields);
   const lines: string[] = [];
@@ -616,10 +652,9 @@ function buildConfigSections(fields: MaiBotPluginBlueprintConfigField[]): Config
 function normalizeComponent(component: MaiBotPluginBlueprintComponent): MaiBotPluginBlueprintComponent {
   return {
     ...component,
-    kind: component.kind === "command" || component.kind === "hook" ? component.kind : "tool",
+    kind: component.kind === "command" ? component.kind : "tool",
     name: toComponentName(component.name),
     description: component.description.trim(),
-    detail: component.detail?.trim(),
     trigger: component.trigger?.trim(),
     eventType: component.eventType?.trim(),
     responseText: component.responseText?.trim(),
@@ -839,6 +874,10 @@ function toTomlKey(value: string): string {
 
 function escapePythonString(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\r/gu, "\\r").replace(/\n/gu, "\\n");
+}
+
+function escapePythonFStringText(value: string): string {
+  return escapePythonString(value).replace(/\{/gu, "{{").replace(/\}/gu, "}}");
 }
 
 function escapePythonRawString(value: string): string {

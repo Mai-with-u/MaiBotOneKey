@@ -418,6 +418,7 @@ function ServiceSummary({
   icon: React.ReactNode;
   service: ServiceDescriptor | undefined;
   webuiAction?: {
+    title: string;
     label: string;
     port: string;
     portValid: boolean;
@@ -426,7 +427,7 @@ function ServiceSummary({
   };
   adapterAction?: {
     title: string;
-    description: string;
+    description?: string;
     label: string;
     onClick: () => void;
   };
@@ -449,37 +450,41 @@ function ServiceSummary({
         ) : null}
       </div>
       {(webuiAction || adapterAction) ? (
-        <div className="grid gap-3 sm:grid-cols-[auto_minmax(280px,1fr)] sm:items-center">
+        <div className="grid gap-3 sm:grid-cols-2">
           {webuiAction ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                className="h-8 justify-self-start px-3 text-xs"
-                disabled={!webuiAction.portValid}
-                onClick={webuiAction.onClick}
-                size="sm"
-                variant="secondary"
-              >
-                <ExternalLink className="size-4" />
-                {webuiAction.label}
-              </Button>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                端口
-                <Input
-                  className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
-                  inputMode="numeric"
-                  onChange={(event) => webuiAction.onPortChange(event.target.value.replace(/\D/gu, "").slice(0, 5))}
-                  value={webuiAction.port}
-                />
-              </label>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+              <p className="min-w-0 truncate text-xs font-semibold">{webuiAction.title}</p>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <label aria-label="端口" className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Input
+                    className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
+                    inputMode="numeric"
+                    onChange={(event) => webuiAction.onPortChange(event.target.value.replace(/\D/gu, "").slice(0, 5))}
+                    value={webuiAction.port}
+                  />
+                </label>
+                <Button
+                  className="h-8 justify-self-start px-3 text-xs"
+                  disabled={!webuiAction.portValid}
+                  onClick={webuiAction.onClick}
+                  size="sm"
+                  variant="secondary"
+                >
+                  <ExternalLink className="size-4" />
+                  {webuiAction.label}
+                </Button>
+              </div>
             </div>
           ) : null}
           {adapterAction ? (
             <div className="grid gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold">{adapterAction.title}</p>
-                <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
-                  {adapterAction.description}
-                </p>
+                {adapterAction.description ? (
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {adapterAction.description}
+                  </p>
+                ) : null}
               </div>
               <Button className="h-7 px-2.5 text-[11px]" onClick={adapterAction.onClick} size="sm" variant="secondary">
                 <Settings />
@@ -556,7 +561,7 @@ function LauncherUpdateCard({
             <Download className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">一键包版本和更新</p>
+            <p className="truncate text-sm font-semibold">一键包版本</p>
           </div>
         </div>
         <Badge dot variant={latestTag ? (updateAvailable ? "warning" : "success") : "secondary"}>
@@ -653,7 +658,7 @@ function MaiBotOverviewCard({
         {activeTab === "version" ? (
           <div className="grid min-w-0 gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
             <div className="min-w-0">
-              <p className="text-xs text-muted-foreground">MaiBot 本地版本</p>
+              <p className="text-xs text-muted-foreground">MaiBot 版本</p>
               <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
                 {valueOrFallback(localVersion)}
               </p>
@@ -672,6 +677,7 @@ function MaiBotOverviewCard({
                 </span>
               </div>
               <Button
+                aria-label="更新 MaiBot"
                 className="mt-1 h-7 justify-self-end px-2.5 text-[11px]"
                 disabled={updateBusy}
                 onClick={onUpdate}
@@ -679,7 +685,6 @@ function MaiBotOverviewCard({
                 variant="secondary"
               >
                 {updateBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                更新
               </Button>
             </div>
           </div>
@@ -782,13 +787,12 @@ function HomeStatsPanel({
           </span>
           <div className="min-w-0">
             <p className="text-sm font-semibold">统计信息</p>
-            <p className="text-[11px] text-muted-foreground">当前实例概览</p>
           </div>
         </div>
 
         <div className="grid gap-2 text-xs">
-          <DetailRow label="服务运行" value={`${runningCount}/${services.length}`} />
-          <DetailRow label="端口可用" value={`${readyCount}/${services.length}`} />
+          <DetailRow label="" value={`${runningCount}/${services.length}`} />
+          <DetailRow label="" value={`${readyCount}/${services.length}`} />
           <DetailRow label="一键包版本" value={`v${snapshot.appVersion}`} />
           <DetailRow label="MaiBot 本地版本" value={snapshot.moduleVersions.maibotLocal} />
           <DetailRow label="QQ 后端" value={qqBackend} />
@@ -1598,14 +1602,14 @@ export function HomePanel({
               {messagePlatformConfigured ? (
                 <ServiceSummary
                   adapterAction={{
-                    title: `${adapterName}插件设置`,
-                    description: "调整消息适配、连接与过滤相关配置。",
+                    title: `${adapterName.replace(/\s+/gu, "")}设置`,
                     label: "打开配置",
                     onClick: () => onOpenPluginConfig(adapterPluginId),
                   }}
                   icon={<Server className="size-4.5" />}
                   service={napcat}
                   webuiAction={{
+                    title: `${napcat?.name ?? "NapCat"} 设置`,
                     label: "打开 WebUI",
                     port: qqWebuiPort,
                     portValid: qqWebuiPortValid,

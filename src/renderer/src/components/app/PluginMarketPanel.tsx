@@ -1855,7 +1855,7 @@ function PluginConfigDialog({
           <Button className="hidden" disabled={busy !== null} onClick={() => onOpenChange(false)} size="sm" variant="ghost">
             关闭
           </Button>
-          <Button className="text-[0]" disabled={busy !== null || !draft || !state} onClick={onSave} size="sm">
+          <Button className="[&>span]:hidden" disabled={busy !== null || !draft || !state} onClick={onSave} size="sm">
             {busy === "save" ? <Loader2 className="animate-spin" /> : <Save />}
             <span className="text-sm">保存并关闭</span>
             保存配置

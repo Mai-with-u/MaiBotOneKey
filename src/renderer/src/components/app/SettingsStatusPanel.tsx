@@ -4,11 +4,13 @@
   CheckCircle2,
   CircleAlert,
   ClipboardCheck,
+  Code2,
   Download,
   Droplets,
   FolderOpen,
   GitBranch,
   HardDrive,
+  ImageIcon,
   Loader2,
   Network,
   Package,
@@ -29,6 +31,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
+  AppIconId,
   InitCheckStatus,
   LogEntry,
   MaiBotDataResetResult,
@@ -38,6 +41,8 @@ import type {
   ModuleTagOption,
   ModuleUpdateResult,
   NetworkProxySettings,
+  OpenCodeSettings,
+  PluginBuilderMode,
   PythonOverridesState,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -101,6 +106,8 @@ interface SettingsStatusPanelProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenPluginConfig: (pluginId: string) => void;
+  pluginBuilderMode: PluginBuilderMode;
+  onPluginBuilderModeChange: (mode: PluginBuilderMode) => void;
 }
 
 const statusText: Record<ServiceStatus, string> = {
@@ -168,6 +175,10 @@ const scaleOptions: Array<{ value: InterfaceScale; label: string; description: s
 const defaultNetworkProxySettings: NetworkProxySettings = {
   enabled: false,
   port: 7890,
+};
+
+const defaultOpenCodeSettings: OpenCodeSettings = {
+  useBundledPluginInstructions: true,
 };
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
@@ -745,6 +756,8 @@ export function SettingsStatusPanel({
   snapshot,
   onSnapshot,
   onOpenPluginConfig,
+  pluginBuilderMode,
+  onPluginBuilderModeChange,
 }: SettingsStatusPanelProps): React.JSX.Element {
   const theme = useTheme();
   const appearance = useAppearance();
@@ -786,6 +799,8 @@ export function SettingsStatusPanel({
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
   const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
+  const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
+  const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
   const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
   const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
@@ -1311,6 +1326,48 @@ export function SettingsStatusPanel({
     }
   }, [networkProxyDraft, onSnapshot, refreshSnapshot, snapshot]);
 
+  const saveOpenCodeSettings = useCallback(
+    async (settings: OpenCodeSettings) => {
+      setBusy("opencode-settings");
+      setError(null);
+      try {
+        const nextOpenCodeSettings = await window.maibotDesktop?.launcher.saveOpenCodeSettings(settings);
+        if (nextOpenCodeSettings) {
+          onSnapshot({ ...snapshot, openCodeSettings: nextOpenCodeSettings });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const selectAppIcon = useCallback(
+    async (iconId: AppIconId) => {
+      if (iconId === appIconSettings.selectedIconId) {
+        return;
+      }
+      setBusy("app-icon");
+      setError(null);
+      try {
+        if (!window.maibotDesktop?.launcher) {
+          throw new Error("Electron bridge 未连接");
+        }
+        const nextAppIconSettings = await window.maibotDesktop.launcher.selectAppIcon(iconId);
+        onSnapshot({ ...snapshot, appIconSettings: nextAppIconSettings });
+        toast.success("应用图标已切换");
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [appIconSettings.selectedIconId, onSnapshot, snapshot],
+  );
+
   const migrateRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
     setBusy(`resource:migrate:${key}`);
     setError(null);
@@ -1685,6 +1742,107 @@ export function SettingsStatusPanel({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Code2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">插件编写器模式</p>
+                        <p className="text-xs text-muted-foreground">
+                          {pluginBuilderMode === "agent"
+                            ? "默认进入内置 Coding Agent"
+                            : "默认进入可视化节点编辑器"}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary">
+                      {pluginBuilderMode === "agent" ? "Coding Agent" : "节点编辑器"}
+                    </Badge>
+                  </div>
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-2"
+                    onValueChange={(value) => onPluginBuilderModeChange(value === "nodes" ? "nodes" : "agent")}
+                    value={pluginBuilderMode}
+                  >
+                    {([
+                      {
+                        value: "agent",
+                        label: "内置 Coding Agent",
+                        description: "用自然语言描述插件需求，默认进入这个模式。",
+                      },
+                      {
+                        value: "nodes",
+                        label: "节点编辑器",
+                        description: "使用蓝图节点、组件库和文件预览手动搭建插件。",
+                      },
+                    ] as const).map((option) => (
+                      <label
+                        className={[
+                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          pluginBuilderMode === option.value
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                        ].join(" ")}
+                        key={option.value}
+                      >
+                        <RadioGroupItem className="mt-0.5" value={option.value} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Code2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">OpenCode 插件说明</p>
+                        <p className="text-xs text-muted-foreground">
+                          {openCodeSettings.useBundledPluginInstructions
+                            ? "启动 OpenCode 时使用内置 plugin_code.md，并跳过 MaiBot 自带 AGENTS.md。"
+                            : "按 OpenCode 默认规则读取项目内 AGENTS.md。"}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={openCodeSettings.useBundledPluginInstructions ? "success" : "outline"}>
+                      {openCodeSettings.useBundledPluginInstructions ? "内置说明" : "项目默认"}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                      <Checkbox
+                        checked={openCodeSettings.useBundledPluginInstructions}
+                        disabled={busy !== null}
+                        onCheckedChange={(checked) =>
+                          void saveOpenCodeSettings({
+                            ...openCodeSettings,
+                            useBundledPluginInstructions: checked === true,
+                          })
+                        }
+                      />
+                      使用内置插件编写说明
+                    </label>
+                    <p
+                      className="min-w-[260px] flex-1 truncate rounded-md border border-border bg-card px-3 py-2 font-mono text-[11px] text-muted-foreground"
+                      title={snapshot.paths.opencodePluginInstructionsPath}
+                    >
+                      {snapshot.paths.opencodePluginInstructionsPath}
+                    </p>
+                    {busy === "opencode-settings" ? (
+                      <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Network className="size-4" />
                       </span>
                       <div className="min-w-0">
@@ -1872,6 +2030,64 @@ export function SettingsStatusPanel({
                       </label>
                     ))}
                   </RadioGroup>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <ImageIcon className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">应用图标</p>
+                        <p className="text-xs text-muted-foreground">切换主窗口和托盘使用的图标。</p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary">
+                      {appIconSettings.options.find((option) => option.id === appIconSettings.selectedIconId)?.label ?? "默认"}
+                    </Badge>
+                  </div>
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-2"
+                    disabled={busy !== null}
+                    onValueChange={(value) => {
+                      if (busy === null) {
+                        void selectAppIcon(value as AppIconId);
+                      }
+                    }}
+                    value={appIconSettings.selectedIconId}
+                  >
+                    {appIconSettings.options.map((option) => (
+                      <label
+                        className={cn(
+                          "flex min-w-0 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors",
+                          appIconSettings.selectedIconId === option.id
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                          busy !== null && "cursor-not-allowed opacity-70",
+                        )}
+                        key={option.id}
+                      >
+                        <span className="grid size-14 shrink-0 place-items-center rounded-md border border-border bg-background">
+                          {option.previewUrl ? (
+                            <img alt="" className="size-12 rounded-md object-cover" draggable={false} src={option.previewUrl} />
+                          ) : (
+                            <ImageIcon className="size-5 text-muted-foreground" />
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                        <RadioGroupItem disabled={busy !== null} value={option.id} />
+                      </label>
+                    ))}
+                  </RadioGroup>
+
+                  <p className="text-xs text-muted-foreground">
+                    安装包和 EXE 文件图标仍由打包配置决定，切换后会立即刷新运行中的窗口与托盘。
+                  </p>
                 </div>
 
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
