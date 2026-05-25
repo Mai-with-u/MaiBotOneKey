@@ -141,19 +141,9 @@ const fallbackSnapshot: DesktopSnapshot = {
         description: "使用带小芽和圆滚滚脸型的麦麦头像。",
       },
       {
-        id: "orbit",
-        label: "环形小芽",
-        description: "使用带环形轨道装饰的小芽头像。",
-      },
-      {
         id: "bean",
         label: "橙团小芽",
         description: "使用更近景、更圆润的橙团小芽头像。",
-      },
-      {
-        id: "classic",
-        label: "经典头像",
-        description: "使用原来的手绘麦麦头像。",
       },
     ],
   },

@@ -133,7 +133,7 @@ export interface OpenCodeSettings {
   useBundledPluginInstructions: boolean;
 }
 
-export type AppIconId = "soft" | "sprout" | "orbit" | "bean" | "classic";
+export type AppIconId = "soft" | "sprout" | "bean";
 
 export interface AppIconOption {
   id: AppIconId;

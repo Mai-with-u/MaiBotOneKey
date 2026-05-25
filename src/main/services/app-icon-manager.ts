@@ -21,22 +21,10 @@ const APP_ICON_OPTIONS = [
     fileName: "sprout.png",
   },
   {
-    id: "orbit",
-    label: "环形小芽",
-    description: "使用带环形轨道装饰的小芽头像。",
-    fileName: "orbit.png",
-  },
-  {
     id: "bean",
     label: "橙团小芽",
     description: "使用更近景、更圆润的橙团小芽头像。",
     fileName: "bean.png",
-  },
-  {
-    id: "classic",
-    label: "经典头像",
-    description: "使用原来的手绘麦麦头像。",
-    fileName: "classic.png",
   },
 ] as const satisfies readonly (AppIconOption & { fileName: string })[];
 
