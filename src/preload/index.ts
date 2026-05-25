@@ -48,6 +48,8 @@ import type {
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
+  ModuleBranchOption,
+  ModuleUpdateTarget,
   ModuleUpdateResult,
   NetworkProxySettings,
   OpenCodeSettings,
@@ -151,7 +153,9 @@ const desktopBridge: DesktopBridge = {
     confirm: () => ipcRenderer.invoke("agreements:confirm") as Promise<StartupAgreementConfirmResult>,
   },
   modules: {
-    updateMaiBot: (tag?: string) => ipcRenderer.invoke("modules:updateMaibot", tag) as Promise<ModuleUpdateResult>,
+    updateMaiBot: (target?: ModuleUpdateTarget) =>
+      ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
+    listMaiBotBranches: () => ipcRenderer.invoke("modules:listMaibotBranches") as Promise<ModuleBranchOption[]>,
     listMaiBotTags: () => ipcRenderer.invoke("modules:listMaibotTags") as Promise<ModuleTagOption[]>,
     getSourceConfig: () => ipcRenderer.invoke("modules:getSourceConfig") as Promise<ModuleSourceConfig>,
     saveSourceConfig: (config: ModuleSourceUpdate) =>

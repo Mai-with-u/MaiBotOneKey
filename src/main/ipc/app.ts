@@ -51,6 +51,7 @@ import type {
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
+  ModuleBranchOption,
   ModuleRuntimeVersions,
   ModuleUpdateResult,
   NetworkProxySettings,
@@ -58,6 +59,7 @@ import type {
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
+  ModuleUpdateTarget,
   PythonOverridesState,
   PythonPackageSourcePreset,
   PythonRuntimeCandidate,
@@ -510,29 +512,15 @@ function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): num
   return left.tag.localeCompare(right.tag, "en-US", { numeric: true, sensitivity: "base" });
 }
 
-function isAtLeastVersion(tag: ParsedVersionTag, minimum: number[]): boolean {
-  const length = Math.max(tag.parts.length, minimum.length);
-  for (let index = 0; index < length; index++) {
-    const diff = (tag.parts[index] ?? 0) - (minimum[index] ?? 0);
-    if (diff !== 0) {
-      return diff > 0;
-    }
-  }
-  return true;
-}
-
 function pickLatestTags(
   rawTags: string[],
-): Pick<ModuleRuntimeVersions, "maibotLatestStableTag" | "maibotLatestPrereleaseTag" | "maibotLatestLegacyTag"> {
+): Pick<ModuleRuntimeVersions, "maibotLatestStableTag" | "maibotLatestPrereleaseTag"> {
   const parsed = rawTags.map(parseVersionTag).filter((tag): tag is ParsedVersionTag => Boolean(tag));
-  const standard = parsed.filter((tag) => isAtLeastVersion(tag, [1, 0, 0]));
-  const stable = standard.filter((tag) => !tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
-  const prerelease = standard.filter((tag) => tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
-  const legacy = parsed.filter((tag) => !isAtLeastVersion(tag, [1, 0, 0])).sort(compareParsedTags).at(-1)?.tag;
+  const stable = parsed.filter((tag) => !tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+  const prerelease = parsed.filter((tag) => tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
   return {
     maibotLatestStableTag: stable,
     maibotLatestPrereleaseTag: prerelease,
-    maibotLatestLegacyTag: legacy,
   };
 }
 
@@ -1618,14 +1606,14 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("modules:updateMaibot", async (_event, tag?: string): Promise<ModuleUpdateResult> => {
+  ipcMain.handle("modules:updateMaibot", async (_event, target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> => {
     const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
     if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
       throw new Error("Stop MaiBot Core before updating MaiBot.");
     }
 
     logStore.append("desktop", "system", "Updating MaiBot module from Git.");
-    const result = await moduleUpdater.updateMaiBot(tag);
+    const result = await moduleUpdater.updateMaiBot(target);
     logStore.append(
       "desktop",
       "system",
@@ -1633,6 +1621,10 @@ export function registerAppIpc({
     );
     await broadcastSnapshot();
     return result;
+  });
+
+  ipcMain.handle("modules:listMaibotBranches", async (): Promise<ModuleBranchOption[]> => {
+    return moduleUpdater.listMaiBotBranches();
   });
 
   ipcMain.handle("modules:listMaibotTags", async (): Promise<ModuleTagOption[]> => {

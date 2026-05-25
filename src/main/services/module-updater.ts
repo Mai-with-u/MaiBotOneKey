@@ -7,7 +7,9 @@ import type {
   ModuleSourceOption,
   ModuleSourcePreset,
   ModuleSourceUpdate,
+  ModuleBranchOption,
   ModuleTagOption,
+  ModuleUpdateTarget,
   ModuleUpdateResult,
   RuntimePaths,
 } from "../../shared/contracts";
@@ -53,6 +55,7 @@ interface RepoUpdateSpec {
   /** 是否执行 git submodule 更新（仅主仓需要）。 */
   runSubmodule: boolean;
   targetTag?: string;
+  targetBranch?: string;
 }
 
 function isPrereleaseTag(tag: string): boolean {
@@ -123,7 +126,30 @@ export class ModuleUpdater {
       .map((name) => ({ name, isPrerelease: isPrereleaseTag(name) }));
   }
 
-  async updateMaiBot(targetTag?: string): Promise<ModuleUpdateResult> {
+  async listMaiBotBranches(): Promise<ModuleBranchOption[]> {
+    const gitPath = this.initManager.getGitPath();
+    const sourceConfig = await this.getSourceConfig();
+    const result = await this.runGit(
+      gitPath,
+      this.paths.installRoot,
+      ["ls-remote", "--heads", "--refs", sourceConfig.maibotUrl],
+      FETCH_ORIGIN_TIMEOUT_MS,
+    );
+    return result.output
+      .map((line) => line.match(/refs\/heads\/(.+)$/u)?.[1])
+      .filter((branch): branch is string => Boolean(branch))
+      .sort((left, right) => {
+        if (left === "main") return -1;
+        if (right === "main") return 1;
+        if (left === "dev") return -1;
+        if (right === "dev") return 1;
+        return left.localeCompare(right, "en-US", { numeric: true, sensitivity: "base" });
+      })
+      .slice(0, 80)
+      .map((name) => ({ name }));
+  }
+
+  async updateMaiBot(target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> {
     const gitPath = this.initManager.getGitPath();
     if (!existsSync(gitPath)) {
       throw new Error(`未找到可用 Git: ${gitPath}`);
@@ -141,7 +167,8 @@ export class ModuleUpdater {
       defaultBranch: "main",
       throwOnFailure: true,
       runSubmodule: true,
-      targetTag: targetTag?.trim() || undefined,
+      targetTag: target?.type === "tag" ? target.name.trim() || undefined : undefined,
+      targetBranch: target?.type === "branch" ? target.name.trim() || undefined : undefined,
     });
     return mainResult;
   }
@@ -298,7 +325,11 @@ export class ModuleUpdater {
           )
         ).output,
       );
-      upstream = spec.targetTag ? `refs/tags/${spec.targetTag}` : await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
+      upstream = spec.targetTag
+        ? `refs/tags/${spec.targetTag}`
+        : spec.targetBranch
+          ? `origin/${spec.targetBranch}`
+          : await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
       append(
         `[${moduleName}] reset --hard ${upstream}`,
         (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
@@ -309,6 +340,8 @@ export class ModuleUpdater {
       await this.restoreRepositoryBeforeUpdate(gitPath, cwd, moduleName, before, originalRemote, hadOriginRemote, output);
       const failure = spec.targetTag
         ? `无法拉取远端 tag ${spec.targetTag}，已恢复到更新前状态: ${remoteError}`
+        : spec.targetBranch
+          ? `无法拉取远端分支 ${spec.targetBranch}，已恢复到更新前状态: ${remoteError}`
         : `远端更新失败，已恢复到更新前状态: ${remoteError}`;
       if (spec.throwOnFailure) {
         throw new Error(failure);

@@ -38,8 +38,6 @@ import type {
   ManagedPythonPackageName,
   ModuleSourceConfig,
   ModuleSourcePreset,
-  ModuleTagOption,
-  ModuleUpdateResult,
   NetworkProxySettings,
   OpenCodeSettings,
   PluginBuilderMode,
@@ -217,89 +215,6 @@ function formatDateTime(timestamp?: number): string {
     minute: "2-digit",
     second: "2-digit",
   }).format(timestamp);
-}
-
-function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.JSX.Element {
-  const output = result.output.slice(-120).join("\n");
-  const hasWarning = Boolean(result.warning || result.remoteError);
-
-  return (
-    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={result.changed ? "success" : "secondary"}>
-          {result.changed ? "已更新" : "已是最新"}
-        </Badge>
-        <Badge variant={result.source === "bundled" ? "secondary" : "outline"}>
-          {result.source === "bundled" ? "内置修复" : "来自 Git 远端"}
-        </Badge>
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {result.before ?? "-"} -&gt; {result.after ?? "-"}
-        </span>
-        <span className="text-[11px] text-muted-foreground">{formatDateTime(result.updatedAt)}</span>
-      </div>
-      {hasWarning ? (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-[12px] leading-relaxed text-destructive">
-          <p className="font-semibold">更新未完成，已恢复到更新前状态</p>
-          {result.warning ? <p className="mt-1 text-destructive/90">{result.warning}</p> : null}
-          {result.remoteError ? (
-            <p className="mt-1 break-all font-mono text-[11px] text-destructive/80">
-              原始错误：{result.remoteError}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="grid gap-2 text-[11px] text-muted-foreground md:grid-cols-2">
-        <span className="truncate" title={result.branch ?? ""}>
-          分支: {result.branch ?? "-"}
-        </span>
-        <span className="truncate" title={result.upstream ?? ""}>
-          远端: {result.upstream ?? "-"}
-        </span>
-        <span className="truncate md:col-span-2" title={result.cwd}>
-          目录: {result.cwd}
-        </span>
-      </div>
-      {output.length > 0 ? (
-        <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
-          {output}
-        </pre>
-      ) : null}
-      {result.plugins && result.plugins.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-[11px] font-semibold text-muted-foreground">同步的子插件</div>
-          {result.plugins.map((plugin) => (
-            <div
-              key={plugin.moduleId}
-              className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-2.5"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{plugin.moduleName}</span>
-                <Badge variant={plugin.changed ? "success" : "secondary"}>
-                  {plugin.changed ? "已更新" : "已是最新"}
-                </Badge>
-                <Badge variant={plugin.source === "bundled" ? "danger" : "outline"}>
-                  {plugin.source === "bundled" ? "内置修复" : "来自 Git 远端"}
-                </Badge>
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {plugin.before ?? "-"} -&gt; {plugin.after ?? "-"}
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                <span className="truncate" title={plugin.cwd}>
-                  目录: {plugin.cwd}
-                </span>
-              </div>
-              {plugin.warning ? (
-                <p className="rounded-sm border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive">
-                  {plugin.warning}
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 function PythonInstallOutput({ result }: { result: PythonPackageInstallResult }): React.JSX.Element {
@@ -764,7 +679,6 @@ export function SettingsStatusPanel({
   const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmUpdateOpen, setConfirmUpdateOpen] = useState(false);
   const [confirmSnowLumaResetOpen, setConfirmSnowLumaResetOpen] = useState(false);
   const [confirmLauncherSettingsResetOpen, setConfirmLauncherSettingsResetOpen] = useState(false);
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
@@ -772,13 +686,10 @@ export function SettingsStatusPanel({
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
   const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
-  const [moduleUpdateResult, setModuleUpdateResult] = useState<ModuleUpdateResult | null>(null);
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
   const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
   const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
   const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
-  const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
-  const [selectedMaibotTag, setSelectedMaibotTag] = useState("");
   const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
   const [pythonVersionsOpen, setPythonVersionsOpen] = useState(false);
   const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
@@ -903,15 +814,6 @@ export function SettingsStatusPanel({
     );
   }, [snapshot.paths.pythonOverridesRoot]);
 
-  const refreshMaiBotTags = useCallback(async () => {
-    try {
-      const tags = await window.maibotDesktop?.modules.listMaiBotTags();
-      setMaibotTags(tags ?? []);
-    } catch {
-      setMaibotTags([]);
-    }
-  }, []);
-
   const refreshPythonRuntimeCandidates = useCallback(async () => {
     setPythonRuntimeCandidatesLoading(true);
     try {
@@ -923,10 +825,6 @@ export function SettingsStatusPanel({
       setPythonRuntimeCandidatesLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    void refreshMaiBotTags();
-  }, [refreshMaiBotTags]);
 
   useEffect(() => {
     void refreshPythonRuntimeCandidates();
@@ -1116,25 +1014,6 @@ export function SettingsStatusPanel({
     }
   }, [refreshSnapshot]);
 
-  const updateMaiBot = useCallback(async () => {
-    setBusy("module:maibot");
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.modules) {
-        throw new Error("桌面桥未就绪，无法更新模块");
-      }
-
-      const result = await window.maibotDesktop.modules.updateMaiBot(selectedMaibotTag || undefined);
-      setModuleUpdateResult(result);
-      setConfirmUpdateOpen(false);
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot, selectedMaibotTag]);
-
   const saveModuleSourceConfig = useCallback(async () => {
     setBusy("module:source");
     setError(null);
@@ -1152,15 +1031,13 @@ export function SettingsStatusPanel({
       setModuleSourcePreset(config.preset);
       setCustomMaiBotUrl(config.maibotUrl);
       setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
-      setSelectedMaibotTag("");
       toast.success("更新源已保存");
-      void refreshMaiBotTags();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset, refreshMaiBotTags]);
+  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
   const openPythonVersions = useCallback(async (packageName: ManagedPythonPackageName) => {
     setPythonVersionsOpen(true);
@@ -1559,6 +1436,65 @@ export function SettingsStatusPanel({
           </div>
         </div>
       ) : null}
+    </>
+  );
+
+  const manualPythonDependenciesPanel = (
+    <>
+      <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
+                <Package className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">手动更新 Python 依赖</p>
+                <p
+                  className="truncate font-mono text-[11px] text-muted-foreground"
+                  title={pythonDepsState?.root ?? ""}
+                >
+                  {pythonDepsState?.root ?? "读取覆盖目录中"}
+                </p>
+              </div>
+            </div>
+          </div>
+          <Badge variant="secondary">清华源</Badge>
+        </div>
+        {customPythonRuntimeEnabled ? (
+          <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+            已启用自定义 Python 路径，MaiBot Core 将直接使用该 Python，不再注入 Python 覆盖依赖。
+          </div>
+        ) : null}
+        <div className="grid gap-2 md:grid-cols-2">
+          {managedPythonPackages.map((pythonPackage) => (
+            <div
+              className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card p-2.5"
+              key={pythonPackage.name}
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{pythonPackage.label}</p>
+                <p className="truncate font-mono text-[11px] text-muted-foreground">{pythonPackage.name}</p>
+              </div>
+              <Button
+                disabled={busy !== null || maibotUpdateBlocked || customPythonRuntimeEnabled}
+                onClick={() => void openPythonVersions(pythonPackage.name)}
+                size="sm"
+                variant="outline"
+              >
+                {busy === `py:list:${pythonPackage.name}` ? <Loader2 className="animate-spin" /> : <Download />}
+                选择版本
+              </Button>
+            </div>
+          ))}
+        </div>
+        {maibotUpdateBlocked ? (
+          <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+            请先停止 MaiBot Core，再更新 Python 覆盖依赖。
+          </div>
+        ) : null}
+      </div>
+      {pythonInstallResult ? <PythonInstallOutput result={pythonInstallResult} /> : null}
     </>
   );
 
@@ -1990,6 +1926,7 @@ export function SettingsStatusPanel({
                 </div>
 
                 {environmentServicesPanel}
+                {manualPythonDependenciesPanel}
               </TabsContent>
 
               <TabsContent className="space-y-4" value="appearance">
@@ -2309,6 +2246,13 @@ export function SettingsStatusPanel({
                     MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
                   </div>
                 ) : null}
+                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
+                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
+                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
+                    保存后端
+                    <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
+                  </Button>
+                </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">重置 SnowLuma 组件</p>
@@ -2325,18 +2269,11 @@ export function SettingsStatusPanel({
                     重置 SnowLuma
                   </Button>
                 </div>
-                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
-                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
-                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
-                    保存后端
-                    <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
-                  </Button>
-                </div>
               </TabsContent>
 
               <TabsContent className="space-y-3" value="modules">
                 <p className="text-xs text-muted-foreground">
-                  使用可用 Git 更新可写 MaiBot 模块。更新器不会执行清理命令，不会删除 data、logs、config 等用户数据目录。
+                  这里只配置模块更新源；执行更新请回到首页的 MaiBot 版本卡片。
                 </p>
                 <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2346,43 +2283,14 @@ export function SettingsStatusPanel({
                           <GitBranch className="size-4" />
                         </span>
                         <div className="min-w-0">
-                          <p className="text-sm font-medium">MaiBot Core</p>
+                          <p className="text-sm font-medium">模块更新源</p>
                           <p className="truncate font-mono text-[11px] text-muted-foreground" title={snapshot.paths.maibotRoot}>
                             {snapshot.paths.maibotRoot}
                           </p>
                         </div>
                       </div>
                     </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      {maibotService ? (
-                        <Badge dot variant={statusVariant[maibotService.status]}>
-                          {statusText[maibotService.status]}
-                        </Badge>
-                      ) : null}
-                      <select
-                        className="h-9 max-w-56 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        disabled={busy !== null}
-                        onChange={(event) => setSelectedMaibotTag(event.target.value)}
-                        value={selectedMaibotTag}
-                      >
-                        <option value="">默认分支</option>
-                        {maibotTags.map((tag) => (
-                          <option key={tag.name} value={tag.name}>
-                            {tag.name}{tag.isPrerelease ? " (测试)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                      <Button disabled={busy !== null} onClick={refreshMaiBotTags} size="icon-sm" variant="outline">
-                        <RefreshCw />
-                      </Button>
-                      <Button
-                        disabled={busy !== null || maibotUpdateBlocked}
-                        onClick={() => setConfirmUpdateOpen(true)}
-                      >
-                        {busy === "module:maibot" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                        更新 MaiBot
-                      </Button>
-                    </div>
+                    <Badge variant="secondary">首页更新使用</Badge>
                   </div>
                   <div className="grid gap-3 rounded-md border border-border bg-card/60 p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto] lg:items-end">
                     <label className="grid gap-1.5 text-xs font-medium">
@@ -2426,72 +2334,10 @@ export function SettingsStatusPanel({
                       保存更新源
                     </Button>
                   </div>
-                  {maibotUpdateBlocked ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      请先停止 MaiBot Core，再执行模块更新。
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground">
-                      会强制同步远端代码并覆盖模块内的本地代码改动；用户运行数据仍保留在 MaiBot/data。
-                    </div>
-                  )}
-                </div>
-                {moduleUpdateResult ? <ModuleUpdateOutput result={moduleUpdateResult} /> : null}
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
-                          <Package className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">手动更新Python 依赖</p>
-                          <p
-                            className="truncate font-mono text-[11px] text-muted-foreground"
-                            title={pythonDepsState?.root ?? ""}
-                          >
-                            {pythonDepsState?.root ?? "读取覆盖目录中"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <Badge variant="secondary">清华源</Badge>
+                  <div className="rounded-md border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground">
+                    首页执行更新时会使用这里保存的仓库地址；更新仍会保留 MaiBot/data 等用户运行数据。
                   </div>
-                  {customPythonRuntimeEnabled ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      已启用自定义 Python 路径，MaiBot Core 将直接使用该 Python，不再注入 python覆盖依赖。
-                    </div>
-                  ) : null}
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {managedPythonPackages.map((pythonPackage) => (
-                      <div
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card p-2.5"
-                        key={pythonPackage.name}
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{pythonPackage.label}</p>
-                          <p className="truncate font-mono text-[11px] text-muted-foreground">{pythonPackage.name}</p>
-                        </div>
-                        <Button
-                          disabled={busy !== null || maibotUpdateBlocked || customPythonRuntimeEnabled}
-                          onClick={() => void openPythonVersions(pythonPackage.name)}
-                          size="sm"
-                          variant="outline"
-                        >
-                          {busy === `py:list:${pythonPackage.name}` ? <Loader2 className="animate-spin" /> : <Download />}
-                          选择版本
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  {maibotUpdateBlocked ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      请先停止 MaiBot Core，再更新 Python 覆盖依赖。
-                    </div>
-                  ) : null}
                 </div>
-                {pythonInstallResult ? <PythonInstallOutput result={pythonInstallResult} /> : null}
               </TabsContent>
 
               <TabsContent className="space-y-3" value="paths">
@@ -2649,42 +2495,6 @@ export function SettingsStatusPanel({
         >
           {busy?.startsWith("py:install") === true ? <Loader2 className="animate-spin" /> : <Download />}
           安装选中版本
-        </Button>
-      </DialogFooter>
-      </DialogContent>
-    </Dialog>
-    <Dialog
-      open={confirmUpdateOpen}
-      onOpenChange={(next) => {
-        if (!next && busy !== "module:maibot") setConfirmUpdateOpen(false);
-      }}
-    >
-      <DialogContent size="md">
-      <DialogHeader
-        description="更新器会使用可用 Git 强制同步 MaiBot 远端代码。它不会执行 git clean，也不会删除 data、logs、config 等用户数据目录。"
-        icon={<GitBranch className="size-4" />}
-        title="确认更新 MaiBot 模块？"
-        tone="warning"
-      />
-      <DialogBody className="space-y-3 text-sm">
-        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          这会覆盖 MaiBot 模块里的本地代码改动，并将代码重置到远端分支。用户数据仍保留在可写模块目录下的
-          <code className="mx-1 rounded bg-card px-1 py-0.5 font-mono">data</code>
-          目录。
-        </div>
-        {maibotUpdateBlocked ? (
-          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
-            MaiBot Core 当前未停止，请先停止服务后再更新。
-          </div>
-        ) : null}
-      </DialogBody>
-      <DialogFooter>
-        <Button disabled={busy === "module:maibot"} onClick={() => setConfirmUpdateOpen(false)} size="sm" variant="ghost">
-          取消
-        </Button>
-        <Button disabled={busy === "module:maibot" || maibotUpdateBlocked} onClick={updateMaiBot} size="sm">
-          {busy === "module:maibot" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          确认更新
         </Button>
       </DialogFooter>
       </DialogContent>

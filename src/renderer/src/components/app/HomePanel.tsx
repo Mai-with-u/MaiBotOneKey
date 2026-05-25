@@ -1,10 +1,11 @@
-﻿import {
+import {
   ArrowRight,
+  ArrowUp,
+  ChevronDown,
   Download,
   ExternalLink,
   Loader2,
   Maximize2,
-  MessageSquare,
   PackageCheck,
   Puzzle,
   Radar,
@@ -12,6 +13,7 @@
   Server,
   Settings,
   Send,
+  Sparkles,
   Store,
   Wrench,
 } from "lucide-react";
@@ -27,8 +29,11 @@ import type {
   LocalChatEvent,
   LocalChatMessageEvent,
   MaiBotStatisticSummary,
+  ModuleBranchOption,
   ModuleSourceConfig,
   ModuleSourcePreset,
+  ModuleTagOption,
+  ModuleUpdateTarget,
   QqBackend,
   ServiceDescriptor,
   ServiceStatus,
@@ -48,7 +53,7 @@ import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 
-type MaiBotUpdateChannel = "stable" | "test" | "legacy";
+type MaiBotUpdateChannel = "stable" | "test" | "other";
 type DashboardUpdateChannel = "stable" | "test";
 type CompactChatState = "idle" | "connecting" | "connected" | "error";
 
@@ -56,6 +61,9 @@ const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const QQ_WEBUI_PORT_STORAGE_PREFIX = "maibot.qqWebuiPort";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
 const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
+const MASCOT_INTRO_TRIGGER_CLICKS = 10;
+
+let mascotIntroShownThisSession = false;
 
 export function adapterPluginIdForBackend(backend: QqBackend): string {
   return backend === "snowluma" ? "maibot-team.snowluma-adapter" : "maibot-team.napcat-adapter";
@@ -336,15 +344,7 @@ function LocalChatQuickCard({
 
   return (
     <section className="rounded-lg border border-border bg-card p-3.5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            <MessageSquare className="size-4.5" />
-          </span>
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold">随便聊聊</h3>
-          </div>
-        </div>
+      <div className="mb-3 flex items-center justify-end gap-2">
         <div className="flex shrink-0 items-center gap-2">
           <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
             {statusLabel}
@@ -612,6 +612,9 @@ function MaiBotOverviewCard({
   onOpenPluginManager: () => void;
 }): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<"version" | "plugins">("version");
+  const hasNewVersion =
+    compareVersionText(latestStable, localVersion) > 0 ||
+    compareVersionText(latestPrerelease, localVersion) > 0;
 
   return (
     <div className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5">
@@ -665,26 +668,29 @@ function MaiBotOverviewCard({
             </div>
             <div className="grid min-w-0 gap-1 sm:min-w-44">
               <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-                <span className="shrink-0 text-muted-foreground">最新正式版</span>
+                <span className="shrink-0 text-muted-foreground">正式版</span>
                 <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestStable}>
                   {valueOrFallback(latestStable)}
                 </span>
               </div>
               <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-                <span className="shrink-0 text-muted-foreground">最新测试版</span>
+                <span className="shrink-0 text-muted-foreground">测试版</span>
                 <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestPrerelease}>
                   {valueOrFallback(latestPrerelease)}
                 </span>
               </div>
               <Button
                 aria-label="更新 MaiBot"
-                className="mt-1 h-7 justify-self-end px-2.5 text-[11px]"
+                className="relative mt-1 h-7 justify-self-end px-2.5 text-[11px]"
                 disabled={updateBusy}
                 onClick={onUpdate}
                 size="sm"
                 variant="secondary"
               >
-                {updateBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                {hasNewVersion ? (
+                  <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning ring-2 ring-card" />
+                ) : null}
+                {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
               </Button>
             </div>
           </div>
@@ -963,7 +969,13 @@ function alphaBoundsForImage(src: string): Promise<ImageAlphaBounds> {
   });
 }
 
-function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.Element {
+function ElasticMascot({
+  onLongPress,
+  onSecretTap,
+}: {
+  onLongPress: () => void;
+  onSecretTap: () => void;
+}): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
   const dropIdRef = useRef(0);
@@ -1233,7 +1245,18 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
     }
     spawnDrop(event.clientX);
     kick((Math.random() - 0.5) * 8, -7, 1.1);
-  }, [kick, spawnDrop]);
+    onSecretTap();
+  }, [kick, onSecretTap, spawnDrop]);
+
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    spawnDrop();
+    kick((Math.random() - 0.5) * 8, -7, 1.1);
+    onSecretTap();
+  }, [kick, onSecretTap, spawnDrop]);
 
   const onPointerDown = useCallback(() => {
     clearLongPress();
@@ -1256,10 +1279,11 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
 
   return (
     <div
-      aria-hidden="true"
+      aria-label="MaiBot 形象"
       className="fixed z-20 hidden h-28 w-32 overflow-hidden md:block"
       data-mascot-stage="true"
       onClick={onClick}
+      onKeyDown={onKeyDown}
       onPointerCancel={onPointerUp}
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
@@ -1267,10 +1291,12 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       ref={stageRef}
+      role="button"
       style={{
         right: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
         bottom: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
       }}
+      tabIndex={0}
     >
       <img
         alt=""
@@ -1327,6 +1353,8 @@ export function HomePanel({
   const [error, setError] = useState<string | null>(null);
   const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
+  const [mascotIntroOpen, setMascotIntroOpen] = useState(false);
+  const [, setMascotClickCount] = useState(0);
   const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend>("napcat");
   const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
@@ -1334,9 +1362,15 @@ export function HomePanel({
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
   const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
+  const [moduleSourceExpanded, setModuleSourceExpanded] = useState(false);
   const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
   const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
   const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
+  const [maibotBranches, setMaibotBranches] = useState<ModuleBranchOption[]>([]);
+  const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
+  const [maibotRefsLoading, setMaibotRefsLoading] = useState(false);
+  const [selectedMaiBotBranch, setSelectedMaiBotBranch] = useState("main");
+  const [selectedMaiBotTag, setSelectedMaiBotTag] = useState("");
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
@@ -1355,12 +1389,32 @@ export function HomePanel({
   const maibotTargets: Record<MaiBotUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.maibotLatestStableTag,
     test: snapshot.moduleVersions.maibotLatestPrereleaseTag,
-    legacy: snapshot.moduleVersions.maibotLatestLegacyTag,
+    other: selectedMaiBotTag
+      ? `Tag ${selectedMaiBotTag}`
+      : selectedMaiBotBranch
+        ? `分支 ${selectedMaiBotBranch}`
+        : undefined,
   };
   const dashboardTargets: Record<DashboardUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi,
     test: snapshot.moduleVersions.dashboardLatestPrereleasePypi,
   };
+
+  const handleMascotSecretTap = useCallback(() => {
+    if (mascotIntroShownThisSession) {
+      return;
+    }
+
+    setMascotClickCount((current) => {
+      const next = current + 1;
+      if (next >= MASCOT_INTRO_TRIGGER_CLICKS) {
+        mascotIntroShownThisSession = true;
+        setMascotIntroOpen(true);
+        return 0;
+      }
+      return next;
+    });
+  }, []);
 
   const refreshSnapshot = useCallback(async () => {
     if (!window.maibotDesktop) {
@@ -1411,20 +1465,54 @@ export function HomePanel({
     setCustomNapcatAdapterUrl(currentNapcatAdapterUrl);
   }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
+  const loadMaiBotRefs = useCallback(async () => {
+    if (!window.maibotDesktop?.modules || maibotRefsLoading) {
+      return;
+    }
+
+    setMaibotRefsLoading(true);
+    try {
+      const [branches, tags] = await Promise.all([
+        window.maibotDesktop.modules.listMaiBotBranches(),
+        window.maibotDesktop.modules.listMaiBotTags(),
+      ]);
+      setMaibotBranches(branches);
+      setMaibotTags(tags);
+      setSelectedMaiBotBranch((current) => {
+        if (current && branches.some((branch) => branch.name === current)) {
+          return current;
+        }
+        return branches.find((branch) => branch.name === "main")?.name ?? branches[0]?.name ?? "";
+      });
+      setSelectedMaiBotTag((current) => (
+        current && tags.some((tag) => tag.name === current) ? current : ""
+      ));
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+      setMaibotBranches([]);
+      setMaibotTags([]);
+      setSelectedMaiBotBranch("");
+      setSelectedMaiBotTag("");
+    } finally {
+      setMaibotRefsLoading(false);
+    }
+  }, [maibotRefsLoading]);
+
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
+    setModuleSourceExpanded(false);
     setMaibotChannel(
       snapshot.moduleVersions.maibotLatestStableTag
         ? "stable"
-        : snapshot.moduleVersions.maibotLatestPrereleaseTag
-          ? "test"
-          : "legacy",
+        : "test",
     );
     setUpdateDialog("maibot");
     void loadModuleSourceConfig().catch((nextError: unknown) => {
       setError(messageFromError(nextError));
     });
+    void loadMaiBotRefs();
   }, [
+    loadMaiBotRefs,
     loadModuleSourceConfig,
     snapshot.moduleVersions.maibotLatestPrereleaseTag,
     snapshot.moduleVersions.maibotLatestStableTag,
@@ -1525,7 +1613,16 @@ export function HomePanel({
   }, [messagePlatformAccount, messagePlatformBackend, onOpenPluginConfig, refreshSnapshot]);
 
   const updateMaiBot = useCallback(async () => {
-    const target = maibotTargets[maibotChannel];
+    const target: ModuleUpdateTarget | undefined =
+      maibotChannel === "stable" && maibotTargets.stable
+        ? { type: "tag", name: maibotTargets.stable }
+        : maibotChannel === "test" && maibotTargets.test
+          ? { type: "tag", name: maibotTargets.test }
+          : maibotChannel === "other" && selectedMaiBotTag
+            ? { type: "tag", name: selectedMaiBotTag }
+            : maibotChannel === "other" && selectedMaiBotBranch
+              ? { type: "branch", name: selectedMaiBotBranch }
+              : undefined;
     if (!window.maibotDesktop?.modules || !target) {
       setError("没有可用的目标版本");
       return;
@@ -1552,7 +1649,17 @@ export function HomePanel({
     } finally {
       setBusy(null);
     }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, maibotChannel, maibotTargets, moduleSourcePreset, refreshSnapshot]);
+  }, [
+    customMaiBotUrl,
+    customNapcatAdapterUrl,
+    maibotChannel,
+    maibotTargets.stable,
+    maibotTargets.test,
+    moduleSourcePreset,
+    refreshSnapshot,
+    selectedMaiBotBranch,
+    selectedMaiBotTag,
+  ]);
 
   const updateDashboard = useCallback(async () => {
     const target = dashboardTargets[dashboardChannel];
@@ -1635,9 +1742,47 @@ export function HomePanel({
               snapshot={snapshot}
             />
           </div>
-          <ElasticMascot onLongPress={onEnterFloatingMode} />
+          <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} />
         </div>
       </div>
+
+      <Dialog open={mascotIntroOpen} onOpenChange={setMascotIntroOpen}>
+        <DialogContent size="md">
+          <DialogHeader
+            description="你把角落里的它点醒了。"
+            icon={<Sparkles className="size-4" />}
+            title="关于这个形象"
+            tone="primary"
+          />
+          <DialogBody className="space-y-4">
+            <div className="flex items-center gap-4 rounded-lg border border-border bg-muted/35 p-4">
+              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-md bg-background">
+                <img
+                  alt=""
+                  className="absolute -right-7 -bottom-6 w-28 select-none"
+                  draggable={false}
+                  src={maiMascotImage}
+                />
+              </div>
+              <div className="min-w-0 space-y-2 text-sm leading-relaxed text-muted-foreground">
+                <p className="font-medium text-foreground">MaiBot OneKey 的角落形象</p>
+                <p>
+                  它是一个橘子和一条萨卡班甲鱼喝醉了之后留下的结果。现在主要以一种形态的 AI 存在，
+                  平时窝在首页右下角，陪你盯着服务状态、WebUI 和插件更新。
+                </p>
+                <p>
+                  偶尔，它也会以人类形态出没。本次启动它只会认真自我介绍这一次；下次重启，再让它重新鼓起勇气开口。
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button onClick={() => setMascotIntroOpen(false)} size="sm">
+              知道了
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={quickActionsOpen} onOpenChange={setQuickActionsOpen}>
         <DialogContent size="lg">
@@ -1748,7 +1893,6 @@ export function HomePanel({
       >
         <DialogContent size="lg">
           <DialogHeader
-            description="选择要同步的 MaiBot 版本。更新前需要停止 MaiBot Core，用户数据目录会保留。"
             icon={<Server className="size-4" />}
             title="更新 MaiBot"
             tone="primary"
@@ -1762,9 +1906,8 @@ export function HomePanel({
             <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
               <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="最新正式版" value={snapshot.moduleVersions.maibotLatestStableTag} />
-              <DetailRow label="最新测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} />
-              <DetailRow label="最新旧版" value={snapshot.moduleVersions.maibotLatestLegacyTag} />
+              <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} />
+              <DetailRow label="测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} />
             </div>
             {maibotUpdateBlocked ? (
               <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
@@ -1772,76 +1915,142 @@ export function HomePanel({
               </div>
             ) : null}
             <div className="grid gap-1.5">
-              <p className="text-xs font-medium">目标版本</p>
               <ChoiceSwitch
                 value={maibotChannel}
-                onChange={setMaibotChannel}
+                onChange={(value) => {
+                  setMaibotChannel(value);
+                  if (value === "other") {
+                    void loadMaiBotRefs();
+                  }
+                }}
                 options={[
-                  { value: "stable", label: "最新正式版", version: maibotTargets.stable },
-                  { value: "test", label: "最新测试版", version: maibotTargets.test },
-                  { value: "legacy", label: "最新旧版", version: maibotTargets.legacy },
+                  { value: "stable", label: "正式版", version: maibotTargets.stable },
+                  { value: "test", label: "测试版", version: maibotTargets.test },
+                  { value: "other", label: "其他版本", version: maibotRefsLoading ? undefined : maibotTargets.other },
                 ]}
               />
             </div>
-            <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium">更新源</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    会同步保存到设置中心的模块更新源。
-                  </p>
-                </div>
-                <Button
-                  disabled={busy !== null}
-                  onClick={() => void reloadModuleSourceOptions()}
-                  size="sm"
-                  variant="ghost"
-                >
-                  <RefreshCw />
-                  重新读取
-                </Button>
-              </div>
-              <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)] md:items-end">
+            {maibotChannel === "other" ? (
+              <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2">
                 <label className="grid gap-1.5 text-xs font-medium">
-                  源预设
+                  分支
                   <select
                     className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                    disabled={busy !== null || !moduleSourceConfig}
+                    disabled={busy !== null || maibotRefsLoading}
                     onChange={(event) => {
-                      const preset = event.target.value as ModuleSourcePreset;
-                      setModuleSourcePreset(preset);
-                      const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
-                      if (option) {
-                        setCustomMaiBotUrl(option.maibotUrl);
-                        setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
+                      setSelectedMaiBotBranch(event.target.value);
+                      if (event.target.value) {
+                        setSelectedMaiBotTag("");
                       }
                     }}
-                    value={moduleSourcePreset}
+                    value={selectedMaiBotBranch}
                   >
-                    {moduleSourceConfig?.options.map((option) => (
-                      <option key={option.preset} value={option.preset}>
-                        {option.label}
+                    <option value="">不指定分支</option>
+                    {maibotBranches.map((branch) => (
+                      <option key={branch.name} value={branch.name}>
+                        {branch.name}
                       </option>
                     ))}
-                    <option value="custom">自定义</option>
                   </select>
                 </label>
                 <label className="grid gap-1.5 text-xs font-medium">
-                  MaiBot 仓库
-                  <Input
-                    disabled={busy !== null || moduleSourcePreset !== "custom"}
-                    onChange={(event) => setCustomMaiBotUrl(event.target.value)}
-                    value={customMaiBotUrl}
-                  />
+                  Tag
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    disabled={busy !== null || maibotRefsLoading}
+                    onChange={(event) => {
+                      setSelectedMaiBotTag(event.target.value);
+                      if (event.target.value) {
+                        setSelectedMaiBotBranch("");
+                      }
+                    }}
+                    value={selectedMaiBotTag}
+                  >
+                    <option value="">最新内容</option>
+                    {maibotTags.map((tag) => (
+                      <option key={tag.name} value={tag.name}>
+                        {tag.name}{tag.isPrerelease ? " (测试)" : ""}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
+            ) : null}
+            <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+              <button
+                className="flex w-full items-center justify-between gap-3 text-left"
+                onClick={() => setModuleSourceExpanded((expanded) => !expanded)}
+                type="button"
+              >
+                <span className="text-xs font-medium">更新源</span>
+                <ChevronDown
+                  className={cn("size-4 shrink-0 text-muted-foreground transition-transform", moduleSourceExpanded && "rotate-180")}
+                />
+              </button>
+              {moduleSourceExpanded ? (
+                <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_auto] md:items-end">
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      源预设
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        disabled={busy !== null || !moduleSourceConfig}
+                        onChange={(event) => {
+                          const preset = event.target.value as ModuleSourcePreset;
+                          setModuleSourcePreset(preset);
+                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
+                          if (option) {
+                            setCustomMaiBotUrl(option.maibotUrl);
+                            setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
+                          }
+                        }}
+                        value={moduleSourcePreset}
+                      >
+                        {moduleSourceConfig?.options.map((option) => (
+                          <option key={option.preset} value={option.preset}>
+                            {option.label}
+                          </option>
+                        ))}
+                        <option value="custom">自定义</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      MaiBot 仓库
+                      <Input
+                        disabled={busy !== null || moduleSourcePreset !== "custom"}
+                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
+                        value={customMaiBotUrl}
+                      />
+                    </label>
+                    <Button
+                      disabled={busy !== null}
+                      onClick={() => {
+                        void reloadModuleSourceOptions();
+                        void loadMaiBotRefs();
+                      }}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      <RefreshCw />
+                      刷新
+                    </Button>
+                  </div>
+              ) : null}
             </div>
           </DialogBody>
           <DialogFooter>
             <Button disabled={busy === "maibot:update"} onClick={() => setUpdateDialog(null)} size="sm" variant="ghost">
               取消
             </Button>
-            <Button disabled={busy !== null || maibotUpdateBlocked || !maibotTargets[maibotChannel]} onClick={() => void updateMaiBot()} size="sm">
+            <Button
+              disabled={
+                busy !== null ||
+                maibotUpdateBlocked ||
+                !maibotTargets[maibotChannel] ||
+                (maibotChannel === "other" && maibotRefsLoading)
+              }
+              onClick={() => void updateMaiBot()}
+              size="sm"
+            >
               {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               开始更新
             </Button>

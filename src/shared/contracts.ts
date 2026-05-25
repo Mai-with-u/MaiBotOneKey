@@ -271,7 +271,6 @@ export interface ModuleRuntimeVersions {
   maibotLocalSource?: "pyproject" | "unknown";
   maibotLatestStableTag?: string;
   maibotLatestPrereleaseTag?: string;
-  maibotLatestLegacyTag?: string;
   maibotRemoteSource?: string;
   dashboardOverride?: string;
   dashboardOverrideSource?: "python-overrides" | "unknown";
@@ -934,6 +933,15 @@ export interface ModuleTagOption {
   isPrerelease: boolean;
 }
 
+export interface ModuleBranchOption {
+  name: string;
+}
+
+export interface ModuleUpdateTarget {
+  type: "tag" | "branch";
+  name: string;
+}
+
 export type ModuleSourcePreset = "ghproxy" | "official" | "custom";
 
 export interface ModuleSourceOption {
@@ -1114,7 +1122,8 @@ export interface DesktopBridge {
     confirm: () => Promise<StartupAgreementConfirmResult>;
   };
   modules: {
-    updateMaiBot: (tag?: string) => Promise<ModuleUpdateResult>;
+    updateMaiBot: (target?: ModuleUpdateTarget) => Promise<ModuleUpdateResult>;
+    listMaiBotBranches: () => Promise<ModuleBranchOption[]>;
     listMaiBotTags: () => Promise<ModuleTagOption[]>;
     getSourceConfig: () => Promise<ModuleSourceConfig>;
     saveSourceConfig: (config: ModuleSourceUpdate) => Promise<ModuleSourceConfig>;
