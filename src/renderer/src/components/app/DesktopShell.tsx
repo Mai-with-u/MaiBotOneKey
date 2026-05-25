@@ -1,20 +1,21 @@
 ﻿import {
+  ChevronDown,
   Code2,
-  FolderOpen,
   GripHorizontal,
   Home,
+  ListTree,
   Loader2,
   MessageSquare,
   Play,
   Puzzle,
   Radar,
   RefreshCw,
-  Server,
   Settings,
   Square,
   TerminalSquare,
 } from "lucide-react";
 import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
@@ -71,6 +72,8 @@ const statusDotColor: Record<ServiceStatus, string> = {
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
+const toolbarMenuItemClassName =
+  "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 
 function createOpenCodeSessionId(): string {
   const randomId =
@@ -109,7 +112,8 @@ function readPluginBuilderMode(): PluginBuilderMode {
   if (typeof window === "undefined") {
     return "agent";
   }
-  return window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY) === "nodes" ? "nodes" : "agent";
+  const mode = window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY);
+  return mode === "nodes" || mode === "disabled" ? mode : "agent";
 }
 
 function errorMessage(error: unknown): string {
@@ -692,18 +696,14 @@ export function DesktopShell(): React.JSX.Element {
   }, [refreshSnapshot]);
 
   const services = snapshot?.services ?? [];
-  const messagePlatformReady =
-    snapshot?.initState.messagePlatformConfigured === true &&
-    Boolean(snapshot.initState.qqAccount?.trim());
   const serviceById = useMemo(
     () => new Map(services.map((s) => [s.id, s])),
     [services],
   );
   const maibotService = serviceById.get("maibot");
   const qqBackendService = serviceById.get("napcat");
-  const showQqBackendTab = messagePlatformReady && Boolean(qqBackendService);
-  const qqBackendDefaultUrl =
-    snapshot?.initState.qqBackend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui";
+  const qqBackendName =
+    qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
   const canInterruptStartup =
@@ -818,10 +818,6 @@ export function DesktopShell(): React.JSX.Element {
       setActiveTab("home");
       return;
     }
-    if (value === "qqbackend" && !showQqBackendTab) {
-      setActiveTab("home");
-      return;
-    }
     if (value === "pluginmarket") {
       setPluginMode("market");
       setActiveTab("plugins");
@@ -833,11 +829,15 @@ export function DesktopShell(): React.JSX.Element {
       return;
     }
     if (value === "pluginbuilder") {
+      if (pluginBuilderMode === "disabled") {
+        setActiveTab("home");
+        return;
+      }
       setActiveTab("pluginbuilder");
       return;
     }
     setActiveTab(value);
-  }, [showQqBackendTab, showTerminalTab]);
+  }, [pluginBuilderMode, showTerminalTab]);
 
   const openPluginConfig = useCallback((pluginId: string) => {
     setPluginMode("manage");
@@ -888,10 +888,13 @@ export function DesktopShell(): React.JSX.Element {
     if (activeTab === "terminal" && !showTerminalTab) {
       setActiveTab("home");
     }
-    if (activeTab === "qqbackend" && !showQqBackendTab) {
+  }, [activeTab, showTerminalTab]);
+
+  useEffect(() => {
+    if (activeTab === "pluginbuilder" && pluginBuilderMode === "disabled") {
       setActiveTab("home");
     }
-  }, [activeTab, showQqBackendTab, showTerminalTab]);
+  }, [activeTab, pluginBuilderMode]);
 
   // Global shortcuts
   useShortcut("Mod+L", openLogs);
@@ -1017,99 +1020,112 @@ export function DesktopShell(): React.JSX.Element {
                     <Puzzle />
                     插件
                   </TabsTrigger>
-                  <TabsTrigger value="pluginbuilder" className="gap-1.5">
-                    <Code2 />
-                    编写器
-                  </TabsTrigger>
-                  {showQqBackendTab ? (
-                    <div
-                      className={cn(
-                        "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
-                        activeTab === "qqbackend" && "border-primary/45 bg-primary/15 text-primary shadow-sm",
-                      )}
-                    >
-                      <TabsTrigger
-                        value="qqbackend"
-                        className="h-full flex-none gap-1.5 border-0 bg-transparent px-2.5 text-inherit hover:text-inherit data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none"
-                      >
-                        <Server />
-                        {qqBackendService?.name ?? "QQ 后端"}
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "size-1.5 shrink-0 rounded-full",
-                            qqBackendService ? statusDotColor[qqBackendService.status] : "bg-muted-foreground/30",
-                          )}
-                        />
-                        <span className="hidden shrink-0 text-[10.5px] font-normal text-muted-foreground tabular-nums xl:inline">
-                          {qqBackendService ? statusText[qqBackendService.status] : "未发现"}
-                        </span>
-                      </TabsTrigger>
-                      <ServiceTabControls
-                        service={qqBackendService}
-                        busy={actionBusy?.startsWith("napcat:") ?? false}
-                        onStart={startService}
-                        onStop={stopService}
-                        onRestart={restartService}
-                      />
-                    </div>
+                  {pluginBuilderMode !== "disabled" ? (
+                    <TabsTrigger value="pluginbuilder" className="gap-1.5">
+                      <Code2 />
+                      编写器
+                    </TabsTrigger>
                   ) : null}
                 </TabsList>
               <div className="ml-auto flex shrink-0 items-center gap-1">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      className="h-7 px-2.5 text-[11px]"
+                      aria-label="设置"
+                      className="size-7"
                       onClick={() => selectTab("settings")}
-                      size="sm"
+                      size="icon-sm"
                       variant={activeTab === "settings" ? "default" : "secondary"}
                     >
                       <Settings />
-                      设置
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
                     设置
                   </TooltipContent>
                 </Tooltip>
+                <div className="flex shrink-0 items-center">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="启动全部服务"
+                        className="h-7 w-8 rounded-r-none px-0 text-[11px]"
+                        disabled={actionBusy !== null}
+                        onClick={startAll}
+                        size="sm"
+                        variant="default"
+                      >
+                        {actionBusy === "all:start" ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <Play />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <span className="flex items-center gap-1">
+                        启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
+                  <DropdownMenuPrimitive.Root>
+                    <DropdownMenuPrimitive.Trigger asChild>
+                      <Button
+                        aria-label="选择要启动的服务"
+                        className="-ml-px h-7 w-5 rounded-l-none border-l border-primary-foreground/25 px-0 text-[11px]"
+                        disabled={actionBusy !== null}
+                        size="sm"
+                        variant="default"
+                      >
+                        <ChevronDown className="size-3" />
+                      </Button>
+                    </DropdownMenuPrimitive.Trigger>
+                    <DropdownMenuPrimitive.Portal>
+                      <DropdownMenuPrimitive.Content
+                        align="end"
+                        className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg shadow-black/15"
+                        sideOffset={6}
+                      >
+                        <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
+                          <Play className="size-3.5" />
+                          <span className="flex-1">启动全部服务</span>
+                          <Kbd keys="Mod+Shift+S" size="xs" />
+                        </DropdownMenuPrimitive.Item>
+                        <DropdownMenuPrimitive.Item
+                          className={toolbarMenuItemClassName}
+                          disabled={!maibotService}
+                          onSelect={() => startService("maibot")}
+                        >
+                          <Play className="size-3.5" />
+                          启动 MaiBot
+                        </DropdownMenuPrimitive.Item>
+                        <DropdownMenuPrimitive.Item
+                          className={toolbarMenuItemClassName}
+                          disabled={!qqBackendService}
+                          onSelect={() => startService("napcat")}
+                        >
+                          <Play className="size-3.5" />
+                          启动 {qqBackendName}
+                        </DropdownMenuPrimitive.Item>
+                      </DropdownMenuPrimitive.Content>
+                    </DropdownMenuPrimitive.Portal>
+                  </DropdownMenuPrimitive.Root>
+                </div>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      size="sm"
-                      variant="default"
-                      onClick={startAll}
-                      disabled={actionBusy !== null}
-                      className="h-7 px-2.5 text-[11px]"
-                    >
-                      {actionBusy === "all:start" ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <Play />
-                      )}
-                      启动全部
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <span className="flex items-center gap-1">
-                      启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
-                    </span>
-                  </TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size="sm"
+                      aria-label="停止全部"
+                      size="icon-sm"
                       variant="ghost"
                       onClick={stopAll}
                       disabled={actionBusy !== null && !canInterruptStartup}
-                      className="h-7 px-2 text-[11px]"
+                      className="size-7"
                     >
                       {actionBusy === "all:stop" ? (
                         <Loader2 className="animate-spin" />
                       ) : (
                         <Square />
                       )}
-                      停止
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -1121,13 +1137,13 @@ export function DesktopShell(): React.JSX.Element {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      size="sm"
+                      aria-label="打开日志目录"
+                      size="icon-sm"
                       variant="ghost"
                       onClick={openLogs}
-                      className="h-7 px-2 text-[11px]"
+                      className="size-7"
                     >
-                      <FolderOpen />
-                      日志
+                      <ListTree />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -1147,6 +1163,10 @@ export function DesktopShell(): React.JSX.Element {
                   onOpenPluginConfig={openPluginConfig}
                   onOpenTab={selectTab}
                   onSnapshot={setSnapshot}
+                  onRestartService={restartService}
+                  onStartService={startService}
+                  onStopService={stopService}
+                  serviceActionBusy={actionBusy}
                   snapshot={snapshot}
                 />
               ) : (
@@ -1214,37 +1234,24 @@ export function DesktopShell(): React.JSX.Element {
               />
             </TabsContent>
 
-            <TabsContent
-              value="pluginbuilder"
-              className="min-h-0 flex-1 overflow-hidden outline-none"
-            >
-              {pluginBuilderMode === "nodes" ? (
-                <PluginBuilderPanel
-                  isStartingOpenCode={isStartingOpenCode}
-                  onStartOpenCode={startOpenCode}
-                  openCodePath={openCodePath}
-                />
-              ) : (
-                <PluginCodingAgentPanel
-                  isStartingOpenCode={isStartingOpenCode}
-                  onStartOpenCode={startOpenCode}
-                  openCodePath={openCodePath}
-                />
-              )}
-            </TabsContent>
-
-            {showQqBackendTab ? (
+            {pluginBuilderMode !== "disabled" ? (
               <TabsContent
-                forceMount
-                value="qqbackend"
-                className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+                value="pluginbuilder"
+                className="min-h-0 flex-1 overflow-hidden outline-none"
               >
-                <WebviewPanel
-                  active={activeTab === "qqbackend"}
-                  emptyText={`${qqBackendService?.name ?? "QQ 后端"} 启动后会在这里载入 WebUI。`}
-                  title={`${qqBackendService?.name ?? "QQ 后端"} WebUI`}
-                  url={qqBackendService?.url ?? qqBackendDefaultUrl}
-                />
+                {pluginBuilderMode === "nodes" ? (
+                  <PluginBuilderPanel
+                    isStartingOpenCode={isStartingOpenCode}
+                    onStartOpenCode={startOpenCode}
+                    openCodePath={openCodePath}
+                  />
+                ) : (
+                  <PluginCodingAgentPanel
+                    isStartingOpenCode={isStartingOpenCode}
+                    onStartOpenCode={startOpenCode}
+                    openCodePath={openCodePath}
+                  />
+                )}
               </TabsContent>
             ) : null}
 

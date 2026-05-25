@@ -7,6 +7,7 @@ import {
   Loader2,
   Maximize2,
   PackageCheck,
+  Play,
   Puzzle,
   Radar,
   RefreshCw,
@@ -14,7 +15,7 @@ import {
   Settings,
   Send,
   Sparkles,
-  Store,
+  Square,
   Wrench,
 } from "lucide-react";
 import type React from "react";
@@ -36,6 +37,7 @@ import type {
   ModuleUpdateTarget,
   QqBackend,
   ServiceDescriptor,
+  ServiceId,
   ServiceStatus,
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
@@ -409,14 +411,79 @@ function LocalChatQuickCard({
   );
 }
 
+function ServiceCardControls({
+  service,
+  busy,
+  onStart,
+  onStop,
+  onRestart,
+}: {
+  service: ServiceDescriptor;
+  busy: boolean;
+  onStart: (id: ServiceId) => void;
+  onStop: (id: ServiceId) => void;
+  onRestart: (id: ServiceId) => void;
+}): React.JSX.Element {
+  const isTransitioning = service.status === "starting" || service.status === "stopping" || busy;
+  const isStarting = service.status === "starting";
+  const canStart = service.status === "stopped" || service.status === "error";
+  const canStop = service.status === "running" || service.status === "starting" || service.status === "error";
+  const stopDisabled = !canStop || (busy && !isStarting) || service.status === "stopping";
+
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button
+        aria-label={`启动 ${service.name}`}
+        className="size-7"
+        disabled={!canStart || isTransitioning}
+        onClick={() => onStart(service.id)}
+        size="icon"
+        title="启动"
+        variant="ghost"
+      >
+        {busy && canStart ? <Loader2 className="animate-spin" /> : <Play />}
+      </Button>
+      <Button
+        aria-label={`停止 ${service.name}`}
+        className="size-7"
+        disabled={stopDisabled}
+        onClick={() => onStop(service.id)}
+        size="icon"
+        title="停止"
+        variant="ghost"
+      >
+        <Square />
+      </Button>
+      <Button
+        aria-label={`重启 ${service.name}`}
+        className="size-7"
+        disabled={isTransitioning}
+        onClick={() => onRestart(service.id)}
+        size="icon"
+        title="重启"
+        variant="ghost"
+      >
+        <RefreshCw />
+      </Button>
+    </div>
+  );
+}
+
 function ServiceSummary({
   icon,
   service,
+  serviceControls,
   webuiAction,
   adapterAction,
 }: {
   icon: React.ReactNode;
   service: ServiceDescriptor | undefined;
+  serviceControls?: {
+    busy: boolean;
+    onStart: (id: ServiceId) => void;
+    onStop: (id: ServiceId) => void;
+    onRestart: (id: ServiceId) => void;
+  };
   webuiAction?: {
     title: string;
     label: string;
@@ -436,18 +503,31 @@ function ServiceSummary({
     <div className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            {icon}
-          </span>
+          {icon ? (
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+              {icon}
+            </span>
+          ) : null}
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{service?.name ?? "未知服务"}</p>
           </div>
         </div>
-        {service ? (
-          <Badge dot variant={statusVariant[service.status]}>
-            {statusText[service.status]}
-          </Badge>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {service && serviceControls ? (
+            <ServiceCardControls
+              busy={serviceControls.busy}
+              onRestart={serviceControls.onRestart}
+              onStart={serviceControls.onStart}
+              onStop={serviceControls.onStop}
+              service={service}
+            />
+          ) : null}
+          {service ? (
+            <Badge dot variant={statusVariant[service.status]}>
+              {statusText[service.status]}
+            </Badge>
+          ) : null}
+        </div>
       </div>
       {(webuiAction || adapterAction) ? (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -555,20 +635,7 @@ function LauncherUpdateCard({
 
   return (
     <section className="rounded-lg border border-border bg-card p-3.5">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            <Download className="size-4.5" />
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">一键包版本</p>
-          </div>
-        </div>
-        <Badge dot variant={latestTag ? (updateAvailable ? "warning" : "success") : "secondary"}>
-          {latestTag ? (updateAvailable ? "可更新" : "已是最新") : "未读取"}
-        </Badge>
-      </div>
-      <div className="mt-3 grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
+      <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
         <DetailRow label="本地版本" value={currentTag} />
         <DetailRow label="最新版本" value={latestTag} />
       </div>
@@ -599,8 +666,6 @@ function MaiBotOverviewCard({
   latestPrerelease,
   updateBusy,
   onUpdate,
-  onOpenPluginStore,
-  onOpenPluginManager,
 }: {
   service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
@@ -608,10 +673,7 @@ function MaiBotOverviewCard({
   latestPrerelease: string | undefined;
   updateBusy?: boolean;
   onUpdate: () => void;
-  onOpenPluginStore: () => void;
-  onOpenPluginManager: () => void;
 }): React.JSX.Element {
-  const [activeTab, setActiveTab] = useState<"version" | "plugins">("version");
   const hasNewVersion =
     compareVersionText(latestStable, localVersion) > 0 ||
     compareVersionText(latestPrerelease, localVersion) > 0;
@@ -634,93 +696,28 @@ function MaiBotOverviewCard({
         ) : null}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_4.25rem]">
-        <div className="min-w-0 sm:order-2">
-          <div className="grid grid-cols-2 rounded-md border border-border bg-muted/35 p-1 sm:grid-cols-1">
-          {([
-            { value: "version", label: "版本" },
-            { value: "plugins", label: "插件" },
-          ] as const).map((tab) => (
-            <button
-              className={cn(
-                "h-7 rounded-sm px-2 text-[11px] font-medium transition-colors sm:h-12",
-                activeTab === tab.value
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              key={tab.value}
-              onClick={() => setActiveTab(tab.value)}
-              type="button"
-            >
-              {tab.label}
-            </button>
-          ))}
-          </div>
+      <div className="grid min-w-0 gap-3 rounded-md border border-border bg-muted/30 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">MaiBot 版本</p>
+          <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
+            {valueOrFallback(localVersion)}
+          </p>
         </div>
-
-        {activeTab === "version" ? (
-          <div className="grid min-w-0 gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <div className="min-w-0">
-              <p className="text-xs text-muted-foreground">MaiBot 版本</p>
-              <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
-                {valueOrFallback(localVersion)}
-              </p>
-            </div>
-            <div className="grid min-w-0 gap-1 sm:min-w-44">
-              <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-                <span className="shrink-0 text-muted-foreground">正式版</span>
-                <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestStable}>
-                  {valueOrFallback(latestStable)}
-                </span>
-              </div>
-              <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-                <span className="shrink-0 text-muted-foreground">测试版</span>
-                <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestPrerelease}>
-                  {valueOrFallback(latestPrerelease)}
-                </span>
-              </div>
-              <Button
-                aria-label="更新 MaiBot"
-                className="relative mt-1 h-7 justify-self-end px-2.5 text-[11px]"
-                disabled={updateBusy}
-                onClick={onUpdate}
-                size="sm"
-                variant="secondary"
-              >
-                {hasNewVersion ? (
-                  <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning ring-2 ring-card" />
-                ) : null}
-                {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                <Puzzle className="size-4.5" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">插件</span>
-                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                  安装或管理 MaiBot Core 插件。
-                </span>
-              </span>
-            </div>
-            <span className="flex shrink-0 flex-wrap gap-2">
-              <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenPluginStore} size="sm">
-                <Store className="size-3.5" />
-                打开商店
-                <ArrowRight className="size-3.5" />
-              </Button>
-              <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenPluginManager} size="sm" variant="secondary">
-                <Puzzle className="size-3.5" />
-                插件管理
-                <ArrowRight className="size-3.5" />
-              </Button>
-            </span>
-          </div>
-        )}
+        <div className="grid min-w-0 gap-1 sm:min-w-44">
+          <Button
+            aria-label="更新 MaiBot"
+            className="relative mt-1 h-7 justify-self-end px-2.5 text-[11px]"
+            disabled={updateBusy}
+            onClick={onUpdate}
+            size="sm"
+            variant="secondary"
+          >
+            {hasNewVersion ? (
+              <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning ring-2 ring-card" />
+            ) : null}
+            {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -736,9 +733,6 @@ function HomeStatsPanel({
   onOpenQuickActions: () => void;
 }): React.JSX.Element {
   const [maibotStats, setMaibotStats] = useState<MaiBotStatisticSummary | null>(null);
-  const runningCount = services.filter((service) => service.status === "running").length;
-  const readyCount = services.filter((service) => service.health === "ready").length;
-  const qqBackend = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat";
   const topChats = maibotStats?.chatStats.slice(0, 2) ?? [];
 
   useEffect(() => {
@@ -797,14 +791,6 @@ function HomeStatsPanel({
         </div>
 
         <div className="grid gap-2 text-xs">
-          <DetailRow label="" value={`${runningCount}/${services.length}`} />
-          <DetailRow label="" value={`${readyCount}/${services.length}`} />
-          <DetailRow label="一键包版本" value={`v${snapshot.appVersion}`} />
-          <DetailRow label="MaiBot 本地版本" value={snapshot.moduleVersions.maibotLocal} />
-          <DetailRow label="QQ 后端" value={qqBackend} />
-        </div>
-
-        <div className="grid gap-2 border-t border-border pt-3 text-xs">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
             {maibotStats?.periodLabel ? (
@@ -844,8 +830,14 @@ function HomeStatsPanel({
               <p className="text-[11px] text-muted-foreground">路径、数据库和配置导入。</p>
             </div>
           </div>
-          <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenQuickActions} size="sm" variant="secondary">
-            打开
+          <Button
+            aria-label="打开快捷操作"
+            className="size-8"
+            onClick={onOpenQuickActions}
+            size="icon"
+            title="打开快捷操作"
+            variant="secondary"
+          >
             <ArrowRight className="size-3.5" />
           </Button>
         </div>
@@ -1340,6 +1332,10 @@ export function HomePanel({
   onOpenTab,
   onOpenPluginConfig,
   onEnterFloatingMode,
+  onRestartService,
+  onStartService,
+  onStopService,
+  serviceActionBusy,
 }: {
   active: boolean;
   snapshot: DesktopSnapshot;
@@ -1347,6 +1343,10 @@ export function HomePanel({
   onOpenTab: (tab: string) => void;
   onOpenPluginConfig: (pluginId: string) => void;
   onEnterFloatingMode: () => void;
+  onRestartService: (id: ServiceId) => void;
+  onStartService: (id: ServiceId) => void;
+  onStopService: (id: ServiceId) => void;
+  serviceActionBusy: string | null;
 }): React.JSX.Element {
   const [updateDialog, setUpdateDialog] = useState<"maibot" | "dashboard" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1518,14 +1518,6 @@ export function HomePanel({
     snapshot.moduleVersions.maibotLatestStableTag,
   ]);
 
-  const openPluginStore = useCallback(() => {
-    onOpenTab("pluginmarket");
-  }, [onOpenTab]);
-
-  const openPluginManager = useCallback(() => {
-    onOpenTab("pluginmanage");
-  }, [onOpenTab]);
-
   const openLauncherRelease = useCallback(() => {
     const tag = snapshot.appLatestTag?.trim();
     const url = tag
@@ -1695,8 +1687,6 @@ export function HomePanel({
                 latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
                 latestStable={snapshot.moduleVersions.maibotLatestStableTag}
                 localVersion={snapshot.moduleVersions.maibotLocal}
-                onOpenPluginManager={openPluginManager}
-                onOpenPluginStore={openPluginStore}
                 onUpdate={openMaiBotUpdate}
                 service={maibot}
                 updateBusy={busy === "maibot:update"}
@@ -1713,8 +1703,14 @@ export function HomePanel({
                     label: "打开配置",
                     onClick: () => onOpenPluginConfig(adapterPluginId),
                   }}
-                  icon={<Server className="size-4.5" />}
+                  icon={null}
                   service={napcat}
+                  serviceControls={napcat ? {
+                    busy: serviceActionBusy?.startsWith(`${napcat.id}:`) ?? false,
+                    onRestart: onRestartService,
+                    onStart: onStartService,
+                    onStop: onStopService,
+                  } : undefined}
                   webuiAction={{
                     title: `${napcat?.name ?? "NapCat"} 设置`,
                     label: "打开 WebUI",

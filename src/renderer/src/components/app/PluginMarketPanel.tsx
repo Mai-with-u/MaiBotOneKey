@@ -1,7 +1,7 @@
-import { AlertTriangle, ArrowDownWideNarrow, Download, ExternalLink, Info, Loader2, MessageSquare, Plus, Puzzle, RefreshCw, Save, Search, Settings, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X } from "lucide-react";
+import { AlertTriangle, Download, ExternalLink, Info, Loader2, MessageSquare, Plus, Puzzle, RefreshCw, Save, Search, Settings, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X } from "lucide-react";
 import type { ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -132,10 +132,17 @@ export function PluginMarketPanel({
   const [configError, setConfigError] = useState<string | null>(null);
   const [detailPlugin, setDetailPlugin] = useState<DetailPlugin | null>(null);
   const [toggleBusyPluginId, setToggleBusyPluginId] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const pluginUserStatesRef = useRef(pluginUserStates);
+  const autoUserStateFetchAttemptedRef = useRef(new Set<string>());
+  const autoUserStateFetchInFlightRef = useRef(new Set<string>());
 
   const loadPlugins = useCallback(async (forceRefresh = false) => {
     setLoadState("loading");
     setError(null);
+    if (forceRefresh) {
+      autoUserStateFetchAttemptedRef.current.clear();
+    }
 
     try {
       if (mode === "market") {
@@ -168,6 +175,72 @@ export function PluginMarketPanel({
   useEffect(() => {
     void loadPlugins();
   }, [loadPlugins]);
+
+  useEffect(() => {
+    pluginUserStatesRef.current = pluginUserStates;
+  }, [pluginUserStates]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "market" || loadState !== "ready" || marketPlugins.length === 0) {
+      return;
+    }
+
+    const statsIds = Array.from(new Set(marketPlugins.map((plugin) => pluginStatsPrimaryId(plugin))));
+    const missingIds = statsIds.filter((statsId) => (
+      !pluginUserStatesRef.current[statsId]
+      && !autoUserStateFetchAttemptedRef.current.has(statsId)
+      && !autoUserStateFetchInFlightRef.current.has(statsId)
+    ));
+
+    if (missingIds.length === 0) {
+      return;
+    }
+
+    const batchSize = 8;
+    for (const statsId of missingIds) {
+      autoUserStateFetchAttemptedRef.current.add(statsId);
+      autoUserStateFetchInFlightRef.current.add(statsId);
+    }
+
+    void (async () => {
+      for (let index = 0; index < missingIds.length; index += batchSize) {
+        const batch = missingIds.slice(index, index + batchSize);
+        const entries = await Promise.all(
+          batch.map(async (statsId) => {
+            try {
+              const userState = await fetchPluginUserState(statsId);
+              return [statsId, userState ?? createEmptyPluginUserState()] as const;
+            } catch {
+              return null;
+            } finally {
+              autoUserStateFetchInFlightRef.current.delete(statsId);
+            }
+          }),
+        );
+        const nextStates = entries.filter((entry): entry is readonly [string, PluginUserState] => entry !== null);
+        if (nextStates.length > 0 && mountedRef.current) {
+          setPluginUserStates((current) => {
+            let changed = false;
+            const next = { ...current };
+            for (const [statsId, userState] of nextStates) {
+              if (!next[statsId]) {
+                next[statsId] = userState;
+                changed = true;
+              }
+            }
+            return changed ? next : current;
+          });
+        }
+      }
+    })();
+  }, [loadState, marketPlugins, mode]);
 
   const beginOperation = useCallback((operation: PendingOperation) => {
     setPendingOperation(operation);
@@ -464,7 +537,7 @@ export function PluginMarketPanel({
   const isMarket = mode === "market";
   const maibotRunning = maibotService?.status === "running";
   const title = isMarket ? "插件商店" : "插件管理";
-  const description = isMarket ? "浏览 MaiBot 插件市场，安装或更新插件。" : "查看已安装插件，执行更新与卸载。";
+  const description = "";
 
   return (
     <>
@@ -473,7 +546,7 @@ export function PluginMarketPanel({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-lg font-semibold">{title}</h2>
-              <p className="text-sm text-muted-foreground">{description}</p>
+              {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
             </div>
             <div className="flex items-center gap-2">
               {onModeChange ? (
@@ -506,9 +579,15 @@ export function PluginMarketPanel({
                   </button>
                 </div>
               ) : null}
-              <Button disabled={loadState === "loading"} onClick={() => void loadPlugins(true)} size="sm" variant="secondary">
+              <Button
+                aria-label="刷新"
+                disabled={loadState === "loading"}
+                onClick={() => void loadPlugins(true)}
+                size="icon-sm"
+                title="刷新"
+                variant="secondary"
+              >
                 {loadState === "loading" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                刷新
               </Button>
             </div>
           </div>
@@ -533,11 +612,7 @@ export function PluginMarketPanel({
                 />
                 优先显示支持当前 MaiBot 版本的插件
               </label>
-              <span className="text-muted-foreground">
-                当前版本：<span className="font-mono text-foreground">{maibotVersion ?? "未知"}</span>
-              </span>
               <label className="ml-auto inline-flex items-center gap-2 text-muted-foreground">
-                <ArrowDownWideNarrow className="size-3.5" />
                 <select
                   className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
                   onChange={(event) => setMarketSortBy(event.target.value as MarketSortKey)}
@@ -783,6 +858,7 @@ function PluginGrid({
         const detailAction: CardAction = {
           label: "详情",
           icon: <Info />,
+          iconOnly: true,
           variant: "ghost",
           onClick: () => onDetail(plugin),
         };
@@ -882,6 +958,7 @@ function InstalledGrid({
               {
                 label: "详情",
                 icon: <Info />,
+                iconOnly: true,
                 variant: "ghost",
                 onClick: () => onDetail(plugin),
               },
@@ -1061,6 +1138,7 @@ function PluginCard({
           {toggleEnabled ? (
             <label className="inline-flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground" title={toggleEnabled.checked ? "禁用插件" : "启用插件"}>
               <button
+                aria-label={toggleEnabled.checked ? "禁用插件" : "启用插件"}
                 aria-checked={toggleEnabled.checked}
                 className={cn(
                   "relative h-5 w-9 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -1081,7 +1159,6 @@ function PluginCard({
                   {toggleEnabled.busy ? <Loader2 className="size-2.5 animate-spin" /> : null}
                 </span>
               </button>
-              {toggleEnabled.checked ? "启用" : "禁用"}
             </label>
           ) : null}
         </div>
@@ -1139,7 +1216,6 @@ function PluginCardQuickStats({
         variant={liked ? "default" : "outline"}
       >
         {busy === "like" ? <Loader2 className="animate-spin" /> : <ThumbsUp />}
-        <span>{liked ? "已赞" : "点赞"}</span>
         <span className={cn("font-mono text-[11px]", liked ? "text-primary-foreground/85" : "text-muted-foreground")}>
           {likes.toLocaleString()}
         </span>
@@ -1159,7 +1235,6 @@ function PluginCardQuickStats({
           ) : (
             <Star className={cn("size-3.5", (userRating > 0 || ratingOpen) && "fill-yellow-400 text-yellow-400")} />
           )}
-          <span>{userRating > 0 ? `${userRating} 星` : "评分"}</span>
           <span className="font-mono text-[11px] text-muted-foreground">{rating.toFixed(1)}</span>
         </Button>
 

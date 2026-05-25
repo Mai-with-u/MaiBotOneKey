@@ -147,7 +147,7 @@ export interface AppIconSettings {
   options: AppIconOption[];
 }
 
-export type PluginBuilderMode = "agent" | "nodes";
+export type PluginBuilderMode = "agent" | "nodes" | "disabled";
 
 export interface NetworkProxySettings {
   enabled: boolean;

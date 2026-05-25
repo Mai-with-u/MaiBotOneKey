@@ -1683,20 +1683,28 @@ export function SettingsStatusPanel({
                       <div className="min-w-0">
                         <p className="text-sm font-medium">插件编写器模式</p>
                         <p className="text-xs text-muted-foreground">
-                          {pluginBuilderMode === "agent"
+                          {pluginBuilderMode === "disabled"
+                            ? "不显示编写器入口"
+                            : pluginBuilderMode === "agent"
                             ? "默认进入内置 Coding Agent"
                             : "默认进入可视化节点编辑器"}
                         </p>
                       </div>
                     </div>
                     <Badge variant="secondary">
-                      {pluginBuilderMode === "agent" ? "Coding Agent" : "节点编辑器"}
+                      {pluginBuilderMode === "disabled"
+                        ? "不启用"
+                        : pluginBuilderMode === "agent"
+                          ? "Coding Agent"
+                          : "节点编辑器"}
                     </Badge>
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-2"
-                    onValueChange={(value) => onPluginBuilderModeChange(value === "nodes" ? "nodes" : "agent")}
+                    className="grid gap-2 md:grid-cols-3"
+                    onValueChange={(value) =>
+                      onPluginBuilderModeChange(value === "nodes" || value === "disabled" ? value : "agent")
+                    }
                     value={pluginBuilderMode}
                   >
                     {([
@@ -1709,6 +1717,11 @@ export function SettingsStatusPanel({
                         value: "nodes",
                         label: "节点编辑器",
                         description: "使用蓝图节点、组件库和文件预览手动搭建插件。",
+                      },
+                      {
+                        value: "disabled",
+                        label: "不启用",
+                        description: "不会显示顶部编写器 tab。",
                       },
                     ] as const).map((option) => (
                       <label
