@@ -18,6 +18,8 @@
    runtime/python/Lib/
    runtime/python/Scripts/pip.exe
    runtime/git/bin/git.exe
+   runtime/opencode/opencode.exe
+   resources/opencode/plugin_code.md
    modules/MaiBot/bot.py
    modules/MaiBot/plugins/napcat-adapter/
    modules/MaiBot/plugins/snowluma-adapter/
@@ -26,6 +28,8 @@
    ```
 
    `runtime/python` 必须保持为基础 Python，只保留 Python 自身和 `pip`/`setuptools`/`wheel` 等启动包。不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`；`release-assets/python-overrides` 不会进入安装包。
+
+   `resources/opencode/plugin_code.md` 会在打包时复制到安装包资源目录的 `runtime/opencode/plugin_code.md`，用于编写器内置 OpenCode 的默认插件编写说明。
 
 3. 执行发布检查：
 

@@ -94,6 +94,16 @@ const requirements: Requirement[] = [
     candidates: [file("runtime/git/bin/git.exe"), file("runtime/git/cmd/git.exe"), file("runtime/git/git.exe")],
   },
   {
+    label: "OpenCode CLI executable",
+    required: true,
+    candidates: [file("runtime/opencode/opencode.exe")],
+  },
+  {
+    label: "OpenCode plugin instruction resource",
+    required: true,
+    candidates: [file("resources/opencode/plugin_code.md")],
+  },
+  {
     label: "modules directory",
     required: true,
     candidates: [dir("modules")],
