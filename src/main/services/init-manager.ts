@@ -358,7 +358,7 @@ function normalizeNapcatAdapterConfig(
       configVersion: asString(pluginRaw["config_version"], defaults.plugin.configVersion),
     },
     server: {
-      host: asString(serverRaw["host"], defaults.server.host).trim() || defaults.server.host,
+      host: asString(serverRaw["host"] ?? serverRaw["server"], defaults.server.host).trim() || defaults.server.host,
       port: asPositiveInt(serverRaw["port"], defaults.server.port),
       token: asString(serverRaw["token"] ?? serverRaw["access_token"], defaults.server.token),
       heartbeatInterval: asPositiveNumber(
@@ -476,6 +476,15 @@ function applyChatOverrides(
     banUserId: override.banUserId !== undefined ? asStringList(override.banUserId) : base.banUserId,
     banQqBot: override.banQqBot ?? base.banQqBot,
   };
+}
+
+function hasUsableWebsocketServerConfig(server: NapcatWebsocketServerConfig | undefined): server is NapcatWebsocketServerConfig {
+  return Boolean(
+    server?.host.trim()
+    && Number.isFinite(server.port)
+    && server.port > 0
+    && server.token.trim(),
+  );
 }
 
 interface StoredAgreementFile {
@@ -1035,17 +1044,16 @@ export class InitManager {
     const existingWebsocketServer = qqBackend === "snowluma"
       ? await this.readSnowLumaWebsocketServer(qqAccount)
       : await this.readNapcatWebsocketServer(qqAccount);
+    const adapterWebsocketServer = await this.readAdapterServerFromConfig(qqBackend);
+    const configuredWebsocketServer = existingWebsocketServer
+      ?? (hasUsableWebsocketServerConfig(adapterWebsocketServer) ? adapterWebsocketServer : undefined);
     const resolvedWebsocketServer: NapcatWebsocketServerConfig = {
-      ...(existingWebsocketServer ?? {
-        host: NAPCAT_ADAPTER_HOST,
-        token: websocketToken || createWebsocketToken(),
-      }),
-      host: NAPCAT_ADAPTER_HOST,
-      port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
-      token: existingWebsocketServer?.token || websocketToken || createWebsocketToken(),
+      host: configuredWebsocketServer?.host || NAPCAT_ADAPTER_HOST,
+      port: configuredWebsocketServer?.port || (qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT),
+      token: configuredWebsocketServer?.token || websocketToken || createWebsocketToken(),
     };
-    const shouldInitializeAdapterConfig = !(await this.isAdapterConfigInitialized(qqBackend));
-    let initializedAdapterConfig = false;
+    const adapterConfigReady = await this.isAdapterConfigInitialized(qqBackend);
+    let initializedAdapterConfig = adapterConfigReady;
 
     if (qqBackend === "snowluma") {
       await this.createSnowLumaConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
@@ -1053,7 +1061,7 @@ export class InitManager {
       await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
       await this.ensureNapCatWebUiConfig();
     }
-    if (shouldInitializeAdapterConfig) {
+    if (!adapterConfigReady) {
       initializedAdapterConfig = await this.writeQqAdapterConfigsForBackend(
         qqBackend,
         resolvedWebsocketServer,
@@ -1114,7 +1122,7 @@ export class InitManager {
         }
       }
     } catch {
-      // ignore 鈥?fall through to empty token
+      // ignore and fall through to empty token
     }
     return undefined;
   }
@@ -1169,9 +1177,8 @@ export class InitManager {
       ? selectedWebsocketServer
       : await this.resolveSnowLumaAdapterServer(qqAccount);
 
-    const shouldInitializeInactive = !(await this.isAdapterConfigInitialized(
-      qqBackend === "snowluma" ? "napcat" : "snowluma",
-    ));
+    const inactiveBackend = qqBackend === "snowluma" ? "napcat" : "snowluma";
+    const shouldInitializeInactive = !(await this.isAdapterConfigInitialized(inactiveBackend));
 
     if (qqBackend === "snowluma") {
       if (shouldInitializeInactive) {
@@ -1217,8 +1224,8 @@ export class InitManager {
       : await this.readNapcatWebsocketServer(qqAccount);
 
     websocketServer = {
-      host: NAPCAT_ADAPTER_HOST,
-      port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
+      host: websocketServer?.host || NAPCAT_ADAPTER_HOST,
+      port: websocketServer?.port || (qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT),
       token: websocketServer?.token || createWebsocketToken(),
     };
     if (qqBackend === "snowluma") {
@@ -1863,14 +1870,52 @@ export class InitManager {
     }
   }
 
+  private hasAdapterConfigInitializedMarker(backend: QqBackend): boolean {
+    return typeof this.readMessagePlatformStore()?.adapterConfigInitialized?.[backend] === "number";
+  }
+
   private async isAdapterConfigInitialized(backend: QqBackend): Promise<boolean> {
     const configPath = backend === "snowluma"
       ? this.snowlumaAdapterConfigPath()
       : this.napcatAdapterConfigPath();
-    return (
-      typeof this.readMessagePlatformStore()?.adapterConfigInitialized?.[backend] === "number"
-      || existsSync(configPath)
+    if (!existsSync(configPath)) {
+      return false;
+    }
+
+    if (this.hasAdapterConfigInitializedMarker(backend)) {
+      return true;
+    }
+
+    return hasUsableWebsocketServerConfig(await this.readAdapterServerFromConfig(backend));
+  }
+
+  private async readAdapterServerFromConfig(backend: QqBackend): Promise<NapcatWebsocketServerConfig | undefined> {
+    const configPath = backend === "snowluma"
+      ? this.snowlumaAdapterConfigPath()
+      : this.napcatAdapterConfigPath();
+    if (!existsSync(configPath)) {
+      return undefined;
+    }
+
+    const defaults = buildDefaultNapcatAdapterConfig(
+      "",
+      backend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
     );
+    if (backend === "snowluma") {
+      defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
+      defaults.server.actionTimeoutSec = 10;
+    }
+
+    try {
+      const parsed = parseToml(await readFile(configPath, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults).server;
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
   }
 
   private async markMessagePlatformConfigured(
