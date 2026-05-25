@@ -11,8 +11,7 @@ export interface KbdProps extends React.HTMLAttributes<HTMLElement> {
 }
 
 const toneStyles: Record<NonNullable<KbdProps["tone"]>, string> = {
-  default:
-    "border-border bg-card text-foreground/80 shadow-[0_1px_0_0_oklch(0_0_0_/_0.04)]",
+  default: "border-border bg-card text-foreground/80",
   muted: "border-border bg-muted text-muted-foreground",
   inverse: "border-white/10 bg-white/5 text-white/85",
 };

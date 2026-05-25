@@ -1,5 +1,4 @@
 ﻿import {
-  ChevronDown,
   Code2,
   GripHorizontal,
   Home,
@@ -15,7 +14,6 @@
   TerminalSquare,
 } from "lucide-react";
 import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
@@ -72,9 +70,6 @@ const statusDotColor: Record<ServiceStatus, string> = {
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
-const toolbarMenuItemClassName =
-  "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
-
 function createOpenCodeSessionId(): string {
   const randomId =
     globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -289,7 +284,7 @@ function ServiceTabControls({
   }
 
   return (
-    <div className="flex h-full shrink-0 items-center border-l border-current/20 px-0.5">
+    <div className="flex h-full shrink-0 items-center px-0.5">
       <ServiceControlButtons
         service={service}
         busy={busy}
@@ -590,10 +585,10 @@ function PluginCodingAgentPanel({
   return (
     <section className="flex h-full min-h-0 bg-background">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 overflow-auto px-6 py-6">
-        <div className="rounded-lg border border-border bg-card p-4">
+        <div className="retro-panel retro-panel-bare p-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+              <span className="retro-control grid size-8 shrink-0 place-items-center text-primary">
                 <Code2 className="size-4" />
               </span>
               <div className="min-w-0">
@@ -606,7 +601,7 @@ function PluginCodingAgentPanel({
           </div>
         </div>
 
-        <div className="grid min-h-[360px] flex-1 place-items-center rounded-lg border border-dashed border-border bg-card/70 p-6 text-center">
+        <div className="retro-panel retro-panel-bare grid min-h-[360px] flex-1 place-items-center p-6 text-center">
           <div className="max-w-md">
             <Code2 className="mx-auto size-8 text-primary" />
             <h3 className="mt-3 text-sm font-semibold">Coding Agent 工作区</h3>
@@ -701,14 +696,8 @@ export function DesktopShell(): React.JSX.Element {
     [services],
   );
   const maibotService = serviceById.get("maibot");
-  const qqBackendService = serviceById.get("napcat");
-  const qqBackendName =
-    qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
-  const canInterruptStartup =
-    actionBusy === "all:start" ||
-    services.some((service) => service.status === "starting");
 
   const openLogs = useCallback(() => {
     void window.maibotDesktop?.openLogsDirectory();
@@ -933,6 +922,7 @@ export function DesktopShell(): React.JSX.Element {
         className={cn(
           "relative flex h-screen min-h-0 flex-col overflow-hidden text-foreground",
           appearance.liquidGlass ? "bg-transparent" : "bg-background",
+          !appearance.liquidGlass && "retro-shell",
         )}
         data-liquid-shell={appearance.liquidGlass ? "true" : undefined}
         style={{
@@ -965,27 +955,27 @@ export function DesktopShell(): React.JSX.Element {
             >
               <div
                 className={cn(
-                  "flex h-10 shrink-0 items-center gap-3 border-b border-border px-3",
+                  "flex h-12 shrink-0 items-stretch gap-0 border-b border-border pl-6 pr-5",
                   appearance.liquidGlass ? "bg-transparent" : "bg-card",
                 )}
                 data-liquid-band={appearance.liquidGlass ? "true" : undefined}
               >
-                <TabsList className="h-8 bg-card">
-                  <TabsTrigger value="home" className="gap-1.5">
-                    <Home />
+                <TabsList className="retro-tabs h-full">
+                  <TabsTrigger value="home" className="gap-1.5 px-5">
+                    <Home data-retro-fill="true" />
                     首页
                   </TabsTrigger>
                   <div
                     className={cn(
-                      "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
-                      activeTab === "maibot" && "border-primary/45 bg-primary/15 text-primary shadow-sm",
+                      "relative flex h-full shrink-0 items-center border-0 bg-transparent text-muted-foreground transition-colors after:absolute after:bottom-3 after:right-0 after:top-3 after:w-px after:bg-border/70 hover:text-foreground/90",
+                      activeTab === "maibot" && "bg-primary text-primary-foreground",
                     )}
                   >
                     <TabsTrigger
                       value="maibot"
-                      className="h-full flex-none gap-1.5 border-0 bg-transparent px-2.5 text-inherit hover:text-inherit data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none"
+                      className="h-full flex-none gap-1.5 border-0 bg-transparent px-4 text-inherit after:hidden hover:text-inherit data-[state=active]:bg-transparent data-[state=active]:text-inherit"
                     >
-                      <Radar />
+                      <Radar className="text-[var(--retro-gold)]" />
                       MaiBot
                       <span
                         aria-hidden
@@ -994,7 +984,12 @@ export function DesktopShell(): React.JSX.Element {
                           maibotService ? statusDotColor[maibotService.status] : "bg-muted-foreground/30",
                         )}
                       />
-                      <span className="hidden shrink-0 text-[10.5px] font-normal text-muted-foreground tabular-nums xl:inline">
+                      <span
+                        className={cn(
+                          "hidden shrink-0 text-[10.5px] font-normal tabular-nums xl:inline",
+                          activeTab === "maibot" ? "text-primary-foreground/80" : "text-muted-foreground",
+                        )}
+                      >
                         {maibotService ? statusText[maibotService.status] : "未发现"}
                       </span>
                     </TabsTrigger>
@@ -1006,131 +1001,69 @@ export function DesktopShell(): React.JSX.Element {
                       onRestart={restartService}
                     />
                   </div>
-                  <TabsTrigger value="localchat" className="gap-1.5">
+                  <TabsTrigger value="localchat" className="gap-1.5 px-5">
                     <MessageSquare />
                     聊聊
                   </TabsTrigger>
                   {showTerminalTab ? (
-                    <TabsTrigger value="terminal" className="gap-1.5">
+                    <TabsTrigger value="terminal" className="gap-1.5 px-5">
                       <TerminalSquare />
                       终端
                     </TabsTrigger>
                   ) : null}
-                  <TabsTrigger value="plugins" className="gap-1.5">
+                  <TabsTrigger value="plugins" className="gap-1.5 px-5">
                     <Puzzle />
                     插件
                   </TabsTrigger>
                   {pluginBuilderMode !== "disabled" ? (
-                    <TabsTrigger value="pluginbuilder" className="gap-1.5">
+                    <TabsTrigger value="pluginbuilder" className="gap-1.5 px-5">
                       <Code2 />
                       编写器
                     </TabsTrigger>
                   ) : null}
                 </TabsList>
-              <div className="ml-auto flex shrink-0 items-center gap-1">
+              <div className="ml-auto flex shrink-0 items-center gap-1 py-1">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       aria-label="设置"
-                      className="size-7"
+                      className={cn(
+                        "retro-top-action text-primary-foreground [&_svg]:fill-none [&_svg]:stroke-primary-foreground [&_svg]:stroke-[3]",
+                        activeTab === "settings"
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-[var(--retro-ink)] bg-[var(--retro-ink)] text-primary-foreground hover:bg-[var(--retro-ink)]",
+                      )}
                       onClick={() => selectTab("settings")}
                       size="icon-sm"
-                      variant={activeTab === "settings" ? "default" : "secondary"}
+                      variant="secondary"
                     >
-                      <Settings />
+                      <Settings className="size-5" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
                     设置
                   </TooltipContent>
                 </Tooltip>
-                <div className="flex shrink-0 items-center">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        aria-label="启动全部服务"
-                        className="h-7 w-8 rounded-r-none px-0 text-[11px]"
-                        disabled={actionBusy !== null}
-                        onClick={startAll}
-                        size="sm"
-                        variant="default"
-                      >
-                        {actionBusy === "all:start" ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <Play />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <span className="flex items-center gap-1">
-                        启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
-                      </span>
-                    </TooltipContent>
-                  </Tooltip>
-                  <DropdownMenuPrimitive.Root>
-                    <DropdownMenuPrimitive.Trigger asChild>
-                      <Button
-                        aria-label="选择要启动的服务"
-                        className="-ml-px h-7 w-5 rounded-l-none border-l border-primary-foreground/25 px-0 text-[11px]"
-                        disabled={actionBusy !== null}
-                        size="sm"
-                        variant="default"
-                      >
-                        <ChevronDown className="size-3" />
-                      </Button>
-                    </DropdownMenuPrimitive.Trigger>
-                    <DropdownMenuPrimitive.Portal>
-                      <DropdownMenuPrimitive.Content
-                        align="end"
-                        className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg shadow-black/15"
-                        sideOffset={6}
-                      >
-                        <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
-                          <Play className="size-3.5" />
-                          <span className="flex-1">启动全部服务</span>
-                          <Kbd keys="Mod+Shift+S" size="xs" />
-                        </DropdownMenuPrimitive.Item>
-                        <DropdownMenuPrimitive.Item
-                          className={toolbarMenuItemClassName}
-                          disabled={!maibotService}
-                          onSelect={() => startService("maibot")}
-                        >
-                          <Play className="size-3.5" />
-                          启动 MaiBot
-                        </DropdownMenuPrimitive.Item>
-                        <DropdownMenuPrimitive.Item
-                          className={toolbarMenuItemClassName}
-                          disabled={!qqBackendService}
-                          onSelect={() => startService("napcat")}
-                        >
-                          <Play className="size-3.5" />
-                          启动 {qqBackendName}
-                        </DropdownMenuPrimitive.Item>
-                      </DropdownMenuPrimitive.Content>
-                    </DropdownMenuPrimitive.Portal>
-                  </DropdownMenuPrimitive.Root>
-                </div>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      aria-label="停止全部"
-                      size="icon-sm"
-                      variant="ghost"
-                      onClick={stopAll}
-                      disabled={actionBusy !== null && !canInterruptStartup}
-                      className="size-7"
+                      aria-label="启动全部服务"
+                      className="retro-top-action w-16 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90"
+                      disabled={actionBusy !== null}
+                      onClick={startAll}
+                      size="sm"
+                      variant="secondary"
                     >
-                      {actionBusy === "all:stop" ? (
+                      {actionBusy === "all:start" ? (
                         <Loader2 className="animate-spin" />
                       ) : (
-                        <Square />
+                        <Play />
                       )}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
                     <span className="flex items-center gap-1">
-                      停止全部 <Kbd keys="Mod+Shift+X" size="xs" tone="inverse" />
+                      启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
                     </span>
                   </TooltipContent>
                 </Tooltip>
@@ -1141,7 +1074,7 @@ export function DesktopShell(): React.JSX.Element {
                       size="icon-sm"
                       variant="ghost"
                       onClick={openLogs}
-                      className="size-7"
+                      className="retro-top-action border-border bg-card"
                     >
                       <ListTree />
                     </Button>

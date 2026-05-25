@@ -1,5 +1,4 @@
 import {
-  Bot,
   Maximize2,
   Minus,
   MonitorCog,
@@ -55,7 +54,7 @@ function MacTrafficLights(): React.JSX.Element {
     >
       <button
         aria-label="关闭"
-        className="group grid size-3 place-items-center rounded-full bg-[#ff5f57] text-[#4d0000] shadow-[inset_0_0_0_0.5px_rgb(0_0_0/0.18)] transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="group grid size-3 place-items-center rounded-full bg-[#ff5f57] text-[#4d0000] transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         onClick={() => bridge?.close()}
         type="button"
       >
@@ -63,7 +62,7 @@ function MacTrafficLights(): React.JSX.Element {
       </button>
       <button
         aria-label="最小化"
-        className="group grid size-3 place-items-center rounded-full bg-[#febc2e] text-[#5a3a00] shadow-[inset_0_0_0_0.5px_rgb(0_0_0/0.18)] transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="group grid size-3 place-items-center rounded-full bg-[#febc2e] text-[#5a3a00] transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         onClick={() => bridge?.minimize()}
         type="button"
       >
@@ -71,7 +70,7 @@ function MacTrafficLights(): React.JSX.Element {
       </button>
       <button
         aria-label="最大化"
-        className="group grid size-3 place-items-center rounded-full bg-[#28c840] text-[#003d00] shadow-[inset_0_0_0_0.5px_rgb(0_0_0/0.18)] transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="group grid size-3 place-items-center rounded-full bg-[#28c840] text-[#003d00] transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         onClick={() => bridge?.toggleMaximize()}
         type="button"
       >
@@ -84,7 +83,7 @@ function MacTrafficLights(): React.JSX.Element {
 function WinControls({ isMaximized }: { isMaximized: boolean }): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   const baseBtn =
-    "grid h-full w-12 place-items-center text-foreground/70 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
+    "grid h-full w-12 place-items-center text-foreground/75 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
   return (
     <div className="flex h-full items-stretch" data-app-region="no-drag">
       <button
@@ -120,7 +119,7 @@ function WinControls({ isMaximized }: { isMaximized: boolean }): React.JSX.Eleme
       </button>
       <button
         aria-label="关闭"
-        className="grid h-full w-12 place-items-center text-foreground/70 transition-colors hover:bg-[#e81123] hover:text-white focus:outline-none"
+        className="grid h-full w-12 place-items-center text-primary transition-colors hover:bg-primary hover:text-primary-foreground focus:outline-none"
         onClick={() => bridge?.close()}
         type="button"
       >
@@ -137,7 +136,7 @@ const themeLabel = {
 } as const;
 
 const titlebarBtn =
-  "inline-grid h-7 place-items-center rounded-md px-1.5 text-foreground/70 transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50";
+  "inline-grid h-7 place-items-center rounded-sm border border-transparent px-1.5 text-foreground/70 transition-colors hover:border-border hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50";
 
 export function Titlebar({
   appVersion,
@@ -154,12 +153,12 @@ export function Titlebar({
 
   const ThemeIcon =
     theme.preference === "system" ? MonitorCog : theme.resolved === "dark" ? Moon : Sun;
-  const themeTitle = `主题: ${themeLabel[theme.preference]} (点击切换)`;
+  const themeTitle = `主题：${themeLabel[theme.preference]}（点击切换）`;
 
   return (
     <div
       className={cn(
-        "relative z-40 flex h-9 shrink-0 items-stretch border-b border-border",
+        "relative z-40 flex h-12 shrink-0 items-stretch border-b border-border",
         liquidGlass ? "bg-transparent" : "bg-card",
         !state.isFocused && "opacity-90",
       )}
@@ -169,10 +168,8 @@ export function Titlebar({
       {isMac ? <MacTrafficLights /> : null}
 
       {/* Brand */}
-      <div className="flex items-center gap-2 px-2" data-app-region="no-drag">
-        <span className="grid size-5 shrink-0 place-items-center rounded-md bg-primary/15 text-primary">
-          <Bot className="size-3" strokeWidth={2} />
-        </span>
+      <div className="flex items-center gap-3 pl-5 pr-2" data-app-region="no-drag">
+        <span className="size-5 shrink-0 rounded-full bg-primary" />
       </div>
 
       <div
@@ -181,14 +178,14 @@ export function Titlebar({
           isMac ? "justify-center px-3" : "px-1",
         )}
       >
-        <span className="truncate text-[12px] font-semibold tracking-tight">
+        <span className="retro-title truncate text-lg leading-none">
           MaiBot OneKey
         </span>
       </div>
 
       {/* Right cluster */}
-      <div className="flex items-center gap-1 px-1.5" data-app-region="no-drag">
-        <span className="hidden font-mono text-[10px] text-muted-foreground md:inline-block">
+      <div className="flex items-center gap-2 px-2" data-app-region="no-drag">
+        <span className="retro-value hidden text-[12px] text-foreground md:inline-block">
           v{appVersion}
         </span>
         <button

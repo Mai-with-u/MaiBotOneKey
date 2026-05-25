@@ -848,7 +848,7 @@ export function TerminalPanel({
         <div className="flex min-w-0 items-center gap-2">
           <TerminalSquare className="size-3.5 shrink-0 text-primary" />
           <div className="min-w-0">
-            <h2 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
+            <h2 className="truncate text-[13px] font-semibold text-foreground">
               后台 PTY 终端
             </h2>
             <p className="truncate text-[10px] text-muted-foreground">

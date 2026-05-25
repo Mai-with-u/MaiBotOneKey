@@ -42,8 +42,8 @@
     "Inter Variable", "Inter", "PingFang SC", "Microsoft YaHei UI",
     system-ui, sans-serif;
   --font-mono:
-    "JetBrains Mono", "SF Mono", "Cascadia Mono", "Menlo", Consolas,
-    "Liberation Mono", ui-monospace, monospace;
+    "Cascadia Mono", Consolas, "Courier New", "JetBrains Mono", "SF Mono",
+    "Menlo", "Liberation Mono", ui-monospace, monospace;
 }
 
 :root {
@@ -305,6 +305,88 @@
   --scrollbar-thumb-hover: oklch(0.46 0.012 70);
 }
 
+:root:not(.liquid-glass),
+:root[data-accent]:not(.liquid-glass) {
+  --background: #efe2c8;
+  --foreground: #123b42;
+  --card: #f4e8cf;
+  --card-foreground: #123b42;
+  --popover: #f5ead4;
+  --popover-foreground: #123b42;
+  --primary: #ba4b22;
+  --primary-foreground: #fff4dd;
+  --secondary: #e7d7b8;
+  --secondary-foreground: #153f45;
+  --muted: #e9d9b8;
+  --muted-foreground: #6d695d;
+  --accent: #d9c29a;
+  --accent-foreground: #123b42;
+  --destructive: #a93123;
+  --destructive-foreground: #fff4dd;
+  --success: #20775a;
+  --success-foreground: #f9edd4;
+  --warning: #b8872e;
+  --warning-foreground: #3d2d14;
+  --border: #164951;
+  --input: #6f7668;
+  --ring: rgb(186 75 34 / 0.45);
+  --radius: 0.375rem;
+  --app-window-radius: 18px;
+  --scrollbar-thumb: #bdad8e;
+  --scrollbar-thumb-hover: #164951;
+  --retro-paper: #f5e8cf;
+  --retro-paper-deep: #e2cda5;
+  --retro-paper-soft: #f8ead0;
+  --retro-ink: #123f47;
+  --retro-ink-soft: rgb(18 63 71 / 0.64);
+  --retro-rust: #bd4b24;
+  --retro-rust-dark: #913619;
+  --retro-gold: #c69a48;
+  --retro-line: rgb(18 63 71 / 0.82);
+  --retro-shadow: rgb(61 43 23 / 0.18);
+  --retro-paper-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='4' seed='11'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 .18 0 0 0 0 .13 0 0 0 0 .06 0 0 0 .24 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23noise)'/%3E%3Cg opacity='.11' fill='%23bd4b24'%3E%3Ccircle cx='12' cy='21' r='.7'/%3E%3Ccircle cx='67' cy='43' r='.55'/%3E%3Ccircle cx='139' cy='16' r='.65'/%3E%3Ccircle cx='158' cy='107' r='.6'/%3E%3Ccircle cx='41' cy='151' r='.55'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+:root.dark:not(.liquid-glass),
+:root.dark[data-accent]:not(.liquid-glass) {
+  --background: #132f34;
+  --foreground: #f3e4c8;
+  --card: #1b3c42;
+  --card-foreground: #f3e4c8;
+  --popover: #1d4147;
+  --popover-foreground: #f3e4c8;
+  --primary: #d16837;
+  --primary-foreground: #1a2e31;
+  --secondary: #294b4f;
+  --secondary-foreground: #f3e4c8;
+  --muted: #244348;
+  --muted-foreground: #c6b997;
+  --accent: #405947;
+  --accent-foreground: #f7e8ca;
+  --destructive: #df654f;
+  --destructive-foreground: #1d1613;
+  --success: #67b68f;
+  --success-foreground: #112c23;
+  --warning: #d2a44e;
+  --warning-foreground: #1d1608;
+  --border: #d6c398;
+  --input: #bbaa83;
+  --ring: rgb(209 104 55 / 0.52);
+  --scrollbar-thumb: #526c67;
+  --scrollbar-thumb-hover: #d2a44e;
+  --retro-paper: #1b3c42;
+  --retro-paper-deep: #132f34;
+  --retro-paper-soft: #24484d;
+  --retro-ink: #f3e4c8;
+  --retro-ink-soft: rgb(243 228 200 / 0.66);
+  --retro-rust: #d16837;
+  --retro-rust-dark: #f08a55;
+  --retro-gold: #d2a44e;
+  --retro-line: rgb(243 228 200 / 0.78);
+  --retro-shadow: rgb(0 0 0 / 0.28);
+  --retro-paper-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='4' seed='11'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 .95 0 0 0 0 .84 0 0 0 0 .60 0 0 0 .14 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23noise)'/%3E%3C/svg%3E");
+}
+
 :root.liquid-glass {
   --background: transparent;
   --card: rgb(255 255 255 / var(--liquid-glass-card-alpha, 0.012));
@@ -462,6 +544,160 @@
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
+}
+
+.retro-shell {
+  background-color: var(--background);
+  background-image:
+    var(--retro-paper-texture),
+    radial-gradient(circle at 12% 18%, rgb(255 248 226 / 0.44) 0 14%, transparent 36%);
+  background-size: 180px 180px, 100% 100%;
+}
+
+.retro-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--retro-paper-texture);
+  background-position: 0 0;
+  background-size: 160px 160px;
+  opacity: 0.95;
+}
+
+.retro-shell::after {
+  content: "";
+  position: absolute;
+  right: -58px;
+  bottom: -40px;
+  z-index: 0;
+  width: 270px;
+  height: 118px;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, transparent 0 26%, var(--retro-ink) 26% 42%, transparent 42% 47%, var(--retro-gold) 47% 58%, transparent 58% 63%, var(--retro-rust) 63% 76%, transparent 76%);
+  opacity: 0.92;
+}
+
+.retro-panel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid var(--retro-line);
+  border-radius: var(--radius);
+  background-color: var(--retro-paper);
+  background-image: var(--retro-paper-texture);
+  background-size: 165px 165px;
+  box-shadow: none;
+}
+
+.retro-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.retro-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  width: 8px;
+  background: var(--retro-ink);
+}
+
+.retro-panel::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  z-index: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 22px 22px;
+  border-color: transparent transparent var(--retro-ink) transparent;
+}
+
+.retro-panel-bare::before,
+.retro-panel-bare::after {
+  display: none;
+}
+
+.retro-panel-action::before {
+  width: 70px;
+  background: var(--retro-rust);
+}
+
+.retro-title {
+  font-family: "Bahnschrift Condensed", "Agency FB", "Arial Narrow", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.retro-rule {
+  border-top: 1px dashed rgb(18 63 71 / 0.38);
+}
+
+.retro-value {
+  color: var(--retro-rust);
+  font-family: "Agency FB", "Bahnschrift Condensed", "Cascadia Mono", "Consolas", "Courier New", monospace;
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.retro-control {
+  border: 1px solid var(--retro-line);
+  border-radius: calc(var(--radius) - 1px);
+  background-color: var(--retro-paper-soft);
+  background-image: var(--retro-paper-texture);
+  background-size: 145px 145px;
+  box-shadow: none;
+}
+
+.retro-control-dark {
+  border-color: var(--retro-ink);
+  background: var(--retro-ink);
+  color: var(--primary-foreground);
+}
+
+.retro-shell svg,
+[data-slot="dialog-content"] svg {
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 2.35;
+}
+
+.retro-tabs svg {
+  stroke-width: 2.55;
+}
+
+.retro-tabs [data-state="active"] {
+  color: var(--primary-foreground) !important;
+}
+
+.retro-tabs [data-state="active"] svg {
+  color: var(--primary-foreground) !important;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.85;
+}
+
+.retro-tabs [data-state="active"] svg[data-retro-fill="true"] {
+  fill: currentColor;
+}
+
+.retro-tabs [data-state="active"] span:not([aria-hidden]) {
+  color: inherit;
+}
+
+.retro-top-action {
+  height: 40px;
+  width: 48px;
+  border-radius: 2px;
 }
 
 /* ──────────────────────────────────────────────────────────

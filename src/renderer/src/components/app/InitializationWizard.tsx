@@ -343,7 +343,7 @@ export function InitializationWizard({
               </section>
 
               <section className="rounded-lg border border-border bg-card p-4">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase text-muted-foreground">
                   {ready ? <CheckCircle2 className="size-3.5 text-success" /> : <Loader2 className="size-3.5 animate-spin" />}
                   依赖安装进度
                 </div>

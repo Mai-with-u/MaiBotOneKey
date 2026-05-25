@@ -8,8 +8,6 @@ import {
   Maximize2,
   PackageCheck,
   Play,
-  Puzzle,
-  Radar,
   RefreshCw,
   Server,
   Settings,
@@ -198,7 +196,7 @@ function DetailRow({
   return (
     <div className={cn("flex items-center justify-between gap-3", className)}>
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate font-mono font-semibold" title={value}>
+      <span className="retro-value min-w-0 truncate text-right" title={value}>
         {valueOrFallback(value)}
       </span>
     </div>
@@ -217,7 +215,7 @@ function ChoiceSwitch<T extends string>({
   return (
     <div
       className={cn(
-        "grid gap-2 rounded-lg border border-border bg-muted/30 p-1",
+        "retro-control grid gap-2 p-1",
         options.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
       )}
     >
@@ -227,8 +225,8 @@ function ChoiceSwitch<T extends string>({
         return (
           <button
             className={cn(
-              "grid min-h-14 min-w-0 gap-1 rounded-md px-3 py-2 text-left text-xs transition-colors",
-              selected ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted",
+              "grid min-h-14 min-w-0 gap-1 rounded-sm border border-transparent px-3 py-2 text-left text-xs transition-colors",
+              selected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted",
               disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
             )}
             disabled={disabled}
@@ -345,8 +343,9 @@ function LocalChatQuickCard({
     .slice(-12);
 
   return (
-    <section className="rounded-lg border border-border bg-card p-3.5">
-      <div className="mb-3 flex items-center justify-end gap-2">
+    <section className="retro-panel p-3.5 pl-5">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className="retro-title text-lg text-foreground">Local Chat</p>
         <div className="flex shrink-0 items-center gap-2">
           <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
             {statusLabel}
@@ -356,7 +355,7 @@ function LocalChatQuickCard({
           </Button>
         </div>
       </div>
-      <div className="mb-3 grid max-h-32 min-h-20 gap-2 overflow-y-auto rounded-md border border-border bg-muted/30 p-3 [scrollbar-width:thin]">
+      <div className="retro-control mb-3 grid max-h-32 min-h-24 gap-2 overflow-y-auto p-3 [scrollbar-width:thin]">
         {visibleMessages.length > 0 ? (
           visibleMessages.map((message) => (
             <div
@@ -365,12 +364,12 @@ function LocalChatQuickCard({
             >
               <p
                 className={cn(
-                  "max-w-[82%] truncate rounded-md px-2.5 py-1.5 text-xs",
+                  "max-w-[82%] truncate rounded-sm border px-2.5 py-1.5 text-xs",
                   message.role === "user"
-                    ? "bg-primary text-primary-foreground"
+                    ? "border-primary bg-primary text-primary-foreground"
                     : message.role === "error"
-                      ? "bg-destructive/10 text-destructive"
-                      : "bg-card text-foreground",
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : "border-border bg-card text-foreground",
                 )}
                 title={message.text}
               >
@@ -380,7 +379,7 @@ function LocalChatQuickCard({
           ))
         ) : (
           <div className="grid place-items-center text-xs text-muted-foreground">
-            {error ?? "这里会显示最近几句简单文字。"}
+            {error ?? "暂无本地聊天消息"}
           </div>
         )}
       </div>
@@ -398,7 +397,7 @@ function LocalChatQuickCard({
           value={draft}
         />
         <Button
-          className="h-8 shrink-0 px-3 text-xs"
+          className="h-9 shrink-0 px-3 text-xs"
           disabled={!connected || !draft.trim() || sending}
           onClick={() => void sendQuickMessage()}
           size="sm"
@@ -434,34 +433,34 @@ function ServiceCardControls({
     <div className="flex shrink-0 items-center gap-1">
       <Button
         aria-label={`启动 ${service.name}`}
-        className="size-7"
+        className="size-8"
         disabled={!canStart || isTransitioning}
         onClick={() => onStart(service.id)}
         size="icon"
         title="启动"
-        variant="ghost"
+        variant="secondary"
       >
         {busy && canStart ? <Loader2 className="animate-spin" /> : <Play />}
       </Button>
       <Button
         aria-label={`停止 ${service.name}`}
-        className="size-7"
+        className="size-8"
         disabled={stopDisabled}
         onClick={() => onStop(service.id)}
         size="icon"
         title="停止"
-        variant="ghost"
+        variant="secondary"
       >
         <Square />
       </Button>
       <Button
         aria-label={`重启 ${service.name}`}
-        className="size-7"
+        className="size-8"
         disabled={isTransitioning}
         onClick={() => onRestart(service.id)}
         size="icon"
         title="重启"
-        variant="ghost"
+        variant="secondary"
       >
         <RefreshCw />
       </Button>
@@ -500,16 +499,16 @@ function ServiceSummary({
   };
 }): React.JSX.Element {
   return (
-    <div className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
+    <div className="retro-panel grid gap-3 p-3.5 pl-5">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {icon ? (
-            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
               {icon}
             </span>
           ) : null}
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{service?.name ?? "未知服务"}</p>
+            <p className="retro-title truncate text-xl">{service?.name ?? "未知服务"}</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -532,7 +531,7 @@ function ServiceSummary({
       {(webuiAction || adapterAction) ? (
         <div className="grid gap-3 sm:grid-cols-2">
           {webuiAction ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+            <div className="retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2">
               <p className="min-w-0 truncate text-xs font-semibold">{webuiAction.title}</p>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <label aria-label="端口" className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -557,7 +556,7 @@ function ServiceSummary({
             </div>
           ) : null}
           {adapterAction ? (
-            <div className="grid gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div className="retro-control grid gap-3 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold">{adapterAction.title}</p>
                 {adapterAction.description ? (
@@ -585,17 +584,17 @@ function MessagePlatformConnectCard({
 }): React.JSX.Element {
   return (
     <button
-      className="grid gap-3 rounded-lg border border-dashed border-primary/45 bg-card p-3.5 text-left transition-colors hover:border-primary hover:bg-primary/5"
+      className="retro-panel grid gap-3 p-3.5 pl-5 text-left transition-colors hover:border-primary"
       onClick={onClick}
       type="button"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
             <Server className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">连接到消息软件平台.......</p>
+            <p className="retro-title truncate text-xl">Message Platform</p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               新增 QQ-NapCat 或 QQ-SnowLuma，自动写入连接配置并启动后端。
             </p>
@@ -603,9 +602,9 @@ function MessagePlatformConnectCard({
         </div>
         <Badge variant="warning">待配置</Badge>
       </div>
-      <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3">
+      <div className="retro-control flex items-center justify-between gap-3 p-3">
         <span className="text-xs text-muted-foreground">选择一个消息平台开始初始化</span>
-        <span className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground">
+        <span className="inline-flex h-7 items-center gap-1 rounded-sm bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground">
           新增平台
           <ArrowRight className="size-3.5" />
         </span>
@@ -634,8 +633,12 @@ function LauncherUpdateCard({
   const busyRunning = busy !== null && busy !== undefined;
 
   return (
-    <section className="rounded-lg border border-border bg-card p-3.5">
-      <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
+    <section className="retro-panel p-3.5 pl-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="retro-title text-lg text-foreground">OneKey Launcher</p>
+        {updateAvailable ? <Badge variant="warning">可更新</Badge> : <Badge variant="outline">已同步</Badge>}
+      </div>
+      <div className="retro-control grid gap-2 p-3 text-xs">
         <DetailRow label="本地版本" value={currentTag} />
         <DetailRow label="最新版本" value={latestTag} />
       </div>
@@ -679,15 +682,10 @@ function MaiBotOverviewCard({
     compareVersionText(latestPrerelease, localVersion) > 0;
 
   return (
-    <div className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5">
+    <div className="retro-panel grid min-w-0 gap-4 p-4 pl-6">
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            <Radar className="size-4.5" />
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{service?.name ?? "MaiBot Core"}</p>
-          </div>
+        <div className="min-w-0">
+          <p className="retro-title truncate text-3xl leading-none text-foreground">{service?.name ?? "MaiBot Core"}</p>
         </div>
         {service ? (
           <Badge dot variant={statusVariant[service.status]}>
@@ -696,20 +694,20 @@ function MaiBotOverviewCard({
         ) : null}
       </div>
 
-      <div className="grid min-w-0 gap-3 rounded-md border border-border bg-muted/30 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+      <div className="grid min-w-0 gap-3 border-t border-border/70 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">MaiBot 版本</p>
-          <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
+          <p className="text-xs font-semibold text-muted-foreground">MAIBOT 版本</p>
+          <p className="retro-value mt-2 truncate text-3xl leading-none" title={localVersion}>
             {valueOrFallback(localVersion)}
           </p>
         </div>
         <div className="grid min-w-0 gap-1 sm:min-w-44">
           <Button
             aria-label="更新 MaiBot"
-            className="relative mt-1 h-7 justify-self-end px-2.5 text-[11px]"
+            className="relative mt-1 size-10 justify-self-end px-0"
             disabled={updateBusy}
             onClick={onUpdate}
-            size="sm"
+            size="icon"
             variant="secondary"
           >
             {hasNewVersion ? (
@@ -763,30 +761,30 @@ function HomeStatsPanel({
   }, [snapshot.paths.maibotRoot]);
 
   return (
-    <div className="grid gap-3 self-start">
+    <div className="grid gap-4 self-start">
       <button
-        className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-card p-3.5 text-left transition-colors hover:border-primary/45 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="retro-panel retro-panel-bare flex w-full items-center justify-between gap-3 p-4 text-left transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={() => void window.maibotDesktop?.openExternal(MAIBOT_OFFICIAL_DOCS_URL)}
         type="button"
       >
         <span className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <span className="grid size-11 shrink-0 place-items-center border border-primary bg-primary/10 text-primary">
             <ExternalLink className="size-4.5" />
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-semibold">官方文档</span>
-            <span className="block truncate text-[11px] text-muted-foreground">docs.mai-mai.org</span>
+            <span className="retro-title block text-lg">官方文档</span>
+            <span className="block truncate font-mono text-xs text-foreground">docs.mai-mai.org</span>
           </span>
         </span>
-        <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+        <ArrowRight className="size-5 shrink-0 text-primary" />
       </button>
-      <aside className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
+      <aside className="retro-panel grid gap-4 p-4 pl-6">
         <div className="flex items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
             <PackageCheck className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-semibold">统计信息</p>
+            <p className="retro-title text-xl">统计信息</p>
           </div>
         </div>
 
@@ -794,7 +792,7 @@ function HomeStatsPanel({
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
             {maibotStats?.periodLabel ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+              <span className="rounded-sm bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                 {maibotStats.periodLabel}
               </span>
             ) : null}
@@ -805,7 +803,7 @@ function HomeStatsPanel({
           <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} />
         </div>
 
-        <div className="grid gap-2 border-t border-border pt-3 text-xs">
+        <div className="retro-rule grid gap-2 pt-3 text-xs">
           <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
           <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} />
           <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} />
@@ -819,26 +817,23 @@ function HomeStatsPanel({
           ))}
         </div>
       </aside>
-      <section className="rounded-lg border border-border bg-card p-3.5">
-        <div className="flex items-center justify-between gap-3">
+      <section className="retro-panel retro-panel-action min-h-[72px] p-0 pl-[88px] pr-4">
+        <div className="flex min-h-[72px] items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-              <Wrench className="size-4.5" />
-            </span>
             <div className="min-w-0">
-              <p className="text-sm font-semibold">快捷操作</p>
+              <p className="retro-title text-lg">快捷操作</p>
               <p className="text-[11px] text-muted-foreground">路径、数据库和配置导入。</p>
             </div>
           </div>
           <Button
             aria-label="打开快捷操作"
-            className="size-8"
+            className="size-10 border-0 bg-transparent text-primary hover:bg-transparent hover:text-primary active:bg-transparent"
             onClick={onOpenQuickActions}
             size="icon"
             title="打开快捷操作"
-            variant="secondary"
+            variant="ghost"
           >
-            <ArrowRight className="size-3.5" />
+            <ArrowRight className="size-7" />
           </Button>
         </div>
       </section>
@@ -895,7 +890,7 @@ function randomDropImage(): string {
 }
 
 function randomCollisionTarget(): CollisionRect | undefined {
-  const candidates = Array.from(document.querySelectorAll<HTMLElement>(".rounded-lg.border"))
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>(".retro-panel, .rounded-lg.border"))
     .filter((element) => !element.closest("[data-drop-layer='true']"))
     .filter((element) => !element.closest("[data-mascot-stage='true']"))
     .map((element) => element.getBoundingClientRect())
@@ -1679,10 +1674,10 @@ export function HomePanel({
 
   return (
     <>
-      <div className={cn("h-full overflow-auto bg-background px-5 py-4", active ? "block" : "hidden")}>
-        <div className="mx-auto grid max-w-6xl gap-4">
-          <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="grid min-w-0 gap-3">
+      <div className={cn("h-full overflow-auto px-5 py-4 pb-24", active ? "block" : "hidden")}>
+        <div className="mx-auto grid max-w-[1480px] gap-4">
+          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="grid min-w-0 gap-4">
               <MaiBotOverviewCard
                 latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
                 latestStable={snapshot.moduleVersions.maibotLatestStableTag}
@@ -1751,8 +1746,8 @@ export function HomePanel({
             tone="primary"
           />
           <DialogBody className="space-y-4">
-            <div className="flex items-center gap-4 rounded-lg border border-border bg-muted/35 p-4">
-              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-md bg-background">
+            <div className="retro-control flex items-center gap-4 p-4">
+              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-sm bg-background">
                 <img
                   alt=""
                   className="absolute -right-7 -bottom-6 w-28 select-none"
@@ -1814,7 +1809,7 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && messagePlatformDialogOpen ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className="rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 {error}
               </div>
             ) : null}
@@ -1833,7 +1828,7 @@ export function HomePanel({
               ] as const).map((option) => (
                 <button
                   className={cn(
-                    "rounded-lg border p-3 text-left transition-colors",
+                    "rounded-sm border p-3 text-left transition-colors",
                     messagePlatformBackend === option.backend
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
@@ -1860,7 +1855,7 @@ export function HomePanel({
               />
             </label>
             {qqBackendBusy ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+              <div className="rounded-sm border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
                 QQ 后端正在运行，请先停止后再新增或切换消息平台。
               </div>
             ) : null}
@@ -1895,18 +1890,18 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && updateDialog === "maibot" ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className="rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 {error}
               </div>
             ) : null}
-            <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+            <div className="retro-control grid gap-2 p-3 text-xs">
               <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} />
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} />
               <DetailRow label="测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} />
             </div>
             {maibotUpdateBlocked ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
+              <div className="rounded-sm border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
                 请先停止 MaiBot Core，再执行更新。
               </div>
             ) : null}
@@ -1927,11 +1922,11 @@ export function HomePanel({
               />
             </div>
             {maibotChannel === "other" ? (
-              <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2">
+              <div className="retro-control grid gap-3 p-3 md:grid-cols-2">
                 <label className="grid gap-1.5 text-xs font-medium">
                   分支
                   <select
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                     disabled={busy !== null || maibotRefsLoading}
                     onChange={(event) => {
                       setSelectedMaiBotBranch(event.target.value);
@@ -1952,7 +1947,7 @@ export function HomePanel({
                 <label className="grid gap-1.5 text-xs font-medium">
                   Tag
                   <select
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                     disabled={busy !== null || maibotRefsLoading}
                     onChange={(event) => {
                       setSelectedMaiBotTag(event.target.value);
@@ -1972,7 +1967,7 @@ export function HomePanel({
                 </label>
               </div>
             ) : null}
-            <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <div className="retro-control grid gap-3 p-3">
               <button
                 className="flex w-full items-center justify-between gap-3 text-left"
                 onClick={() => setModuleSourceExpanded((expanded) => !expanded)}
@@ -1988,7 +1983,7 @@ export function HomePanel({
                     <label className="grid gap-1.5 text-xs font-medium">
                       源预设
                       <select
-                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        className="h-9 rounded-sm border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                         disabled={busy !== null || !moduleSourceConfig}
                         onChange={(event) => {
                           const preset = event.target.value as ModuleSourcePreset;
@@ -2069,18 +2064,18 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && updateDialog === "dashboard" ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className="rounded-sm border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 {error}
               </div>
             ) : null}
-            <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+            <div className="retro-control grid gap-2 p-3 text-xs">
               <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} />
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="最新正式版" value={dashboardTargets.stable} />
               <DetailRow label="最新测试版" value={dashboardTargets.test} />
             </div>
             {maibotUpdateBlocked ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
+              <div className="rounded-sm border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
                 请先停止 MaiBot Core，再更新 WebUI 覆盖依赖。
               </div>
             ) : null}

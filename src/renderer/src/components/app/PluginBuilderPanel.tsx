@@ -1965,7 +1965,7 @@ function ComponentLibrarySection({
   }
   return (
     <div className="grid gap-2 rounded-lg border border-border bg-background p-2">
-      <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>
+      <p className="px-1 text-[11px] font-semibold uppercase text-muted-foreground">{title}</p>
       {children}
     </div>
   );

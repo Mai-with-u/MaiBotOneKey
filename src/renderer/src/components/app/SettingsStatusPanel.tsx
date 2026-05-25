@@ -252,7 +252,7 @@ function PathField({
 }): React.JSX.Element {
   return (
     <div className="min-w-0 space-y-1">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <span className="text-[10px] font-semibold uppercase text-muted-foreground">
         {label}
       </span>
       <div className="flex min-w-0 items-start gap-2">

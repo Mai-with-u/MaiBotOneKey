@@ -228,7 +228,7 @@ export function WebviewPanel({
     <section className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 ">
         <div className="flex min-w-0 items-center gap-2">
-          <h2 className="shrink-0 text-[12px] font-semibold tracking-tight">{title}</h2>
+          <h2 className="shrink-0 text-[12px] font-semibold">{title}</h2>
           <Badge
             dot
             variant={
@@ -354,14 +354,14 @@ function DefaultWebviewPanel({
       aria-live="polite"
       className="absolute inset-0 grid place-items-center overflow-auto bg-background/95 p-6 "
     >
-      <div className="w-full max-w-[520px] rounded-2xl border border-border bg-card p-6 shadow-xl">
+      <div className="retro-panel retro-panel-bare w-full max-w-[520px] p-6">
         <div className="flex items-start gap-3">
-          <span className={`grid size-10 shrink-0 place-items-center rounded-xl border ${tone}`}>
+          <span className={`grid size-10 shrink-0 place-items-center rounded-sm border ${tone}`}>
             <Icon className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-[15px] font-semibold tracking-tight">{headline}</h3>
+              <h3 className="text-[15px] font-semibold">{headline}</h3>
               <Badge variant={isError ? "danger" : "secondary"}>
                 {isError ? "未连接" : loadState === "loading" ? "载入中" : "待载入"}
               </Badge>
@@ -377,7 +377,7 @@ function DefaultWebviewPanel({
         </div>
 
         {isError ? (
-          <ul className="mt-5 space-y-1.5 rounded-lg border border-border bg-muted/40 p-3 text-[12px] leading-relaxed text-muted-foreground">
+          <ul className="retro-control mt-5 space-y-1.5 p-3 text-[12px] leading-relaxed text-muted-foreground">
             <li className="flex items-start gap-2">
               <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
               先在「设置状态」里确认对应服务正在运行。
