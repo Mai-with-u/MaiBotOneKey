@@ -53,14 +53,6 @@ import { TerminalPanel } from "./TerminalPanel";
 import { Titlebar } from "./Titlebar";
 import { WebviewPanel } from "./WebviewPanel";
 
-const statusText: Record<ServiceStatus, string> = {
-  stopped: "未启动",
-  starting: "启动中",
-  running: "运行中",
-  stopping: "停止中",
-  error: "异常",
-};
-
 const statusColor: Record<ServiceStatus, string> = {
   stopped: "var(--retro-ink, var(--muted-foreground))",
   starting: "var(--warning)",
@@ -68,6 +60,10 @@ const statusColor: Record<ServiceStatus, string> = {
   stopping: "var(--warning)",
   error: "var(--destructive)",
 };
+
+function isServiceProcessActive(service: ServiceDescriptor): boolean {
+  return service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping";
+}
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
@@ -936,11 +932,17 @@ export function DesktopShell(): React.JSX.Element {
   const qqBackendService = serviceById.get("napcat");
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
+  const messagePlatformConfigured = Boolean(
+    snapshot?.initState.messagePlatformConfigured && snapshot.initState.qqAccount?.trim(),
+  );
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
   const canInterruptStartup =
     actionBusy === "all:start" ||
     services.some((service) => service.status === "starting");
+  const hasActiveServiceProcess =
+    actionBusy === "all:start" ||
+    services.some(isServiceProcessActive);
 
   const openLogs = useCallback(() => {
     void window.maibotDesktop?.openLogsDirectory();
@@ -987,6 +989,21 @@ export function DesktopShell(): React.JSX.Element {
       async () => window.maibotDesktop?.services.stopAll() ?? [],
     );
   }, [runServiceAction]);
+  const runPrimaryServiceAction = useCallback(() => {
+    if (hasActiveServiceProcess) {
+      stopAll();
+      return;
+    }
+    startAll();
+  }, [hasActiveServiceProcess, startAll, stopAll]);
+  const primaryServiceActionLabel = hasActiveServiceProcess ? "停止全部服务" : "启动全部服务";
+  const primaryServiceActionShortcut = hasActiveServiceProcess ? "Mod+Shift+X" : "Mod+Shift+S";
+  const primaryServiceActionDisabled = hasActiveServiceProcess
+    ? actionBusy !== null && !canInterruptStartup
+    : actionBusy !== null;
+  const primaryServiceActionBusy = hasActiveServiceProcess
+    ? actionBusy === "all:stop"
+    : actionBusy === "all:start";
   const startService = useCallback(
     (id: ServiceId) =>
       void runServiceAction(`${id}:start`, async () => {
@@ -1338,23 +1355,10 @@ export function DesktopShell(): React.JSX.Element {
                           : "px-2.5 data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none",
                       )}
                     >
-                      <Radar className={cn(useRetroChrome && "text-[var(--retro-gold)]")} />
-                      MaiBot
-                      <span
-                        aria-hidden
-                        className="size-1.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: maibotService ? statusColor[maibotService.status] : "var(--muted-foreground)" }}
+                      <Radar
+                        style={{ color: maibotService ? statusColor[maibotService.status] : "var(--muted-foreground)" }}
                       />
-                      <span
-                        className={cn(
-                          "hidden shrink-0 text-[10.5px] font-normal tabular-nums xl:inline",
-                          useRetroChrome && activeTab === "maibot" ? "text-primary-foreground/80" : undefined,
-                          !maibotService && "text-muted-foreground",
-                        )}
-                        style={maibotService && !useRetroChrome ? { color: statusColor[maibotService.status] } : undefined}
-                      >
-                        {maibotService ? statusText[maibotService.status] : "未发现"}
-                      </span>
+                      MaiBot
                     </TabsTrigger>
                     <ServiceTabControls
                       service={maibotService}
@@ -1455,15 +1459,17 @@ export function DesktopShell(): React.JSX.Element {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
-                        aria-label="启动全部服务"
+                        aria-label={primaryServiceActionLabel}
                         className={cn("retro-top-action w-16 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90", retroTopActionIconClassName)}
-                        disabled={actionBusy !== null}
-                        onClick={startAll}
+                        disabled={primaryServiceActionDisabled}
+                        onClick={runPrimaryServiceAction}
                         size="sm"
                         variant="secondary"
                       >
-                        {actionBusy === "all:start" ? (
+                        {primaryServiceActionBusy ? (
                           <Loader2 className="animate-spin" />
+                        ) : hasActiveServiceProcess ? (
+                          <Square />
                         ) : (
                           <Play />
                         )}
@@ -1471,7 +1477,7 @@ export function DesktopShell(): React.JSX.Element {
                     </TooltipTrigger>
                     <TooltipContent>
                       <span className="flex items-center gap-1">
-                        启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
+                        {primaryServiceActionLabel} <Kbd keys={primaryServiceActionShortcut} size="xs" tone="inverse" />
                       </span>
                     </TooltipContent>
                   </Tooltip>
@@ -1480,15 +1486,17 @@ export function DesktopShell(): React.JSX.Element {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          aria-label="启动全部服务"
-                          className="h-7 w-8 rounded-r-none px-0 text-[11px]"
-                          disabled={actionBusy !== null}
-                          onClick={startAll}
+                          aria-label={primaryServiceActionLabel}
+                          className={cn("h-7 w-8 px-0 text-[11px]", !hasActiveServiceProcess && "rounded-r-none")}
+                          disabled={primaryServiceActionDisabled}
+                          onClick={runPrimaryServiceAction}
                           size="sm"
                           variant="default"
                         >
-                          {actionBusy === "all:start" ? (
+                          {primaryServiceActionBusy ? (
                             <Loader2 className="animate-spin" />
+                          ) : hasActiveServiceProcess ? (
+                            <Square />
                           ) : (
                             <Play />
                           )}
@@ -1496,79 +1504,56 @@ export function DesktopShell(): React.JSX.Element {
                       </TooltipTrigger>
                       <TooltipContent>
                         <span className="flex items-center gap-1">
-                          启动全部服务 <Kbd keys="Mod+Shift+S" size="xs" tone="inverse" />
+                          {primaryServiceActionLabel} <Kbd keys={primaryServiceActionShortcut} size="xs" tone="inverse" />
                         </span>
                       </TooltipContent>
                     </Tooltip>
-                    <DropdownMenuPrimitive.Root>
-                      <DropdownMenuPrimitive.Trigger asChild>
-                        <Button
-                          aria-label="选择要启动的服务"
-                          className="-ml-px h-7 w-5 rounded-l-none border-l border-primary-foreground/25 px-0 text-[11px]"
-                          disabled={actionBusy !== null}
-                          size="sm"
-                          variant="default"
-                        >
-                          <ChevronDown className="size-3" />
-                        </Button>
-                      </DropdownMenuPrimitive.Trigger>
-                      <DropdownMenuPrimitive.Portal>
-                        <DropdownMenuPrimitive.Content
-                          align="end"
-                          className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg shadow-black/15"
-                          sideOffset={6}
-                        >
-                          <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
-                            <Play className="size-3.5" />
-                            <span className="flex-1">启动全部服务</span>
-                            <Kbd keys="Mod+Shift+S" size="xs" />
-                          </DropdownMenuPrimitive.Item>
-                          <DropdownMenuPrimitive.Item
-                            className={toolbarMenuItemClassName}
-                            disabled={!maibotService}
-                            onSelect={() => startService("maibot")}
+                    {!hasActiveServiceProcess ? (
+                      <DropdownMenuPrimitive.Root>
+                        <DropdownMenuPrimitive.Trigger asChild>
+                          <Button
+                            aria-label="选择要启动的服务"
+                            className="-ml-px h-7 w-5 rounded-l-none border-l border-primary-foreground/25 px-0 text-[11px]"
+                            disabled={actionBusy !== null}
+                            size="sm"
+                            variant="default"
                           >
-                            <Play className="size-3.5" />
-                            启动 MaiBot
-                          </DropdownMenuPrimitive.Item>
-                          <DropdownMenuPrimitive.Item
-                            className={toolbarMenuItemClassName}
-                            disabled={!qqBackendService}
-                            onSelect={() => startService("napcat")}
+                            <ChevronDown className="size-3" />
+                          </Button>
+                        </DropdownMenuPrimitive.Trigger>
+                        <DropdownMenuPrimitive.Portal>
+                          <DropdownMenuPrimitive.Content
+                            align="end"
+                            className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg shadow-black/15"
+                            sideOffset={6}
                           >
-                            <Play className="size-3.5" />
-                            启动 {qqBackendName}
-                          </DropdownMenuPrimitive.Item>
-                        </DropdownMenuPrimitive.Content>
-                      </DropdownMenuPrimitive.Portal>
-                    </DropdownMenuPrimitive.Root>
+                            <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
+                              <Play className="size-3.5" />
+                              <span className="flex-1">启动全部服务</span>
+                              <Kbd keys="Mod+Shift+S" size="xs" />
+                            </DropdownMenuPrimitive.Item>
+                            <DropdownMenuPrimitive.Item
+                              className={toolbarMenuItemClassName}
+                              disabled={!maibotService}
+                              onSelect={() => startService("maibot")}
+                            >
+                              <Play className="size-3.5" />
+                              启动 MaiBot
+                            </DropdownMenuPrimitive.Item>
+                            <DropdownMenuPrimitive.Item
+                              className={toolbarMenuItemClassName}
+                              disabled={!qqBackendService || !messagePlatformConfigured}
+                              onSelect={() => startService("napcat")}
+                            >
+                              <Play className="size-3.5" />
+                              启动 {qqBackendName}
+                            </DropdownMenuPrimitive.Item>
+                          </DropdownMenuPrimitive.Content>
+                        </DropdownMenuPrimitive.Portal>
+                      </DropdownMenuPrimitive.Root>
+                    ) : null}
                   </div>
                 )}
-                {!useRetroChrome ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        aria-label="停止全部"
-                        size="icon-sm"
-                        variant="ghost"
-                        onClick={stopAll}
-                        disabled={actionBusy !== null && !canInterruptStartup}
-                        className="size-7"
-                      >
-                        {actionBusy === "all:stop" ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <Square />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <span className="flex items-center gap-1">
-                        停止全部 <Kbd keys="Mod+Shift+X" size="xs" tone="inverse" />
-                      </span>
-                    </TooltipContent>
-                  </Tooltip>
-                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "![1779700604525](image/package/1779700604525.png)otricSeven",
   "license": "GPL-3.0-only",
@@ -116,8 +116,7 @@
           "!napcat/**/*linux*",
           "!napcat/**/*darwin*",
           "!napcat/**/*arm64*",
-          "!napcat/versions/**/resources/app/napcat/config/webui.json",
-          "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json"
+          "!napcat/versions/**/resources/app/napcat/config/**"
         ]
       },
       {

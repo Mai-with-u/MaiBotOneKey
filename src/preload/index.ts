@@ -17,6 +17,7 @@ import type {
   LocalChatMessageEvent,
   LocalChatSendRequest,
   LauncherResetResult,
+  LauncherUpdateDownloadProgress,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
@@ -184,6 +185,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("launcher:checkUpdate") as Promise<LauncherUpdateInfo>,
     downloadAndInstallUpdate: () =>
       ipcRenderer.invoke("launcher:downloadAndInstallUpdate") as Promise<LauncherUpdateApplyResult>,
+    onDownloadProgress: (callback: (progress: LauncherUpdateDownloadProgress) => void) =>
+      onIpc("launcher:update-download-progress", callback),
     resetSettings: () =>
       ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
     resetAll: () =>

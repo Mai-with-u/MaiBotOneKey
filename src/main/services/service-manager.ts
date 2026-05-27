@@ -191,7 +191,6 @@ function relocateBundledModulePath(value: string, paths: RuntimePaths): string {
     { source: join(paths.bundledModulesRoot, "MaiBot"), target: paths.maibotRoot },
     { source: join(paths.bundledModulesRoot, "napcat"), target: paths.napcatRoot },
     { source: join(paths.bundledModulesRoot, "SnowLuma"), target: paths.snowlumaRoot },
-    { source: join(paths.bundledModulesRoot, "napcatframework"), target: join(dirname(paths.napcatRoot), "napcatframework") },
   ];
 
   for (const mapping of mappings) {
@@ -216,7 +215,6 @@ function relocateBundledModuleReferences(value: string, paths: RuntimePaths): st
     [join(paths.bundledModulesRoot, "MaiBot"), paths.maibotRoot],
     [join(paths.bundledModulesRoot, "napcat"), paths.napcatRoot],
     [join(paths.bundledModulesRoot, "SnowLuma"), paths.snowlumaRoot],
-    [join(paths.bundledModulesRoot, "napcatframework"), join(dirname(paths.napcatRoot), "napcatframework")],
   ].reduce((nextValue, [search, replacement]) => replaceAllPathVariants(nextValue, search, replacement), value);
 }
 
@@ -536,7 +534,13 @@ export class ServiceManager extends EventEmitter {
 
   async startAll(): Promise<ServiceDescriptor[]> {
     await this.initManager.assertAgreementsConfirmed();
-    for (const serviceId of ["napcat", "maibot"] as ServiceId[]) {
+    const serviceIds: ServiceId[] = this.initManager.hasMessagePlatformConfigured()
+      ? ["napcat", "maibot"]
+      : ["maibot"];
+    if (!serviceIds.includes("napcat")) {
+      this.logs.append("napcat", "system", "start all skipped: message platform is not configured");
+    }
+    for (const serviceId of serviceIds) {
       await this.start(serviceId);
     }
     return this.refresh();
@@ -590,6 +594,11 @@ export class ServiceManager extends EventEmitter {
 
     if (serviceId === "maibot") {
       await this.initManager.assertAgreementsConfirmed();
+    }
+    if (serviceId === "napcat" && !this.initManager.hasMessagePlatformConfigured()) {
+      const message = "请先在首页配置消息平台，再启动 NapCat / SnowLuma。";
+      this.logs.append(serviceId, "system", "start blocked: message platform is not configured");
+      throw new Error(message);
     }
 
     if (state.status === "starting") {

@@ -33,7 +33,6 @@ const GIT_RUNTIME_DIR = "git";
 const PYTHON_MINIMUM_VERSION = "3.12";
 const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
-const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
 const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
 const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
@@ -791,7 +790,9 @@ export class InitManager {
   }
 
   hasMessagePlatformConfigured(): boolean {
-    return existsSync(this.messagePlatformPath());
+    const store = this.readMessagePlatformStore();
+    const qqAccount = store?.qqAccount?.trim();
+    return Boolean(qqAccount && isDigits(qqAccount));
   }
 
   async setQqBackend(backend: QqBackend, options: { syncAdapters?: boolean } = {}): Promise<void> {
@@ -804,7 +805,7 @@ export class InitManager {
     await this.ensureServiceReady("napcat");
     if (options.syncAdapters !== false) {
       const qqAccount = await this.readQqAccount();
-      if (qqAccount && !(await this.isAdapterConfigInitialized(backend))) {
+      if (qqAccount) {
         const syncedPaths = await this.syncSelectedQqAdapterConfigs();
         const selectedConfigPath = backend === "snowluma"
           ? this.snowlumaAdapterConfigPath()
@@ -1130,8 +1131,6 @@ export class InitManager {
       port: configuredWebsocketServer?.port || (qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT),
       token: configuredWebsocketServer?.token || websocketToken || createWebsocketToken(),
     };
-    const adapterConfigReady = await this.isAdapterConfigInitialized(qqBackend);
-    let initializedAdapterConfig = adapterConfigReady;
 
     if (qqBackend === "snowluma") {
       await this.createSnowLumaConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
@@ -1139,14 +1138,12 @@ export class InitManager {
       await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
       await this.ensureNapCatWebUiConfig();
     }
-    if (!adapterConfigReady) {
-      initializedAdapterConfig = await this.writeQqAdapterConfigsForBackend(
-        qqBackend,
-        resolvedWebsocketServer,
-        qqAccount,
-        chatOverrides,
-      );
-    }
+    const initializedAdapterConfig = await this.writeQqAdapterConfigsForBackend(
+      qqBackend,
+      resolvedWebsocketServer,
+      qqAccount,
+      chatOverrides,
+    );
     await this.markMessagePlatformConfigured(
       qqBackend,
       qqAccount,
@@ -1255,21 +1252,15 @@ export class InitManager {
       ? selectedWebsocketServer
       : await this.resolveSnowLumaAdapterServer(qqAccount);
 
-    const inactiveBackend = qqBackend === "snowluma" ? "napcat" : "snowluma";
-    const shouldInitializeInactive = !(await this.isAdapterConfigInitialized(inactiveBackend));
-
     if (qqBackend === "snowluma") {
-      if (shouldInitializeInactive) {
-        await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false);
-      }
-      return this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true);
+      const wroteInactive = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false);
+      const wroteSelected = await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true);
+      return wroteSelected || wroteInactive;
     }
 
     const wroteSelected = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, true);
-    if (shouldInitializeInactive) {
-      await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false);
-    }
-    return wroteSelected;
+    const wroteInactive = await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false);
+    return wroteSelected || wroteInactive;
   }
 
   private async resolveNapcatAdapterServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig> {
@@ -1449,26 +1440,20 @@ export class InitManager {
       });
     }
 
-    const changedFiles = [
-      ...(await this.ensureBundledModuleSubtree("napcat", [
-        "node.exe",
-        "index.js",
-        join("napcat", "package.json"),
-      ], {
-        excludeRelativePaths: [
-          "config",
-          "data",
-          "logs",
-          join("napcat", "config"),
-          join("napcat", "data"),
-          join("napcat", "logs"),
-        ],
-      })),
-      ...(await this.ensureBundledModuleSubtree("napcatframework", ["versions"], {
-        optional: true,
-        excludeRelativePaths: ["config", "data", "logs"],
-      })),
-    ];
+    const changedFiles = await this.ensureBundledModuleSubtree("napcat", [
+      "node.exe",
+      "index.js",
+      join("napcat", "package.json"),
+    ], {
+      excludeRelativePaths: [
+        "config",
+        "data",
+        "logs",
+        join("napcat", "config"),
+        join("napcat", "data"),
+        join("napcat", "logs"),
+      ],
+    });
     const launcher = await this.ensureNapCatLauncher();
     if (launcher) {
       changedFiles.push(launcher);
@@ -1802,17 +1787,10 @@ export class InitManager {
     if (moduleName === "napcat") {
       return this.paths.napcatRoot;
     }
-    if (moduleName === "napcatframework") {
-      return this.napcatFrameworkRoot();
-    }
     if (moduleName === "SnowLuma") {
       return this.paths.snowlumaRoot;
     }
     return join(this.paths.modulesRoot, moduleName);
-  }
-
-  private napcatFrameworkRoot(): string {
-    return join(dirname(this.paths.napcatRoot), "napcatframework");
   }
 
   async ensureNapCatWebUiConfig(): Promise<string | undefined> {
@@ -2496,49 +2474,7 @@ export class InitManager {
   }
 
   private async findNapCatRuntimeConfigDirs(): Promise<string[]> {
-    const versions = await this.findNapCatVersions();
-    return [
-      join(this.paths.napcatRoot, "napcat", "config"),
-      ...versions.flatMap((version) => [
-        join(this.paths.napcatRoot, "versions", version, "resources", "app", "napcat", "config"),
-        join(
-          this.napcatFrameworkRoot(),
-          "versions",
-          version,
-          "resources",
-          "app",
-          "LiteLoader",
-          "plugins",
-          "NapCat",
-          "config",
-        ),
-      ]),
-    ];
-  }
-
-  private async findNapCatVersions(): Promise<string[]> {
-    const roots = [
-      join(this.paths.napcatRoot, "versions"),
-      join(this.napcatFrameworkRoot(), "versions"),
-      join(this.paths.bundledModulesRoot, "napcat", "versions"),
-      join(this.paths.bundledModulesRoot, "napcatframework", "versions"),
-    ];
-    const versions = new Set<string>();
-
-    for (const root of roots) {
-      if (!existsSync(root)) {
-        continue;
-      }
-
-      const entries = await readdir(root, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          versions.add(entry.name);
-        }
-      }
-    }
-
-    return versions.size > 0 ? [...versions] : [NAPCAT_FALLBACK_VERSION];
+    return [join(this.paths.napcatRoot, "napcat", "config")];
   }
 
 }

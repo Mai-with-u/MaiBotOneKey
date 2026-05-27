@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { once } from "node:events";
+import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
@@ -11,6 +12,7 @@ import type {
   InitRepairResult,
   InitState,
   LauncherUpdateApplyResult,
+  LauncherUpdateDownloadProgress,
   LauncherUpdateInfo,
   LauncherResetResult,
   LogEntry,
@@ -94,6 +96,7 @@ import { InitManager } from "../services/init-manager";
 import type { AppIconManager } from "../services/app-icon-manager";
 import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
+import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-cleanup";
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { NetworkProxyManager } from "../services/network-proxy-manager";
@@ -138,11 +141,11 @@ const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
   "bottom-right",
   "bottom-left",
 ]);
-const ONEKEY_REPOSITORY_URL = "https://github.com/DrSmoothl/MaiBotOneKey.git";
-const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/tags?per_page=100";
-const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/releases/latest";
-const ONEKEY_RELEASES_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/releases?per_page=100";
-const ONEKEY_RELEASE_SOURCE = "DrSmoothl/MaiBotOneKey";
+const ONEKEY_REPOSITORY_URL = "https://github.com/Mai-with-u/MaiBotOneKey.git";
+const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/tags?per_page=100";
+const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
+const ONEKEY_RELEASES_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases?per_page=100";
+const ONEKEY_RELEASE_SOURCE = "Mai-with-u/MaiBotOneKey";
 
 interface GitHubReleaseAsset {
   name?: unknown;
@@ -163,6 +166,14 @@ interface GitHubReleasePayload {
 interface LauncherUpdateInternalInfo extends LauncherUpdateInfo {
   downloadUrl?: string;
 }
+
+interface LauncherUpdateDownloadResult {
+  installerPath: string;
+  receivedBytes: number;
+  totalBytes?: number;
+}
+
+type LauncherUpdateDownloadProgressCallback = (progress: LauncherUpdateDownloadProgress) => void;
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
@@ -649,7 +660,7 @@ async function fetchLauncherUpdateInfo(currentVersion: string): Promise<Launcher
       latestTag,
       latestVersion: releaseTagToVersion(latestTag),
       releaseName: typeof release.name === "string" ? release.name : latestTag,
-      releaseUrl: typeof release.html_url === "string" ? release.html_url : "https://github.com/DrSmoothl/MaiBotOneKey/releases",
+      releaseUrl: typeof release.html_url === "string" ? release.html_url : "https://github.com/Mai-with-u/MaiBotOneKey/releases",
       releaseNotes,
       assetName: typeof asset?.name === "string" ? asset.name : undefined,
       assetSize: typeof asset?.size === "number" ? asset.size : undefined,
@@ -668,7 +679,46 @@ function publicLauncherUpdateInfo(update: LauncherUpdateInternalInfo): LauncherU
   return publicUpdate;
 }
 
-async function downloadLauncherUpdate(paths: RuntimePaths, update: LauncherUpdateInternalInfo): Promise<string> {
+function parseContentLength(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const length = Number(value);
+  return Number.isFinite(length) && length > 0 ? length : undefined;
+}
+
+function launcherDownloadProgress(
+  phase: LauncherUpdateDownloadProgress["phase"],
+  update: LauncherUpdateInternalInfo,
+  receivedBytes: number,
+  totalBytes?: number,
+): LauncherUpdateDownloadProgress {
+  return {
+    phase,
+    assetName: update.assetName,
+    receivedBytes,
+    totalBytes,
+    percent: totalBytes ? Math.min(100, Math.round((receivedBytes / totalBytes) * 1000) / 10) : undefined,
+  };
+}
+
+async function writeDownloadChunk(stream: WriteStream, chunk: Buffer): Promise<void> {
+  if (stream.write(chunk)) {
+    return;
+  }
+  await once(stream, "drain");
+}
+
+async function finishDownloadStream(stream: WriteStream): Promise<void> {
+  stream.end();
+  await once(stream, "finish");
+}
+
+async function downloadLauncherUpdate(
+  paths: RuntimePaths,
+  update: LauncherUpdateInternalInfo,
+  onProgress?: LauncherUpdateDownloadProgressCallback,
+): Promise<LauncherUpdateDownloadResult> {
   if (!update.downloadUrl || !update.assetName) {
     throw new Error("最新版本没有可下载的 Windows 安装包");
   }
@@ -681,16 +731,68 @@ async function downloadLauncherUpdate(paths: RuntimePaths, update: LauncherUpdat
       throw new Error(`安装包下载失败: HTTP ${response.status}`);
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (update.assetSize && buffer.length !== update.assetSize) {
-      throw new Error(`安装包大小校验失败: ${buffer.length} / ${update.assetSize}`);
+    if (!response.body) {
+      throw new Error("安装包下载失败：服务器没有返回可读取的内容");
     }
 
-    const updatesRoot = join(paths.userDataRoot, "updates");
+    const updatesRoot = getLauncherUpdateDownloadRoot(paths);
     await mkdir(updatesRoot, { recursive: true });
     const installerPath = join(updatesRoot, sanitizeDownloadFileName(update.assetName));
-    await writeFile(installerPath, buffer);
-    return installerPath;
+    const partialPath = `${installerPath}.download`;
+    await rm(partialPath, { force: true }).catch(() => undefined);
+
+    const totalBytes = parseContentLength(response.headers.get("content-length")) ?? update.assetSize;
+    const reader = response.body.getReader();
+    const stream = createWriteStream(partialPath);
+    let receivedBytes = 0;
+    let lastProgressAt = 0;
+
+    const emitProgress = (phase: LauncherUpdateDownloadProgress["phase"], force = false): void => {
+      if (!onProgress) {
+        return;
+      }
+      const now = Date.now();
+      if (!force && now - lastProgressAt < 120) {
+        return;
+      }
+      lastProgressAt = now;
+      onProgress(launcherDownloadProgress(phase, update, receivedBytes, totalBytes));
+    };
+
+    emitProgress("downloading", true);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value) {
+          continue;
+        }
+        const chunk = Buffer.from(value);
+        receivedBytes += chunk.length;
+        await writeDownloadChunk(stream, chunk);
+        emitProgress("downloading", receivedBytes === totalBytes);
+      }
+
+      await finishDownloadStream(stream);
+      if (update.assetSize && receivedBytes !== update.assetSize) {
+        throw new Error(`安装包大小校验失败: ${receivedBytes} / ${update.assetSize}`);
+      }
+
+      await rm(installerPath, { force: true }).catch(() => undefined);
+      await rename(partialPath, installerPath);
+      emitProgress("starting", true);
+      return {
+        installerPath,
+        receivedBytes,
+        totalBytes,
+      };
+    } catch (error: unknown) {
+      stream.destroy();
+      await rm(partialPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
   } finally {
     clearTimeout(timeout);
   }
@@ -1922,19 +2024,37 @@ export function registerAppIpc({
     return publicLauncherUpdateInfo(await checkLauncherUpdate());
   });
 
-  ipcMain.handle("launcher:downloadAndInstallUpdate", async (): Promise<LauncherUpdateApplyResult> => {
+  ipcMain.handle("launcher:downloadAndInstallUpdate", async (event): Promise<LauncherUpdateApplyResult> => {
+    const sendProgress = (progress: LauncherUpdateDownloadProgress): void => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("launcher:update-download-progress", progress);
+      }
+    };
+
+    sendProgress({
+      phase: "checking",
+      receivedBytes: 0,
+    });
     const update = await checkLauncherUpdate();
     if (!update.available) {
       throw new Error("当前启动器已经是最新版本");
     }
 
-    const installerPath = await downloadLauncherUpdate(paths, update);
+    const download = await downloadLauncherUpdate(paths, update, sendProgress);
+    const installerPath = download.installerPath;
     const child = spawn(installerPath, [], {
       detached: true,
       stdio: "ignore",
       windowsHide: false,
     });
     child.unref();
+    sendProgress({
+      phase: "completed",
+      assetName: update.assetName,
+      receivedBytes: download.receivedBytes,
+      totalBytes: download.totalBytes,
+      percent: 100,
+    });
     logStore.append("desktop", "system", `启动器更新安装器已启动: ${installerPath}`);
     setTimeout(() => requestQuit(), 800);
     return {

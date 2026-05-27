@@ -187,7 +187,6 @@ const requirements: Requirement[] = [
     candidates: [
       file("modules/napcat/napcat/package.json"),
       dirContaining("modules/napcat/versions", [join("resources", "app", "package.json")]),
-      dirContaining("modules/napcatframework/versions", [join("resources", "app", "package.json")]),
     ],
   },
   {

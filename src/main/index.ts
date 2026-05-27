@@ -9,6 +9,7 @@ import { PtySessionManager } from "./pty/pty-session-manager";
 import { InitManager } from "./services/init-manager";
 import { acquireInstallInstanceLock } from "./services/instance-lock";
 import { AppIconManager } from "./services/app-icon-manager";
+import { cleanupLauncherUpdateDownloads, type LauncherUpdateCleanupResult } from "./services/launcher-update-cleanup";
 import { LogStore } from "./services/log-store";
 import { ModuleUpdater } from "./services/module-updater";
 import { NetworkProxyManager } from "./services/network-proxy-manager";
@@ -154,6 +155,33 @@ function applyAppIcon(): void {
   const icon = createAppIcon();
   mainWindow?.setIcon(icon);
   tray?.setImage(icon.resize({ width: 32, height: 32, quality: "best" }));
+}
+
+function cleanupLauncherUpdateDownloadsOnStartup(): void {
+  void cleanupLauncherUpdateDownloads(runtimePaths)
+    .then((result) => {
+      if (result.removed.length > 0) {
+        logStore.append("desktop", "system", `已清理启动器更新安装包缓存: ${result.removed.length} 项`);
+      }
+      if (result.failed.length > 0) {
+        logStore.append(
+          "desktop",
+          "system",
+          `启动器更新安装包缓存有 ${result.failed.length} 项暂时无法清理: ${formatCleanupFailures(result.failed)}`,
+        );
+      }
+    })
+    .catch((error: unknown) => {
+      logStore.append("desktop", "system", `启动器更新安装包缓存清理失败: ${String(error)}`);
+    });
+}
+
+function formatCleanupFailures(failed: LauncherUpdateCleanupResult["failed"]): string {
+  const preview = failed
+    .slice(0, 3)
+    .map((item) => `${item.name} (${item.message})`)
+    .join("; ");
+  return failed.length > 3 ? `${preview}; ...` : preview;
 }
 
 function broadcastWindowState(window: BrowserWindow): void {
@@ -307,6 +335,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
   app.quit();
 } else {
   app.whenReady().then(async () => {
+    cleanupLauncherUpdateDownloadsOnStartup();
     registerLive2dResourceProtocol(runtimePaths);
     registerAppIconResourceProtocol();
     await networkProxyManager.applyStoredSettings().catch((error: unknown) => {

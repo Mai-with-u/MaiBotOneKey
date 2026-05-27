@@ -3,7 +3,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
 import type { IBufferLine, ILink, ILinkProvider } from "@xterm/xterm";
 import type { LogEntry, PtySessionSnapshot, ServiceDescriptor, ServiceId, TerminalSettings } from "@shared/contracts";
-import { ArrowDownToLine, Copy, Loader2, Plus, RotateCcw, TerminalSquare, X } from "lucide-react";
+import { ArrowDownToLine, Copy, Loader2, Plus, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { Badge } from "@/components/ui/badge";
@@ -269,11 +269,6 @@ export function TerminalPanel({
   const activeFooterText = activeSession?.cwd
     ? `${activeSession.cwd}${activeCommandText ? ` · ${activeCommandText}` : ""}`
     : (activeCommandText ?? "启动命令会在服务启动后显示");
-  const activePidText = activeSession?.pid
-    ? `PID ${activeSession.pid}`
-    : activeTerminal.serviceId
-      ? "等待后台服务启动"
-      : "等待终端启动";
   const canCreateUserTerminal = Boolean(window.maibotDesktop?.pty && maibotRoot);
 
   useEffect(() => {
@@ -907,17 +902,6 @@ export function TerminalPanel({
   return (
     <section className={cn("flex h-full min-h-0 flex-col text-foreground", retro ? "bg-transparent" : "bg-background")}>
       <div className="flex min-h-9 shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-1">
-        <div className="flex min-w-[142px] shrink-0 items-center gap-2">
-          <TerminalSquare className="size-3.5 shrink-0 text-primary" />
-          <div className="min-w-0">
-            <h2 className="truncate text-[13px] font-semibold text-foreground">
-              后台 PTY 终端
-            </h2>
-            <p className="truncate text-[10px] text-muted-foreground">
-              {activePidText} · Ctrl+C 复制选中内容
-            </p>
-          </div>
-        </div>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-0.5">
           {terminalTabs}
         </div>

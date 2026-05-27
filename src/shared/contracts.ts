@@ -315,6 +315,20 @@ export interface LauncherUpdateInfo {
   source: string;
 }
 
+export type LauncherUpdateDownloadPhase =
+  | "checking"
+  | "downloading"
+  | "starting"
+  | "completed";
+
+export interface LauncherUpdateDownloadProgress {
+  phase: LauncherUpdateDownloadPhase;
+  assetName?: string;
+  receivedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+}
+
 export interface LauncherUpdateApplyResult {
   update: LauncherUpdateInfo;
   installerPath: string;
@@ -1141,6 +1155,7 @@ export interface DesktopBridge {
     selectAppIcon: (iconId: AppIconId) => Promise<AppIconSettings>;
     checkUpdate: () => Promise<LauncherUpdateInfo>;
     downloadAndInstallUpdate: () => Promise<LauncherUpdateApplyResult>;
+    onDownloadProgress: (callback: (progress: LauncherUpdateDownloadProgress) => void) => () => void;
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;
   };

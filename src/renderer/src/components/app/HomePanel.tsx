@@ -41,7 +41,6 @@ import type {
   ServiceId,
   ServiceStatus,
 } from "@shared/contracts";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -452,13 +451,14 @@ function LocalChatQuickCard({
           value={draft}
         />
         <Button
-          className={cn("shrink-0 px-3 text-xs", retro ? "h-9" : "h-8")}
+          aria-label="发送"
+          className="shrink-0"
           disabled={!connected || !draft.trim() || sending}
           onClick={() => void sendQuickMessage()}
-          size="sm"
+          size={retro ? "icon" : "icon-sm"}
+          title="发送"
         >
           {sending ? <Loader2 className="animate-spin" /> : <Send />}
-          发送
         </Button>
       </div>
     </section>
@@ -645,8 +645,8 @@ function MessagePlatformConnectCard({
       className={cn(
         "grid gap-3 text-left transition-colors hover:border-primary",
         retro
-          ? "retro-panel p-3.5 pl-5"
-          : "rounded-lg border border-dashed border-primary/45 bg-card p-3.5 hover:bg-primary/5",
+          ? "retro-panel !border-primary p-3.5 pl-5 [&::after]:!border-b-primary [&::before]:!bg-primary"
+          : "rounded-lg border border-dashed border-primary/70 bg-card p-3.5 hover:bg-primary/5",
       )}
       onClick={onClick}
       type="button"
@@ -665,10 +665,9 @@ function MessagePlatformConnectCard({
             </p>
           </div>
         </div>
-        <Badge variant="warning">待配置</Badge>
       </div>
       <div className={cn(retro ? "retro-control flex items-center justify-between gap-3 p-3" : "flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3")}>
-        <span className="text-xs text-muted-foreground">选择一个消息平台开始初始化</span>
+        <span className="text-xs text-muted-foreground">配置 NapCat 或者 SnowLuma 来让麦麦连接到QQ</span>
         <span className={cn("inline-flex h-7 items-center gap-1 bg-primary px-2.5 text-[11px] text-primary-foreground", retro ? "rounded-sm font-semibold" : "rounded-md font-medium")}>
           新增平台
           <ArrowRight className="size-3.5" />
@@ -697,10 +696,7 @@ function LauncherUpdateCard({
   return (
     <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
       {retro ? (
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="retro-title text-2xl text-foreground">一键包信息</p>
-          {updateAvailable ? <Badge variant="warning">可更新</Badge> : <Badge variant="outline">已同步</Badge>}
-        </div>
+        <p className="retro-title mb-3 text-2xl text-foreground">一键包信息</p>
       ) : null}
       <div
         className={cn(
@@ -1682,8 +1678,8 @@ export function HomePanel({
 
     const tag = launcherLatestTag?.trim();
     const url = tag
-      ? `https://github.com/DrSmoothl/MaiBotOneKey/releases/tag/${encodeURIComponent(tag)}`
-      : "https://github.com/DrSmoothl/MaiBotOneKey/releases";
+      ? `https://github.com/Mai-with-u/MaiBotOneKey/releases/tag/${encodeURIComponent(tag)}`
+      : "https://github.com/Mai-with-u/MaiBotOneKey/releases";
     void window.maibotDesktop?.openExternal(url);
   }, [launcherLatestTag, launcherUpdateInfo?.releaseUrl]);
 

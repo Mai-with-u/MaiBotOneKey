@@ -261,21 +261,6 @@ export class ResourceLocationManager {
       copiedEntries.push(key);
     }
 
-    if (key === "napcat") {
-      const sourceFramework = join(dirname(sourcePath), "napcatframework");
-      const targetFramework = join(dirname(targetPath), "napcatframework");
-      if (existsSync(sourceFramework) && !samePath(sourceFramework, targetFramework)) {
-        await mkdir(dirname(targetFramework), { recursive: true });
-        await cp(sourceFramework, targetFramework, {
-          recursive: true,
-          force: false,
-          errorOnExist: false,
-          preserveTimestamps: true,
-        });
-        copiedEntries.push("napcatframework");
-      }
-    }
-
     return copiedEntries;
   }
 

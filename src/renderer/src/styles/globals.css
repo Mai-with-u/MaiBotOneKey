@@ -707,8 +707,9 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: 0.875rem;
-  font-weight: 700;
+  font-family: "Bahnschrift Condensed", "Agency FB", "Arial Narrow", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-size: 1.1rem;
+  font-weight: 800;
   box-shadow: none;
 }
 
