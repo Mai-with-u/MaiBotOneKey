@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       payload_url:
-        description: Zip URL containing runtime/ and modules/. runtime/python and runtime/git are required for the full installer.
+        description: Zip URL containing runtime/ and modules/.
         required: false
         type: string
       payload_sha256:
@@ -92,7 +92,7 @@ jobs:
       - name: Check release payload
         run: bun run release:check
 
-      - name: Build installers
+      - name: Build installer
         run: bun run release:win
 
       - name: Upload installer artifacts

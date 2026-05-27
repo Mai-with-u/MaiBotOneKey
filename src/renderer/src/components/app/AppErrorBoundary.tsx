@@ -58,14 +58,14 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 
     return (
       <main className="grid h-screen place-items-center bg-background p-6 text-foreground">
-        <div className="w-full max-w-[640px] rounded-2xl border border-border bg-card shadow-xl">
+        <div className="retro-panel retro-panel-bare w-full max-w-[640px]">
           <div className="flex items-start gap-3 border-b border-border px-6 py-5">
-            <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-destructive/15 text-destructive">
+            <span className="grid size-10 shrink-0 place-items-center rounded-sm bg-destructive/15 text-destructive">
               <AlertTriangle className="size-4" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-base font-semibold tracking-tight">桌面界面加载失败</h1>
+                <h1 className="text-base font-semibold">桌面界面加载失败</h1>
                 <Badge variant="danger">renderer</Badge>
               </div>
               <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
@@ -78,7 +78,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 font-mono text-xs leading-relaxed text-destructive">
               {error.message}
             </div>
-            <pre className="max-h-[280px] overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
+            <pre className="max-h-[280px] overflow-auto rounded-sm border border-border bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
               {error.stack ?? error.message}
             </pre>
           </div>

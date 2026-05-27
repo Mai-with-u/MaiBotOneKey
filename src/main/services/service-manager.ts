@@ -104,8 +104,9 @@ const STOP_FORCE_AFTER_MS = 10_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_RESTART_ATTEMPTS = 3;
 const RESTART_DELAY_MS = 2_500;
-const SERVICE_TERMINAL_COLS = 120;
+const SERVICE_TERMINAL_COLS = 260;
 const SERVICE_TERMINAL_ROWS = 36;
+const LOCAL_DASHBOARD_ENV_NAME = "MAIBOT_WEBUI_USE_LOCAL_DASHBOARD";
 const COMMAND_CONFIG_FILE = "service-commands.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const TERMINAL_SETTINGS_FILE = "terminal-settings.json";
@@ -263,6 +264,24 @@ function createServiceEnv(extraEnv: Record<string, string> | undefined): NodeJS.
   }
 
   return env;
+}
+
+function isDevRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === "development" ||
+    Boolean(process.env.ELECTRON_RENDERER_URL) ||
+    Boolean(process.env.VITE_DEV_SERVER_URL)
+  );
+}
+
+function createServiceSpecificEnv(serviceId: ServiceId): Record<string, string> {
+  if (serviceId === "maibot" && isDevRuntime()) {
+    return {
+      [LOCAL_DASHBOARD_ENV_NAME]: "1",
+    };
+  }
+
+  return {};
 }
 
 function killWindowsProcessTree(pid: number, force: boolean): Promise<void> {
@@ -556,10 +575,14 @@ export class ServiceManager extends EventEmitter {
 
   async restart(serviceId: ServiceId): Promise<ServiceDescriptor> {
     await this.stop(serviceId);
+    if (serviceId === "maibot") {
+      await this.pythonDependencyManager?.waitForStartupUpgradeIdle();
+    }
     return this.start(serviceId);
   }
 
   async start(serviceId: ServiceId, resetRestartAttempts = true): Promise<ServiceDescriptor> {
+    this.definitions = this.createDefinitions();
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
     const sessionId = serviceSessionId(serviceId);
@@ -641,7 +664,11 @@ export class ServiceManager extends EventEmitter {
       const agreementEnv = await this.initManager.getAgreementEnvVars();
       const usePythonOverlay = definition.id === "maibot" && !this.isCustomPythonRuntimeEnabled();
       const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
-      const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
+      const serviceEnv = createServiceSpecificEnv(definition.id);
+      const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv, ...serviceEnv };
+      if (serviceEnv[LOCAL_DASHBOARD_ENV_NAME]) {
+        this.logs.append("maibot", "system", `dev local dashboard enabled: ${LOCAL_DASHBOARD_ENV_NAME}=1`);
+      }
       if (usePythonOverlay && this.pythonDependencyManager) {
         const syncedPythonOverrides = await this.initManager.ensureBundledPythonOverrides();
         if (syncedPythonOverrides.length > 0) {
@@ -870,6 +897,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async refresh(): Promise<ServiceDescriptor[]> {
+    this.definitions = this.createDefinitions();
     this.attachLivePtySessions();
     this.reconcileExitedPtySessions();
 
@@ -985,6 +1013,7 @@ export class ServiceManager extends EventEmitter {
   private createDefinitions(): ServiceDefinition[] {
     const python = this.getRuntimePath("python");
     const maibotRoot = this.paths.maibotRoot;
+    const maibotWebUi = this.initManager.readMaiBotWebUiEndpointSync();
     const napcatRoot = this.paths.napcatRoot;
     const qqBackend = this.initManager.getQqBackendSync();
     const snowlumaRoot = this.paths.snowlumaRoot;
@@ -1001,13 +1030,13 @@ export class ServiceManager extends EventEmitter {
       {
         id: "maibot",
         name: "MaiBot Core",
-        port: 8001,
-        ports: [8001],
-        url: "http://127.0.0.1:8001",
+        port: maibotWebUi.port,
+        ports: [maibotWebUi.port],
+        url: maibotWebUi.url,
         cwd: maibotRoot,
         defaultRequiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
-        conflictPorts: [8001],
-        readyPorts: [8001],
+        conflictPorts: [maibotWebUi.port],
+        readyPorts: [maibotWebUi.port],
         buildDefaultCommand: async () => [python, "bot.py"],
         buildDefaultCommandLine: async () => `${quoteCommandPart(python)} bot.py`,
       },
@@ -1042,8 +1071,8 @@ export class ServiceManager extends EventEmitter {
             return qq ? [napcatNode, napcatNodeEntry, "-q", qq] : [napcatNode, napcatNodeEntry];
           }
           if (process.platform === "win32" && existsSync(napcatLauncherPath)) {
-            // 閫氳繃 cmd.exe 璋冪敤纾佺洏涓婄殑 napcat-launch.cmd锛堝凡鍥哄畾 chcp 65001锛夛紝
-            // argv 鍚勫厓绱犵嫭绔嬩紶閫掞紝涓嶄細瑙﹀彂 cmd /C 瀛楃涓叉嫾鎺ョ殑寮曞彿姝т箟銆?
+            // 通过 cmd.exe 调用磁盘上的 napcat-launch.cmd（已固定 chcp 65001），
+            // argv entries are passed independently and do not trigger cmd /C string quote issues.
             const args = ["/D", "/S", "/C", napcatLauncherName];
             if (qq) {
               args.push("-q", qq);
@@ -1317,7 +1346,7 @@ export class ServiceManager extends EventEmitter {
   private getRuntimePathDefinition(key: RuntimePathKey): RuntimePathDefinition {
     const definition = this.getRuntimePathDefinitions().find((item) => item.key === key);
     if (!definition) {
-      throw new Error(`鏈煡璺緞閰嶇疆: ${key}`);
+      throw new Error(`Unknown path config: ${key}`);
     }
     return definition;
   }
@@ -1372,16 +1401,23 @@ export class ServiceManager extends EventEmitter {
   private async resolveNapCatUrl(fallback: string): Promise<string> {
     try {
       const { token } = await this.initManager.readNapCatWebUiToken();
-      return token ? `http://127.0.0.1:6099/webui?token=${encodeURIComponent(token)}` : fallback;
+      if (!token) {
+        return fallback;
+      }
+      const target = new URL(fallback);
+      target.pathname = "/webui/web_login";
+      target.search = "";
+      target.searchParams.set("token", token);
+      return target.toString();
     } catch {
-      // 浠讳綍璇诲彇寮傚父閮界洿鎺ュ洖閫€鍒版櫘閫氱櫥褰曢〉锛岄伩鍏嶉樆濉炰富闈㈡澘銆?
+      // Any read error falls back to the normal login page, avoiding a blocked main panel.
       return fallback;
     }
   }
 
   /**
-   * MaiBot Core WebUI 鏀寔 `/auth?token=<access_token>` 鐩存帴鐧诲綍锛?
-   * webui.json 杩樻湭鐢熸垚鎴栧瓧娈电己澶辨椂鐩存帴鍥為€€涓烘牴鍦板潃锛岀敱鐢ㄦ埛璧版櫘閫氱櫥褰曟祦绋嬨€?
+   * MaiBot Core WebUI supports direct login through `/auth?token=<access_token>`.
+   * If webui.json has not been generated or fields are missing, return the root URL for normal login.
    */
   private async resolveMaiBotUrl(fallback: string): Promise<string> {
     try {
@@ -1507,7 +1543,7 @@ export class ServiceManager extends EventEmitter {
         : shouldRestart
           ? `进程退出，准备自动重启: ${event.exitCode}`
           : `进程异常退出: ${event.exitCode}`,
-      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `杩涚▼寮傚父閫€鍑? ${event.exitCode}`,
+      error: stoppedByRequest ? undefined : shouldRestart ? undefined : `Process exited unexpectedly: ${event.exitCode}`,
       stoppedAt: Date.now(),
     });
 
@@ -1646,7 +1682,7 @@ export class ServiceManager extends EventEmitter {
   private getDefinition(serviceId: ServiceId): ServiceDefinition {
     const definition = this.definitions.find((item) => item.id === serviceId);
     if (!definition) {
-      throw new Error(`鏈煡鏈嶅姟: ${serviceId}`);
+      throw new Error(`Unknown service: ${serviceId}`);
     }
     return definition;
   }
@@ -1654,7 +1690,7 @@ export class ServiceManager extends EventEmitter {
   private getState(serviceId: ServiceId): ServiceState {
     const state = this.states.get(serviceId);
     if (!state) {
-      throw new Error(`鏈煡鏈嶅姟鐘舵€? ${serviceId}`);
+      throw new Error(`Unknown service status: ${serviceId}`);
     }
     return state;
   }

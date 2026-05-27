@@ -1,11 +1,11 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.3.3",
+  "version": "0.4.4",
   "description": "Electron desktop shell for MaiBot OneKey.",
-  "author": "MotricSeven",
+  "author": "![1779700604525](image/package/1779700604525.png)otricSeven",
   "license": "GPL-3.0-only",
   "type": "module",
-  "main": "out/main/index.js",
+  "main": "out/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.renderer.config.ts",
@@ -23,6 +23,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@tanstack/react-virtual": "^3.13.24",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -79,6 +80,10 @@
         "to": "icon.png"
       },
       {
+        "from": "resources/app-icons",
+        "to": "app-icons"
+      },
+      {
         "from": "runtime",
         "to": "runtime",
         "filter": [
@@ -90,37 +95,71 @@
         ]
       },
       {
-        "from": "release-assets/python-overrides",
-        "to": "python-overrides",
-        "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc"
-        ]
+        "from": "resources/opencode/plugin_code.md",
+        "to": "runtime/opencode/plugin_code.md"
       },
       {
         "from": "modules",
         "to": "modules",
         "filter": [
           "**/*",
+          "!**/.git/**",
           "!**/__pycache__/**",
           "!**/*.pyc",
-          "!**/.git/index.lock",
-          "!**/.git/objects/pack/.tmp-*",
           "!MaiBot/config/**",
           "!MaiBot/data/**",
+          "!MaiBot/dashboard/.vite/**",
+          "!MaiBot/dashboard/node_modules/**",
           "!MaiBot/maibot_statistics.html",
-          "!MaiBot/plugins/sengokucola_better-image/**",
-          "!MaiBot/plugins/__init__.py",
-          "!MaiBot/plugins/napcat-adapter/.git/**",
-          "!MaiBot/plugins/snowluma-adapter/.git/**",
+          "!MaiBot/plugins/**",
           "!napcat/napcat/config/webui.json",
           "!napcat/**/*linux*",
           "!napcat/**/*darwin*",
           "!napcat/**/*arm64*",
           "!napcat/versions/**/resources/app/napcat/config/webui.json",
-          "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json",
-          "!napcat/.git/**"
+          "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json"
+        ]
+      },
+      {
+        "from": "modules/MaiBot/plugins/napcat-adapter",
+        "to": "modules/MaiBot/plugins/napcat-adapter",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/config.toml",
+          "!**/config.toml.*",
+          "!**/config_back/**",
+          "!**/data/**",
+          "!**/logs/**",
+          "!**/*.bak",
+          "!**/*.backup*",
+          "!**/*.db",
+          "!**/*.sqlite",
+          "!**/*.sqlite3",
+          "!**/*.log"
+        ]
+      },
+      {
+        "from": "modules/MaiBot/plugins/snowluma-adapter",
+        "to": "modules/MaiBot/plugins/snowluma-adapter",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/config.toml",
+          "!**/config.toml.*",
+          "!**/config_back/**",
+          "!**/data/**",
+          "!**/logs/**",
+          "!**/*.bak",
+          "!**/*.backup*",
+          "!**/*.db",
+          "!**/*.sqlite",
+          "!**/*.sqlite3",
+          "!**/*.log"
         ]
       }
     ],

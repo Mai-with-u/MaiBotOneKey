@@ -2,6 +2,8 @@ import type { DesktopSnapshot } from "@shared/contracts";
 
 const fallbackSnapshot: DesktopSnapshot = {
   appVersion: "0.1.0",
+  appLatestTag: undefined,
+  appLatestSource: undefined,
   moduleVersions: {},
   platform:
     typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
@@ -24,8 +26,11 @@ const fallbackSnapshot: DesktopSnapshot = {
     snowlumaRoot: "开发预览/modules/SnowLuma",
     bundledModulesRoot: "开发预览/modules",
     runtimeRoot: "开发预览/runtime",
+    opencodePluginInstructionsPath: "开发预览/resources/opencode/plugin_code.md",
     defaultPythonOverridesRoot: "开发预览/python-overrides",
     pythonOverridesRoot: "开发预览/python-overrides",
+    live2dRoot: "开发预览/live2d",
+    pluginBuilderRoot: "开发预览/plugin-builder/plugins",
     logsRoot: "开发预览/logs",
   },
   services: [
@@ -119,6 +124,33 @@ const fallbackSnapshot: DesktopSnapshot = {
     useEmbeddedTerminal: true,
     fontSize: 12,
   },
+  openCodeSettings: {
+    useBundledPluginInstructions: true,
+  },
+  appIconSettings: {
+    selectedIconId: "sprout",
+    options: [
+      {
+        id: "soft",
+        label: "圆角头像",
+        description: "使用新的柔和圆角麦麦头像。",
+      },
+      {
+        id: "sprout",
+        label: "小芽头像",
+        description: "使用带小芽和圆滚滚脸型的麦麦头像。",
+      },
+      {
+        id: "bean",
+        label: "橙团小芽",
+        description: "使用更近景、更圆润的橙团小芽头像。",
+      },
+    ],
+  },
+  networkProxySettings: {
+    enabled: false,
+    port: 7890,
+  },
   initState: {
     isReady: false,
     qqBackend: "napcat",
@@ -162,6 +194,9 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
     runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
+    openCodeSettings: snapshot.openCodeSettings ?? fallbackSnapshot.openCodeSettings,
+    appIconSettings: snapshot.appIconSettings ?? fallbackSnapshot.appIconSettings,
+    networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,
     moduleVersions: {
       ...fallbackSnapshot.moduleVersions,
       ...snapshot.moduleVersions,

@@ -5,6 +5,9 @@ export type ResolvedTheme = "light" | "dark";
 
 const STORAGE_KEY = "maibot-theme";
 const CHANGE_EVENT = "maibot-theme-change";
+const APPEARANCE_STORAGE_KEY = "maibot-appearance";
+const APPEARANCE_CHANGE_EVENT = "maibot-appearance-change";
+const DEFAULT_APPEARANCE_MODE = "future-retro";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 function readStored(): ThemePreference {
@@ -27,6 +30,39 @@ function systemTheme(): ResolvedTheme {
 
 function resolve(preference: ThemePreference): ResolvedTheme {
   return preference === "system" ? systemTheme() : preference;
+}
+
+function readAppearanceMode(): string {
+  if (typeof document !== "undefined") {
+    const mode = document.documentElement.dataset.appearanceMode;
+    if (mode) {
+      return mode;
+    }
+  }
+  if (typeof window === "undefined") {
+    return DEFAULT_APPEARANCE_MODE;
+  }
+  try {
+    const raw = window.localStorage.getItem(APPEARANCE_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_APPEARANCE_MODE;
+    }
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof value.mode === "string") {
+      return value.mode === "future" ? "modern" : value.mode;
+    }
+    return DEFAULT_APPEARANCE_MODE;
+  } catch {
+    return DEFAULT_APPEARANCE_MODE;
+  }
+}
+
+function shouldForceLight(): boolean {
+  return readAppearanceMode() === "future-retro";
+}
+
+function resolveEffective(preference: ThemePreference, systemValue = systemTheme()): ResolvedTheme {
+  return shouldForceLight() ? "light" : preference === "system" ? systemValue : preference;
 }
 
 function applyClass(theme: ResolvedTheme): void {
@@ -57,6 +93,7 @@ export interface ThemeApi {
 export function useTheme(): ThemeApi {
   const [preference, setPreferenceState] = useState<ThemePreference>(() => readStored());
   const [systemValue, setSystemValue] = useState<ResolvedTheme>(() => systemTheme());
+  const [forceLight, setForceLight] = useState(() => shouldForceLight());
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -68,7 +105,7 @@ export function useTheme(): ThemeApi {
     return () => media.removeEventListener("change", handler);
   }, []);
 
-  const resolved: ResolvedTheme = preference === "system" ? systemValue : preference;
+  const resolved: ResolvedTheme = forceLight ? "light" : preference === "system" ? systemValue : preference;
 
   useEffect(() => {
     applyClass(resolved);
@@ -83,6 +120,17 @@ export function useTheme(): ThemeApi {
     };
     window.addEventListener(CHANGE_EVENT, listener);
     return () => window.removeEventListener(CHANGE_EVENT, listener);
+  }, []);
+
+  useEffect(() => {
+    const refresh = (): void => setForceLight(shouldForceLight());
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    refresh();
+    return () => {
+      window.removeEventListener(APPEARANCE_CHANGE_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
   }, []);
 
   const setPreference = useCallback((next: ThemePreference) => {
@@ -113,5 +161,5 @@ export function useTheme(): ThemeApi {
 
 /** Apply persisted theme synchronously before React paints. Call once at module init. */
 export function bootstrapTheme(): void {
-  applyClass(resolve(readStored()));
+  applyClass(resolveEffective(readStored()));
 }

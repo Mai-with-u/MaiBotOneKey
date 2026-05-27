@@ -1,21 +1,41 @@
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import {
+  buildMaiBotPluginBlueprintFiles,
+  defaultMaiBotPluginFolderName,
+  sanitizeMaiBotPluginFolderName,
+  validateMaiBotPluginBlueprint,
+} from "../../shared/plugin-blueprint";
 import type {
+  MaiBotPluginBlueprint,
+  MaiBotPluginBlueprintCreateResult,
+  MaiBotPluginBlueprintParseResult,
+  MaiBotPluginBlueprintComponent,
+  MaiBotPluginBlueprintConfigField,
+  MaiBotPluginBlueprintParameter,
+  MaiBotPluginBlueprintScalarType,
   MaiBotPluginConfigSaveResult,
+  MaiBotPluginConfigField,
   MaiBotPluginConfigSchema,
+  MaiBotPluginConfigSection,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
   MaiBotPluginConfigLocalizedText,
   MaiBotInstalledPlugin,
+  MaiBotPluginDownloadResult,
   MaiBotPluginListOptions,
   MaiBotMarketPlugin,
   MaiBotPluginListResult,
   MaiBotPluginManifest,
   MaiBotPluginOperationResult,
+  MaiBotPluginRatingResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  MaiBotPluginUserState,
+  MaiBotPluginUserStates,
+  MaiBotPluginVoteResult,
   ModuleSourceConfig,
 } from "../../shared/contracts";
 
@@ -32,6 +52,9 @@ const MARKET_TIMEOUT_MS = 10_000;
 const MAIBOT_API_TIMEOUT_MS = 3_000;
 const PLUGIN_MARKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const PLUGIN_CONFIG_FILE = "config.toml";
+const PLUGIN_CONFIG_BACKUP_DIR = "config_back";
+const PLUGIN_UPDATE_BACKUP_DIR = ".update_backups";
+const PLUGIN_UPDATE_TMP_DIR = ".update_tmp";
 
 export interface MaiBotPluginClientOptions {
   maibotRoot: string;
@@ -47,6 +70,46 @@ interface GitRunResult {
 interface CacheFile<T> {
   timestamp: number;
   data: T;
+}
+
+interface LocalPythonConfigInspection {
+  classes: Map<string, LocalPythonConfigClass>;
+  configModel?: string;
+}
+
+interface LocalPythonConfigClass {
+  name: string;
+  description?: string;
+  label?: string;
+  icon?: string;
+  order?: number;
+  fields: LocalPythonConfigField[];
+}
+
+interface LocalPythonConfigField {
+  name: string;
+  annotation: string;
+  defaultFactory?: string;
+  defaultValue?: MaiBotPluginConfigValue;
+  label?: MaiBotPluginConfigLocalizedText;
+  description?: MaiBotPluginConfigLocalizedText;
+  hint?: MaiBotPluginConfigLocalizedText;
+  placeholder?: MaiBotPluginConfigLocalizedText;
+  uiType?: string;
+  inputType?: string;
+  choices?: Array<MaiBotPluginConfigValue | { label?: MaiBotPluginConfigLocalizedText; value: MaiBotPluginConfigValue }>;
+  min?: number;
+  max?: number;
+  step?: number;
+  rows?: number;
+  required?: boolean;
+  hidden?: boolean;
+  disabled?: boolean;
+  order?: number;
+  icon?: string;
+  itemType?: string;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export class MaiBotPluginClient {
@@ -136,6 +199,7 @@ export class MaiBotPluginClient {
           downloads: statsItem?.downloads ?? plugin.downloads,
           rating: statsItem?.rating ?? plugin.rating,
           likes: statsItem?.likes ?? plugin.likes,
+          comment_count: statsItem?.comment_count ?? plugin.comment_count,
         };
       });
 
@@ -145,14 +209,14 @@ export class MaiBotPluginClient {
   async install(pluginId: string, repositoryUrl: string, branch = "main"): Promise<MaiBotPluginOperationResult> {
     const targetPath = this.installTargetPath(pluginId);
     if (await pathExists(targetPath)) {
-      throw new Error("鎻掍欢宸插畨瑁咃紝璇峰厛鍗歌浇");
+      throw new Error("插件已安装，请先卸载");
     }
 
     await this.cloneRepository(await this.resolveSourceUrl(repositoryUrl), targetPath, branch);
     const manifest = await this.validateInstalledManifest(targetPath, pluginId);
     return {
       success: true,
-      message: "鎻掍欢瀹夎鎴愬姛",
+      message: "Plugin installed successfully",
       plugin_id: pluginId,
       plugin_name: pluginName({ id: pluginId, manifest }),
       new_version: pluginVersion(manifest),
@@ -167,21 +231,26 @@ export class MaiBotPluginClient {
   ): Promise<MaiBotPluginOperationResult> {
     const pluginPath = await this.resolveInstalledPluginPath(pluginId);
     if (!pluginPath) {
-      throw new Error("鎻掍欢鏈畨瑁咃紝璇峰厛瀹夎");
+      throw new Error("Plugin is not installed; install it first");
     }
 
     const oldManifest = await this.readManifest(pluginPath);
     const oldVersion = oldManifest ? pluginVersion(oldManifest) : "unknown";
     if (latestVersion && !isNewerVersion(latestVersion, oldVersion)) {
-      throw new Error("褰撳墠宸叉槸鏈€鏂扮増鏈紝鏃犻渶鏇存柊");
+      throw new Error("Already on the latest version; no update needed");
     }
+    const resolvedRepositoryUrl = await this.resolveSourceUrl(repositoryUrl);
+    if (!(await isDirectory(join(pluginPath, ".git")))) {
+      return this.replaceNonGitPlugin(pluginId, pluginPath, resolvedRepositoryUrl, branch, oldVersion);
+    }
+
     const beforeCommit = await this.currentGitCommit(pluginPath);
     if (!beforeCommit) {
-      throw new Error("插件目录不是可更新的 Git 仓库，无法执行强制 pull");
+      throw new Error("Plugin Git repository cannot be read; update cannot continue");
     }
 
     try {
-      await this.forcePullRepository(pluginPath, await this.resolveSourceUrl(repositoryUrl), branch);
+      await this.forcePullRepository(pluginPath, resolvedRepositoryUrl, branch);
       const newManifest = await this.validateInstalledManifest(pluginPath, pluginId, false);
       return {
         success: true,
@@ -207,9 +276,117 @@ export class MaiBotPluginClient {
     await this.removePluginPath(pluginPath);
     return {
       success: true,
-      message: "鎻掍欢鍗歌浇鎴愬姛",
+      message: "插件卸载成功",
       plugin_id: pluginId,
       plugin_name: manifest ? pluginName({ id: pluginId, manifest }) : pluginId,
+    };
+  }
+
+  async createFromBlueprint(
+    blueprint: MaiBotPluginBlueprint,
+    overwrite = false,
+  ): Promise<MaiBotPluginBlueprintCreateResult> {
+    const errors = validateMaiBotPluginBlueprint(blueprint);
+    if (errors.length > 0) {
+      throw new Error(errors.join("\n"));
+    }
+
+    const pluginId = validatePluginId(blueprint.manifest.pluginId);
+    const folderName = sanitizeMaiBotPluginFolderName(
+      blueprint.manifest.folderName ?? defaultMaiBotPluginFolderName(pluginId),
+      pluginId,
+    );
+    const pluginPath = this.safePluginPath(folderName, false);
+    const alreadyExists = await pathExists(pluginPath);
+
+    if (alreadyExists && !overwrite) {
+      throw new Error("插件目录已存在，请启用覆盖后再生成。");
+    }
+
+    const files = buildMaiBotPluginBlueprintFiles({
+      ...blueprint,
+      manifest: {
+        ...blueprint.manifest,
+        pluginId,
+        folderName,
+      },
+    });
+
+    if (alreadyExists && overwrite) {
+      await rm(pluginPath, { recursive: true, force: true });
+    }
+    await mkdir(pluginPath, { recursive: true });
+
+    for (const file of files) {
+      const targetPath = resolve(pluginPath, file.relativePath);
+      if (!isPathInside(pluginPath, targetPath)) {
+        throw new Error(`拒绝写入插件目录外的文件: ${file.relativePath}`);
+      }
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, file.content, "utf8");
+    }
+
+    return {
+      pluginId,
+      pluginPath,
+      files,
+      overwritten: alreadyExists,
+      createdAt: Date.now(),
+    };
+  }
+
+  async parseToBlueprint(pluginId: string): Promise<MaiBotPluginBlueprintParseResult> {
+    const pluginPath = await this.requireInstalledPluginPath(pluginId);
+    const manifest = await this.readManifest(pluginPath);
+    const config = await this.readPluginConfig(pluginPath).catch(() => ({}));
+    const schema = await buildLocalPluginConfigSchema(pluginPath, config)
+      ?? buildPluginConfigSchema(config, "local");
+    const pythonFiles = await collectPluginPythonFiles(pluginPath).catch(() => []);
+    const sources: string[] = [];
+    for (const filePath of pythonFiles) {
+      try {
+        if ((await stat(filePath)).size <= 512 * 1024) {
+          sources.push(await readFile(filePath, "utf8"));
+        }
+      } catch {
+        // Keep parsing any readable files.
+      }
+    }
+
+    const parsedComponents = parsePluginBlueprintComponents(sources);
+    const resolvedPluginId = validatePluginId(manifest?.id?.trim() || pluginId);
+    const blueprint: MaiBotPluginBlueprint = {
+      manifest: {
+        pluginId: resolvedPluginId,
+        folderName: basename(pluginPath),
+        name: manifest?.name?.trim() || resolvedPluginId,
+        version: manifest?.version?.trim() || "1.0.0",
+        description: manifest?.description?.trim() || "从现有插件解析生成的蓝图",
+        authorName: manifestAuthorName(manifest),
+        authorUrl: manifestAuthorUrl(manifest),
+        license: manifest?.license?.trim() || "MIT",
+        repositoryUrl: manifestRepositoryUrl(manifest),
+        minHostVersion: manifest?.host_application?.min_version?.trim() || "1.0.0",
+        maxHostVersion: manifest?.host_application?.max_version?.trim() || "1.99.99",
+        minSdkVersion: readManifestSdkVersion(manifest, "min_version") || "2.0.0",
+        maxSdkVersion: readManifestSdkVersion(manifest, "max_version") || "2.99.99",
+        capabilities: manifest?.capabilities?.length ? manifest.capabilities : ["send.text", "config.get"],
+      },
+      components: parsedComponents.components,
+      configFields: blueprintFieldsFromConfigSchema(schema),
+    };
+
+    return {
+      pluginId: resolvedPluginId,
+      pluginPath,
+      blueprint,
+      parsed: {
+        manifest: manifest !== null,
+        configFields: blueprint.configFields.length,
+        tools: parsedComponents.tools,
+        commands: parsedComponents.commands,
+        unsupportedDecorators: parsedComponents.unsupportedDecorators,
+      },
     };
   }
 
@@ -217,7 +394,7 @@ export class MaiBotPluginClient {
     const pluginPath = await this.requireInstalledPluginPath(pluginId);
     const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
     if (!isPathInside(pluginPath, configPath)) {
-      throw new Error("鎻掍欢閰嶇疆璺緞瓒呭嚭鍏佽鑼冨洿");
+      throw new Error("Plugin config path is outside the allowed range");
     }
 
     const runtimeConfig = await this.getRuntimeConfig(pluginId, pluginPath, configPath, serviceUrl);
@@ -228,6 +405,8 @@ export class MaiBotPluginClient {
     const exists = await pathExists(configPath);
     const raw = exists ? await readFile(configPath, "utf8") : "";
     const config = exists ? parsePluginConfig(raw, configPath) : {};
+    const schema = await buildLocalPluginConfigSchema(pluginPath, config)
+      ?? buildPluginConfigSchema(config, "local");
 
     return {
       pluginId,
@@ -235,7 +414,7 @@ export class MaiBotPluginClient {
       configPath,
       exists,
       config,
-      schema: buildPluginConfigSchema(config, "local"),
+      schema,
       raw,
     };
   }
@@ -248,7 +427,7 @@ export class MaiBotPluginClient {
     const pluginPath = await this.requireInstalledPluginPath(pluginId);
     const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
     if (!isPathInside(pluginPath, configPath)) {
-      throw new Error("鎻掍欢閰嶇疆璺緞瓒呭嚭鍏佽鑼冨洿");
+      throw new Error("Plugin config path is outside the allowed range");
     }
 
     const runtimeConfig = normalizePluginConfigRoot(config);
@@ -272,7 +451,8 @@ export class MaiBotPluginClient {
       pluginId,
       configPath,
       config: normalizedConfig,
-      schema: buildPluginConfigSchema(normalizedConfig, "local"),
+      schema: await buildLocalPluginConfigSchema(pluginPath, normalizedConfig)
+        ?? buildPluginConfigSchema(normalizedConfig, "local"),
       raw,
       backupPath,
       savedAt: Date.now(),
@@ -297,7 +477,7 @@ export class MaiBotPluginClient {
 
     const remoteUrl = repositoryUrl ? githubRawReadmeUrl(await this.resolveSourceUrl(repositoryUrl)) : undefined;
     if (!remoteUrl) {
-      return { success: false, error: "鏈壘鍒版彃浠?README" };
+      return { success: false, error: "Plugin README not found" };
     }
 
     for (const branch of ["main", "master"]) {
@@ -306,7 +486,7 @@ export class MaiBotPluginClient {
         return { success: true, content: await response.text() };
       }
     }
-    return { success: false, error: "鏈壘鍒版彃浠?README" };
+    return { success: false, error: "Plugin README not found" };
   }
 
   async getStats(pluginId: string): Promise<MaiBotPluginStats | null> {
@@ -316,6 +496,88 @@ export class MaiBotPluginClient {
     }
     const data = (await response.json()) as unknown;
     return normalizePluginStatsDetail(pluginId, data);
+  }
+
+  async getUserState(pluginId: string, userId: string): Promise<MaiBotPluginUserState | null> {
+    const query = new URLSearchParams({ plugin_id: pluginId, user_id: userId });
+    const data = await requestPluginStatsService("GET", `/stats/user-state?${query.toString()}`);
+    return data ? normalizePluginUserState(data) : null;
+  }
+
+  async getUserStates(userId: string): Promise<MaiBotPluginUserStates> {
+    const query = new URLSearchParams({ user_id: userId });
+    const data = await requestPluginStatsService("GET", `/stats/user-states?${query.toString()}`);
+    if (isUnknownRecord(data) && data.success === false) {
+      throw new Error(typeof data.error === "string" ? data.error : "Plugin user states request failed");
+    }
+    return normalizePluginUserStates(data);
+  }
+
+  async likePlugin(pluginId: string, userId: string): Promise<MaiBotPluginVoteResult> {
+    const result = await this.postPluginVote("/stats/like", pluginId, userId);
+    this.mergeCachedPluginStats(pluginId, {
+      likes: result.likes,
+      dislikes: result.dislikes,
+    });
+    return result;
+  }
+
+  async dislikePlugin(pluginId: string, userId: string): Promise<MaiBotPluginVoteResult> {
+    const result = await this.postPluginVote("/stats/dislike", pluginId, userId);
+    this.mergeCachedPluginStats(pluginId, {
+      likes: result.likes,
+      dislikes: result.dislikes,
+    });
+    return result;
+  }
+
+  async ratePlugin(
+    pluginId: string,
+    rating: number | null | undefined,
+    comment: string | null | undefined,
+    userId: string,
+  ): Promise<MaiBotPluginRatingResult> {
+    if (rating !== undefined && rating !== null && (rating < 1 || rating > 5)) {
+      return { success: false, error: "评分必须在 1-5 之间" };
+    }
+    if (rating === undefined && comment === undefined) {
+      return { success: false, error: "评分和评论至少需要提交一项" };
+    }
+
+    const payload: Record<string, unknown> = {
+      plugin_id: pluginId,
+      user_id: userId,
+    };
+    if (rating !== undefined) {
+      payload.rating = rating;
+    }
+    if (comment !== undefined) {
+      payload.comment = comment;
+    }
+
+    const data = await requestPluginStatsService("POST", "/stats/rate", payload);
+    const result = normalizePluginRatingResult(data);
+    this.mergeCachedPluginStats(pluginId, {
+      rating: result.rating,
+      rating_count: result.rating_count,
+      comment_count: result.comment_count,
+    });
+    return result;
+  }
+
+  async recordDownload(
+    pluginId: string,
+    userId?: string,
+    fingerprint?: string,
+  ): Promise<MaiBotPluginDownloadResult> {
+    const data = await requestPluginStatsService("POST", "/stats/download", {
+      plugin_id: pluginId,
+      user_id: userId,
+      fingerprint,
+    });
+    const result = normalizePluginDownloadResult(data);
+    this.mergeCachedPluginStats(pluginId, { downloads: result.downloads });
+    return result;
   }
 
   private installTargetPath(pluginId: string): string {
@@ -391,7 +653,7 @@ export class MaiBotPluginClient {
 
   private async getPluginStatsSummary(options: MaiBotPluginListOptions): Promise<Record<string, MaiBotPluginStats>> {
     const cached = await this.readCache(
-      "onekey-plugin-market-stats-cache.json",
+      "onekey-plugin-market-stats-cache-v2.json",
       this.statsCache,
       isPluginStatsMap,
     );
@@ -405,7 +667,7 @@ export class MaiBotPluginClient {
         .then(async (stats) => {
           const nextCache = { timestamp: Date.now(), data: stats };
           this.statsCache = nextCache;
-          await this.writeCache("onekey-plugin-market-stats-cache.json", nextCache);
+          await this.writeCache("onekey-plugin-market-stats-cache-v2.json", nextCache);
           return stats;
         })
         .catch((error) => {
@@ -420,6 +682,36 @@ export class MaiBotPluginClient {
     }
 
     return this.statsRequest;
+  }
+
+  private async postPluginVote(path: string, pluginId: string, userId: string): Promise<MaiBotPluginVoteResult> {
+    const data = await requestPluginStatsService("POST", path, {
+      plugin_id: pluginId,
+      user_id: userId,
+    });
+    return normalizePluginVoteResult(data);
+  }
+
+  private mergeCachedPluginStats(pluginId: string, partialStats: Partial<MaiBotPluginStats>): void {
+    const currentCache = this.statsCache;
+    if (!currentCache) {
+      return;
+    }
+
+    const previousStats = currentCache.data[pluginId] ?? createEmptyPluginStats(pluginId);
+    const nextStats = normalizePluginStats(pluginId, {
+      ...previousStats,
+      ...Object.fromEntries(Object.entries(partialStats).filter(([, value]) => value !== undefined)),
+      plugin_id: pluginId,
+    })?.[1] ?? previousStats;
+
+    this.statsCache = {
+      timestamp: Date.now(),
+      data: {
+        ...currentCache.data,
+        [pluginId]: nextStats,
+      },
+    };
   }
 
   private async resolveSourceUrl(url: string): Promise<string> {
@@ -464,7 +756,7 @@ export class MaiBotPluginClient {
   private cachePath(fileName: string): string {
     const cachePath = resolve(this.maibotRoot, "data", fileName);
     if (!isPathInside(this.maibotRoot, cachePath)) {
-      throw new Error("鎻掍欢甯傚満缂撳瓨璺緞瓒呭嚭鍏佽鑼冨洿");
+      throw new Error("Plugin market cache path is outside the allowed range");
     }
     return cachePath;
   }
@@ -475,7 +767,7 @@ export class MaiBotPluginClient {
     const result = await runGit(this.gitPath, args, this.maibotRoot);
     if (result.exitCode !== 0) {
       await rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
-      throw new Error(result.output || "鍏嬮殕浠撳簱澶辫触");
+      throw new Error(result.output || "克隆仓库失败");
     }
   }
 
@@ -485,6 +777,93 @@ export class MaiBotPluginClient {
     }
     const result = await runGit(this.gitPath, ["rev-parse", "HEAD"], pluginPath);
     return result.exitCode === 0 && result.output.trim() ? result.output.trim().split(/\s+/u)[0] : null;
+  }
+
+  private async replaceNonGitPlugin(
+    pluginId: string,
+    pluginPath: string,
+    repositoryUrl: string,
+    branch: string,
+    oldVersion: string,
+  ): Promise<MaiBotPluginOperationResult> {
+    const { backupPath, tempPath } = this.createPluginUpdateWorkspace(pluginId);
+
+    await mkdir(dirname(backupPath), { recursive: true });
+    await mkdir(dirname(tempPath), { recursive: true });
+    await rename(pluginPath, backupPath);
+
+    try {
+      await this.cloneRepository(repositoryUrl, tempPath, branch);
+      const newManifest = await this.validateReplacementManifest(tempPath, pluginId);
+      await this.restoreOfficialPluginConfig(backupPath, tempPath);
+      await rename(tempPath, pluginPath);
+
+      return {
+        success: true,
+        message: "Plugin updated successfully",
+        plugin_id: pluginId,
+        plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
+        old_version: oldVersion,
+        new_version: pluginVersion(newManifest),
+      };
+    } catch (error) {
+      await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
+      await this.restoreUpdateBackup(backupPath, pluginPath);
+      throw error;
+    }
+  }
+
+  private createPluginUpdateWorkspace(pluginId: string): { backupPath: string; tempPath: string } {
+    const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
+    const safeId = sanitizeUpdateWorkspaceName(validatePluginId(pluginId));
+    const folderName = `${safeId}.${timestamp}.${process.pid}`;
+    const backupPath = resolve(this.pluginsRoot, PLUGIN_UPDATE_BACKUP_DIR, folderName);
+    const tempPath = resolve(this.pluginsRoot, PLUGIN_UPDATE_TMP_DIR, folderName);
+
+    if (!isPathInside(this.pluginsRoot, backupPath) || !isPathInside(this.pluginsRoot, tempPath)) {
+      throw new Error("Plugin update workspace path is outside the allowed range");
+    }
+    return { backupPath, tempPath };
+  }
+
+  private async restoreUpdateBackup(backupPath: string, pluginPath: string): Promise<void> {
+    if (!(await pathExists(backupPath))) {
+      return;
+    }
+
+    if (await pathExists(pluginPath)) {
+      await rm(pluginPath, { recursive: true, force: true });
+    }
+    await rename(backupPath, pluginPath);
+  }
+
+  private async restoreOfficialPluginConfig(backupPath: string, pluginPath: string): Promise<void> {
+    await this.restorePluginConfigEntry(backupPath, pluginPath, PLUGIN_CONFIG_FILE);
+    await this.restorePluginConfigEntry(backupPath, pluginPath, PLUGIN_CONFIG_BACKUP_DIR);
+  }
+
+  private async restorePluginConfigEntry(
+    backupPath: string,
+    pluginPath: string,
+    entryName: string,
+  ): Promise<void> {
+    const sourcePath = resolve(backupPath, entryName);
+    const targetPath = resolve(pluginPath, entryName);
+    if (!isPathInside(backupPath, sourcePath) || !isPathInside(pluginPath, targetPath)) {
+      throw new Error("Plugin config restore path is outside the allowed range");
+    }
+    if (!(await pathExists(sourcePath))) {
+      return;
+    }
+
+    const sourceStat = await stat(sourcePath);
+    await rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
+    if (sourceStat.isDirectory()) {
+      await cp(sourcePath, targetPath, { recursive: true, force: true });
+    } else if (sourceStat.isFile()) {
+      await mkdir(dirname(targetPath), { recursive: true });
+      await copyFile(sourcePath, targetPath);
+    }
   }
 
   private async forcePullRepository(pluginPath: string, repositoryUrl: string, branch: string): Promise<void> {
@@ -508,13 +887,39 @@ export class MaiBotPluginClient {
     }
   }
 
+  private async validateReplacementManifest(pluginPath: string, pluginId: string): Promise<MaiBotPluginManifest> {
+    const manifest = await this.readManifest(pluginPath);
+    if (!manifest) {
+      throw new Error("Invalid plugin: missing _manifest.json");
+    }
+
+    const expectedId = validatePluginId(pluginId);
+    const manifestId = manifest.id?.trim();
+    if (manifestId !== expectedId) {
+      throw new Error(`Invalid _manifest.json: plugin id must be ${expectedId}`);
+    }
+    if (!manifest.name?.trim()) {
+      throw new Error("Invalid _manifest.json: missing required field name");
+    }
+    if (!manifest.version?.trim()) {
+      throw new Error("Invalid _manifest.json: missing required field version");
+    }
+
+    const authorName = typeof manifest.author === "string" ? manifest.author.trim() : manifest.author?.name?.trim();
+    if (!authorName) {
+      throw new Error("Invalid _manifest.json: missing required field author");
+    }
+
+    return { ...manifest, id: manifestId };
+  }
+
   private async validateInstalledManifest(pluginPath: string, pluginId: string, removeOnFailure = true): Promise<MaiBotPluginManifest> {
     const manifest = await this.readManifest(pluginPath);
     if (!manifest) {
       if (removeOnFailure) {
         await rm(pluginPath, { recursive: true, force: true }).catch(() => undefined);
       }
-      throw new Error("鏃犳晥鐨勬彃浠讹細缂哄皯 _manifest.json");
+      throw new Error("无效的插件：缺少 _manifest.json");
     }
 
     for (const field of ["name", "version", "author"]) {
@@ -522,7 +927,7 @@ export class MaiBotPluginClient {
         if (removeOnFailure) {
           await rm(pluginPath, { recursive: true, force: true }).catch(() => undefined);
         }
-        throw new Error(`鏃犳晥鐨?_manifest.json锛氱己灏戝繀闇€瀛楁 ${field}`);
+        throw new Error(`Invalid _manifest.json: missing required field ${field}`);
       }
     }
 
@@ -707,18 +1112,311 @@ export class MaiBotPluginClient {
 
   private safePluginPath(folderName: string, mustExist: boolean): string {
     if (!folderName || folderName.includes("..") || /[\\/\0\r\n\t]/u.test(folderName)) {
-      throw new Error("鎻掍欢 ID 鍖呭惈闈炴硶瀛楃");
+      throw new Error("Plugin ID contains invalid characters");
     }
 
     const targetPath = resolve(this.pluginsRoot, folderName);
     if (!isPathInside(this.pluginsRoot, targetPath)) {
-      throw new Error("鎻掍欢璺緞瓒呭嚭鍏佽鑼冨洿");
+      throw new Error("Plugin path is outside the allowed range");
     }
     if (mustExist && targetPath === this.pluginsRoot) {
       throw new Error("拒绝操作插件根目录");
     }
     return targetPath;
   }
+}
+
+interface ParsedBlueprintComponents {
+  components: MaiBotPluginBlueprintComponent[];
+  tools: number;
+  commands: number;
+  unsupportedDecorators: string[];
+}
+
+function manifestAuthorName(manifest: MaiBotPluginManifest | null): string {
+  if (typeof manifest?.author === "string") {
+    return manifest.author;
+  }
+  return manifest?.author?.name?.trim() || "MaiBot Developer";
+}
+
+function manifestAuthorUrl(manifest: MaiBotPluginManifest | null): string {
+  if (typeof manifest?.author === "object" && manifest.author?.url) {
+    return manifest.author.url;
+  }
+  return manifest?.homepage_url?.trim() || manifest?.urls?.homepage?.trim() || "https://example.com";
+}
+
+function manifestRepositoryUrl(manifest: MaiBotPluginManifest | null): string {
+  return manifest?.repository_url?.trim()
+    || manifest?.urls?.repository?.trim()
+    || manifest?.homepage_url?.trim()
+    || manifest?.urls?.homepage?.trim()
+    || "https://example.com/maibot-plugin";
+}
+
+function readManifestSdkVersion(
+  manifest: MaiBotPluginManifest | null,
+  key: "min_version" | "max_version",
+): string | undefined {
+  return manifest?.sdk?.[key]?.trim();
+}
+
+function blueprintFieldsFromConfigSchema(schema: MaiBotPluginConfigSchema): MaiBotPluginBlueprintConfigField[] {
+  const fields: MaiBotPluginBlueprintConfigField[] = [];
+  for (const section of schema.sections) {
+    for (const field of section.fields) {
+      if (field.path.length < 2) {
+        continue;
+      }
+      const sectionName = field.path[0];
+      const fieldName = field.path[1];
+      if (sectionName === "plugin" && (fieldName === "enabled" || fieldName === "config_version")) {
+        continue;
+      }
+      const type = blueprintScalarTypeFromConfigValue(field.value);
+      if (!type) {
+        continue;
+      }
+      fields.push({
+        id: `field-${sectionName}-${fieldName}`,
+        section: sectionName,
+        name: fieldName,
+        type,
+        label: localizedConfigTextToString(field.label, fieldName),
+        description: localizedConfigTextToString(field.description, ""),
+        defaultValue: blueprintDefaultFromConfigValue(field.value),
+      });
+    }
+  }
+  return fields;
+}
+
+function blueprintScalarTypeFromConfigValue(value: MaiBotPluginConfigValue): MaiBotPluginBlueprintScalarType | null {
+  if (typeof value === "boolean") {
+    return "boolean";
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? "integer" : "float";
+  }
+  if (typeof value === "string") {
+    return "string";
+  }
+  return null;
+}
+
+function blueprintDefaultFromConfigValue(value: MaiBotPluginConfigValue): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+
+function localizedConfigTextToString(value: MaiBotPluginConfigLocalizedText | undefined, fallback: string): string {
+  if (typeof value === "string") {
+    return value || fallback;
+  }
+  return value?.["zh-CN"] || value?.zh || value?.en || Object.values(value ?? {})[0] || fallback;
+}
+
+function parsePluginBlueprintComponents(sources: string[]): ParsedBlueprintComponents {
+  const components: MaiBotPluginBlueprintComponent[] = [];
+  const unsupportedDecorators = new Set<string>();
+
+  for (const source of sources) {
+    components.push(...parseDecoratorComponents(source, "Tool"));
+    components.push(...parseDecoratorComponents(source, "Command"));
+    for (const decorator of source.matchAll(/@(Action|EventHandler|API|Schedule)\s*\(/gu)) {
+      unsupportedDecorators.add(decorator[1]);
+    }
+  }
+
+  return {
+    components: dedupeBlueprintComponents(components),
+    tools: components.filter((component) => component.kind === "tool").length,
+    commands: components.filter((component) => component.kind === "command").length,
+    unsupportedDecorators: [...unsupportedDecorators],
+  };
+}
+
+function parseDecoratorComponents(source: string, decoratorName: "Tool" | "Command"): MaiBotPluginBlueprintComponent[] {
+  const components: MaiBotPluginBlueprintComponent[] = [];
+  let index = 0;
+  const marker = `@${decoratorName}`;
+  while (index < source.length) {
+    const markerIndex = source.indexOf(marker, index);
+    if (markerIndex < 0) {
+      break;
+    }
+    const openIndex = source.indexOf("(", markerIndex + marker.length);
+    if (openIndex < 0) {
+      break;
+    }
+    const closeIndex = findMatchingDelimiter(source, openIndex, "(", ")");
+    if (closeIndex < 0) {
+      break;
+    }
+    const argsText = source.slice(openIndex + 1, closeIndex);
+    const methodStart = source.indexOf("async def", closeIndex);
+    const nextDecorator = source.indexOf("\n    @", closeIndex + 1);
+    const methodEnd = nextDecorator < 0 ? source.length : nextDecorator;
+    const methodText = methodStart >= 0 && methodStart < methodEnd ? source.slice(methodStart, methodEnd) : "";
+    const component = decoratorName === "Tool"
+      ? parseToolComponent(argsText, methodText, components.length)
+      : parseCommandComponent(argsText, methodText, components.length);
+    if (component) {
+      components.push(component);
+    }
+    index = closeIndex + 1;
+  }
+  return components;
+}
+
+function parseToolComponent(
+  argsText: string,
+  methodText: string,
+  index: number,
+): MaiBotPluginBlueprintComponent | null {
+  const name = readDecoratorName(argsText) || readMethodName(methodText)?.replace(/^handle_/u, "") || `tool_${index + 1}`;
+  return {
+    id: `tool-${name}-${index}`,
+    kind: "tool",
+    name,
+    description: readDecoratorStringArg(argsText, ["description", "brief_description", "detailed_description"]) || name,
+    responseText: readMethodMessage(methodText) || "工具已执行。",
+    parameters: parseToolParameters(argsText, methodText),
+  };
+}
+
+function parseCommandComponent(
+  argsText: string,
+  methodText: string,
+  index: number,
+): MaiBotPluginBlueprintComponent | null {
+  const name = readDecoratorName(argsText) || readMethodName(methodText)?.replace(/^handle_/u, "") || `command_${index + 1}`;
+  return {
+    id: `command-${name}-${index}`,
+    kind: "command",
+    name,
+    description: readDecoratorStringArg(argsText, ["description"]) || name,
+    trigger: readDecoratorStringArg(argsText, ["pattern"]) || `^/${name}$`,
+    responseText: readMethodMessage(methodText) || "命令已执行。",
+  };
+}
+
+function readDecoratorName(argsText: string): string | undefined {
+  const literal = readPythonStringLiteral(argsText, skipWhitespace(argsText, 0));
+  return literal?.value.trim() || undefined;
+}
+
+function readDecoratorStringArg(argsText: string, names: string[]): string | undefined {
+  for (const name of names) {
+    const match = new RegExp(`${escapeRegExp(name)}\\s*=\\s*([rRuUbBfF]*["'])`, "u").exec(argsText);
+    if (!match) {
+      continue;
+    }
+    const literalStart = match.index + match[0].lastIndexOf(match[1]);
+    const literal = readPythonStringLiteral(argsText, literalStart);
+    if (literal?.value.trim()) {
+      return literal.value.trim();
+    }
+  }
+  return undefined;
+}
+
+function parseToolParameters(argsText: string, methodText: string): MaiBotPluginBlueprintParameter[] {
+  const parameters: MaiBotPluginBlueprintParameter[] = [];
+  const parameterRegex = /ToolParameterInfo\s*\(/gu;
+  let match: RegExpExecArray | null;
+  while ((match = parameterRegex.exec(argsText)) !== null) {
+    const openIndex = argsText.indexOf("(", match.index);
+    const closeIndex = findMatchingDelimiter(argsText, openIndex, "(", ")");
+    if (closeIndex < 0) {
+      break;
+    }
+    const parameterText = argsText.slice(openIndex + 1, closeIndex);
+    const name = readDecoratorStringArg(parameterText, ["name"]) || "";
+    if (!name) {
+      parameterRegex.lastIndex = closeIndex + 1;
+      continue;
+    }
+    const type = readToolParameterType(parameterText);
+    parameters.push({
+      id: `param-${name}`,
+      name,
+      type,
+      description: readDecoratorStringArg(parameterText, ["description"]) || name,
+      required: /required\s*=\s*True/u.test(parameterText),
+      defaultValue: readMethodParameterDefault(methodText, name) ?? defaultValueForBlueprintScalar(type),
+    });
+    parameterRegex.lastIndex = closeIndex + 1;
+  }
+  return parameters;
+}
+
+function readToolParameterType(parameterText: string): MaiBotPluginBlueprintScalarType {
+  const type = parameterText.match(/ToolParamType\.([A-Z_]+)/u)?.[1];
+  switch (type) {
+    case "FLOAT":
+    case "NUMBER":
+      return "float";
+    case "INTEGER":
+    case "INT":
+      return "integer";
+    case "BOOLEAN":
+    case "BOOL":
+      return "boolean";
+    default:
+      return "string";
+  }
+}
+
+function readMethodParameterDefault(methodText: string, name: string): string | undefined {
+  const signature = methodText.match(/async\s+def\s+\w+\s*\(([\s\S]*?)\)\s*:/u)?.[1];
+  if (!signature) {
+    return undefined;
+  }
+  const match = new RegExp(`${escapeRegExp(name)}\\s*:[^=,]+=(\\s*[^,]+)`, "u").exec(signature);
+  return match?.[1]?.trim().replace(/^["']|["']$/gu, "");
+}
+
+function defaultValueForBlueprintScalar(type: MaiBotPluginBlueprintScalarType): string {
+  if (type === "boolean") return "false";
+  if (type === "integer" || type === "float") return "0";
+  return "";
+}
+
+function readMethodName(methodText: string): string | undefined {
+  return methodText.match(/async\s+def\s+(\w+)/u)?.[1];
+}
+
+function readMethodMessage(methodText: string): string | undefined {
+  const assignment = methodText.match(/message\s*=\s*([rRuUbBfF]*["'])/u);
+  if (assignment) {
+    const literalStart = assignment.index! + assignment[0].lastIndexOf(assignment[1]);
+    return readPythonStringLiteral(methodText, literalStart)?.value.trim();
+  }
+  const sendText = methodText.match(/send\.text\s*\(\s*([rRuUbBfF]*["'])/u);
+  if (sendText) {
+    const literalStart = sendText.index! + sendText[0].lastIndexOf(sendText[1]);
+    return readPythonStringLiteral(methodText, literalStart)?.value.trim();
+  }
+  return undefined;
+}
+
+function dedupeBlueprintComponents(components: MaiBotPluginBlueprintComponent[]): MaiBotPluginBlueprintComponent[] {
+  const seen = new Set<string>();
+  return components.filter((component) => {
+    const key = `${component.kind}:${component.name}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
@@ -733,6 +1431,8 @@ function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
     downloads?: unknown;
     rating?: unknown;
     likes?: unknown;
+    comment_count?: unknown;
+    comments?: unknown;
   };
   const manifest = item.manifest;
   const id = manifest?.id?.trim() || item.id?.trim();
@@ -747,6 +1447,7 @@ function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
     downloads: normalizeStatsNumber(item.downloads),
     rating: normalizeStatsNumber(item.rating),
     likes: normalizeStatsNumber(item.likes),
+    comment_count: normalizeStatsNumber(item.comment_count) ?? normalizeStatsNumber(item.comments),
   };
 }
 
@@ -760,14 +1461,22 @@ function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
   if (!id || !manifest.name || !manifest.version) {
     return null;
   }
+  const loadStatus = typeof raw.load_status === "string" ? raw.load_status : undefined;
+  const loaded = loadStatus === "success"
+    ? true
+    : loadStatus === "failed"
+      ? false
+      : raw.loaded === true
+        ? true
+        : undefined;
 
   return {
     id,
     manifest: { ...manifest, id: manifest.id?.trim() || id },
     path: typeof raw.path === "string" ? raw.path : "",
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : typeof raw.disabled === "boolean" ? !raw.disabled : true,
-    loaded: typeof raw.loaded === "boolean" ? raw.loaded : undefined,
-    load_status: typeof raw.load_status === "string" ? raw.load_status : undefined,
+    loaded,
+    load_status: loadStatus,
   };
 }
 
@@ -819,6 +1528,12 @@ function normalizePluginStats(pluginId: string, rawStats: unknown): [string, Mai
   }
 
   const normalizedId = String(rawStats.plugin_id ?? pluginId);
+  const recentRatings = normalizePluginRatings(rawStats.recent_ratings);
+  const ratingCount = normalizeStatsNumber(rawStats.rating_count) ?? 0;
+  const commentCount = normalizeStatsNumber(rawStats.comment_count)
+    ?? normalizeStatsNumber(rawStats.comments)
+    ?? recentRatings?.filter((rating) => rating.comment?.trim()).length
+    ?? 0;
   return [
     pluginId,
     {
@@ -827,8 +1542,9 @@ function normalizePluginStats(pluginId: string, rawStats: unknown): [string, Mai
       dislikes: normalizeStatsNumber(rawStats.dislikes) ?? 0,
       downloads: normalizeStatsNumber(rawStats.downloads) ?? 0,
       rating: normalizeStatsNumber(rawStats.rating) ?? 0,
-      rating_count: normalizeStatsNumber(rawStats.rating_count) ?? 0,
-      recent_ratings: normalizePluginRatings(rawStats.recent_ratings),
+      rating_count: ratingCount,
+      comment_count: commentCount,
+      recent_ratings: recentRatings,
     },
   ];
 }
@@ -849,12 +1565,108 @@ function normalizePluginRatings(rawRatings: unknown): MaiBotPluginStats["recent_
   return rawRatings
     .filter(isUnknownRecord)
     .map((rating) => ({
-      user_id: String(rating.user_id ?? "鍖垮悕鐢ㄦ埛"),
-      rating: normalizeStatsNumber(rating.rating) ?? 0,
+      id: typeof rating.id === "string" ? rating.id : undefined,
+      user_id: String(rating.user_id ?? "匿名用户"),
+      rating: rating.rating === null ? null : normalizeStatsNumber(rating.rating),
       comment: typeof rating.comment === "string" ? rating.comment : undefined,
       created_at: String(rating.created_at ?? ""),
+      updated_at: typeof rating.updated_at === "string" ? rating.updated_at : undefined,
+      likes: normalizeStatsNumber(rating.likes) ?? normalizeStatsNumber(rating.like_count),
+      dislikes: normalizeStatsNumber(rating.dislikes) ?? normalizeStatsNumber(rating.dislike_count),
     }))
-    .filter((rating) => rating.rating > 0 || rating.comment);
+    .filter((rating) => (typeof rating.rating === "number" && rating.rating > 0) || rating.comment);
+}
+
+function createEmptyPluginStats(pluginId: string): MaiBotPluginStats {
+  return {
+    plugin_id: pluginId,
+    likes: 0,
+    dislikes: 0,
+    downloads: 0,
+    rating: 0,
+    rating_count: 0,
+    comment_count: 0,
+  };
+}
+
+function normalizePluginUserState(rawData: unknown): MaiBotPluginUserState | null {
+  if (!isUnknownRecord(rawData) || rawData.success === false) {
+    return null;
+  }
+
+  return {
+    liked: rawData.liked === true,
+    disliked: rawData.disliked === true,
+    rating: rawData.rating === null ? null : normalizeStatsNumber(rawData.rating) ?? 0,
+    comment: typeof rawData.comment === "string" ? rawData.comment : "",
+  };
+}
+
+function normalizePluginUserStates(rawData: unknown): MaiBotPluginUserStates {
+  if (!isUnknownRecord(rawData) || rawData.success === false || !isUnknownRecord(rawData.states)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(rawData.states)
+      .map(([pluginId, rawState]) => {
+        const state = normalizePluginUserState(rawState);
+        if (!state) {
+          return null;
+        }
+        const normalizedPluginId = isUnknownRecord(rawState) && typeof rawState.plugin_id === "string"
+          ? rawState.plugin_id
+          : pluginId;
+        return [normalizedPluginId, state] as const;
+      })
+      .filter((entry): entry is readonly [string, MaiBotPluginUserState] => entry !== null),
+  );
+}
+
+function normalizePluginVoteResult(rawData: unknown): MaiBotPluginVoteResult {
+  if (!isUnknownRecord(rawData)) {
+    return { success: false, error: "插件统计服务响应格式无效" };
+  }
+
+  return {
+    success: rawData.success === true,
+    error: typeof rawData.error === "string" ? rawData.error : undefined,
+    liked: typeof rawData.liked === "boolean" ? rawData.liked : undefined,
+    disliked: typeof rawData.disliked === "boolean" ? rawData.disliked : undefined,
+    likes: normalizeStatsNumber(rawData.likes),
+    dislikes: normalizeStatsNumber(rawData.dislikes),
+    remaining: normalizeStatsNumber(rawData.remaining),
+  };
+}
+
+function normalizePluginRatingResult(rawData: unknown): MaiBotPluginRatingResult {
+  if (!isUnknownRecord(rawData)) {
+    return { success: false, error: "插件统计服务响应格式无效" };
+  }
+
+  return {
+    success: rawData.success === true,
+    error: typeof rawData.error === "string" ? rawData.error : undefined,
+    user_rating: rawData.user_rating === null ? null : normalizeStatsNumber(rawData.user_rating),
+    rating: normalizeStatsNumber(rawData.rating),
+    rating_count: normalizeStatsNumber(rawData.rating_count),
+    comment_count: normalizeStatsNumber(rawData.comment_count) ?? normalizeStatsNumber(rawData.comments),
+    remaining: normalizeStatsNumber(rawData.remaining),
+  };
+}
+
+function normalizePluginDownloadResult(rawData: unknown): MaiBotPluginDownloadResult {
+  if (!isUnknownRecord(rawData)) {
+    return { success: false, error: "插件统计服务响应格式无效" };
+  }
+
+  return {
+    success: rawData.success === true,
+    error: typeof rawData.error === "string" ? rawData.error : undefined,
+    counted: typeof rawData.counted === "boolean" ? rawData.counted : undefined,
+    downloads: normalizeStatsNumber(rawData.downloads),
+    remaining: normalizeStatsNumber(rawData.remaining),
+  };
 }
 
 function githubRawReadmeUrl(repositoryUrl: string): ((branch: string) => string) | undefined {
@@ -939,12 +1751,16 @@ function inferPluginId(folderName: string, manifest: MaiBotPluginManifest): stri
 function validatePluginId(pluginId: string): string {
   const normalized = pluginId.trim();
   if (!normalized || normalized.startsWith(".") || normalized.endsWith(".")) {
-    throw new Error("鎻掍欢 ID 涓嶈兘涓虹┖锛屼笖涓嶈兘浠ョ偣寮€澶存垨缁撳熬");
+    throw new Error("Plugin ID cannot be empty and cannot start or end with a dot");
   }
   if ([".", ".."].includes(normalized) || /[\\/\0\r\n\t]/u.test(normalized) || normalized.includes("..")) {
-    throw new Error("鎻掍欢 ID 鍖呭惈闈炴硶瀛楃");
+    throw new Error("Plugin ID contains invalid characters");
   }
   return normalized;
+}
+
+function sanitizeUpdateWorkspaceName(pluginId: string): string {
+  return pluginId.replace(/[^a-zA-Z0-9._-]/gu, "_").replace(/\.+/gu, ".");
 }
 
 function pluginName(plugin: { id: string; manifest: MaiBotPluginManifest }): string {
@@ -959,7 +1775,7 @@ function parsePluginConfig(raw: string, configPath: string): Record<string, MaiB
   try {
     return normalizePluginConfigRoot(parseToml(raw));
   } catch (error) {
-    throw new Error(`TOML 閰嶇疆瑙ｆ瀽澶辫触: ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`TOML 配置解析失败: ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -975,6 +1791,681 @@ function readPluginEnabled(config: Record<string, MaiBotPluginConfigValue>): boo
     if (["1", "true", "yes", "on"].includes(normalized)) return true;
   }
   return typeof enabled === "boolean" ? enabled : true;
+}
+
+async function buildLocalPluginConfigSchema(
+  pluginPath: string,
+  config: Record<string, MaiBotPluginConfigValue>,
+): Promise<MaiBotPluginConfigSchema | null> {
+  const pythonFiles = await collectPluginPythonFiles(pluginPath).catch(() => []);
+  if (pythonFiles.length === 0) {
+    return null;
+  }
+
+  const sources: string[] = [];
+  for (const filePath of pythonFiles) {
+    try {
+      if ((await stat(filePath)).size > 512 * 1024) {
+        continue;
+      }
+      sources.push(await readFile(filePath, "utf8"));
+    } catch {
+      // Ignore unreadable plugin helper files and keep the weak TOML fallback available.
+    }
+  }
+
+  if (sources.length === 0) {
+    return null;
+  }
+
+  const inspection = parseLocalPythonConfigInspection(sources);
+  if (inspection.classes.size === 0) {
+    return null;
+  }
+  return buildPluginConfigSchemaFromLocalPython(inspection, config);
+}
+
+async function collectPluginPythonFiles(
+  pluginPath: string,
+  currentPath = pluginPath,
+  depth = 0,
+  files: string[] = [],
+): Promise<string[]> {
+  if (depth > 2 || files.length >= 80) {
+    return files;
+  }
+
+  const entries = await readdir(currentPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (files.length >= 80) {
+      break;
+    }
+    if (entry.name.startsWith(".") || entry.name === "__pycache__" || entry.name === "node_modules") {
+      continue;
+    }
+
+    const entryPath = resolve(currentPath, entry.name);
+    if (!isPathInside(pluginPath, entryPath)) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      await collectPluginPythonFiles(pluginPath, entryPath, depth + 1, files);
+    } else if (entry.isFile() && entry.name.endsWith(".py")) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function parseLocalPythonConfigInspection(sources: string[]): LocalPythonConfigInspection {
+  const classes = new Map<string, LocalPythonConfigClass>();
+  let configModel: string | undefined;
+
+  for (const source of sources) {
+    configModel ??= extractPythonConfigModel(source);
+    for (const configClass of parsePythonConfigClasses(source)) {
+      if (configClass.fields.length > 0 || configClass.label || configClass.description) {
+        classes.set(configClass.name, configClass);
+      }
+    }
+  }
+
+  return { classes, configModel };
+}
+
+function extractPythonConfigModel(source: string): string | undefined {
+  const match = source.match(/^\s{4}config_model(?:\s*:[^=\n]+)?\s*=\s*([A-Za-z_]\w*)/mu)
+    ?? source.match(/^config_model(?:\s*:[^=\n]+)?\s*=\s*([A-Za-z_]\w*)/mu);
+  return match?.[1];
+}
+
+function parsePythonConfigClasses(source: string): LocalPythonConfigClass[] {
+  const classHeaders: Array<{ name: string; headerEnd: number; start: number }> = [];
+  const classRegex = /^class\s+([A-Za-z_]\w*)\([^)]*\):/gmu;
+  let classMatch: RegExpExecArray | null;
+  while ((classMatch = classRegex.exec(source)) !== null) {
+    classHeaders.push({
+      name: classMatch[1],
+      headerEnd: classMatch.index + classMatch[0].length,
+      start: classMatch.index,
+    });
+  }
+
+  return classHeaders.map((header, index) => {
+    const nextHeader = classHeaders[index + 1];
+    const block = source.slice(header.headerEnd, nextHeader?.start);
+    return parsePythonConfigClass(header.name, block);
+  });
+}
+
+function parsePythonConfigClass(name: string, block: string): LocalPythonConfigClass {
+  return {
+    name,
+    description: extractPythonClassDocstring(block),
+    label: extractPythonClassStringAttribute(block, "__ui_label__"),
+    icon: extractPythonClassStringAttribute(block, "__ui_icon__"),
+    order: extractPythonClassNumberAttribute(block, "__ui_order__"),
+    fields: parsePythonConfigFields(block),
+  };
+}
+
+function parsePythonConfigFields(block: string): LocalPythonConfigField[] {
+  const fields: LocalPythonConfigField[] = [];
+  const fieldRegex = /^ {4}([A-Za-z_]\w*)\s*:\s*([^=\n]+?)\s*=\s*Field\s*\(/gmu;
+  let fieldMatch: RegExpExecArray | null;
+  while ((fieldMatch = fieldRegex.exec(block)) !== null) {
+    const openParenIndex = fieldMatch.index + fieldMatch[0].lastIndexOf("(");
+    const closeParenIndex = findMatchingDelimiter(block, openParenIndex, "(", ")");
+    if (closeParenIndex < 0) {
+      continue;
+    }
+
+    const name = fieldMatch[1];
+    const annotation = fieldMatch[2].trim();
+    const expression = block.slice(openParenIndex + 1, closeParenIndex);
+    const extra = extractPythonFieldExtra(expression);
+    fields.push({
+      name,
+      annotation,
+      defaultFactory: extractPythonIdentifierKeyword(expression, "default_factory"),
+      defaultValue: extractPythonDefaultValue(expression),
+      label: extra.label,
+      description: extractPythonStringKeyword(expression, "description") ?? extra.description,
+      hint: extra.hint,
+      placeholder: extra.placeholder,
+      uiType: extra.uiType,
+      inputType: extra.inputType,
+      choices: extra.choices ?? extractLiteralChoices(annotation),
+      min: extra.min,
+      max: extra.max,
+      step: extra.step,
+      rows: extra.rows,
+      required: extra.required,
+      hidden: extra.hidden,
+      disabled: extra.disabled,
+      order: extra.order,
+      icon: extra.icon,
+      itemType: extra.itemType,
+      minItems: extra.minItems,
+      maxItems: extra.maxItems,
+    });
+    fieldRegex.lastIndex = closeParenIndex + 1;
+  }
+  return fields;
+}
+
+function buildPluginConfigSchemaFromLocalPython(
+  inspection: LocalPythonConfigInspection,
+  config: Record<string, MaiBotPluginConfigValue>,
+): MaiBotPluginConfigSchema | null {
+  const rootClass = resolveLocalPythonRootConfigClass(inspection, config);
+  if (!rootClass) {
+    return null;
+  }
+
+  const sections: MaiBotPluginConfigSection[] = [];
+  const usedConfigKeys = new Set<string>();
+  const rootFields = [...rootClass.fields].sort(compareLocalPythonFields);
+
+  for (const rootField of rootFields) {
+    const sectionValue = config[rootField.name];
+    const sectionClassName = resolveLocalPythonFieldClassName(rootField, inspection.classes);
+    const sectionClass = sectionClassName ? inspection.classes.get(sectionClassName) : undefined;
+    if (!sectionClass && !isConfigRecord(sectionValue)) {
+      continue;
+    }
+
+    usedConfigKeys.add(rootField.name);
+    sections.push(buildLocalPythonConfigSection(
+      rootField.name,
+      isConfigRecord(sectionValue) ? sectionValue : {},
+      sectionClass,
+      rootField,
+    ));
+  }
+
+  const generalFields = rootFields
+    .filter((field) => !usedConfigKeys.has(field.name) && field.hidden !== true)
+    .map((field) => buildLocalPythonConfigField([field.name], field, config[field.name]))
+    .filter((field): field is MaiBotPluginConfigField => field !== null);
+
+  const extraGeneralFields = Object.entries(config)
+    .filter(([key, value]) => !usedConfigKeys.has(key) && !rootClass.fields.some((field) => field.name === key) && !isConfigRecord(value))
+    .map(([key, value]) => buildPluginConfigField([key], key, value));
+
+  if (generalFields.length > 0 || extraGeneralFields.length > 0) {
+    sections.unshift({
+      name: "general",
+      title: "General",
+      fields: [...generalFields, ...extraGeneralFields],
+    });
+  }
+
+  for (const [sectionName, sectionValue] of Object.entries(config)) {
+    if (usedConfigKeys.has(sectionName) || !isConfigRecord(sectionValue)) {
+      continue;
+    }
+    sections.push(buildLocalPythonConfigSection(sectionName, sectionValue));
+  }
+
+  if (sections.length === 0) {
+    return null;
+  }
+  return {
+    pluginInfo: {
+      name: rootClass.label,
+      description: rootClass.description,
+    },
+    sections: sections.sort((left, right) => (left.order ?? 0) - (right.order ?? 0)),
+    source: "local",
+  };
+}
+
+function resolveLocalPythonRootConfigClass(
+  inspection: LocalPythonConfigInspection,
+  config: Record<string, MaiBotPluginConfigValue>,
+): LocalPythonConfigClass | undefined {
+  if (inspection.configModel && inspection.classes.has(inspection.configModel)) {
+    return inspection.classes.get(inspection.configModel);
+  }
+
+  const configKeys = new Set(Object.keys(config));
+  return [...inspection.classes.values()]
+    .map((configClass) => {
+      let score = 0;
+      for (const field of configClass.fields) {
+        const className = resolveLocalPythonFieldClassName(field, inspection.classes);
+        if (className) {
+          score += 4;
+        }
+        if (configKeys.has(field.name)) {
+          score += 2;
+        }
+      }
+      return { configClass, score };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score)[0]?.configClass;
+}
+
+function buildLocalPythonConfigSection(
+  sectionName: string,
+  sectionConfig: Record<string, MaiBotPluginConfigValue>,
+  sectionClass?: LocalPythonConfigClass,
+  rootField?: LocalPythonConfigField,
+): MaiBotPluginConfigSection {
+  const metadataFields = [...(sectionClass?.fields ?? [])].sort(compareLocalPythonFields);
+  const metadataNames = new Set(metadataFields.map((field) => field.name));
+  const fields = [
+    ...metadataFields
+      .filter((field) => field.hidden !== true)
+      .map((field) => buildLocalPythonConfigField([sectionName, field.name], field, sectionConfig[field.name]))
+      .filter((field): field is MaiBotPluginConfigField => field !== null),
+    ...Object.entries(sectionConfig)
+      .filter(([fieldName]) => !metadataNames.has(fieldName))
+      .map(([fieldName, fieldValue]) => buildPluginConfigField([sectionName, fieldName], fieldName, fieldValue)),
+  ];
+
+  return {
+    name: sectionName,
+    title: sectionClass?.label ?? rootField?.label ?? labelFromKey(sectionName),
+    description: sectionClass?.description ?? rootField?.description,
+    icon: sectionClass?.icon ?? rootField?.icon,
+    order: sectionClass?.order ?? rootField?.order,
+    fields,
+  };
+}
+
+function buildLocalPythonConfigField(
+  path: string[],
+  metadata: LocalPythonConfigField,
+  currentValue: MaiBotPluginConfigValue | undefined,
+): MaiBotPluginConfigField | null {
+  if (metadata.hidden === true) {
+    return null;
+  }
+  const value = currentValue
+    ?? metadata.defaultValue
+    ?? defaultValueForPythonAnnotation(metadata.annotation, metadata.defaultFactory);
+  return {
+    name: metadata.name,
+    label: metadata.label ?? metadata.description ?? labelFromKey(metadata.name),
+    path,
+    type: pluginConfigValueType(value),
+    value,
+    description: metadata.description,
+    hint: metadata.hint,
+    placeholder: metadata.placeholder,
+    uiType: metadata.uiType,
+    inputType: metadata.inputType,
+    choices: metadata.choices,
+    min: metadata.min,
+    max: metadata.max,
+    step: metadata.step,
+    rows: metadata.rows,
+    required: metadata.required,
+    disabled: metadata.disabled,
+    order: metadata.order,
+    icon: metadata.icon,
+    default: metadata.defaultValue,
+    itemType: metadata.itemType,
+    minItems: metadata.minItems,
+    maxItems: metadata.maxItems,
+  };
+}
+
+function compareLocalPythonFields(left: LocalPythonConfigField, right: LocalPythonConfigField): number {
+  return (left.order ?? 0) - (right.order ?? 0);
+}
+
+function resolveLocalPythonFieldClassName(
+  field: LocalPythonConfigField,
+  classes: Map<string, LocalPythonConfigClass>,
+): string | undefined {
+  const candidates = [
+    ...extractPythonIdentifierTokens(field.annotation),
+    ...(field.defaultFactory ? extractPythonIdentifierTokens(field.defaultFactory) : []),
+  ];
+  return candidates.find((candidate) => classes.has(candidate));
+}
+
+function defaultValueForPythonAnnotation(annotation: string, defaultFactory?: string): MaiBotPluginConfigValue {
+  const normalized = annotation.toLowerCase();
+  const factory = defaultFactory?.toLowerCase();
+  if (factory === "list" || normalized.includes("list[")) {
+    return [];
+  }
+  if (factory === "dict" || normalized.includes("dict[") || normalized.includes("mapping[")) {
+    return {};
+  }
+  if (normalized.includes("bool")) {
+    return false;
+  }
+  if (normalized.includes("int") || normalized.includes("float")) {
+    return 0;
+  }
+  return "";
+}
+
+function extractPythonClassDocstring(block: string): string | undefined {
+  const firstContent = block.match(/^\s*(?:(?:\r?\n)\s*)*/u)?.[0].length ?? 0;
+  const literal = readPythonStringLiteral(block, firstContent);
+  return literal?.value.trim() || undefined;
+}
+
+function extractPythonClassStringAttribute(block: string, attribute: string): string | undefined {
+  const regex = new RegExp(`^ {4}${escapeRegExp(attribute)}(?:\\s*:[^=\\n]+)?\\s*=\\s*`, "mu");
+  const match = regex.exec(block);
+  if (!match) {
+    return undefined;
+  }
+  return readPythonStringLiteral(block, match.index + match[0].length)?.value;
+}
+
+function extractPythonClassNumberAttribute(block: string, attribute: string): number | undefined {
+  const regex = new RegExp(`^ {4}${escapeRegExp(attribute)}(?:\\s*:[^=\\n]+)?\\s*=\\s*([-+]?\\d+(?:\\.\\d+)?)`, "mu");
+  const value = Number(regex.exec(block)?.[1]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function extractPythonFieldExtra(expression: string): Partial<LocalPythonConfigField> {
+  return {
+    label: extractPythonDictStringValue(expression, "label"),
+    description: extractPythonDictStringValue(expression, "description"),
+    hint: extractPythonDictStringValue(expression, "hint"),
+    placeholder: extractPythonDictStringValue(expression, "placeholder"),
+    uiType: extractPythonDictStringValue(expression, "ui_type"),
+    inputType: extractPythonDictStringValue(expression, "input_type"),
+    icon: extractPythonDictStringValue(expression, "icon"),
+    itemType: extractPythonDictStringValue(expression, "item_type"),
+    hidden: extractPythonDictBooleanValue(expression, "hidden"),
+    disabled: extractPythonDictBooleanValue(expression, "disabled"),
+    required: extractPythonDictBooleanValue(expression, "required"),
+    order: extractPythonDictNumberValue(expression, "order"),
+    min: extractPythonDictNumberValue(expression, "min"),
+    max: extractPythonDictNumberValue(expression, "max"),
+    step: extractPythonDictNumberValue(expression, "step"),
+    rows: extractPythonDictNumberValue(expression, "rows"),
+    minItems: extractPythonDictNumberValue(expression, "min_items"),
+    maxItems: extractPythonDictNumberValue(expression, "max_items"),
+    choices: extractPythonDictChoices(expression, "choices"),
+  };
+}
+
+function extractPythonDefaultValue(expression: string): MaiBotPluginConfigValue | undefined {
+  const rawDefault = extractPythonKeywordExpression(expression, "default");
+  if (rawDefault !== undefined) {
+    return parsePythonLiteral(rawDefault);
+  }
+
+  const factory = extractPythonIdentifierKeyword(expression, "default_factory")?.toLowerCase();
+  if (factory === "list") {
+    return [];
+  }
+  if (factory === "dict") {
+    return {};
+  }
+  return undefined;
+}
+
+function extractPythonStringKeyword(expression: string, keyword: string): string | undefined {
+  const rawValue = extractPythonKeywordExpression(expression, keyword);
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  return readPythonStringLiteral(rawValue, 0)?.value;
+}
+
+function extractPythonIdentifierKeyword(expression: string, keyword: string): string | undefined {
+  const rawValue = extractPythonKeywordExpression(expression, keyword);
+  return rawValue?.trim().match(/^[A-Za-z_]\w*/u)?.[0];
+}
+
+function extractPythonKeywordExpression(expression: string, keyword: string): string | undefined {
+  const regex = new RegExp(`\\b${escapeRegExp(keyword)}\\s*=`, "u");
+  const match = regex.exec(expression);
+  if (!match) {
+    return undefined;
+  }
+  return readPythonExpressionUntilComma(expression, match.index + match[0].length).trim();
+}
+
+function extractPythonDictStringValue(expression: string, key: string): string | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const literal = readPythonStringLiteral(rawValue, 0);
+    if (literal?.value) {
+      return literal.value;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictBooleanValue(expression: string, key: string): boolean | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const parsed = parsePythonLiteral(rawValue);
+    if (typeof parsed === "boolean") {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictNumberValue(expression: string, key: string): number | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const parsed = parsePythonLiteral(rawValue);
+    if (typeof parsed === "number") {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictChoices(
+  expression: string,
+  key: string,
+): Array<MaiBotPluginConfigValue | { label?: MaiBotPluginConfigLocalizedText; value: MaiBotPluginConfigValue }> | undefined {
+  for (const rawValue of extractPythonDictExpressions(expression, key)) {
+    const parsed = parsePythonLiteral(rawValue);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPythonDictExpressions(expression: string, key: string): string[] {
+  const values: string[] = [];
+  const regex = new RegExp(`["']${escapeRegExp(key)}["']\\s*:`, "gu");
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(expression)) !== null) {
+    values.push(readPythonExpressionUntilComma(expression, match.index + match[0].length).trim());
+  }
+  return values;
+}
+
+function extractLiteralChoices(annotation: string): MaiBotPluginConfigValue[] | undefined {
+  const literalMatch = annotation.match(/Literal\s*\[(.*)\]/u);
+  if (!literalMatch) {
+    return undefined;
+  }
+  const values: MaiBotPluginConfigValue[] = [];
+  const content = literalMatch[1];
+  let index = 0;
+  while (index < content.length) {
+    const rawExpression = readPythonExpressionUntilComma(content, index);
+    const expression = rawExpression.trim();
+    const parsed = parsePythonLiteral(expression);
+    if (parsed !== undefined) {
+      values.push(parsed);
+    }
+    index += rawExpression.length + 1;
+  }
+  return values.length > 0 ? values : undefined;
+}
+
+function parsePythonLiteral(rawValue: string): MaiBotPluginConfigValue | undefined {
+  const value = rawValue.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (value === "True") {
+    return true;
+  }
+  if (value === "False") {
+    return false;
+  }
+  if (value === "None") {
+    return null;
+  }
+
+  const stringLiteral = readPythonStringLiteral(value, 0);
+  if (stringLiteral && value.slice(stringLiteral.end).trim().length === 0) {
+    return stringLiteral.value;
+  }
+
+  if (/^[-+]?\d+(?:\.\d+)?$/u.test(value)) {
+    return Number(value);
+  }
+
+  if (value === "[]" || value.toLowerCase() === "list()") {
+    return [];
+  }
+  if (value === "{}" || value.toLowerCase() === "dict()") {
+    return {};
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return parsePythonListLiteral(value);
+  }
+  return undefined;
+}
+
+function parsePythonListLiteral(value: string): MaiBotPluginConfigValue[] | undefined {
+  const content = value.slice(1, -1);
+  const values: MaiBotPluginConfigValue[] = [];
+  let index = 0;
+  while (index < content.length) {
+    const rawExpression = readPythonExpressionUntilComma(content, index);
+    const item = rawExpression.trim();
+    if (item) {
+      const parsed = parsePythonLiteral(item);
+      if (parsed === undefined || isConfigRecord(parsed)) {
+        return undefined;
+      }
+      values.push(parsed);
+    }
+    index += rawExpression.length + 1;
+  }
+  return values;
+}
+
+function readPythonExpressionUntilComma(text: string, startIndex: number): string {
+  let depth = 0;
+  for (let index = startIndex; index < text.length; index++) {
+    const stringEnd = findPythonStringEnd(text, index);
+    if (stringEnd > index) {
+      index = stringEnd - 1;
+      continue;
+    }
+
+    const char = text[index];
+    if (char === "(" || char === "[" || char === "{") {
+      depth++;
+    } else if (char === ")" || char === "]" || char === "}") {
+      if (depth === 0) {
+        return text.slice(startIndex, index);
+      }
+      depth--;
+    } else if (char === "," && depth === 0) {
+      return text.slice(startIndex, index);
+    }
+  }
+  return text.slice(startIndex);
+}
+
+function findMatchingDelimiter(text: string, openIndex: number, open: string, close: string): number {
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index++) {
+    const stringEnd = findPythonStringEnd(text, index);
+    if (stringEnd > index) {
+      index = stringEnd - 1;
+      continue;
+    }
+
+    if (text[index] === open) {
+      depth++;
+    } else if (text[index] === close) {
+      depth--;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function readPythonStringLiteral(text: string, startIndex: number): { value: string; end: number } | null {
+  let index = skipWhitespace(text, startIndex);
+  while (/[rRuUbBfF]/u.test(text[index] ?? "") && (text[index + 1] === "\"" || text[index + 1] === "'")) {
+    index++;
+  }
+
+  const quote = text[index];
+  if (quote !== "\"" && quote !== "'") {
+    return null;
+  }
+
+  const triple = text.slice(index, index + 3) === quote.repeat(3);
+  const contentStart = index + (triple ? 3 : 1);
+  let value = "";
+  for (let cursor = contentStart; cursor < text.length; cursor++) {
+    if (triple && text.slice(cursor, cursor + 3) === quote.repeat(3)) {
+      return { value, end: cursor + 3 };
+    }
+    if (!triple && text[cursor] === quote) {
+      return { value, end: cursor + 1 };
+    }
+    if (text[cursor] === "\\" && cursor + 1 < text.length) {
+      value += decodePythonEscapedChar(text[cursor + 1]);
+      cursor++;
+    } else {
+      value += text[cursor];
+    }
+  }
+  return null;
+}
+
+function findPythonStringEnd(text: string, index: number): number {
+  const literal = readPythonStringLiteral(text, index);
+  return literal?.end ?? index;
+}
+
+function decodePythonEscapedChar(char: string): string {
+  switch (char) {
+    case "n":
+      return "\n";
+    case "r":
+      return "\r";
+    case "t":
+      return "\t";
+    default:
+      return char;
+  }
+}
+
+function skipWhitespace(text: string, startIndex: number): number {
+  let index = startIndex;
+  while (/\s/u.test(text[index] ?? "")) {
+    index++;
+  }
+  return index;
+}
+
+function extractPythonIdentifierTokens(value: string): string[] {
+  return [...value.matchAll(/[A-Za-z_]\w*/gu)].map((match) => match[0]);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 interface DashboardConfigFieldSchema {
@@ -1088,14 +2579,14 @@ function normalizePluginConfigRootForToml(
 
 function normalizePluginConfigValueForToml(value: MaiBotPluginConfigValue, path: string): MaiBotPluginConfigValue {
   if (value === null) {
-    throw new Error(`TOML 涓嶆敮鎸?null: ${path}`);
+    throw new Error(`TOML does not support null: ${path}`);
   }
   if (typeof value === "string" || typeof value === "boolean") {
     return value;
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new Error(`鏁板瓧閰嶇疆鏃犳晥: ${path}`);
+      throw new Error(`数字配置无效: ${path}`);
     }
     return value;
   }
@@ -1110,7 +2601,7 @@ function normalizePluginConfigValueForToml(value: MaiBotPluginConfigValue, path:
       ]),
     );
   }
-  throw new Error(`鎻掍欢閰嶇疆鍊间笉鍙楁敮鎸? ${path}`);
+  throw new Error(`Unsupported plugin config value: ${path}`);
 }
 
 function buildPluginConfigSchema(
@@ -1134,7 +2625,7 @@ function buildPluginConfigSchema(
   if (generalFields.length > 0) {
     sections.unshift({
       name: "general",
-      title: "甯歌",
+      title: "常规",
       fields: generalFields,
     });
   }
@@ -1426,6 +2917,30 @@ function tokenFromServiceUrl(serviceUrl: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+async function requestPluginStatsService(
+  method: "GET" | "POST",
+  path: string,
+  payload?: Record<string, unknown>,
+): Promise<unknown> {
+  const init: RequestInit = {
+    method,
+    headers: payload ? { "Content-Type": "application/json" } : undefined,
+    body: payload ? JSON.stringify(payload) : undefined,
+  };
+  const response = await fetchWithTimeout(`${PLUGIN_STATS_BASE_URL}${path}`, MARKET_TIMEOUT_MS, init).catch(() => null);
+  if (!response) {
+    return { success: false, error: "插件统计服务暂不可用" };
+  }
+
+  const data = await response.json().catch(() => null) as unknown;
+  if (!response.ok) {
+    return isUnknownRecord(data)
+      ? { ...data, success: false }
+      : { success: false, error: `插件统计服务返回 HTTP ${response.status}` };
+  }
+  return data;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs = MARKET_TIMEOUT_MS, init?: RequestInit): Promise<Response> {

@@ -1,16 +1,23 @@
-import { app, BrowserWindow, Menu, nativeImage, shell, Tray } from "electron";
-import { join } from "node:path";
+import { app, BrowserWindow, Menu, nativeImage, net, protocol, session, shell, Tray } from "electron";
+import { stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { AppIconId, RuntimePaths } from "../shared/contracts";
 import { registerAppIpc } from "./ipc/app";
 import { registerPtyIpc } from "./ipc/pty";
 import { PtySessionManager } from "./pty/pty-session-manager";
 import { InitManager } from "./services/init-manager";
 import { acquireInstallInstanceLock } from "./services/instance-lock";
+import { AppIconManager } from "./services/app-icon-manager";
 import { LogStore } from "./services/log-store";
 import { ModuleUpdater } from "./services/module-updater";
+import { NetworkProxyManager } from "./services/network-proxy-manager";
+import { OpenCodeSettingsManager } from "./services/opencode-settings-manager";
 import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
 import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
+import { isWindowVisuallyMaximized } from "./window-state";
 
 const runtimePaths = configureRuntimePaths();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
@@ -20,16 +27,109 @@ const resourceLock = instanceLock.acquired
   : { acquired: true };
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
+const networkProxyManager = new NetworkProxyManager(runtimePaths);
+const openCodeSettingsManager = new OpenCodeSettingsManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
 const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager);
 const ptySessionManager = new PtySessionManager();
 const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, ptySessionManager, pythonDependencyManager);
+const appIconManager = new AppIconManager(runtimePaths, app.isPackaged);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let appIpcDisposables: ReturnType<typeof registerAppIpc> | null = null;
 let allowQuit = false;
 let quitRequested = false;
+
+const LIVE2D_ASSET_SCHEME = "maibot-live2d";
+const LIVE2D_WEBVIEW_PARTITION = "maibot-live2d";
+const APP_ICON_ASSET_SCHEME = "maibot-app-icon";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: LIVE2D_ASSET_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+  {
+    scheme: APP_ICON_ASSET_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
+
+function isPathInside(root: string, target: string): boolean {
+  const relativePath = relative(resolve(root), resolve(target));
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function resolveLive2dAssetPath(paths: RuntimePaths, url: string): string | null {
+  const parsed = new URL(url);
+  if (parsed.protocol !== `${LIVE2D_ASSET_SCHEME}:` || parsed.hostname !== "assets") {
+    return null;
+  }
+
+  const relativePath = decodeURIComponent(parsed.pathname).replace(/^\/+/u, "");
+  const target = resolve(paths.live2dRoot, relativePath);
+  return isPathInside(paths.live2dRoot, target) ? target : null;
+}
+
+function registerLive2dResourceProtocol(paths: RuntimePaths): void {
+  const handler = async (request: Request): Promise<Response> => {
+    const target = resolveLive2dAssetPath(paths, request.url);
+    if (!target) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    try {
+      const fileStat = await stat(target);
+      if (!fileStat.isFile()) {
+        return new Response("Not found", { status: 404 });
+      }
+      return net.fetch(pathToFileURL(target).toString());
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  };
+
+  protocol.handle(LIVE2D_ASSET_SCHEME, handler);
+  session.fromPartition(LIVE2D_WEBVIEW_PARTITION).protocol.handle(LIVE2D_ASSET_SCHEME, handler);
+}
+
+function resolveAppIconAssetPath(url: string): string | null {
+  const parsed = new URL(url);
+  if (parsed.protocol !== `${APP_ICON_ASSET_SCHEME}:`) {
+    return null;
+  }
+  return appIconManager.getIconPath(parsed.hostname as AppIconId);
+}
+
+function registerAppIconResourceProtocol(): void {
+  protocol.handle(APP_ICON_ASSET_SCHEME, async (request: Request): Promise<Response> => {
+    const target = resolveAppIconAssetPath(request.url);
+    if (!target) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    try {
+      const fileStat = await stat(target);
+      if (!fileStat.isFile()) {
+        return new Response("Not found", { status: 404 });
+      }
+      return net.fetch(pathToFileURL(target).toString());
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
+}
 
 function createFallbackIcon(): Electron.NativeImage {
   return nativeImage.createFromDataURL(
@@ -46,11 +146,14 @@ function createFallbackIcon(): Electron.NativeImage {
 }
 
 function createAppIcon(): Electron.NativeImage {
-  const iconPath = app.isPackaged
-    ? join(process.resourcesPath, "icon.png")
-    : join(process.cwd(), "resources", "icon.png");
-  const icon = nativeImage.createFromPath(iconPath);
+  const icon = appIconManager.createIcon();
   return icon.isEmpty() ? createFallbackIcon() : icon;
+}
+
+function applyAppIcon(): void {
+  const icon = createAppIcon();
+  mainWindow?.setIcon(icon);
+  tray?.setImage(icon.resize({ width: 32, height: 32, quality: "best" }));
 }
 
 function broadcastWindowState(window: BrowserWindow): void {
@@ -59,7 +162,7 @@ function broadcastWindowState(window: BrowserWindow): void {
   }
 
   window.webContents.send("desktop:window-state", {
-    isMaximized: window.isMaximized(),
+    isMaximized: isWindowVisuallyMaximized(window),
     isFullScreen: window.isFullScreen(),
     isFocused: window.isFocused(),
   });
@@ -72,6 +175,7 @@ function createMainWindow(): BrowserWindow {
     height: 820,
     minWidth: 1080,
     minHeight: 720,
+    resizable: false,
     show: false,
     backgroundColor: "#00000000",
     transparent: true,
@@ -80,7 +184,7 @@ function createMainWindow(): BrowserWindow {
     titleBarStyle: process.platform === "darwin" ? "hidden" : "default",
     trafficLightPosition: process.platform === "darwin" ? { x: -100, y: -100 } : undefined,
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -202,7 +306,12 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
   ptySessionManager.dispose();
   app.quit();
 } else {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    registerLive2dResourceProtocol(runtimePaths);
+    registerAppIconResourceProtocol();
+    await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
+      logStore.append("desktop", "system", `network proxy apply failed: ${String(error)}`);
+    });
     mainWindow = createMainWindow();
     tray = createTray();
 
@@ -210,10 +319,14 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       paths: runtimePaths,
       initManager,
       moduleUpdater,
+      networkProxyManager,
+      openCodeSettingsManager,
       pythonDependencyManager,
       resourceLocationManager,
       serviceManager,
       logStore,
+      appIconManager,
+      applyAppIcon,
       getMainWindow: () => mainWindow,
       requestQuit,
       showMainWindow,

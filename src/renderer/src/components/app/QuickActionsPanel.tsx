@@ -42,8 +42,8 @@ function ResultDetails({
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <div className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-foreground">
-      <div className="flex items-center gap-1.5 font-medium text-success">
+    <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-[12px] text-foreground">
+      <div className="flex items-center gap-1.5 font-medium text-primary">
         <CheckCircle2 className="size-3.5" />
         {title}
       </div>
@@ -151,13 +151,13 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
     <div className={embedded ? "max-h-[70vh] overflow-y-auto" : "h-full overflow-y-auto bg-background"}>
       <div className={embedded ? "flex flex-col gap-4 pr-2" : "mx-auto flex max-w-3xl flex-col gap-4 p-6"}>
         <div className={embedded ? "hidden" : undefined}>
-          <h2 className="text-base font-semibold tracking-tight">快捷操作</h2>
+          <h2 className="text-base font-semibold">快捷操作</h2>
         </div>
 
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+              <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
                 <FolderOpen className="size-4" />
               </span>
               <div className="min-w-0 flex-1">
@@ -191,7 +191,7 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+              <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
                 <DatabaseBackup className="size-4" />
               </span>
               <div className="min-w-0 flex-1">
@@ -230,7 +230,7 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+              <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
                 <FileCog className="size-4" />
               </span>
               <div className="min-w-0 flex-1">

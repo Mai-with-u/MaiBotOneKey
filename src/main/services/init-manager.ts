@@ -35,6 +35,8 @@ const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const NAPCAT_FALLBACK_VERSION = "9.9.26-44498";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
+const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
+const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
 const QQ_BACKEND_FILE = "qq-backend.json";
 const MESSAGE_PLATFORM_FILE = "message-platform.json";
 const PYTHON_OVERRIDES_IGNORED_ENTRIES = new Set([".keep", "resource.lock"]);
@@ -233,8 +235,8 @@ const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName:
 const AGREEMENT_STORE_FILE = "agreement.json";
 
 /**
- * NapCat 鍚姩鍖呰 .cmd锛氬湪鍚姩 exe 鍓嶅厛鍒囨帶鍒跺彴鍒?UTF-8锛岄伩鍏嶄腑鏂囦贡鐮併€?
- * 鍐呭鏄浐瀹氱殑銆佷笉渚濊禆浠讳綍杩愯鏃舵嫾鎺ョ殑鍙橀噺锛氫笉浼氶亣鍒?cmd 寮曞彿瑙ｆ瀽闂銆?
+ * NapCat startup wrapper .cmd: switch the console to UTF-8 before launching the exe.
+ * The content is fixed and does not interpolate runtime variables, avoiding cmd quote parsing issues.
  */
 const NAPCAT_LAUNCHER_FILE = "napcat-launch.cmd";
 const NAPCAT_LAUNCHER_CONTENT = [
@@ -255,8 +257,6 @@ const NAPCAT_ADAPTER_HOST = "127.0.0.1";
 const NAPCAT_ADAPTER_PORT = 7998;
 const SNOWLUMA_ONEBOT_PORT = 7988;
 const SNOWLUMA_WEBUI_PORT = 5099;
-const LOCAL_CHAT_PLATFORM = "onekey-local-chat";
-const LOCAL_CHAT_BOT_ACCOUNT = "onekey-local-bot";
 
 interface NapcatWebsocketServerConfig {
   host: string;
@@ -326,6 +326,46 @@ function asPositiveInt(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(num));
 }
 
+function asTcpPort(value: unknown, fallback: number): number {
+  const port = asPositiveInt(value, fallback);
+  return port <= 65535 ? port : fallback;
+}
+
+function localWebUiHost(host: string): string {
+  const normalized = host.trim();
+  if (!normalized || normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]" || normalized === "*") {
+    return MAIBOT_WEBUI_FALLBACK_HOST;
+  }
+  return normalized;
+}
+
+function hostForUrl(host: string): string {
+  const unwrapped = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return unwrapped.includes(":") ? `[${unwrapped}]` : unwrapped;
+}
+
+function buildMaiBotWebUiEndpoint(host = MAIBOT_WEBUI_FALLBACK_HOST, port = MAIBOT_WEBUI_FALLBACK_PORT): {
+  host: string;
+  port: number;
+  url: string;
+} {
+  const resolvedHost = localWebUiHost(host);
+  const resolvedPort = asTcpPort(port, MAIBOT_WEBUI_FALLBACK_PORT);
+  try {
+    return {
+      host: resolvedHost,
+      port: resolvedPort,
+      url: new URL(`http://${hostForUrl(resolvedHost)}:${resolvedPort}`).origin,
+    };
+  } catch {
+    return {
+      host: MAIBOT_WEBUI_FALLBACK_HOST,
+      port: MAIBOT_WEBUI_FALLBACK_PORT,
+      url: `http://${MAIBOT_WEBUI_FALLBACK_HOST}:${MAIBOT_WEBUI_FALLBACK_PORT}`,
+    };
+  }
+}
+
 function asListMode(value: unknown, fallback: NapcatChatListMode): NapcatChatListMode {
   if (value === "whitelist" || value === "blacklist") return value;
   return fallback;
@@ -360,7 +400,7 @@ function normalizeNapcatAdapterConfig(
       configVersion: asString(pluginRaw["config_version"], defaults.plugin.configVersion),
     },
     server: {
-      host: asString(serverRaw["host"], defaults.server.host).trim() || defaults.server.host,
+      host: asString(serverRaw["host"] ?? serverRaw["server"], defaults.server.host).trim() || defaults.server.host,
       port: asPositiveInt(serverRaw["port"], defaults.server.port),
       token: asString(serverRaw["token"] ?? serverRaw["access_token"], defaults.server.token),
       heartbeatInterval: asPositiveNumber(
@@ -480,6 +520,15 @@ function applyChatOverrides(
   };
 }
 
+function hasUsableWebsocketServerConfig(server: NapcatWebsocketServerConfig | undefined): server is NapcatWebsocketServerConfig {
+  return Boolean(
+    server?.host.trim()
+    && Number.isFinite(server.port)
+    && server.port > 0
+    && server.token.trim(),
+  );
+}
+
 interface StoredAgreementFile {
   version: 1;
   hashes: Partial<Record<AgreementDocumentId, string>>;
@@ -502,29 +551,58 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+function normalizeTomlLineEndings(content: string): string {
+  return content.replace(/\r\n?/gu, "\n");
+}
+
+function readTomlTable(content: string, tableName: string): Record<string, unknown> | undefined {
+  const normalized = normalizeTomlLineEndings(content);
+  const tablePattern = new RegExp(
+    `(^|\\n)\\s*\\[${escapeRegExp(tableName)}\\]\\s*(?:#.*)?(?:\\n|$)`,
+    "u",
+  );
+  const tableMatch = tablePattern.exec(normalized);
+  if (!tableMatch) {
+    return undefined;
+  }
+
+  const tableStart = tableMatch.index + tableMatch[0].length;
+  const nextTableOffset = normalized
+    .slice(tableStart)
+    .search(/\n\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?(?:\n|$)/u);
+  const tableBody = nextTableOffset === -1
+    ? normalized.slice(tableStart)
+    : normalized.slice(tableStart, tableStart + nextTableOffset);
+
+  try {
+    const parsed = parseToml(`[${tableName}]\n${tableBody.trimEnd()}\n`);
+    const table = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)[tableName]
+      : undefined;
+    return table && typeof table === "object" && !Array.isArray(table)
+      ? table as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureBotQqConfig(content: string, account: string): string {
   return ensureBotPlatformConfig(content, {
     platform: "qq",
     qqAccount: account,
-    extraPlatformAccount: `${LOCAL_CHAT_PLATFORM}:${LOCAL_CHAT_BOT_ACCOUNT}`,
-  });
-}
-
-function ensureLocalChatBotConfig(content: string): string {
-  return ensureBotPlatformConfig(content, {
-    extraPlatformAccount: `${LOCAL_CHAT_PLATFORM}:${LOCAL_CHAT_BOT_ACCOUNT}`,
   });
 }
 
 function ensureBotPlatformConfig(
   content: string,
-  options: { platform?: string; qqAccount?: string; extraPlatformAccount: string },
+  options: { platform?: string; qqAccount?: string },
 ): string {
   const botSectionMatch = content.match(/(^|\r?\n)(\s*\[bot\]\s*(?:#.*)?)(?:\r?\n|$)/u);
   if (!botSectionMatch) {
     const platformLine = options.platform ? `platform = "${options.platform}"\n` : "";
     const qqAccountLine = options.qqAccount ? `qq_account = ${options.qqAccount}\n` : "";
-    return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}platforms = [\n    "${options.extraPlatformAccount}",\n]\n`;
+    return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}`;
   }
 
   const botSectionStart = (botSectionMatch.index ?? 0) + botSectionMatch[0].length;
@@ -558,24 +636,6 @@ function ensureBotPlatformConfig(
     } else {
       nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${options.qqAccount}\n`;
     }
-  }
-
-  const platformsMatch = nextBotSection.match(/(^|\r?\n)(\s*platforms\s*=\s*)(\[[\s\S]*?\])(\s*(?:#.*)?)(?=\r?\n|$)/u);
-  const platformEntries = platformsMatch
-    ? Array.from(platformsMatch[3].matchAll(/["']([^"']+)["']/gu), (match) => match[1])
-    : [];
-  const nextPlatformEntries = [
-    ...platformEntries.filter((entry) => {
-      const [platformName] = entry.split(":", 1);
-      return platformName.trim().toLowerCase() !== LOCAL_CHAT_PLATFORM;
-    }),
-    options.extraPlatformAccount,
-  ];
-  if (platformsMatch) {
-    const nextListBody = nextPlatformEntries.map((entry) => `    "${entry}",`).join("\n");
-    nextBotSection = `${nextBotSection.slice(0, platformsMatch.index)}${platformsMatch[1] ?? ""}${platformsMatch[2]}[\n${nextListBody}\n]${platformsMatch[4]}${nextBotSection.slice((platformsMatch.index ?? 0) + platformsMatch[0].length)}`;
-  } else {
-    nextBotSection = `${nextBotSection.trimEnd()}\nplatforms = [\n    "${options.extraPlatformAccount}",\n]\n`;
   }
 
   return `${beforeBotSection}${nextBotSection}${afterBotSection}`;
@@ -650,9 +710,9 @@ function createWebsocketToken(): string {
 }
 
 function md5Utf8(content: string): string {
-  // 涓?Python `open(path, encoding="utf-8").read()` 琛屼负瀵归綈锛?
-  // Python 鏂囨湰妯″紡浼氭妸 \r\n / \r 缁熶竴杞垚 \n锛屽啀浜ょ粰 hashlib銆?
-  // Node 鐨?readFile(path, 'utf8') 淇濈暀鍘熷 CRLF锛屾墍浠ヨ繖閲屾墜鍔ㄥ綊涓€鍖栦互鍖归厤 MaiBot 鐨勫搱甯岀粨鏋溿€?
+  // Match Python `open(path, encoding="utf-8").read()` behavior.
+  // Python text mode normalizes CRLF / CR to LF before passing content to hashlib.
+  // Node readFile(path, "utf8") preserves original CRLF, so normalize here to match MaiBot hashes.
   const normalized = content.replace(/\r\n?/g, "\n");
   return createHash("md5").update(normalized, "utf8").digest("hex");
 }
@@ -819,7 +879,7 @@ export class InitManager {
     const state = await this.getAgreementState();
     const missing = state.documents.find((document) => !document.exists);
     if (missing) {
-      throw new Error(`${missing.title} 鏂囦欢缂哄け: ${missing.sourcePath}`);
+      throw new Error(`${missing.title} 文件缺失: ${missing.sourcePath}`);
     }
 
     const hashes: Partial<Record<AgreementDocumentId, string>> = {};
@@ -850,9 +910,9 @@ export class InitManager {
   }
 
   /**
-   * 璁＄畻褰撳墠 EULA / PRIVACY 鐨勬渶鏂?MD5锛屼綔涓虹幆澧冨彉閲忓湪姣忔鍚姩 MaiBot 鏃舵敞鍏ャ€?
-   * 楹﹂害鐨?bot.py 浼氳鍙?`EULA_AGREE` 涓?`PRIVACY_AGREE`锛岀瓑浜庡綋鍓嶆枃浠?hash 鍗宠涓哄凡鍚屾剰锛?
-   * 鍗忚鏈夋洿鏂版椂 hash 鑷姩鍙樺寲锛岄害楹︾浼氳Е鍙戦噸鏂扮‘璁ゆ祦绋嬨€?
+   * Calculate the latest EULA / PRIVACY MD5 and inject it as environment variables on each MaiBot start.
+   * MaiBot bot.py reads `EULA_AGREE` and `PRIVACY_AGREE`; matching the current file hash means accepted.
+   * When agreements change, the hash changes automatically and MaiBot will trigger confirmation again.
    */
   async getAgreementEnvVars(): Promise<Record<string, string>> {
     const env: Record<string, string> = {};
@@ -865,7 +925,7 @@ export class InitManager {
         const content = await readFile(sourcePath, "utf8");
         env[agreement.envVar] = md5Utf8(content);
       } catch {
-        // 蹇界暐璇诲彇澶辫触锛岄害楹︿細鍥為€€鍒颁氦浜掑紡纭
+        // Ignore read failures; MaiBot will fall back to interactive confirmation.
       }
     }
     return env;
@@ -880,21 +940,21 @@ export class InitManager {
   }
 
   /**
-   * 鎶婄敤鎴锋彁渚涚殑 bot_config.toml / model_config.toml 瑕嗙洊鍒?MaiBot/config 涓嬶紝
-   * 鑷姩鍑嗗濂藉彲鍐欑殑 MaiBot 妯″潡鐩綍涓?config 瀛愮洰褰曪紝骞跺鍘熸枃浠跺仛鏃堕棿鎴冲浠姐€?
+   * Copy user-provided bot_config.toml / model_config.toml into MaiBot/config.
+   * Prepare the writable MaiBot module config directory and back up original files with timestamps.
    */
   async importMaiBotConfig(
     fileName: MaiBotConfigFileName,
     sourcePath: string,
   ): Promise<MaiBotConfigImportResult> {
     if (fileName !== "bot_config.toml" && fileName !== "model_config.toml") {
-      throw new Error(`涓嶆敮鎸佺殑閰嶇疆鏂囦欢鍚? ${fileName}`);
+      throw new Error(`Unsupported config file name: ${fileName}`);
     }
     if (!sourcePath) {
-      throw new Error("鏈€夋嫨閰嶇疆鏂囦欢");
+      throw new Error("No config file selected");
     }
     if (!existsSync(sourcePath)) {
-      throw new Error(`閰嶇疆鏂囦欢涓嶅瓨鍦? ${sourcePath}`);
+      throw new Error(`Config file does not exist: ${sourcePath}`);
     }
     const sourceStat = await stat(sourcePath);
     if (!sourceStat.isFile()) {
@@ -924,15 +984,15 @@ export class InitManager {
   }
 
   /**
-   * 鎶婄敤鎴锋彁渚涚殑 MaiBot.db 瑕嗙洊鍒?MaiBot/data/MaiBot.db锛?
-   * 鑷姩鍑嗗濂藉彲鍐欑殑 MaiBot 妯″潡鐩綍涓?data 瀛愮洰褰曘€?
+   * Copy user-provided MaiBot.db into MaiBot/data/MaiBot.db.
+   * Prepare the writable MaiBot module data directory.
    */
   async importMaiBotDatabase(sourcePath: string): Promise<MaiBotDataImportResult> {
     if (!sourcePath) {
       throw new Error("未选择数据库文件");
     }
     if (!existsSync(sourcePath)) {
-      throw new Error(`鏁版嵁搴撴枃浠朵笉瀛樺湪: ${sourcePath}`);
+      throw new Error(`数据库文件不存在: ${sourcePath}`);
     }
     const sourceStat = await stat(sourcePath);
     if (!sourceStat.isFile()) {
@@ -961,8 +1021,8 @@ export class InitManager {
   }
 
   /**
-   * 娓呯┖ MaiBot/data 鐩綍涓嬬殑鎵€鏈夊唴瀹癸紙涓嶄細鍒犻櫎 data 鐩綍鏈韩锛夈€?
-   * 浠呬綔鐢ㄤ簬鍙啓妯″潡鐩綍锛屽紑鍙戞€佹寚鍚?bundled 妯℃澘鏃朵細鎷掔粷鎵ц銆?
+   * Clear all contents under MaiBot/data without deleting the data directory itself.
+   * Only applies to writable module directories; bundled template mode refuses to run this.
    */
   async resetMaiBotData(): Promise<MaiBotDataResetResult> {
     if (samePath(this.paths.maibotRoot, join(this.paths.bundledModulesRoot, "MaiBot"))) {
@@ -1062,17 +1122,16 @@ export class InitManager {
     const existingWebsocketServer = qqBackend === "snowluma"
       ? await this.readSnowLumaWebsocketServer(qqAccount)
       : await this.readNapcatWebsocketServer(qqAccount);
+    const adapterWebsocketServer = await this.readAdapterServerFromConfig(qqBackend);
+    const configuredWebsocketServer = existingWebsocketServer
+      ?? (hasUsableWebsocketServerConfig(adapterWebsocketServer) ? adapterWebsocketServer : undefined);
     const resolvedWebsocketServer: NapcatWebsocketServerConfig = {
-      ...(existingWebsocketServer ?? {
-        host: NAPCAT_ADAPTER_HOST,
-        token: websocketToken || createWebsocketToken(),
-      }),
-      host: NAPCAT_ADAPTER_HOST,
-      port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
-      token: existingWebsocketServer?.token || websocketToken || createWebsocketToken(),
+      host: configuredWebsocketServer?.host || NAPCAT_ADAPTER_HOST,
+      port: configuredWebsocketServer?.port || (qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT),
+      token: configuredWebsocketServer?.token || websocketToken || createWebsocketToken(),
     };
-    const shouldInitializeAdapterConfig = !(await this.isAdapterConfigInitialized(qqBackend));
-    let initializedAdapterConfig = false;
+    const adapterConfigReady = await this.isAdapterConfigInitialized(qqBackend);
+    let initializedAdapterConfig = adapterConfigReady;
 
     if (qqBackend === "snowluma") {
       await this.createSnowLumaConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
@@ -1080,7 +1139,7 @@ export class InitManager {
       await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
       await this.ensureNapCatWebUiConfig();
     }
-    if (shouldInitializeAdapterConfig) {
+    if (!adapterConfigReady) {
       initializedAdapterConfig = await this.writeQqAdapterConfigsForBackend(
         qqBackend,
         resolvedWebsocketServer,
@@ -1111,8 +1170,8 @@ export class InitManager {
   }
 
   /**
-   * 璇诲彇鏈€鏂颁竴浠?onebot11_<qq>.json 涓凡鍐欏叆鐨?WebSocket Token锛?
-   * 鐢ㄤ簬鍦?napcat-adapter 閰嶇疆涓鐢ㄥ悓涓€涓?token锛岄伩鍏嶉害楹︾杩炰笉涓娿€?
+   * Read the latest onebot11_<qq>.json that contains a WebSocket Token.
+   * Reuse the same token in napcat-adapter config to avoid failed MaiBot connections.
    */
   async readNapcatWebsocketServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig | undefined> {
     try {
@@ -1141,7 +1200,7 @@ export class InitManager {
         }
       }
     } catch {
-      // ignore 鈥?fall through to empty token
+      // ignore and fall through to empty token
     }
     return undefined;
   }
@@ -1180,8 +1239,8 @@ export class InitManager {
   }
 
   /**
-   * 鍒涘缓/鏇存柊 napcat-adapter 鐨?config.toml锛?   * token 鐩存帴鏉ヨ嚜褰撳墠 setQqAccount 娴佺▼鐢熸垚鐨?websocket token锛?
-   * chat 璁剧疆鍒欏彇鐢ㄦ埛鍦ㄥ紩瀵肩晫闈㈠～鍐欑殑瑕嗙洊鍊硷紙缂虹渷鍗抽粯璁わ級銆?
+   * Create/update napcat-adapter config.toml. The token comes from the current setQqAccount flow.
+   * Chat settings use values entered in the setup UI, falling back to defaults when absent.
    */
   private async writeQqAdapterConfigsForBackend(
     qqBackend: QqBackend,
@@ -1196,9 +1255,8 @@ export class InitManager {
       ? selectedWebsocketServer
       : await this.resolveSnowLumaAdapterServer(qqAccount);
 
-    const shouldInitializeInactive = !(await this.isAdapterConfigInitialized(
-      qqBackend === "snowluma" ? "napcat" : "snowluma",
-    ));
+    const inactiveBackend = qqBackend === "snowluma" ? "napcat" : "snowluma";
+    const shouldInitializeInactive = !(await this.isAdapterConfigInitialized(inactiveBackend));
 
     if (qqBackend === "snowluma") {
       if (shouldInitializeInactive) {
@@ -1244,8 +1302,8 @@ export class InitManager {
       : await this.readNapcatWebsocketServer(qqAccount);
 
     websocketServer = {
-      host: NAPCAT_ADAPTER_HOST,
-      port: qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
+      host: websocketServer?.host || NAPCAT_ADAPTER_HOST,
+      port: websocketServer?.port || (qqBackend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT),
       token: websocketServer?.token || createWebsocketToken(),
     };
     if (qqBackend === "snowluma") {
@@ -1284,7 +1342,7 @@ export class InitManager {
           existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
         }
       } catch {
-        // 瑙ｆ瀽澶辫触鍒欑洿鎺ヤ互榛樿鍊艰鐩?
+        // On parse failure, use default values directly.
       }
     }
 
@@ -1367,7 +1425,7 @@ export class InitManager {
     await mkdir(this.paths.logsRoot, { recursive: true });
 
     if (!existsSync(this.paths.bundledModulesRoot)) {
-      throw new Error(`鍐呯疆 modules 妯℃澘缂哄け: ${this.paths.bundledModulesRoot}`);
+      throw new Error(`内置 modules 模板缺失: ${this.paths.bundledModulesRoot}`);
     }
 
     if (serviceId === "maibot") {
@@ -1457,9 +1515,9 @@ export class InitManager {
   }
 
   /**
-   * 鍦?napcat 鐩綍涓嬬敓鎴愪竴涓浐瀹氱殑寮曞 .cmd锛屽惎鍔ㄦ椂鍏?chcp 65001 鍐嶈皟 exe锛?
-   * 閬垮厤鍦ㄦ簮鐮侀噷鎷兼帴 `cmd /C` 瀛楃涓插甫鏉ョ殑寮曞彿闂锛屽悓鏃朵繚鐣欐帶鍒跺彴 UTF-8
-   * 浠ュ厤涓枃杈撳嚭涔辩爜銆?
+   * Generate a fixed launcher .cmd under the napcat directory; it runs chcp 65001 before the exe.
+   * Avoid building a `cmd /C` command string in source while keeping the console in UTF-8.
+   * This prevents garbled Chinese output.
    */
   private async ensureNapCatLauncher(): Promise<string | undefined> {
     const napcatRoot = this.paths.napcatRoot;
@@ -1477,7 +1535,7 @@ export class InitManager {
           return undefined;
         }
       } catch {
-        // 璇讳笉鍒板氨閲嶅啓
+        // 读不到就重写
       }
     }
 
@@ -1641,7 +1699,7 @@ export class InitManager {
         return [];
       }
 
-      throw new Error(`鍐呯疆 ${moduleName} 妯℃澘缂哄け: ${source}`);
+      throw new Error(`内置 ${moduleName} 模板缺失: ${source}`);
     }
 
     if (samePath(source, target)) {
@@ -1764,7 +1822,7 @@ export class InitManager {
     }
 
     if (existing.exists) {
-      throw new Error(existing.error ?? "NapCat WebUI 閰嶇疆瀛樺湪浣嗙己灏?token锛岃鎵嬪姩妫€鏌?webui.json");
+      throw new Error(existing.error ?? "NapCat WebUI config exists but token is missing; please check webui.json manually");
     }
 
     const configDirs = await this.findNapCatWebUiConfigDirs();
@@ -1813,19 +1871,45 @@ export class InitManager {
         if (typeof raw.token === "string" && raw.token.length > 0) {
           return { token: raw.token, exists: true };
         }
-        firstError ??= `缂哄皯 token: ${candidate}`;
+        firstError ??= `缺少 token: ${candidate}`;
       } catch (error) {
-        firstError ??= `JSON 鏍煎紡閿欒: ${candidate}: ${toDetail(error)}`;
+        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
       }
     }
 
     return { exists: sawExisting, error: firstError };
   }
 
+  readMaiBotWebUiEndpointSync(): { host: string; port: number; url: string } {
+    const fallback = buildMaiBotWebUiEndpoint();
+    const candidates = uniqueExistingPaths([
+      this.botConfigPath(),
+      join(this.paths.bundledModulesRoot, "MaiBot", "config", "bot_config.toml"),
+    ]);
+
+    for (const candidate of candidates) {
+      try {
+        const config = readTomlTable(readFileSync(candidate, "utf8"), "webui");
+        if (!config) {
+          continue;
+        }
+
+        return buildMaiBotWebUiEndpoint(
+          asString(config["host"], fallback.host),
+          asTcpPort(config["port"], fallback.port),
+        );
+      } catch {
+        continue;
+      }
+    }
+
+    return fallback;
+  }
+
   /**
-   * 璇诲彇 MaiBot Core WebUI 鐨?access_token锛岀敤浜庡湪 WebUI 鍏ュ彛鎷兼帴
-   * `?token=<access_token>` 瀹炵幇鑷姩鐧诲綍銆?
-   * 鏂囦欢涓嶅瓨鍦ㄦ垨缂哄瓧娈垫椂杩斿洖绌?token锛岃皟鐢ㄦ柟搴斿洖閫€涓轰笉甯﹀弬鏁扮殑鍦板潃銆?
+   * Read MaiBot Core WebUI access_token for composing the WebUI entry URL.
+   * `?token=<access_token>` performs automatic login.
+   * If the file or field is missing, return an empty token and let callers use the plain root URL.
    */
   async readMaiBotWebUiToken(): Promise<{ token?: string; exists: boolean; error?: string }> {
     const candidates = [
@@ -1847,9 +1931,9 @@ export class InitManager {
         if (typeof raw.access_token === "string" && raw.access_token.length > 0) {
           return { token: raw.access_token, exists: true };
         }
-        firstError ??= `缂哄皯 access_token: ${candidate}`;
+        firstError ??= `缺少 access_token: ${candidate}`;
       } catch (error) {
-        firstError ??= `JSON 鏍煎紡閿欒: ${candidate}: ${toDetail(error)}`;
+        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
       }
     }
 
@@ -1890,14 +1974,52 @@ export class InitManager {
     }
   }
 
+  private hasAdapterConfigInitializedMarker(backend: QqBackend): boolean {
+    return typeof this.readMessagePlatformStore()?.adapterConfigInitialized?.[backend] === "number";
+  }
+
   private async isAdapterConfigInitialized(backend: QqBackend): Promise<boolean> {
     const configPath = backend === "snowluma"
       ? this.snowlumaAdapterConfigPath()
       : this.napcatAdapterConfigPath();
-    return (
-      typeof this.readMessagePlatformStore()?.adapterConfigInitialized?.[backend] === "number"
-      || existsSync(configPath)
+    if (!existsSync(configPath)) {
+      return false;
+    }
+
+    if (this.hasAdapterConfigInitializedMarker(backend)) {
+      return true;
+    }
+
+    return hasUsableWebsocketServerConfig(await this.readAdapterServerFromConfig(backend));
+  }
+
+  private async readAdapterServerFromConfig(backend: QqBackend): Promise<NapcatWebsocketServerConfig | undefined> {
+    const configPath = backend === "snowluma"
+      ? this.snowlumaAdapterConfigPath()
+      : this.napcatAdapterConfigPath();
+    if (!existsSync(configPath)) {
+      return undefined;
+    }
+
+    const defaults = buildDefaultNapcatAdapterConfig(
+      "",
+      backend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
     );
+    if (backend === "snowluma") {
+      defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
+      defaults.server.actionTimeoutSec = 10;
+    }
+
+    try {
+      const parsed = parseToml(await readFile(configPath, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        return normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults).server;
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
   }
 
   private async markMessagePlatformConfigured(
@@ -1963,7 +2085,7 @@ export class InitManager {
         hash: "",
         exists: false,
         confirmed: false,
-        error: `${fileName} 鏂囦欢缂哄け`,
+        error: `${fileName} 文件缺失`,
       };
     }
 
@@ -2002,11 +2124,11 @@ export class InitManager {
     const botConfigPath = this.botConfigPath();
     const configVersion = maibotInitialConfigVersion(await this.readMaiBotConfigVersion());
     if (!existsSync(botConfigPath)) {
-      return ensureLocalChatBotConfig(`[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`);
+      return `[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`;
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    return ensureLocalChatBotConfig(ensureInnerVersion(content, configVersion));
+    return ensureInnerVersion(content, configVersion);
   }
 
   private async repairBotConfigVersionInfo(): Promise<string | undefined> {
@@ -2016,9 +2138,7 @@ export class InitManager {
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    const repaired = ensureLocalChatBotConfig(
-      ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion())),
-    );
+    const repaired = ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion()));
     if (repaired === content) {
       return undefined;
     }
@@ -2223,7 +2343,7 @@ export class InitManager {
         id: "napcat-webui-token",
         label: "NapCat WebUI token",
         status: "ok",
-        detail: "宸叉壘鍒?token",
+        detail: "token found",
       };
     }
 

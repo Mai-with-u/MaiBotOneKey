@@ -1,12 +1,14 @@
 ﻿import {
   AlertTriangle,
+  ChevronDown,
   CheckCircle2,
   CircleAlert,
   ClipboardCheck,
+  Code2,
   Download,
   FolderOpen,
-  GitBranch,
   HardDrive,
+  ImageIcon,
   Loader2,
   Network,
   Package,
@@ -18,7 +20,6 @@
   ShieldCheck,
   TerminalSquare,
   Trash2,
-  Type,
   UserRound,
   Wrench,
 } from "lucide-react";
@@ -27,14 +28,14 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
+  AppIconId,
   InitCheckStatus,
   LogEntry,
   MaiBotDataResetResult,
   ManagedPythonPackageName,
-  ModuleSourceConfig,
-  ModuleSourcePreset,
-  ModuleTagOption,
-  ModuleUpdateResult,
+  NetworkProxySettings,
+  OpenCodeSettings,
+  PluginBuilderMode,
   PythonOverridesState,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -54,7 +55,7 @@ import type {
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -75,7 +76,17 @@ import {
   setClosePreference,
   type ClosePreference,
 } from "@/lib/close-preference";
-import { useAppearance, type AccentColor, type FontFamily, type InterfaceScale } from "@/lib/use-appearance";
+import {
+  RETRO_WINDOW_CORNER_RADIUS_MIN,
+  WINDOW_CORNER_RADIUS_MAX,
+  WINDOW_CORNER_RADIUS_MIN,
+  useAppearance,
+  type AccentColor,
+  type AppearanceApi,
+  type AppearanceMode,
+  type FontFamily,
+  type InterfaceScale,
+} from "@/lib/use-appearance";
 import { useShortcut } from "@/lib/use-shortcut";
 import { useTheme, type ThemePreference } from "@/lib/use-theme";
 import { cn } from "@/lib/utils";
@@ -89,6 +100,8 @@ interface SettingsStatusPanelProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenPluginConfig: (pluginId: string) => void;
+  pluginBuilderMode: PluginBuilderMode;
+  onPluginBuilderModeChange: (mode: PluginBuilderMode) => void;
 }
 
 const statusText: Record<ServiceStatus, string> = {
@@ -127,6 +140,12 @@ const closePreferenceText: Record<ClosePreference, string> = {
   quit: "关闭应用",
 };
 
+const closePreferenceOptions: Array<{ value: ClosePreference; label: string }> = [
+  { value: "ask", label: "每次询问" },
+  { value: "minimize", label: "最小化到托盘" },
+  { value: "quit", label: "关闭应用" },
+];
+
 const themeOptions: Array<{ value: ThemePreference; label: string; description: string }> = [
   { value: "system", label: "跟随系统", description: "根据系统浅色/深色模式自动切换。" },
   { value: "light", label: "浅色", description: "保持明亮、低干扰的工作界面。" },
@@ -152,6 +171,25 @@ const scaleOptions: Array<{ value: InterfaceScale; label: string; description: s
   { value: "normal", label: "标准", description: "默认的信息密度与字号。" },
   { value: "comfortable", label: "宽松", description: "字号更大，留白更多。" },
 ];
+
+const appearanceModeOptions: Array<{ value: AppearanceMode; label: string; description: string }> = [
+  { value: "future-retro", label: "未来复古", description: "纸面颗粒、硬朗描边和控制台式切角。" },
+  { value: "modern", label: "现代", description: "干净卡片、主题色和更通用的桌面应用质感。" },
+];
+
+const qqBackendOptions: Array<{ value: QqBackend; label: string; description: string }> = [
+  { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接，WebUI 端口 6099。" },
+  { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程，WebUI 端口 5099，OneBot 端口 7988。" },
+];
+
+const defaultNetworkProxySettings: NetworkProxySettings = {
+  enabled: false,
+  port: 7890,
+};
+
+const defaultOpenCodeSettings: OpenCodeSettings = {
+  useBundledPluginInstructions: true,
+};
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
 
@@ -191,89 +229,6 @@ function formatDateTime(timestamp?: number): string {
   }).format(timestamp);
 }
 
-function ModuleUpdateOutput({ result }: { result: ModuleUpdateResult }): React.JSX.Element {
-  const output = result.output.slice(-120).join("\n");
-  const hasWarning = Boolean(result.warning || result.remoteError);
-
-  return (
-    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={result.changed ? "success" : "secondary"}>
-          {result.changed ? "已更新" : "已是最新"}
-        </Badge>
-        <Badge variant={result.source === "bundled" ? "secondary" : "outline"}>
-          {result.source === "bundled" ? "内置修复" : "来自 Git 远端"}
-        </Badge>
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {result.before ?? "-"} -&gt; {result.after ?? "-"}
-        </span>
-        <span className="text-[11px] text-muted-foreground">{formatDateTime(result.updatedAt)}</span>
-      </div>
-      {hasWarning ? (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-[12px] leading-relaxed text-destructive">
-          <p className="font-semibold">更新未完成，已恢复到更新前状态</p>
-          {result.warning ? <p className="mt-1 text-destructive/90">{result.warning}</p> : null}
-          {result.remoteError ? (
-            <p className="mt-1 break-all font-mono text-[11px] text-destructive/80">
-              原始错误：{result.remoteError}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="grid gap-2 text-[11px] text-muted-foreground md:grid-cols-2">
-        <span className="truncate" title={result.branch ?? ""}>
-          分支: {result.branch ?? "-"}
-        </span>
-        <span className="truncate" title={result.upstream ?? ""}>
-          远端: {result.upstream ?? "-"}
-        </span>
-        <span className="truncate md:col-span-2" title={result.cwd}>
-          目录: {result.cwd}
-        </span>
-      </div>
-      {output.length > 0 ? (
-        <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
-          {output}
-        </pre>
-      ) : null}
-      {result.plugins && result.plugins.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-[11px] font-semibold text-muted-foreground">同步的子插件</div>
-          {result.plugins.map((plugin) => (
-            <div
-              key={plugin.moduleId}
-              className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-2.5"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{plugin.moduleName}</span>
-                <Badge variant={plugin.changed ? "success" : "secondary"}>
-                  {plugin.changed ? "已更新" : "已是最新"}
-                </Badge>
-                <Badge variant={plugin.source === "bundled" ? "danger" : "outline"}>
-                  {plugin.source === "bundled" ? "内置修复" : "来自 Git 远端"}
-                </Badge>
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {plugin.before ?? "-"} -&gt; {plugin.after ?? "-"}
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                <span className="truncate" title={plugin.cwd}>
-                  目录: {plugin.cwd}
-                </span>
-              </div>
-              {plugin.warning ? (
-                <p className="rounded-sm border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive">
-                  {plugin.warning}
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function PythonInstallOutput({ result }: { result: PythonPackageInstallResult }): React.JSX.Element {
   const output = result.output.slice(-80).join("\n");
 
@@ -309,7 +264,7 @@ function PathField({
 }): React.JSX.Element {
   return (
     <div className="min-w-0 space-y-1">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <span className="text-[10px] font-semibold uppercase text-muted-foreground">
         {label}
       </span>
       <div className="flex min-w-0 items-start gap-2">
@@ -332,6 +287,140 @@ function PathField({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function AppearanceAccentControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">主题色</p>
+        <p className="mt-1 text-xs text-muted-foreground">用于按钮、重点数字和选中状态。</p>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-5">
+        {accentOptions.map((option) => (
+          <button
+            aria-pressed={appearance.accent === option.value}
+            className={cn(
+              "flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors",
+              appearance.accent === option.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+            key={option.value}
+            onClick={() => appearance.setAccent(option.value)}
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              className="size-4 shrink-0 rounded-sm border border-foreground/20"
+              style={{ background: option.color }}
+            />
+            <span className="truncate">{option.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AppearanceFontControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">字体</p>
+        <p className="mt-1 text-xs text-muted-foreground">调整界面文字的整体气质。</p>
+      </div>
+      <RadioGroup
+        className="grid gap-2"
+        onValueChange={(value) => appearance.setFont(value as FontFamily)}
+        value={appearance.font}
+      >
+        {fontOptions.map((option) => (
+          <label
+            className={cn(
+              "flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+              appearance.font === option.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+            key={option.value}
+          >
+            <RadioGroupItem className="mt-0.5" value={option.value} />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{option.label}</span>
+              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </RadioGroup>
+    </div>
+  );
+}
+
+function AppearanceScaleControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">界面密度</p>
+        <p className="mt-1 text-xs text-muted-foreground">控制字号和控件间距。</p>
+      </div>
+      <RadioGroup
+        className="grid gap-2"
+        onValueChange={(value) => appearance.setScale(value as InterfaceScale)}
+        value={appearance.scale}
+      >
+        {scaleOptions.map((option) => (
+          <label
+            className={cn(
+              "flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+              appearance.scale === option.value
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+            key={option.value}
+          >
+            <RadioGroupItem className="mt-0.5" value={option.value} />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{option.label}</span>
+              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </RadioGroup>
+    </div>
+  );
+}
+
+function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  const windowCornerRadiusMin = appearance.mode === "future-retro"
+    ? RETRO_WINDOW_CORNER_RADIUS_MIN
+    : WINDOW_CORNER_RADIUS_MIN;
+
+  return (
+    <label className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <span className="flex items-center justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">窗口圆角</span>
+          <span className="mt-1 block text-xs text-muted-foreground">影响主窗口和浮窗边角。</span>
+        </span>
+        <Badge className="shrink-0" variant="secondary">
+          {appearance.windowCornerRadius}px
+        </Badge>
+      </span>
+      <input
+        className="w-full accent-primary"
+        max={WINDOW_CORNER_RADIUS_MAX}
+        min={windowCornerRadiusMin}
+        onChange={(event) => appearance.setWindowCornerRadius(Number(event.target.value))}
+        type="range"
+        value={appearance.windowCornerRadius}
+      />
+      <span className="flex justify-between font-mono text-[10px] text-muted-foreground">
+        <span>{windowCornerRadiusMin}px</span>
+        <span>{WINDOW_CORNER_RADIUS_MAX}px</span>
+      </span>
+    </label>
   );
 }
 
@@ -728,26 +817,22 @@ export function SettingsStatusPanel({
   snapshot,
   onSnapshot,
   onOpenPluginConfig,
+  pluginBuilderMode,
+  onPluginBuilderModeChange,
 }: SettingsStatusPanelProps): React.JSX.Element {
   const theme = useTheme();
   const appearance = useAppearance();
   const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmUpdateOpen, setConfirmUpdateOpen] = useState(false);
   const [confirmSnowLumaResetOpen, setConfirmSnowLumaResetOpen] = useState(false);
   const [confirmLauncherSettingsResetOpen, setConfirmLauncherSettingsResetOpen] = useState(false);
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
   const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
+  const [confirmPluginBuilderEnableOpen, setConfirmPluginBuilderEnableOpen] = useState(false);
+  const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
-  const [moduleUpdateResult, setModuleUpdateResult] = useState<ModuleUpdateResult | null>(null);
-  const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
-  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
-  const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
-  const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
-  const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
-  const [selectedMaibotTag, setSelectedMaibotTag] = useState("");
   const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
   const [pythonVersionsOpen, setPythonVersionsOpen] = useState(false);
   const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
@@ -768,7 +853,13 @@ export function SettingsStatusPanel({
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
   const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
+  const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
+  const pluginBuilderEnabled = pluginBuilderMode !== "disabled";
+  const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
+  const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
+  const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
+  const environmentServicesContentId = useId();
   const recentLogEntries = snapshot.recentLogs ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
   const maibotUpdateBlocked = Boolean(
@@ -791,6 +882,16 @@ export function SettingsStatusPanel({
       service.status === "running" ||
       service.status === "stopping",
   );
+  const networkProxyDirty =
+    networkProxyDraft.enabled !== networkProxySettings.enabled ||
+    networkProxyDraft.port !== networkProxySettings.port;
+  const selectedQqBackendOption =
+    qqBackendOptions.find((option) => option.value === qqBackend) ?? qqBackendOptions[0];
+
+  useEffect(() => {
+    setNetworkProxyDraft(networkProxySettings);
+  }, [networkProxySettings.enabled, networkProxySettings.port]);
+
   useEffect(() => {
     setQqBackend(initState.qqBackend ?? "napcat");
   }, [initState.qqBackend]);
@@ -830,26 +931,6 @@ export function SettingsStatusPanel({
   }, []);
 
   useEffect(() => {
-    let mounted = true;
-    window.maibotDesktop?.modules
-      .getSourceConfig()
-      .then((config) => {
-        if (!mounted) {
-          return;
-        }
-        setModuleSourceConfig(config);
-        setModuleSourcePreset(config.preset);
-        setCustomMaiBotUrl(config.maibotUrl);
-        setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
-      })
-      .catch(() => undefined);
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
     if (!snapshot.paths.pythonOverridesRoot) {
       return;
     }
@@ -858,15 +939,6 @@ export function SettingsStatusPanel({
       state ? { ...state, root: snapshot.paths.pythonOverridesRoot } : state,
     );
   }, [snapshot.paths.pythonOverridesRoot]);
-
-  const refreshMaiBotTags = useCallback(async () => {
-    try {
-      const tags = await window.maibotDesktop?.modules.listMaiBotTags();
-      setMaibotTags(tags ?? []);
-    } catch {
-      setMaibotTags([]);
-    }
-  }, []);
 
   const refreshPythonRuntimeCandidates = useCallback(async () => {
     setPythonRuntimeCandidatesLoading(true);
@@ -879,10 +951,6 @@ export function SettingsStatusPanel({
       setPythonRuntimeCandidatesLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    void refreshMaiBotTags();
-  }, [refreshMaiBotTags]);
 
   useEffect(() => {
     void refreshPythonRuntimeCandidates();
@@ -914,6 +982,27 @@ export function SettingsStatusPanel({
     setClosePreferenceState(preference);
     toast.success(`关闭行为已设为：${closePreferenceText[preference]}`);
   }, []);
+
+  const requestPluginBuilderEnabledChange = useCallback(
+    (enabled: boolean) => {
+      if (enabled) {
+        if (pluginBuilderMode === "disabled") {
+          setConfirmPluginBuilderEnableOpen(true);
+        }
+        return;
+      }
+
+      onPluginBuilderModeChange("disabled");
+      toast.success("插件编写器入口已关闭");
+    },
+    [onPluginBuilderModeChange, pluginBuilderMode],
+  );
+
+  const confirmPluginBuilderEnable = useCallback(() => {
+    onPluginBuilderModeChange("agent");
+    setConfirmPluginBuilderEnableOpen(false);
+    toast.success("插件编写器入口已打开");
+  }, [onPluginBuilderModeChange]);
 
   const repair = useCallback(async () => {
     setBusy("repair");
@@ -1072,52 +1161,6 @@ export function SettingsStatusPanel({
     }
   }, [refreshSnapshot]);
 
-  const updateMaiBot = useCallback(async () => {
-    setBusy("module:maibot");
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.modules) {
-        throw new Error("桌面桥未就绪，无法更新模块");
-      }
-
-      const result = await window.maibotDesktop.modules.updateMaiBot(selectedMaibotTag || undefined);
-      setModuleUpdateResult(result);
-      setConfirmUpdateOpen(false);
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot, selectedMaibotTag]);
-
-  const saveModuleSourceConfig = useCallback(async () => {
-    setBusy("module:source");
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.modules) {
-        throw new Error("妗岄潰妗ユ湭灏辩华锛屾棤娉曚繚瀛樻ā鍧楁洿鏂版簮");
-      }
-
-      const config = await window.maibotDesktop.modules.saveSourceConfig({
-        preset: moduleSourcePreset,
-        maibotUrl: customMaiBotUrl,
-        napcatAdapterUrl: customNapcatAdapterUrl,
-      });
-      setModuleSourceConfig(config);
-      setModuleSourcePreset(config.preset);
-      setCustomMaiBotUrl(config.maibotUrl);
-      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
-      setSelectedMaibotTag("");
-      toast.success("更新源已保存");
-      void refreshMaiBotTags();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset, refreshMaiBotTags]);
-
   const openPythonVersions = useCallback(async (packageName: ManagedPythonPackageName) => {
     setPythonVersionsOpen(true);
     setPythonVersions(null);
@@ -1263,6 +1306,67 @@ export function SettingsStatusPanel({
     [onSnapshot, refreshSnapshot, snapshot],
   );
 
+  const saveNetworkProxySettings = useCallback(async () => {
+    setBusy("network-proxy");
+    setError(null);
+    try {
+      const nextNetworkProxySettings =
+        await window.maibotDesktop?.launcher.saveNetworkProxySettings(networkProxyDraft);
+      if (nextNetworkProxySettings) {
+        onSnapshot({ ...snapshot, networkProxySettings: nextNetworkProxySettings });
+        setNetworkProxyDraft(nextNetworkProxySettings);
+      }
+      toast.success("网络代理设置已保存");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [networkProxyDraft, onSnapshot, refreshSnapshot, snapshot]);
+
+  const saveOpenCodeSettings = useCallback(
+    async (settings: OpenCodeSettings) => {
+      setBusy("opencode-settings");
+      setError(null);
+      try {
+        const nextOpenCodeSettings = await window.maibotDesktop?.launcher.saveOpenCodeSettings(settings);
+        if (nextOpenCodeSettings) {
+          onSnapshot({ ...snapshot, openCodeSettings: nextOpenCodeSettings });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const selectAppIcon = useCallback(
+    async (iconId: AppIconId) => {
+      if (iconId === appIconSettings.selectedIconId) {
+        return;
+      }
+      setBusy("app-icon");
+      setError(null);
+      try {
+        if (!window.maibotDesktop?.launcher) {
+          throw new Error("Electron bridge 未连接");
+        }
+        const nextAppIconSettings = await window.maibotDesktop.launcher.selectAppIcon(iconId);
+        onSnapshot({ ...snapshot, appIconSettings: nextAppIconSettings });
+        toast.success("应用图标已切换");
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [appIconSettings.selectedIconId, onSnapshot, snapshot],
+  );
+
   const migrateRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
     setBusy(`resource:migrate:${key}`);
     setError(null);
@@ -1346,9 +1450,184 @@ export function SettingsStatusPanel({
   useShortcut("Mod+Enter", saveQqBackend, { enabled: canSaveQqBackend, allowInEditable: true });
   useShortcut("Mod+Shift+R", repair, { enabled: busy === null });
 
+  const environmentServicesPanel = (
+    <>
+      <Button
+        aria-controls={environmentServicesContentId}
+        aria-expanded={environmentServicesExpanded}
+        className="h-auto w-full justify-between gap-3 whitespace-normal rounded-lg border-border bg-muted/40 px-3 py-3 text-left"
+        onClick={() => setEnvironmentServicesExpanded((expanded) => !expanded)}
+        type="button"
+        variant="outline"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+            <ClipboardCheck className="size-4" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">
+              {environmentServicesExpanded ? "收起环境与服务" : "展开环境与服务"}
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {attentionChecks.length > 0 ? `${attentionChecks.length} 项待处理` : "环境检查正常"} · 服务{" "}
+              {services.length} 个
+            </span>
+          </span>
+        </span>
+        <ChevronDown
+          className={cn("size-4 shrink-0 transition-transform", environmentServicesExpanded && "rotate-180")}
+        />
+      </Button>
+
+      {environmentServicesExpanded ? (
+        <div className="space-y-4" id={environmentServicesContentId}>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">环境检查</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                检查运行目录、基础依赖和必要工具是否可用。
+              </p>
+            </div>
+            <Button disabled={busy !== null} onClick={repair} variant="outline">
+              {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
+              准备基础目录
+              <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
+            </Button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {initState.checks.map((check) => (
+              <div
+                className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5"
+                key={check.id}
+              >
+                {check.status === "ok" ? (
+                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
+                ) : (
+                  <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{check.label}</span>
+                    <Badge variant={initVariant[check.status]}>
+                      {check.status === "ok" ? "正常" : check.status === "warning" ? "确认" : "错误"}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground" title={check.path}>
+                    {check.detail}
+                  </p>
+                </div>
+                {check.actionUrl ? (
+                  <Button
+                    className="h-7 shrink-0 px-2 text-[11px]"
+                    onClick={() => openExternal(check.actionUrl ?? "")}
+                    size="sm"
+                    title={check.actionLabel ?? "打开下载页面"}
+                    variant="outline"
+                  >
+                    <Download className="size-3" />
+                    {check.actionLabel ?? "下载"}
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                <Network className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">服务状态</p>
+                <p className="text-xs text-muted-foreground">
+                  固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
+                </p>
+              </div>
+            </div>
+            {services.map((service) => (
+              <ServiceDetail
+                commandBusy={busy === `command:${service.id}`}
+                commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
+                key={service.id}
+                onOpenPath={openPath}
+                onResetCommand={resetCommandConfig}
+                onSaveCommand={saveCommandConfig}
+                service={service}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+
+  const manualPythonDependenciesPanel = (
+    <>
+      <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
+                <Package className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">手动更新 Python 依赖</p>
+                <p
+                  className="truncate font-mono text-[11px] text-muted-foreground"
+                  title={pythonDepsState?.root ?? ""}
+                >
+                  {pythonDepsState?.root ?? "读取覆盖目录中"}
+                </p>
+              </div>
+            </div>
+          </div>
+          <Badge variant="secondary">清华源</Badge>
+        </div>
+        {customPythonRuntimeEnabled ? (
+          <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+            已启用自定义 Python 路径，MaiBot Core 将直接使用该 Python，不再注入 Python 覆盖依赖。
+          </div>
+        ) : null}
+        <div className="grid gap-2 md:grid-cols-2">
+          {managedPythonPackages.map((pythonPackage) => (
+            <div
+              className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card p-2.5"
+              key={pythonPackage.name}
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{pythonPackage.label}</p>
+                <p className="truncate font-mono text-[11px] text-muted-foreground">{pythonPackage.name}</p>
+              </div>
+              <Button
+                disabled={busy !== null || maibotUpdateBlocked || customPythonRuntimeEnabled}
+                onClick={() => void openPythonVersions(pythonPackage.name)}
+                size="sm"
+                variant="outline"
+              >
+                {busy === `py:list:${pythonPackage.name}` ? <Loader2 className="animate-spin" /> : <Download />}
+                选择版本
+              </Button>
+            </div>
+          ))}
+        </div>
+        {maibotUpdateBlocked ? (
+          <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+            请先停止 MaiBot Core，再更新 Python 覆盖依赖。
+          </div>
+        ) : null}
+      </div>
+      {pythonInstallResult ? <PythonInstallOutput result={pythonInstallResult} /> : null}
+    </>
+  );
+
   return (
     <>
-    <section className="h-full overflow-auto bg-background px-6 py-6">
+    <section
+      className={cn(
+        "h-full overflow-auto px-6 py-6",
+        appearance.mode === "future-retro" ? "bg-transparent" : "bg-background",
+      )}
+    >
       <div className="mx-auto w-full max-w-[1180px]">
         <Card className="border-border bg-card ">
           <CardHeader className="space-y-3">
@@ -1389,17 +1668,9 @@ export function SettingsStatusPanel({
                   <Palette className="size-3" />
                   外观
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="checks">
-                  <ClipboardCheck className="size-3" />
-                  环境与服务
-                </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="account">
                   <UserRound className="size-3" />
                   协议端选择
-                </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="modules">
-                  <Download className="size-3" />
-                  模块更新
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="paths">
                   <ShieldCheck className="size-3" />
@@ -1412,23 +1683,20 @@ export function SettingsStatusPanel({
               </TabsList>
 
               <TabsContent className="space-y-4" value="general">
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Settings className="size-4" />
+                    </span>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                          <Settings className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">窗口关闭行为</p>
-                        </div>
-                      </div>
+                      <p className="text-sm font-medium">窗口关闭行为</p>
+                      <p className="text-xs text-muted-foreground">关闭主窗口时如何处理。</p>
                     </div>
-                    <Badge variant="secondary">{closePreferenceText[closePreference]}</Badge>
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
+                    aria-label="窗口关闭行为"
+                    className="grid w-full grid-cols-3 gap-1 rounded-md border border-border bg-background/70 p-1 text-xs sm:w-auto"
                     onValueChange={(value) => {
                       if (isClosePreference(value)) {
                         saveClosePreference(value);
@@ -1436,37 +1704,18 @@ export function SettingsStatusPanel({
                     }}
                     value={closePreference}
                   >
-                    {([
-                      {
-                        value: "ask",
-                        label: "每次询问",
-                        description: "关闭窗口时弹出选择框，由你当次决定。",
-                      },
-                      {
-                        value: "minimize",
-                        label: "最小化到托盘",
-                        description: "关闭窗口时隐藏主界面，托管服务继续运行。",
-                      },
-                      {
-                        value: "quit",
-                        label: "关闭应用",
-                        description: "关闭窗口时停止托管进程并退出 MaiBot OneKey。",
-                      },
-                    ] as const).map((option) => (
+                    {closePreferenceOptions.map((option) => (
                       <label
-                        className={[
-                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                        className={cn(
+                          "flex h-7 min-w-0 cursor-pointer items-center justify-center rounded-sm px-2.5 font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/40",
                           closePreference === option.value
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                        ].join(" ")}
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                        )}
                         key={option.value}
                       >
-                        <RadioGroupItem className="mt-0.5" value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
+                        <RadioGroupItem className="sr-only" value={option.value} />
+                        <span className="truncate">{option.label}</span>
                       </label>
                     ))}
                   </RadioGroup>
@@ -1478,52 +1727,196 @@ export function SettingsStatusPanel({
                       <TerminalSquare className="size-4" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium">终端模式</p>
+                      <p className="text-sm font-medium">终端设置</p>
                       <p className="text-xs text-muted-foreground">
                         {terminalSettings.useEmbeddedTerminal
-                          ? "服务会在应用内终端页运行"
-                          : "服务会在外部 Windows 终端窗口运行"}
+                          ? `服务在应用内终端页运行，字号 ${terminalSettings.fontSize}px。`
+                          : `服务在外部 Windows 终端窗口运行，内嵌字号 ${terminalSettings.fontSize}px。`}
                       </p>
                     </div>
                   </div>
-                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                    <Checkbox
-                      checked={terminalSettings.useEmbeddedTerminal}
-                      disabled={busy !== null}
-                      onCheckedChange={(checked) =>
-                        void saveTerminalSettings({ ...terminalSettings, useEmbeddedTerminal: checked === true })
-                      }
-                    />
-                    使用内嵌终端
-                  </label>
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                    <label className="flex h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
+                      <Checkbox
+                        checked={terminalSettings.useEmbeddedTerminal}
+                        disabled={busy !== null}
+                        onCheckedChange={(checked) =>
+                          void saveTerminalSettings({ ...terminalSettings, useEmbeddedTerminal: checked === true })
+                        }
+                      />
+                      使用内嵌终端
+                    </label>
+                    <label className="flex h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
+                      <span className="text-muted-foreground">字号</span>
+                      <Input
+                        className="h-8 w-20 font-mono text-sm"
+                        inputMode="numeric"
+                        max={22}
+                        min={10}
+                        onChange={(event) =>
+                          void saveTerminalSettings({
+                            ...terminalSettings,
+                            fontSize: Number(event.target.value),
+                          })
+                        }
+                        type="number"
+                        value={terminalSettings.fontSize}
+                      />
+                      px
+                    </label>
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <TerminalSquare className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">终端字体大小</p>
-                      <p className="text-xs text-muted-foreground">调整内嵌 PTY 终端字号，保存后会立即应用。</p>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Code2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">插件编写器</p>
+                        <p className="text-xs text-muted-foreground">
+                          {pluginBuilderEnabled
+                            ? "顶部显示编写器入口，并使用内置 Coding Agent。"
+                            : "顶部不显示编写器入口。"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <Badge variant={pluginBuilderEnabled ? "success" : "outline"}>
+                        {pluginBuilderEnabled ? "已打开" : "已关闭"}
+                      </Badge>
+                      <Badge variant={openCodeSettings.useBundledPluginInstructions ? "secondary" : "outline"}>
+                        {openCodeSettings.useBundledPluginInstructions ? "内置说明" : "项目默认"}
+                      </Badge>
                     </div>
                   </div>
-                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                    <Input
-                      className="h-8 w-20 font-mono text-sm"
-                      inputMode="numeric"
-                      max={22}
-                      min={10}
-                      onChange={(event) =>
-                        void saveTerminalSettings({
-                          ...terminalSettings,
-                          fontSize: Number(event.target.value),
-                        })
+
+                  <div className="grid gap-2">
+                    <label
+                      className={cn(
+                        "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                        pluginBuilderEnabled
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                      )}
+                    >
+                      <Checkbox
+                        checked={pluginBuilderEnabled}
+                        disabled={busy !== null}
+                        onCheckedChange={(checked) => requestPluginBuilderEnabledChange(checked === true)}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium">打开插件编写器</span>
+                        <span className="mt-1 block text-xs leading-relaxed">
+                          在顶部显示“编写器”入口，进入内置 Coding Agent 工作区。
+                        </span>
+                      </span>
+                    </label>
+
+                    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+                      <label className="flex min-w-0 cursor-pointer items-start gap-3">
+                        <Checkbox
+                          checked={openCodeSettings.useBundledPluginInstructions}
+                          disabled={busy !== null}
+                          onCheckedChange={(checked) =>
+                            void saveOpenCodeSettings({
+                              ...openCodeSettings,
+                              useBundledPluginInstructions: checked === true,
+                            })
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">使用内置插件编写说明</span>
+                          <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                            {openCodeSettings.useBundledPluginInstructions
+                              ? "启动 OpenCode 时使用内置 plugin_code.md，并跳过 MaiBot 自带 AGENTS.md。"
+                              : "按 OpenCode 默认规则读取项目内 AGENTS.md。"}
+                          </span>
+                        </span>
+                      </label>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <p
+                          className="min-w-[260px] flex-1 truncate rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] text-muted-foreground"
+                          title={snapshot.paths.opencodePluginInstructionsPath}
+                        >
+                          {snapshot.paths.opencodePluginInstructionsPath}
+                        </p>
+                        {busy === "opencode-settings" ? (
+                          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Network className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">网络代理</p>
+                        <p className="text-xs text-muted-foreground">
+                          对接 Clash 等本机代理，地址固定为 127.0.0.1。
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={networkProxyDraft.enabled ? "success" : "outline"}>
+                      {networkProxyDraft.enabled ? "已启用" : "未启用"}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <label className="flex min-h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                      <Checkbox
+                        checked={networkProxyDraft.enabled}
+                        disabled={busy !== null}
+                        onCheckedChange={(checked) =>
+                          setNetworkProxyDraft((current) => ({ ...current, enabled: checked === true }))
+                        }
+                      />
+                      启用本机代理
+                    </label>
+                    <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                      端口
+                      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
+                        <span className="font-mono text-xs text-muted-foreground">127.0.0.1:</span>
+                        <Input
+                          className="h-8 w-24 font-mono text-sm"
+                          disabled={busy !== null}
+                          inputMode="numeric"
+                          max={65535}
+                          min={1}
+                          onChange={(event) =>
+                            setNetworkProxyDraft((current) => ({
+                              ...current,
+                              port: Number(event.target.value),
+                            }))
+                          }
+                          type="number"
+                          value={networkProxyDraft.port}
+                        />
+                      </div>
+                    </label>
+                    <p className="min-w-[220px] flex-1 pb-2 text-xs text-muted-foreground">
+                      保存后影响启动器网络请求、Git / pip 更新，以及之后启动的托管服务。
+                    </p>
+                    <Button
+                      disabled={
+                        busy !== null ||
+                        !networkProxyDirty ||
+                        !Number.isInteger(networkProxyDraft.port) ||
+                        networkProxyDraft.port < 1 ||
+                        networkProxyDraft.port > 65535
                       }
-                      type="number"
-                      value={terminalSettings.fontSize}
-                    />
-                    px
-                  </label>
+                      onClick={() => void saveNetworkProxySettings()}
+                      size="sm"
+                    >
+                      {busy === "network-proxy" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                      保存代理设置
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
@@ -1606,6 +1999,9 @@ export function SettingsStatusPanel({
                     </Button>
                   </div>
                 </div>
+
+                {environmentServicesPanel}
+                {manualPythonDependenciesPanel}
               </TabsContent>
 
               <TabsContent className="space-y-4" value="appearance">
@@ -1613,26 +2009,77 @@ export function SettingsStatusPanel({
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Palette className="size-4" />
+                        <ImageIcon className="size-4" />
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium">主题模式</p>
-                        <p className="text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
+                        <p className="text-sm font-medium">应用图标</p>
+                        <p className="text-xs text-muted-foreground">切换主窗口和托盘使用的图标。</p>
                       </div>
                     </div>
-                    <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
+                    <Badge variant="secondary">
+                      {appIconSettings.options.find((option) => option.id === appIconSettings.selectedIconId)?.label ?? "默认"}
+                    </Badge>
                   </div>
 
                   <RadioGroup
                     className="grid gap-2 md:grid-cols-3"
-                    onValueChange={(value) => theme.setPreference(value as ThemePreference)}
-                    value={theme.preference}
+                    disabled={busy !== null}
+                    onValueChange={(value) => {
+                      if (busy === null) {
+                        void selectAppIcon(value as AppIconId);
+                      }
+                    }}
+                    value={appIconSettings.selectedIconId}
                   >
-                    {themeOptions.map((option) => (
+                    {appIconSettings.options.map((option) => (
+                      <label
+                        className={cn(
+                          "flex min-w-0 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors",
+                          appIconSettings.selectedIconId === option.id
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                          busy !== null && "cursor-not-allowed opacity-70",
+                        )}
+                        key={option.id}
+                      >
+                        <span className="grid size-14 shrink-0 place-items-center rounded-md border border-border bg-background">
+                          {option.previewUrl ? (
+                            <img alt="" className="size-12 rounded-md object-cover" draggable={false} src={option.previewUrl} />
+                          ) : (
+                            <ImageIcon className="size-5 text-muted-foreground" />
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                        <RadioGroupItem disabled={busy !== null} value={option.id} />
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Palette className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">外观风格</p>
+                      <p className="text-xs text-muted-foreground">选择整体视觉方向；每种风格有独立的配置项。</p>
+                    </div>
+                  </div>
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-3"
+                    onValueChange={(value) => appearance.setMode(value as AppearanceMode)}
+                    value={appearance.mode}
+                  >
+                    {appearanceModeOptions.map((option) => (
                       <label
                         className={cn(
                           "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
-                          theme.preference === option.value
+                          appearance.mode === option.value
                             ? "border-primary bg-primary/10 text-foreground"
                             : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
                         )}
@@ -1648,175 +2095,97 @@ export function SettingsStatusPanel({
                   </RadioGroup>
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <Palette className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">主题色</p>
-                      <p className="text-xs text-muted-foreground">影响按钮、选中态、焦点环和强调色。</p>
+                {appearance.mode === "future-retro" ? (
+                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                          <Palette className="size-4" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">未来复古配置</p>
+                          <p className="text-xs text-muted-foreground">控制纸张纹理、仪表盘边角和界面密度。</p>
+                        </div>
+                      </div>
+                      <label className="flex shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                        <Checkbox
+                          checked={appearance.retroPaperTexture}
+                          onCheckedChange={(checked) => appearance.setRetroPaperTexture(checked === true)}
+                        />
+                        纸张颗粒
+                      </label>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <AppearanceRadiusControl appearance={appearance} />
+                      <AppearanceScaleControl appearance={appearance} />
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {accentOptions.map((option) => (
-                      <button
-                        className={cn(
-                          "flex h-10 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:border-primary/50",
-                          appearance.accent === option.value ? "border-primary ring-2 ring-ring/35" : "border-border",
-                        )}
-                        key={option.value}
-                        onClick={() => appearance.setAccent(option.value)}
-                        type="button"
+                ) : null}
+
+                {appearance.mode === "modern" ? (
+                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Palette className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">现代配置</p>
+                        <p className="text-xs text-muted-foreground">控制主题色、字体、圆角和信息密度。</p>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">主题模式</p>
+                          <p className="mt-1 text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
+                        </div>
+                        <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
+                      </div>
+
+                      <RadioGroup
+                        className="grid gap-2 md:grid-cols-3"
+                        onValueChange={(value) => theme.setPreference(value as ThemePreference)}
+                        value={theme.preference}
                       >
-                        <span className="size-4 rounded-full border border-black/10" style={{ background: option.color }} />
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Type className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">字体</p>
-                        <p className="text-xs text-muted-foreground">调整界面文字的整体字形。</p>
-                      </div>
+                        {themeOptions.map((option) => (
+                          <label
+                            className={cn(
+                              "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                              theme.preference === option.value
+                                ? "border-primary bg-primary/10 text-foreground"
+                                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                            )}
+                            key={option.value}
+                          >
+                            <RadioGroupItem className="mt-0.5" value={option.value} />
+                            <span className="min-w-0">
+                              <span className="block text-sm font-medium">{option.label}</span>
+                              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </RadioGroup>
                     </div>
-                    <RadioGroup onValueChange={(value) => appearance.setFont(value as FontFamily)} value={appearance.font}>
-                      {fontOptions.map((option) => (
-                        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 text-sm" key={option.value}>
-                          <RadioGroupItem className="mt-0.5" value={option.value} />
-                          <span>
-                            <span className="block font-medium">{option.label}</span>
-                            <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </RadioGroup>
-                  </div>
-
-                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Settings className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">界面密度</p>
-                        <p className="text-xs text-muted-foreground">调整全局字号基准，影响信息密度。</p>
-                      </div>
+                    <AppearanceAccentControl appearance={appearance} />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <AppearanceFontControl appearance={appearance} />
+                      <AppearanceScaleControl appearance={appearance} />
                     </div>
-                    <RadioGroup onValueChange={(value) => appearance.setScale(value as InterfaceScale)} value={appearance.scale}>
-                      {scaleOptions.map((option) => (
-                        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-3 text-sm" key={option.value}>
-                          <RadioGroupItem className="mt-0.5" value={option.value} />
-                          <span>
-                            <span className="block font-medium">{option.label}</span>
-                            <span className="mt-1 block text-xs text-muted-foreground">{option.description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </RadioGroup>
+                    <AppearanceRadiusControl appearance={appearance} />
                   </div>
-                </div>
+                ) : null}
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">外观预览</p>
-                    <p className="mt-1 text-xs text-muted-foreground">设置会立即生效，并保存在本机浏览器存储中。</p>
+                    <p className="text-sm font-medium">外观设置</p>
+                    <p className="mt-1 text-xs text-muted-foreground">调整会立即生效，并自动保存在本机浏览器存储中。</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <Button onClick={appearance.reset} size="sm" variant="secondary">
                       <RotateCcw className="size-4" />
-                      恢复默认
-                    </Button>
-                    <Button size="sm">
-                      <Save className="size-4" />
-                      已自动保存
+                      恢复默认外观
                     </Button>
                   </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent className="space-y-4" value="checks">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">环境检查</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      检查运行目录、基础依赖和必要工具是否可用。
-                    </p>
-                  </div>
-                  <Button disabled={busy !== null} onClick={repair} variant="outline">
-                    {busy === "repair" ? <Loader2 className="animate-spin" /> : <Wrench />}
-                    准备基础目录
-                    <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
-                  </Button>
-                </div>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {initState.checks.map((check) => (
-                    <div
-                      className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5"
-                      key={check.id}
-                    >
-                      {check.status === "ok" ? (
-                        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
-                      ) : (
-                        <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium">{check.label}</span>
-                          <Badge variant={initVariant[check.status]}>
-                            {check.status === "ok" ? "正常" : check.status === "warning" ? "确认" : "错误"}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 truncate text-[11px] text-muted-foreground" title={check.path}>
-                          {check.detail}
-                        </p>
-                      </div>
-                      {check.actionUrl ? (
-                        <Button
-                          className="h-7 shrink-0 px-2 text-[11px]"
-                          onClick={() => openExternal(check.actionUrl ?? "")}
-                          size="sm"
-                          title={check.actionLabel ?? "打开下载页面"}
-                          variant="outline"
-                        >
-                          <Download className="size-3" />
-                          {check.actionLabel ?? "下载"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <Network className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">服务状态</p>
-                      <p className="text-xs text-muted-foreground">
-                        固定端口模式；端口冲突时报错。托管进程异常退出会有限次自动重启。
-                      </p>
-                    </div>
-                  </div>
-                  {services.map((service) => (
-                    <ServiceDetail
-                      commandBusy={busy === `command:${service.id}`}
-                      commandConfig={serviceCommands.find((config) => config.serviceId === service.id)}
-                      key={service.id}
-                      onOpenPath={openPath}
-                      onResetCommand={resetCommandConfig}
-                      onSaveCommand={saveCommandConfig}
-                      service={service}
-                    />
-                  ))}
                 </div>
               </TabsContent>
 
@@ -1824,30 +2193,44 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   选择当前使用的 QQ 后端。MaiBot Core 或 QQ 后端运行中不能切换。
                 </p>
-                <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2">
-                  {([
-                    { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接，WebUI 端口 6099。" },
-                    { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程，WebUI 端口 5099，OneBot 端口 7988。" },
-                  ] as const).map((option) => (
-                    <button
-                      className={[
-                        "rounded-md border p-3 text-left transition-colors",
-                        qqBackendSwitchBlocked && qqBackend !== option.value
-                          ? "cursor-not-allowed opacity-55"
-                          : "",
-                        qqBackend === option.value
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                      ].join(" ")}
-                      disabled={qqBackendSwitchBlocked && qqBackend !== option.value}
-                      key={option.value}
-                      onClick={() => setQqBackend(option.value)}
-                      type="button"
-                    >
-                      <span className="text-sm font-semibold">{option.label}</span>
-                      <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                    </button>
-                  ))}
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">QQ 后端</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {selectedQqBackendOption.description}
+                    </p>
+                  </div>
+                  <RadioGroup
+                    aria-label="QQ 后端"
+                    className="grid w-full shrink-0 grid-cols-2 gap-1 rounded-md border border-border bg-card p-1 sm:w-[320px]"
+                    onValueChange={(value) => setQqBackend(value as QqBackend)}
+                    value={qqBackend}
+                  >
+                    {qqBackendOptions.map((option) => {
+                      const selected = qqBackend === option.value;
+                      const disabled = qqBackendSwitchBlocked && !selected;
+
+                      return (
+                        <label
+                          className={cn(
+                            "flex h-8 min-w-0 cursor-pointer items-center justify-center rounded-sm px-3 text-xs font-semibold transition-colors",
+                            selected
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                            disabled && "cursor-not-allowed opacity-55 hover:bg-transparent hover:text-muted-foreground",
+                          )}
+                          key={option.value}
+                        >
+                          <RadioGroupItem className="sr-only" disabled={disabled} value={option.value} />
+                          <span className="truncate">{option.label}</span>
+                        </label>
+                      );
+                    })}
+                  </RadioGroup>
+                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
+                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
+                    保存后端
+                  </Button>
                 </div>
                 {qqBackendSwitchBlocked ? (
                   <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
@@ -1870,173 +2253,6 @@ export function SettingsStatusPanel({
                     重置 SnowLuma
                   </Button>
                 </div>
-                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
-                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
-                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
-                    保存后端
-                    <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
-                  </Button>
-                </div>
-              </TabsContent>
-
-              <TabsContent className="space-y-3" value="modules">
-                <p className="text-xs text-muted-foreground">
-                  使用可用 Git 更新可写 MaiBot 模块。更新器不会执行清理命令，不会删除 data、logs、config 等用户数据目录。
-                </p>
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
-                          <GitBranch className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">MaiBot Core</p>
-                          <p className="truncate font-mono text-[11px] text-muted-foreground" title={snapshot.paths.maibotRoot}>
-                            {snapshot.paths.maibotRoot}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      {maibotService ? (
-                        <Badge dot variant={statusVariant[maibotService.status]}>
-                          {statusText[maibotService.status]}
-                        </Badge>
-                      ) : null}
-                      <select
-                        className="h-9 max-w-56 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        disabled={busy !== null}
-                        onChange={(event) => setSelectedMaibotTag(event.target.value)}
-                        value={selectedMaibotTag}
-                      >
-                        <option value="">默认分支</option>
-                        {maibotTags.map((tag) => (
-                          <option key={tag.name} value={tag.name}>
-                            {tag.name}{tag.isPrerelease ? " (测试)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                      <Button disabled={busy !== null} onClick={refreshMaiBotTags} size="icon-sm" variant="outline">
-                        <RefreshCw />
-                      </Button>
-                      <Button
-                        disabled={busy !== null || maibotUpdateBlocked}
-                        onClick={() => setConfirmUpdateOpen(true)}
-                      >
-                        {busy === "module:maibot" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                        更新 MaiBot
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="grid gap-3 rounded-md border border-border bg-card/60 p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto] lg:items-end">
-                    <label className="grid gap-1.5 text-xs font-medium">
-                      更新源
-                      <select
-                        className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                        disabled={busy !== null}
-                        value={moduleSourcePreset}
-                        onChange={(event) => {
-                          const preset = event.target.value as ModuleSourcePreset;
-                          setModuleSourcePreset(preset);
-                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
-                          if (option) {
-                            setCustomMaiBotUrl(option.maibotUrl);
-                          }
-                        }}
-                      >
-                        {moduleSourceConfig?.options.map((option) => (
-                          <option key={option.preset} value={option.preset}>
-                            {option.label}
-                          </option>
-                        ))}
-                        <option value="custom">自定义</option>
-                      </select>
-                    </label>
-                    <label className="grid gap-1.5 text-xs font-medium">
-                      MaiBot 仓库
-                      <Input
-                        disabled={busy !== null || moduleSourcePreset !== "custom"}
-                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
-                        value={customMaiBotUrl}
-                      />
-                    </label>
-                    <Button
-                      disabled={busy !== null || !moduleSourceConfig}
-                      onClick={saveModuleSourceConfig}
-                      size="sm"
-                      variant="secondary"
-                    >
-                      {busy === "module:source" ? <Loader2 className="animate-spin" /> : <Save />}
-                      保存更新源
-                    </Button>
-                  </div>
-                  {maibotUpdateBlocked ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      请先停止 MaiBot Core，再执行模块更新。
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground">
-                      会强制同步远端代码并覆盖模块内的本地代码改动；用户运行数据仍保留在 MaiBot/data。
-                    </div>
-                  )}
-                </div>
-                {moduleUpdateResult ? <ModuleUpdateOutput result={moduleUpdateResult} /> : null}
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
-                          <Package className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">手动更新Python 依赖</p>
-                          <p
-                            className="truncate font-mono text-[11px] text-muted-foreground"
-                            title={pythonDepsState?.root ?? ""}
-                          >
-                            {pythonDepsState?.root ?? "读取覆盖目录中"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <Badge variant="secondary">清华源</Badge>
-                  </div>
-                  {customPythonRuntimeEnabled ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      已启用自定义 Python 路径，MaiBot Core 将直接使用该 Python，不再注入 python覆盖依赖。
-                    </div>
-                  ) : null}
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {managedPythonPackages.map((pythonPackage) => (
-                      <div
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card p-2.5"
-                        key={pythonPackage.name}
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{pythonPackage.label}</p>
-                          <p className="truncate font-mono text-[11px] text-muted-foreground">{pythonPackage.name}</p>
-                        </div>
-                        <Button
-                          disabled={busy !== null || maibotUpdateBlocked || customPythonRuntimeEnabled}
-                          onClick={() => void openPythonVersions(pythonPackage.name)}
-                          size="sm"
-                          variant="outline"
-                        >
-                          {busy === `py:list:${pythonPackage.name}` ? <Loader2 className="animate-spin" /> : <Download />}
-                          选择版本
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  {maibotUpdateBlocked ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      请先停止 MaiBot Core，再更新 Python 覆盖依赖。
-                    </div>
-                  ) : null}
-                </div>
-                {pythonInstallResult ? <PythonInstallOutput result={pythonInstallResult} /> : null}
               </TabsContent>
 
               <TabsContent className="space-y-3" value="paths">
@@ -2199,39 +2415,34 @@ export function SettingsStatusPanel({
       </DialogContent>
     </Dialog>
     <Dialog
-      open={confirmUpdateOpen}
+      open={confirmPluginBuilderEnableOpen}
       onOpenChange={(next) => {
-        if (!next && busy !== "module:maibot") setConfirmUpdateOpen(false);
+        if (!next) setConfirmPluginBuilderEnableOpen(false);
       }}
     >
       <DialogContent size="md">
-      <DialogHeader
-        description="更新器会使用可用 Git 强制同步 MaiBot 远端代码。它不会执行 git clean，也不会删除 data、logs、config 等用户数据目录。"
-        icon={<GitBranch className="size-4" />}
-        title="确认更新 MaiBot 模块？"
-        tone="warning"
-      />
-      <DialogBody className="space-y-3 text-sm">
-        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          这会覆盖 MaiBot 模块里的本地代码改动，并将代码重置到远端分支。用户数据仍保留在可写模块目录下的
-          <code className="mx-1 rounded bg-card px-1 py-0.5 font-mono">data</code>
-          目录。
-        </div>
-        {maibotUpdateBlocked ? (
-          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
-            MaiBot Core 当前未停止，请先停止服务后再更新。
+        <DialogHeader
+          description="OpenCode 这类 AI Agent CLI 会在 MaiBot 工作目录中运行，并可能读取、创建、修改文件或执行命令。"
+          icon={<AlertTriangle className="size-4" />}
+          title="确认打开插件编写器？"
+          tone="warning"
+        />
+        <DialogBody className="space-y-3 text-sm">
+          <div className="rounded-md border border-warning/40 bg-warning/15 p-3 text-xs leading-relaxed text-warning-foreground">
+            只在你信任当前工作区、理解操作影响，并准备好查看 AI Agent 执行内容时打开。建议避免输入敏感密钥、账号密码或私人文件路径。
           </div>
-        ) : null}
-      </DialogBody>
-      <DialogFooter>
-        <Button disabled={busy === "module:maibot"} onClick={() => setConfirmUpdateOpen(false)} size="sm" variant="ghost">
-          取消
-        </Button>
-        <Button disabled={busy === "module:maibot" || maibotUpdateBlocked} onClick={updateMaiBot} size="sm">
-          {busy === "module:maibot" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          确认更新
-        </Button>
-      </DialogFooter>
+          <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+            该设置只会显示编写器入口；真正启动 OpenCode 后，终端会切到对应会话，你仍需要关注它的命令输出和文件改动。
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button onClick={() => setConfirmPluginBuilderEnableOpen(false)} size="sm" variant="ghost">
+            取消
+          </Button>
+          <Button onClick={confirmPluginBuilderEnable} size="sm" variant="default">
+            我已了解，打开
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
       <Dialog
@@ -2325,7 +2536,7 @@ export function SettingsStatusPanel({
       />
       <DialogBody className="space-y-3 text-sm">
         <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          会重置关闭行为、服务命令、运行时工具路径、依赖源、模块更新源、资源路径选择和 QQ 后端选择。完成后界面会刷新并重新进入启动引导。
+          会重置关闭行为、服务命令、运行时工具路径、依赖源、首页更新源、资源路径选择和 QQ 后端选择。完成后界面会刷新并重新进入启动引导。
         </div>
         {resourceMoveBlocked ? (
           <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">

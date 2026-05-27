@@ -1,36 +1,44 @@
-﻿import {
+import {
   ArrowRight,
+  ArrowUp,
+  ChevronDown,
   Download,
   ExternalLink,
   Loader2,
   Maximize2,
-  MessageSquare,
   PackageCheck,
-  Puzzle,
+  Play,
   Radar,
   RefreshCw,
   Server,
   Settings,
   Send,
-  Store,
+  Sparkles,
+  Square,
   Wrench,
 } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import emojiDropImage from "../../../../../emoji2.png";
-import maiDropImage from "../../../../../mai.png";
-import mai2DropImage from "../../../../../mai2.png";
+import emojiDropImage from "@/assets/home-drops/emoji2.png";
+import maiDropImage from "@/assets/home-drops/mai.png";
+import mai2DropImage from "@/assets/home-drops/mai2.png";
 import maiMascotImage from "@/assets/mai2.png";
 import type {
   DesktopSnapshot,
+  LauncherUpdateInfo,
   LocalChatEvent,
   LocalChatMessageEvent,
   MaiBotStatisticSummary,
+  ModuleBranchOption,
   ModuleSourceConfig,
   ModuleSourcePreset,
+  ModuleSourceUpdate,
+  ModuleTagOption,
+  ModuleUpdateTarget,
   QqBackend,
   ServiceDescriptor,
+  ServiceId,
   ServiceStatus,
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
@@ -44,17 +52,23 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
+import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
-type MaiBotUpdateChannel = "stable" | "test" | "legacy";
+type MaiBotUpdateChannel = "stable" | "test" | "other";
 type DashboardUpdateChannel = "stable" | "test";
 type CompactChatState = "idle" | "connecting" | "connected" | "error";
 
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const QQ_WEBUI_PORT_STORAGE_PREFIX = "maibot.qqWebuiPort";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
+const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
+const MASCOT_INTRO_TRIGGER_CLICKS = 10;
+
+let mascotIntroShownThisSession = false;
 
 export function adapterPluginIdForBackend(backend: QqBackend): string {
   return backend === "snowluma" ? "maibot-team.snowluma-adapter" : "maibot-team.napcat-adapter";
@@ -118,20 +132,76 @@ const statusText: Record<ServiceStatus, string> = {
   error: "异常",
 };
 
-const statusVariant: Record<ServiceStatus, React.ComponentProps<typeof Badge>["variant"]> = {
-  stopped: "outline",
-  starting: "warning",
-  running: "success",
-  stopping: "warning",
-  error: "danger",
+const statusColor: Record<ServiceStatus, string> = {
+  stopped: "var(--retro-ink, var(--muted-foreground))",
+  starting: "var(--warning)",
+  running: "var(--retro-rust, var(--success))",
+  stopping: "var(--warning)",
+  error: "var(--destructive)",
 };
 
 function valueOrFallback(value: string | undefined): string {
   return value && value.trim().length > 0 ? value : "未读取";
 }
 
+function versionAsTag(version: string | undefined): string | undefined {
+  const trimmed = version?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return /^v/iu.test(trimmed) ? trimmed : `v${trimmed}`;
+}
+
+function formatFileSize(bytes: number | undefined): string | undefined {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) {
+    return undefined;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function ServiceStatusText({
+  status,
+  className,
+}: {
+  status: ServiceStatus;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs font-medium leading-none", className)}
+      style={{ color: statusColor[status] }}
+    >
+      <span aria-hidden className="size-1.5 rounded-full bg-current" />
+      {statusText[status]}
+    </span>
+  );
+}
+
 function formatStatNumber(value: number | undefined): string | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : undefined;
+}
+
+function parseVersionParts(version: string | undefined): number[] {
+  const normalized = version?.trim().replace(/^v/iu, "").split(/[+-]/u, 1)[0] ?? "";
+  return normalized
+    .split(/[._-]/u)
+    .map((part) => Number(part.match(/^\d+/u)?.[0] ?? 0));
+}
+
+function compareVersionText(left: string | undefined, right: string | undefined): number {
+  const leftParts = parseVersionParts(left);
+  const rightParts = parseVersionParts(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index++) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
 }
 
 function messageFromError(error: unknown): string {
@@ -159,15 +229,23 @@ function DetailRow({
   label,
   value,
   className,
+  retro = false,
 }: {
   label: string;
   value: string | undefined;
   className?: string;
+  retro?: boolean;
 }): React.JSX.Element {
   return (
     <div className={cn("flex items-center justify-between gap-3", className)}>
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate font-mono font-semibold" title={value}>
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          retro ? "retro-value text-right" : "font-mono font-semibold",
+        )}
+        title={value}
+      >
         {valueOrFallback(value)}
       </span>
     </div>
@@ -178,15 +256,17 @@ function ChoiceSwitch<T extends string>({
   value,
   options,
   onChange,
+  retro = false,
 }: {
   value: T;
   options: Array<{ value: T; label: string; version: string | undefined }>;
   onChange: (value: T) => void;
+  retro?: boolean;
 }): React.JSX.Element {
   return (
     <div
       className={cn(
-        "grid gap-2 rounded-lg border border-border bg-muted/30 p-1",
+        retro ? "retro-control grid gap-2 p-1" : "grid gap-2 rounded-lg border border-border bg-muted/30 p-1",
         options.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
       )}
     >
@@ -196,8 +276,9 @@ function ChoiceSwitch<T extends string>({
         return (
           <button
             className={cn(
-              "grid min-h-14 min-w-0 gap-1 rounded-md px-3 py-2 text-left text-xs transition-colors",
-              selected ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground hover:bg-muted",
+              "grid min-h-14 min-w-0 gap-1 px-3 py-2 text-left text-xs transition-colors",
+              retro ? "rounded-sm border border-transparent" : "rounded-md",
+              selected ? cn("bg-primary text-primary-foreground", !retro && "shadow-sm") : "text-foreground hover:bg-muted",
               disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
             )}
             disabled={disabled}
@@ -220,10 +301,12 @@ function LocalChatQuickCard({
   active,
   maibotService,
   onOpenFull,
+  retro,
 }: {
   active: boolean;
   maibotService: ServiceDescriptor | undefined;
   onOpenFull: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   const [state, setState] = useState<CompactChatState>("idle");
   const [messages, setMessages] = useState<LocalChatMessageEvent[]>([]);
@@ -306,34 +389,27 @@ function LocalChatQuickCard({
     }
   }, [connected, draft, sending]);
 
-  const statusLabel =
-    connected ? "已连接" : state === "connecting" ? "连接中" : maibotService?.status === "running" ? "未连接" : "MaiBot 未启动";
   const visibleMessages = messages
     .map((message) => ({ ...message, text: localChatText(message) }))
     .filter((message) => message.text.length > 0)
     .slice(-12);
 
   return (
-    <section className="rounded-lg border border-border bg-card p-3.5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            <MessageSquare className="size-4.5" />
-          </span>
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold">随便聊聊</h3>
-          </div>
-        </div>
+    <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
+      <div className={cn("mb-3 flex items-center gap-2", retro ? "justify-between" : "justify-end")}>
+        {retro ? <p className="retro-title text-2xl text-foreground">聊聊</p> : null}
         <div className="flex shrink-0 items-center gap-2">
-          <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
-            {statusLabel}
-          </Badge>
           <Button className="size-7" onClick={onOpenFull} size="icon" title="展开随便聊聊" variant="secondary">
             <Maximize2 className="size-3.5" />
           </Button>
         </div>
       </div>
-      <div className="mb-3 grid max-h-32 min-h-20 gap-2 overflow-y-auto rounded-md border border-border bg-muted/30 p-3 [scrollbar-width:thin]">
+      <div
+        className={cn(
+          "mb-3 grid max-h-32 gap-2 overflow-y-auto p-3 [scrollbar-width:thin]",
+          retro ? "retro-control min-h-24" : "min-h-20 rounded-md border border-border bg-muted/30",
+        )}
+      >
         {visibleMessages.length > 0 ? (
           visibleMessages.map((message) => (
             <div
@@ -342,12 +418,13 @@ function LocalChatQuickCard({
             >
               <p
                 className={cn(
-                  "max-w-[82%] truncate rounded-md px-2.5 py-1.5 text-xs",
+                  "max-w-[82%] truncate px-2.5 py-1.5 text-xs",
+                  retro ? "rounded-sm border" : "rounded-md",
                   message.role === "user"
-                    ? "bg-primary text-primary-foreground"
+                    ? cn("bg-primary text-primary-foreground", retro && "border-primary")
                     : message.role === "error"
-                      ? "bg-destructive/10 text-destructive"
-                      : "bg-card text-foreground",
+                      ? cn("bg-destructive/10 text-destructive", retro && "border-destructive/30")
+                      : cn("bg-card text-foreground", retro && "border-border"),
                 )}
                 title={message.text}
               >
@@ -357,7 +434,7 @@ function LocalChatQuickCard({
           ))
         ) : (
           <div className="grid place-items-center text-xs text-muted-foreground">
-            {error ?? "这里会显示最近几句简单文字。"}
+            {error ?? "暂无本地聊天消息"}
           </div>
         )}
       </div>
@@ -375,7 +452,7 @@ function LocalChatQuickCard({
           value={draft}
         />
         <Button
-          className="h-8 shrink-0 px-3 text-xs"
+          className={cn("shrink-0 px-3 text-xs", retro ? "h-9" : "h-8")}
           disabled={!connected || !draft.trim() || sending}
           onClick={() => void sendQuickMessage()}
           size="sm"
@@ -388,15 +465,84 @@ function LocalChatQuickCard({
   );
 }
 
+function ServiceCardControls({
+  service,
+  busy,
+  onStart,
+  onStop,
+  onRestart,
+  retro,
+}: {
+  service: ServiceDescriptor;
+  busy: boolean;
+  onStart: (id: ServiceId) => void;
+  onStop: (id: ServiceId) => void;
+  onRestart: (id: ServiceId) => void;
+  retro: boolean;
+}): React.JSX.Element {
+  const isTransitioning = service.status === "starting" || service.status === "stopping" || busy;
+  const isStarting = service.status === "starting";
+  const canStart = service.status === "stopped" || service.status === "error";
+  const canStop = service.status === "running" || service.status === "starting" || service.status === "error";
+  const stopDisabled = !canStop || (busy && !isStarting) || service.status === "stopping";
+
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button
+        aria-label={`启动 ${service.name}`}
+        className={cn(retro ? "size-8" : "size-7")}
+        disabled={!canStart || isTransitioning}
+        onClick={() => onStart(service.id)}
+        size="icon"
+        title="启动"
+        variant={retro ? "secondary" : "ghost"}
+      >
+        {busy && canStart ? <Loader2 className="animate-spin" /> : <Play />}
+      </Button>
+      <Button
+        aria-label={`停止 ${service.name}`}
+        className={cn(retro ? "size-8" : "size-7")}
+        disabled={stopDisabled}
+        onClick={() => onStop(service.id)}
+        size="icon"
+        title="停止"
+        variant={retro ? "secondary" : "ghost"}
+      >
+        <Square />
+      </Button>
+      <Button
+        aria-label={`重启 ${service.name}`}
+        className={cn(retro ? "size-8" : "size-7")}
+        disabled={isTransitioning}
+        onClick={() => onRestart(service.id)}
+        size="icon"
+        title="重启"
+        variant={retro ? "secondary" : "ghost"}
+      >
+        <RefreshCw />
+      </Button>
+    </div>
+  );
+}
+
 function ServiceSummary({
   icon,
   service,
+  serviceControls,
   webuiAction,
   adapterAction,
+  retro,
 }: {
   icon: React.ReactNode;
   service: ServiceDescriptor | undefined;
+  serviceControls?: {
+    busy: boolean;
+    onStart: (id: ServiceId) => void;
+    onStop: (id: ServiceId) => void;
+    onRestart: (id: ServiceId) => void;
+  };
   webuiAction?: {
+    title: string;
     label: string;
     port: string;
     portValid: boolean;
@@ -405,60 +551,75 @@ function ServiceSummary({
   };
   adapterAction?: {
     title: string;
-    description: string;
+    description?: string;
     label: string;
     onClick: () => void;
   };
+  retro: boolean;
 }): React.JSX.Element {
   return (
-    <div className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
+    <div className={cn(retro ? "retro-panel grid gap-3 p-3.5 pl-5" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            {icon}
-          </span>
+          {icon ? (
+            <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
+              {icon}
+            </span>
+          ) : null}
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{service?.name ?? "未知服务"}</p>
+            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>{service?.name ?? "未知服务"}</p>
           </div>
         </div>
-        {service ? (
-          <Badge dot variant={statusVariant[service.status]}>
-            {statusText[service.status]}
-          </Badge>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {service && serviceControls ? (
+            <ServiceCardControls
+              busy={serviceControls.busy}
+              onRestart={serviceControls.onRestart}
+              onStart={serviceControls.onStart}
+              onStop={serviceControls.onStop}
+              retro={retro}
+              service={service}
+            />
+          ) : null}
+          {service ? <ServiceStatusText status={service.status} /> : null}
+        </div>
       </div>
       {(webuiAction || adapterAction) ? (
-        <div className="grid gap-3 sm:grid-cols-[auto_minmax(280px,1fr)] sm:items-center">
+        <div className="grid gap-3 sm:grid-cols-2">
           {webuiAction ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                className="h-8 justify-self-start px-3 text-xs"
-                disabled={!webuiAction.portValid}
-                onClick={webuiAction.onClick}
-                size="sm"
-                variant="secondary"
-              >
-                <ExternalLink className="size-4" />
-                {webuiAction.label}
-              </Button>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                端口
-                <Input
-                  className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
-                  inputMode="numeric"
-                  onChange={(event) => webuiAction.onPortChange(event.target.value.replace(/\D/gu, "").slice(0, 5))}
-                  value={webuiAction.port}
-                />
-              </label>
+            <div className={cn(retro ? "retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2" : "flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2")}>
+              <p className={cn("min-w-0 truncate font-bold", retro ? "text-base" : "text-xs")}>{webuiAction.title}</p>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <label aria-label="端口" className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Input
+                    className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
+                    inputMode="numeric"
+                    onChange={(event) => webuiAction.onPortChange(event.target.value.replace(/\D/gu, "").slice(0, 5))}
+                    value={webuiAction.port}
+                  />
+                </label>
+                <Button
+                  className="h-8 justify-self-start px-3 text-xs"
+                  disabled={!webuiAction.portValid}
+                  onClick={webuiAction.onClick}
+                  size="sm"
+                  variant="secondary"
+                >
+                  <ExternalLink className="size-4" />
+                  {webuiAction.label}
+                </Button>
+              </div>
             </div>
           ) : null}
           {adapterAction ? (
-            <div className="grid gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div className={cn(retro ? "retro-control grid gap-3 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" : "grid gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center")}>
               <div className="min-w-0">
-                <p className="truncate text-xs font-semibold">{adapterAction.title}</p>
-                <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
-                  {adapterAction.description}
-                </p>
+                <p className={cn("truncate font-bold", retro ? "text-base" : "text-xs")}>{adapterAction.title}</p>
+                {adapterAction.description ? (
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {adapterAction.description}
+                  </p>
+                ) : null}
               </div>
               <Button className="h-7 px-2.5 text-[11px]" onClick={adapterAction.onClick} size="sm" variant="secondary">
                 <Settings />
@@ -474,22 +635,31 @@ function ServiceSummary({
 
 function MessagePlatformConnectCard({
   onClick,
+  retro,
 }: {
   onClick: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   return (
     <button
-      className="grid gap-3 rounded-lg border border-dashed border-primary/45 bg-card p-3.5 text-left transition-colors hover:border-primary hover:bg-primary/5"
+      className={cn(
+        "grid gap-3 text-left transition-colors hover:border-primary",
+        retro
+          ? "retro-panel p-3.5 pl-5"
+          : "rounded-lg border border-dashed border-primary/45 bg-card p-3.5 hover:bg-primary/5",
+      )}
       onClick={onClick}
       type="button"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
             <Server className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">连接到消息软件平台.......</p>
+            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>
+              {retro ? "Message Platform" : "连接到消息软件平台......."}
+            </p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               新增 QQ-NapCat 或 QQ-SnowLuma，自动写入连接配置并启动后端。
             </p>
@@ -497,14 +667,73 @@ function MessagePlatformConnectCard({
         </div>
         <Badge variant="warning">待配置</Badge>
       </div>
-      <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3">
+      <div className={cn(retro ? "retro-control flex items-center justify-between gap-3 p-3" : "flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3")}>
         <span className="text-xs text-muted-foreground">选择一个消息平台开始初始化</span>
-        <span className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground">
+        <span className={cn("inline-flex h-7 items-center gap-1 bg-primary px-2.5 text-[11px] text-primary-foreground", retro ? "rounded-sm font-semibold" : "rounded-md font-medium")}>
           新增平台
           <ArrowRight className="size-3.5" />
         </span>
       </div>
     </button>
+  );
+}
+
+function LauncherUpdateCard({
+  appVersion,
+  latestTag,
+  updateBusy,
+  onUpdate,
+  retro,
+}: {
+  appVersion: string;
+  latestTag?: string;
+  updateBusy?: boolean;
+  onUpdate: () => void;
+  retro: boolean;
+}): React.JSX.Element {
+  const currentTag = versionAsTag(appVersion);
+  const updateAvailable = latestTag ? compareVersionText(latestTag, currentTag) > 0 : false;
+
+  return (
+    <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
+      {retro ? (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="retro-title text-2xl text-foreground">一键包信息</p>
+          {updateAvailable ? <Badge variant="warning">可更新</Badge> : <Badge variant="outline">已同步</Badge>}
+        </div>
+      ) : null}
+      <div
+        className={cn(
+          "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
+          retro ? "retro-control p-3 text-xs" : "rounded-md border border-border bg-muted/30 p-3 text-xs",
+        )}
+      >
+        <div className="grid min-w-0 gap-2">
+          <DetailRow label="本地版本" value={currentTag} retro={retro} />
+          <DetailRow label="最新版本" value={latestTag} retro={retro} />
+        </div>
+        <Button
+          aria-label="更新一键包"
+          className={cn("relative justify-self-end", retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]")}
+          disabled={updateBusy}
+          onClick={onUpdate}
+          size={retro ? "icon" : "sm"}
+          variant="secondary"
+        >
+          {updateAvailable ? (
+            <span
+              className={cn(
+                "absolute bg-warning",
+                retro
+                  ? "right-[var(--retro-stroke)] top-[var(--retro-stroke)] size-2 rounded-none"
+                  : "right-1 top-1 size-2 rounded-full",
+              )}
+            />
+          ) : null}
+          {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -515,8 +744,7 @@ function MaiBotOverviewCard({
   latestPrerelease,
   updateBusy,
   onUpdate,
-  onOpenPluginStore,
-  onOpenPluginManager,
+  retro,
 }: {
   service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
@@ -524,113 +752,67 @@ function MaiBotOverviewCard({
   latestPrerelease: string | undefined;
   updateBusy?: boolean;
   onUpdate: () => void;
-  onOpenPluginStore: () => void;
-  onOpenPluginManager: () => void;
+  retro: boolean;
 }): React.JSX.Element {
-  const [activeTab, setActiveTab] = useState<"version" | "plugins">("version");
+  const hasNewVersion =
+    compareVersionText(latestStable, localVersion) > 0 ||
+    compareVersionText(latestPrerelease, localVersion) > 0;
 
   return (
-    <div className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5">
+    <div className={cn(retro ? "retro-panel grid min-w-0 gap-4 p-4 pl-6" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5")}>
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-            <Radar className="size-4.5" />
-          </span>
+        <div className={cn("min-w-0", !retro && "flex items-center gap-3")}>
+          {!retro ? (
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+              <Radar className="size-4.5" />
+            </span>
+          ) : null}
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{service?.name ?? "MaiBot Core"}</p>
+            <p className={cn("truncate", retro ? "retro-title text-[3rem] leading-none text-foreground" : "text-sm font-semibold")}>
+              {service?.name ?? "MaiBot Core"}
+            </p>
           </div>
         </div>
-        {service ? (
-          <Badge dot variant={statusVariant[service.status]}>
-            {statusText[service.status]}
-          </Badge>
-        ) : null}
+        {service ? <ServiceStatusText status={service.status} /> : null}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_4.25rem]">
-        <div className="min-w-0 sm:order-2">
-          <div className="grid grid-cols-2 rounded-md border border-border bg-muted/35 p-1 sm:grid-cols-1">
-          {([
-            { value: "version", label: "版本" },
-            { value: "plugins", label: "插件" },
-          ] as const).map((tab) => (
-            <button
-              className={cn(
-                "h-7 rounded-sm px-2 text-[11px] font-medium transition-colors sm:h-12",
-                activeTab === tab.value
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              key={tab.value}
-              onClick={() => setActiveTab(tab.value)}
-              type="button"
-            >
-              {tab.label}
-            </button>
-          ))}
-          </div>
-        </div>
-
-        {activeTab === "version" ? (
-          <div className="grid min-w-0 gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <div className="min-w-0">
-              <p className="text-xs text-muted-foreground">MaiBot 本地版本</p>
-              <p className="mt-1 truncate font-mono text-base font-semibold" title={localVersion}>
-                {valueOrFallback(localVersion)}
-              </p>
-            </div>
-            <div className="grid min-w-0 gap-1 sm:min-w-44">
-              <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-                <span className="shrink-0 text-muted-foreground">最新正式版</span>
-                <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestStable}>
-                  {valueOrFallback(latestStable)}
-                </span>
-              </div>
-              <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px]">
-                <span className="shrink-0 text-muted-foreground">最新测试版</span>
-                <span className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground/80" title={latestPrerelease}>
-                  {valueOrFallback(latestPrerelease)}
-                </span>
-              </div>
-              <Button
-                className="mt-1 h-7 justify-self-end px-2.5 text-[11px]"
-                disabled={updateBusy}
-                onClick={onUpdate}
-                size="sm"
-                variant="secondary"
-              >
-                {updateBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                更新
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3 sm:order-1">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                <Puzzle className="size-4.5" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">插件</span>
-                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                  安装或管理 MaiBot Core 插件。
-                </span>
-              </span>
-            </div>
-            <span className="flex shrink-0 flex-wrap gap-2">
-              <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenPluginStore} size="sm">
-                <Store className="size-3.5" />
-                打开商店
-                <ArrowRight className="size-3.5" />
-              </Button>
-              <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenPluginManager} size="sm" variant="secondary">
-                <Puzzle className="size-3.5" />
-                插件管理
-                <ArrowRight className="size-3.5" />
-              </Button>
-            </span>
-          </div>
+      <div
+        className={cn(
+          "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
+          retro ? "border-t border-border/70 pt-4" : "rounded-md border border-border bg-muted/30 p-3",
         )}
+      >
+        <div className="min-w-0">
+          <p className={cn("text-xs text-muted-foreground", retro && "font-semibold")}>{retro ? "MAIBOT 版本" : "MaiBot 版本"}</p>
+          <p
+            className={cn(retro ? "retro-value mt-2 truncate text-3xl leading-none" : "mt-1 truncate font-mono text-base font-semibold")}
+            title={localVersion}
+          >
+            {valueOrFallback(localVersion)}
+          </p>
+        </div>
+        <div className="grid min-w-0 gap-1 sm:min-w-44">
+          <Button
+            aria-label="更新 MaiBot"
+            className={cn("relative mt-1 justify-self-end", retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]")}
+            disabled={updateBusy}
+            onClick={onUpdate}
+            size={retro ? "icon" : "sm"}
+            variant="secondary"
+          >
+            {hasNewVersion ? (
+              <span
+                className={cn(
+                  "absolute bg-warning",
+                  retro
+                    ? "right-[var(--retro-stroke)] top-[var(--retro-stroke)] size-2 rounded-none"
+                    : "right-1 top-1 size-2 rounded-full",
+                )}
+              />
+            ) : null}
+            {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -638,17 +820,14 @@ function MaiBotOverviewCard({
 
 function HomeStatsPanel({
   snapshot,
-  services,
   onOpenQuickActions,
+  retro,
 }: {
   snapshot: DesktopSnapshot;
-  services: ServiceDescriptor[];
   onOpenQuickActions: () => void;
+  retro: boolean;
 }): React.JSX.Element {
   const [maibotStats, setMaibotStats] = useState<MaiBotStatisticSummary | null>(null);
-  const runningCount = services.filter((service) => service.status === "running").length;
-  const readyCount = services.filter((service) => service.health === "ready").length;
-  const qqBackend = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat";
   const topChats = maibotStats?.chatStats.slice(0, 2) ?? [];
 
   useEffect(() => {
@@ -679,69 +858,90 @@ function HomeStatsPanel({
   }, [snapshot.paths.maibotRoot]);
 
   return (
-    <div className="grid gap-3 self-start">
-      <aside className="grid gap-3 rounded-lg border border-border bg-card p-3.5">
+    <div className={cn("grid self-start", retro ? "gap-4" : "gap-3")}>
+      <button
+        className={cn(
+          "flex w-full items-center justify-between gap-3 text-left transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          retro
+            ? "retro-panel retro-panel-bare p-4"
+            : "rounded-lg border border-border bg-card p-3.5 hover:border-primary/45 hover:bg-accent/45",
+        )}
+        onClick={() => void window.maibotDesktop?.openExternal(MAIBOT_OFFICIAL_DOCS_URL)}
+        type="button"
+      >
+        <span className="flex min-w-0 items-center gap-3">
+          <span className={cn("grid shrink-0 place-items-center bg-primary/10 text-primary", retro ? "size-11 border border-primary" : "size-8 rounded-md")}>
+            <ExternalLink className="size-4.5" />
+          </span>
+          <span className="min-w-0">
+            <span className={cn("block", retro ? "retro-title text-xl" : "text-sm font-semibold")}>官方文档</span>
+            <span className={cn("block truncate", retro ? "font-mono text-xs text-foreground" : "text-[11px] text-muted-foreground")}>docs.mai-mai.org</span>
+          </span>
+        </span>
+        <ArrowRight className={cn("shrink-0", retro ? "size-5 text-primary" : "size-4 text-muted-foreground")} />
+      </button>
+      <aside className={cn(retro ? "retro-panel grid gap-4 p-4 pl-6" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
         <div className="flex items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+          <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
             <PackageCheck className="size-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-semibold">统计信息</p>
-            <p className="text-[11px] text-muted-foreground">当前实例概览</p>
+            <p className={cn(retro ? "retro-title text-2xl" : "text-sm font-semibold")}>统计信息</p>
           </div>
         </div>
 
         <div className="grid gap-2 text-xs">
-          <DetailRow label="服务运行" value={`${runningCount}/${services.length}`} />
-          <DetailRow label="端口可用" value={`${readyCount}/${services.length}`} />
-          <DetailRow label="一键包版本" value={`v${snapshot.appVersion}`} />
-          <DetailRow label="MaiBot 本地版本" value={snapshot.moduleVersions.maibotLocal} />
-          <DetailRow label="QQ 后端" value={qqBackend} />
-        </div>
-
-        <div className="grid gap-2 border-t border-border pt-3 text-xs">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
             {maibotStats?.periodLabel ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+              <span className="rounded-sm border border-border bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
                 {maibotStats.periodLabel}
               </span>
             ) : null}
           </div>
-          <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} />
-          <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} />
-          <DetailRow label="总花费" value={maibotStats?.totalCost} />
-          <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} />
+          <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} retro={retro} />
+          <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} retro={retro} />
+          <DetailRow label="总花费" value={maibotStats?.totalCost} retro={retro} />
+          <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} retro={retro} />
         </div>
 
-        <div className="grid gap-2 border-t border-border pt-3 text-xs">
+        <div className={cn("grid gap-2 pt-3 text-xs", retro ? "retro-rule" : "border-t border-border")}>
           <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
-          <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} />
-          <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} />
-          <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} />
+          <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} retro={retro} />
+          <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} retro={retro} />
+          <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} retro={retro} />
           {topChats.map((chat) => (
             <DetailRow
               key={chat.name}
               label={chat.name}
               value={formatStatNumber(chat.messageCount)}
+              retro={retro}
             />
           ))}
         </div>
       </aside>
-      <section className="rounded-lg border border-border bg-card p-3.5">
-        <div className="flex items-center justify-between gap-3">
+      <section className={cn(retro ? "retro-panel retro-panel-action min-h-[72px] p-0 pl-[88px] pr-4" : "rounded-lg border border-border bg-card p-3.5")}>
+        <div className={cn("flex items-center justify-between gap-3", retro && "min-h-[72px]")}>
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-              <Wrench className="size-4.5" />
-            </span>
+            {!retro ? (
+              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                <Wrench className="size-4.5" />
+              </span>
+            ) : null}
             <div className="min-w-0">
-              <p className="text-sm font-semibold">快捷操作</p>
+              <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>快捷操作</p>
               <p className="text-[11px] text-muted-foreground">路径、数据库和配置导入。</p>
             </div>
           </div>
-          <Button className="h-8 px-2.5 text-[11px]" onClick={onOpenQuickActions} size="sm" variant="secondary">
-            打开
-            <ArrowRight className="size-3.5" />
+          <Button
+            aria-label="打开快捷操作"
+            className={cn(retro ? "size-10 border-0 bg-transparent text-primary hover:bg-transparent hover:text-primary active:bg-transparent" : "size-8")}
+            onClick={onOpenQuickActions}
+            size="icon"
+            title="打开快捷操作"
+            variant={retro ? "ghost" : "secondary"}
+          >
+            <ArrowRight className={cn(retro ? "size-7" : "size-3.5")} />
           </Button>
         </div>
       </section>
@@ -798,7 +998,7 @@ function randomDropImage(): string {
 }
 
 function randomCollisionTarget(): CollisionRect | undefined {
-  const candidates = Array.from(document.querySelectorAll<HTMLElement>(".rounded-lg.border"))
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>(".retro-panel, .rounded-lg.border"))
     .filter((element) => !element.closest("[data-drop-layer='true']"))
     .filter((element) => !element.closest("[data-mascot-stage='true']"))
     .map((element) => element.getBoundingClientRect())
@@ -864,7 +1064,15 @@ function alphaBoundsForImage(src: string): Promise<ImageAlphaBounds> {
   });
 }
 
-function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.Element {
+function ElasticMascot({
+  onLongPress,
+  onSecretTap,
+  placement = "fixed",
+}: {
+  onLongPress: () => void;
+  onSecretTap: () => void;
+  placement?: "fixed" | "retro-column";
+}): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
   const dropIdRef = useRef(0);
@@ -1134,7 +1342,18 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
     }
     spawnDrop(event.clientX);
     kick((Math.random() - 0.5) * 8, -7, 1.1);
-  }, [kick, spawnDrop]);
+    onSecretTap();
+  }, [kick, onSecretTap, spawnDrop]);
+
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    spawnDrop();
+    kick((Math.random() - 0.5) * 8, -7, 1.1);
+    onSecretTap();
+  }, [kick, onSecretTap, spawnDrop]);
 
   const onPointerDown = useCallback(() => {
     clearLongPress();
@@ -1157,10 +1376,14 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
 
   return (
     <div
-      aria-hidden="true"
-      className="fixed right-0 bottom-0 z-20 hidden h-28 w-32 overflow-hidden md:block"
+      aria-label="MaiBot 形象"
+      className={cn(
+        "z-20 hidden h-28 w-32 overflow-hidden md:block",
+        placement === "retro-column" ? "retro-mascot-frame relative self-start" : "fixed",
+      )}
       data-mascot-stage="true"
       onClick={onClick}
+      onKeyDown={onKeyDown}
       onPointerCancel={onPointerUp}
       onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
@@ -1168,10 +1391,21 @@ function ElasticMascot({ onLongPress }: { onLongPress: () => void }): React.JSX.
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       ref={stageRef}
+      role="button"
+      style={placement === "fixed"
+        ? {
+          right: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
+          bottom: "max(4px, calc(var(--app-window-radius, 16px) * 0.28))",
+        }
+        : undefined}
+      tabIndex={0}
     >
       <img
         alt=""
-        className="pointer-events-none absolute right-[-46px] bottom-[-40px] w-32 select-none"
+        className={cn(
+          "pointer-events-none absolute bottom-[-40px] w-32 select-none",
+          placement === "retro-column" ? "left-8" : "right-[-46px]",
+        )}
         draggable={false}
         src={maiMascotImage}
         style={{
@@ -1211,6 +1445,10 @@ export function HomePanel({
   onOpenTab,
   onOpenPluginConfig,
   onEnterFloatingMode,
+  onRestartService,
+  onStartService,
+  onStopService,
+  serviceActionBusy,
 }: {
   active: boolean;
   snapshot: DesktopSnapshot;
@@ -1218,12 +1456,19 @@ export function HomePanel({
   onOpenTab: (tab: string) => void;
   onOpenPluginConfig: (pluginId: string) => void;
   onEnterFloatingMode: () => void;
+  onRestartService: (id: ServiceId) => void;
+  onStartService: (id: ServiceId) => void;
+  onStopService: (id: ServiceId) => void;
+  serviceActionBusy: string | null;
 }): React.JSX.Element {
-  const [updateDialog, setUpdateDialog] = useState<"maibot" | "dashboard" | null>(null);
+  const [updateDialog, setUpdateDialog] = useState<"launcher" | "maibot" | "dashboard" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
   const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
+  const [mascotIntroOpen, setMascotIntroOpen] = useState(false);
+  const [, setMascotClickCount] = useState(0);
   const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend>("napcat");
   const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
@@ -1231,9 +1476,18 @@ export function HomePanel({
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
   const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
+  const [moduleSourceExpanded, setModuleSourceExpanded] = useState(false);
+  const [moduleSourceSaving, setModuleSourceSaving] = useState(false);
   const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
   const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
   const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
+  const [maibotBranches, setMaibotBranches] = useState<ModuleBranchOption[]>([]);
+  const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
+  const [maibotRefsLoading, setMaibotRefsLoading] = useState(false);
+  const [selectedMaiBotBranch, setSelectedMaiBotBranch] = useState("main");
+  const [selectedMaiBotTag, setSelectedMaiBotTag] = useState("");
+  const appearance = useAppearance();
+  const useRetroHome = appearance.mode === "future-retro";
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
@@ -1248,16 +1502,43 @@ export function HomePanel({
     napcat?.status === "starting" || napcat?.status === "running" || napcat?.status === "stopping" || Boolean(napcat?.managed);
   const maibotUpdateBlocked =
     maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping";
+  const launcherCurrentTag = versionAsTag(launcherUpdateInfo?.currentVersion ?? snapshot.appVersion);
+  const launcherLatestTag =
+    launcherUpdateInfo?.latestTag
+    ?? versionAsTag(launcherUpdateInfo?.latestVersion)
+    ?? snapshot.appLatestTag;
+  const launcherUpdateAvailable =
+    launcherUpdateInfo?.available ?? (compareVersionText(launcherLatestTag, launcherCurrentTag) > 0);
 
   const maibotTargets: Record<MaiBotUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.maibotLatestStableTag,
     test: snapshot.moduleVersions.maibotLatestPrereleaseTag,
-    legacy: snapshot.moduleVersions.maibotLatestLegacyTag,
+    other: selectedMaiBotTag
+      ? `Tag ${selectedMaiBotTag}`
+      : selectedMaiBotBranch
+        ? `分支 ${selectedMaiBotBranch}`
+        : undefined,
   };
   const dashboardTargets: Record<DashboardUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi,
     test: snapshot.moduleVersions.dashboardLatestPrereleasePypi,
   };
+
+  const handleMascotSecretTap = useCallback(() => {
+    if (mascotIntroShownThisSession) {
+      return;
+    }
+
+    setMascotClickCount((current) => {
+      const next = current + 1;
+      if (next >= MASCOT_INTRO_TRIGGER_CLICKS) {
+        mascotIntroShownThisSession = true;
+        setMascotIntroOpen(true);
+        return 0;
+      }
+      return next;
+    });
+  }, []);
 
   const refreshSnapshot = useCallback(async () => {
     if (!window.maibotDesktop) {
@@ -1308,32 +1589,143 @@ export function HomePanel({
     setCustomNapcatAdapterUrl(currentNapcatAdapterUrl);
   }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
 
+  const saveModuleSourceConfig = useCallback(async (update?: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
+    if (!window.maibotDesktop?.modules) {
+      throw new Error("桌面桥未就绪，无法保存模块更新源");
+    }
+
+    setModuleSourceSaving(true);
+    try {
+      const config = await window.maibotDesktop.modules.saveSourceConfig({
+        preset: update?.preset ?? moduleSourcePreset,
+        maibotUrl: update?.maibotUrl ?? customMaiBotUrl,
+        napcatAdapterUrl: update?.napcatAdapterUrl ?? customNapcatAdapterUrl,
+      });
+      setModuleSourceConfig(config);
+      setModuleSourcePreset(config.preset);
+      setCustomMaiBotUrl(config.maibotUrl);
+      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+      setError(null);
+      return config;
+    } finally {
+      setModuleSourceSaving(false);
+    }
+  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
+
+  const loadMaiBotRefs = useCallback(async () => {
+    if (!window.maibotDesktop?.modules || maibotRefsLoading) {
+      return;
+    }
+
+    setMaibotRefsLoading(true);
+    try {
+      if (moduleSourceConfig) {
+        await saveModuleSourceConfig();
+      }
+      const [branches, tags] = await Promise.all([
+        window.maibotDesktop.modules.listMaiBotBranches(),
+        window.maibotDesktop.modules.listMaiBotTags(),
+      ]);
+      setMaibotBranches(branches);
+      setMaibotTags(tags);
+      setSelectedMaiBotBranch((current) => {
+        if (current && branches.some((branch) => branch.name === current)) {
+          return current;
+        }
+        return branches.find((branch) => branch.name === "main")?.name ?? branches[0]?.name ?? "";
+      });
+      setSelectedMaiBotTag((current) => (
+        current && tags.some((tag) => tag.name === current) ? current : ""
+      ));
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+      setMaibotBranches([]);
+      setMaibotTags([]);
+      setSelectedMaiBotBranch("");
+      setSelectedMaiBotTag("");
+    } finally {
+      setMaibotRefsLoading(false);
+    }
+  }, [maibotRefsLoading, moduleSourceConfig, saveModuleSourceConfig]);
+
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
+    setModuleSourceExpanded(false);
     setMaibotChannel(
       snapshot.moduleVersions.maibotLatestStableTag
         ? "stable"
-        : snapshot.moduleVersions.maibotLatestPrereleaseTag
-          ? "test"
-          : "legacy",
+        : "test",
     );
     setUpdateDialog("maibot");
     void loadModuleSourceConfig().catch((nextError: unknown) => {
       setError(messageFromError(nextError));
     });
+    void loadMaiBotRefs();
   }, [
+    loadMaiBotRefs,
     loadModuleSourceConfig,
     snapshot.moduleVersions.maibotLatestPrereleaseTag,
     snapshot.moduleVersions.maibotLatestStableTag,
   ]);
 
-  const openPluginStore = useCallback(() => {
-    onOpenTab("pluginmarket");
-  }, [onOpenTab]);
+  const openLauncherUpdate = useCallback(() => {
+    setError(null);
+    setUpdateDialog("launcher");
+  }, []);
 
-  const openPluginManager = useCallback(() => {
-    onOpenTab("pluginmanage");
-  }, [onOpenTab]);
+  const openLauncherRelease = useCallback(() => {
+    const releaseUrl = launcherUpdateInfo?.releaseUrl?.trim();
+    if (releaseUrl) {
+      void window.maibotDesktop?.openExternal(releaseUrl);
+      return;
+    }
+
+    const tag = launcherLatestTag?.trim();
+    const url = tag
+      ? `https://github.com/DrSmoothl/MaiBotOneKey/releases/tag/${encodeURIComponent(tag)}`
+      : "https://github.com/DrSmoothl/MaiBotOneKey/releases";
+    void window.maibotDesktop?.openExternal(url);
+  }, [launcherLatestTag, launcherUpdateInfo?.releaseUrl]);
+
+  const checkLauncherUpdate = useCallback(async () => {
+    if (!window.maibotDesktop?.launcher) {
+      setError("桌面桥未就绪，无法检查启动器更新");
+      return;
+    }
+
+    setBusy("launcher:check");
+    setError(null);
+    try {
+      const update = await window.maibotDesktop.launcher.checkUpdate();
+      setLauncherUpdateInfo(update);
+      toast.success(update.available
+        ? `发现新版本 ${update.latestTag ?? update.latestVersion ?? ""}`
+        : "启动器已是最新版本");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshSnapshot]);
+
+  const installLauncherUpdate = useCallback(async () => {
+    if (!window.maibotDesktop?.launcher) {
+      setError("桌面桥未就绪，无法安装启动器更新");
+      return;
+    }
+
+    setBusy("launcher:update");
+    setError(null);
+    try {
+      const result = await window.maibotDesktop.launcher.downloadAndInstallUpdate();
+      setLauncherUpdateInfo(result.update);
+      toast.success(result.willQuit ? "安装器已启动，启动器即将退出" : "安装器已启动");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+      setBusy(null);
+    }
+  }, []);
 
   const openMessagePlatformDialog = useCallback(() => {
     setError(null);
@@ -1376,7 +1768,16 @@ export function HomePanel({
   }, [messagePlatformAccount, messagePlatformBackend, onOpenPluginConfig, refreshSnapshot]);
 
   const updateMaiBot = useCallback(async () => {
-    const target = maibotTargets[maibotChannel];
+    const target: ModuleUpdateTarget | undefined =
+      maibotChannel === "stable" && maibotTargets.stable
+        ? { type: "tag", name: maibotTargets.stable }
+        : maibotChannel === "test" && maibotTargets.test
+          ? { type: "tag", name: maibotTargets.test }
+          : maibotChannel === "other" && selectedMaiBotTag
+            ? { type: "tag", name: selectedMaiBotTag }
+            : maibotChannel === "other" && selectedMaiBotBranch
+              ? { type: "branch", name: selectedMaiBotBranch }
+              : undefined;
     if (!window.maibotDesktop?.modules || !target) {
       setError("没有可用的目标版本");
       return;
@@ -1385,15 +1786,7 @@ export function HomePanel({
     setBusy("maibot:update");
     setError(null);
     try {
-      const config = await window.maibotDesktop.modules.saveSourceConfig({
-        preset: moduleSourcePreset,
-        maibotUrl: customMaiBotUrl,
-        napcatAdapterUrl: customNapcatAdapterUrl,
-      });
-      setModuleSourceConfig(config);
-      setModuleSourcePreset(config.preset);
-      setCustomMaiBotUrl(config.maibotUrl);
-      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
+      await saveModuleSourceConfig();
       await window.maibotDesktop.modules.updateMaiBot(target);
       toast.success("MaiBot 更新完成");
       setUpdateDialog(null);
@@ -1403,7 +1796,15 @@ export function HomePanel({
     } finally {
       setBusy(null);
     }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, maibotChannel, maibotTargets, moduleSourcePreset, refreshSnapshot]);
+  }, [
+    maibotChannel,
+    maibotTargets.stable,
+    maibotTargets.test,
+    refreshSnapshot,
+    saveModuleSourceConfig,
+    selectedMaiBotBranch,
+    selectedMaiBotTag,
+  ]);
 
   const updateDashboard = useCallback(async () => {
     const target = dashboardTargets[dashboardChannel];
@@ -1431,17 +1832,23 @@ export function HomePanel({
 
   return (
     <>
-      <div className={cn("h-full overflow-auto bg-background px-5 py-4", active ? "block" : "hidden")}>
-        <div className="mx-auto grid max-w-6xl gap-4">
-          <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="grid min-w-0 gap-3">
+      <div className={cn("h-full overflow-auto px-5 py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", useRetroHome && "pb-24", !useRetroHome && "bg-background", active ? "block" : "hidden")}>
+        <div className={cn("mx-auto grid", useRetroHome ? "max-w-[1480px] gap-4" : "max-w-6xl gap-4")}>
+          <div
+            className={cn(
+              "grid",
+              useRetroHome
+                ? "grid-cols-[minmax(0,1fr)_minmax(300px,360px)] items-stretch gap-4"
+                : "grid-cols-[minmax(0,1fr)_minmax(280px,320px)] items-start gap-3",
+            )}
+          >
+            <div className={cn("grid min-w-0", useRetroHome ? "gap-4" : "gap-3")}>
               <MaiBotOverviewCard
                 latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
                 latestStable={snapshot.moduleVersions.maibotLatestStableTag}
                 localVersion={snapshot.moduleVersions.maibotLocal}
-                onOpenPluginManager={openPluginManager}
-                onOpenPluginStore={openPluginStore}
                 onUpdate={openMaiBotUpdate}
+                retro={useRetroHome}
                 service={maibot}
                 updateBusy={busy === "maibot:update"}
               />
@@ -1449,18 +1856,26 @@ export function HomePanel({
                 active={active}
                 maibotService={maibot}
                 onOpenFull={() => onOpenTab("localchat")}
+                retro={useRetroHome}
               />
               {messagePlatformConfigured ? (
                 <ServiceSummary
                   adapterAction={{
-                    title: `${adapterName}插件设置`,
-                    description: "调整消息适配、连接与过滤相关配置。",
+                    title: `${adapterName.replace(/\s+/gu, "")}设置`,
                     label: "打开配置",
                     onClick: () => onOpenPluginConfig(adapterPluginId),
                   }}
-                  icon={<Server className="size-4.5" />}
+                  icon={null}
+                  retro={useRetroHome}
                   service={napcat}
+                  serviceControls={napcat ? {
+                    busy: serviceActionBusy?.startsWith(`${napcat.id}:`) ?? false,
+                    onRestart: onRestartService,
+                    onStart: onStartService,
+                    onStop: onStopService,
+                  } : undefined}
                   webuiAction={{
+                    title: `${napcat?.name ?? "NapCat"} 设置`,
                     label: "打开 WebUI",
                     port: qqWebuiPort,
                     portValid: qqWebuiPortValid,
@@ -1469,18 +1884,78 @@ export function HomePanel({
                   }}
                 />
               ) : (
-                <MessagePlatformConnectCard onClick={openMessagePlatformDialog} />
+                <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroHome} />
               )}
+              <LauncherUpdateCard
+                appVersion={snapshot.appVersion}
+                latestTag={launcherLatestTag}
+                onUpdate={openLauncherUpdate}
+                retro={useRetroHome}
+                updateBusy={busy === "launcher:check" || busy === "launcher:update"}
+              />
             </div>
-            <HomeStatsPanel
-              onOpenQuickActions={() => setQuickActionsOpen(true)}
-              services={services}
-              snapshot={snapshot}
-            />
+            {useRetroHome ? (
+              <div className="flex min-h-full flex-col gap-4">
+                <HomeStatsPanel
+                  onOpenQuickActions={() => setQuickActionsOpen(true)}
+                  retro={useRetroHome}
+                  snapshot={snapshot}
+                />
+                <ElasticMascot
+                  onLongPress={onEnterFloatingMode}
+                  onSecretTap={handleMascotSecretTap}
+                  placement="retro-column"
+                />
+              </div>
+            ) : (
+              <HomeStatsPanel
+                onOpenQuickActions={() => setQuickActionsOpen(true)}
+                retro={useRetroHome}
+                snapshot={snapshot}
+              />
+            )}
           </div>
-          <ElasticMascot onLongPress={onEnterFloatingMode} />
+          {!useRetroHome ? <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} /> : null}
         </div>
       </div>
+
+      <Dialog open={mascotIntroOpen} onOpenChange={setMascotIntroOpen}>
+        <DialogContent size="md">
+          <DialogHeader
+            description="你把角落里的它点醒了。"
+            icon={<Sparkles className="size-4" />}
+            title="关于这个形象"
+            tone="primary"
+          />
+          <DialogBody className="space-y-4">
+            <div className={cn(useRetroHome ? "retro-control flex items-center gap-4 p-4" : "flex items-center gap-4 rounded-lg border border-border bg-muted/35 p-4")}>
+              <div className={cn("relative h-24 w-24 shrink-0 overflow-hidden bg-background", useRetroHome ? "rounded-sm" : "rounded-md")}>
+                <img
+                  alt=""
+                  className="absolute -right-7 -bottom-6 w-28 select-none"
+                  draggable={false}
+                  src={maiMascotImage}
+                />
+              </div>
+              <div className="min-w-0 space-y-2 text-sm leading-relaxed text-muted-foreground">
+                <p className="font-medium text-foreground">MaiBot OneKey 的角落形象</p>
+                <p>
+                  它是一个橘子和一条萨卡班甲鱼喝醉了之后留下的结果。现在主要以一种形态的 AI 存在，
+                  平时窝在首页右下角，陪你盯着服务状态、WebUI 和插件更新。
+                </p>
+                <p>
+                  偶尔，它也会以人类形态出没。本次启动它只会认真自我介绍这一次；下次重启，再让它重新鼓起勇气开口。
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button onClick={() => setMascotIntroOpen(false)} size="sm">
+              知道了
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={quickActionsOpen} onOpenChange={setQuickActionsOpen}>
         <DialogContent size="lg">
@@ -1516,7 +1991,7 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && messagePlatformDialogOpen ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
@@ -1535,7 +2010,7 @@ export function HomePanel({
               ] as const).map((option) => (
                 <button
                   className={cn(
-                    "rounded-lg border p-3 text-left transition-colors",
+                    cn(useRetroHome ? "rounded-sm" : "rounded-lg", "border p-3 text-left transition-colors"),
                     messagePlatformBackend === option.backend
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
@@ -1562,7 +2037,7 @@ export function HomePanel({
               />
             </label>
             {qqBackendBusy ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 QQ 后端正在运行，请先停止后再新增或切换消息平台。
               </div>
             ) : null}
@@ -1584,6 +2059,73 @@ export function HomePanel({
       </Dialog>
 
       <Dialog
+        open={updateDialog === "launcher"}
+        onOpenChange={(next) => {
+          if (!next && busy !== "launcher:check" && busy !== "launcher:update") setUpdateDialog(null);
+        }}
+      >
+        <DialogContent size="lg">
+          <DialogHeader
+            description="检查 MaiBot OneKey 的最新安装包，并在确认后启动安装器。"
+            icon={<PackageCheck className="size-4" />}
+            title="更新一键包"
+            tone="primary"
+          />
+          <DialogBody className="space-y-4">
+            {error && updateDialog === "launcher" ? (
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
+                {error}
+              </div>
+            ) : null}
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+              <DetailRow label="本地版本" value={launcherCurrentTag} retro={useRetroHome} />
+              <DetailRow label="最新版本" value={launcherLatestTag} retro={useRetroHome} />
+              <div className="my-1 border-t border-border/70" />
+              <DetailRow label="发布版本" value={launcherUpdateInfo?.releaseName ?? launcherLatestTag} retro={useRetroHome} />
+              <DetailRow label="安装包" value={launcherUpdateInfo?.assetName} retro={useRetroHome} />
+              <DetailRow label="大小" value={formatFileSize(launcherUpdateInfo?.assetSize)} retro={useRetroHome} />
+              <DetailRow label="更新源" value={launcherUpdateInfo?.source ?? snapshot.appLatestSource} retro={useRetroHome} />
+            </div>
+            {launcherUpdateInfo?.releaseNotes ? (
+              <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3")}>
+                <p className="text-xs font-medium">更新说明</p>
+                <MarkdownRenderer
+                  className="max-h-48 overflow-auto break-words pr-1 text-xs"
+                  content={launcherUpdateInfo.releaseNotes}
+                />
+              </div>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              disabled={busy === "launcher:check" || busy === "launcher:update"}
+              onClick={() => setUpdateDialog(null)}
+              size="sm"
+              variant="ghost"
+            >
+              取消
+            </Button>
+            <Button disabled={busy !== null} onClick={() => void checkLauncherUpdate()} size="sm" variant="secondary">
+              {busy === "launcher:check" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              检查更新
+            </Button>
+            <Button disabled={busy !== null} onClick={openLauncherRelease} size="sm" variant="secondary">
+              <ExternalLink />
+              查看更新
+            </Button>
+            <Button
+              disabled={busy !== null || !launcherUpdateAvailable}
+              onClick={() => void installLauncherUpdate()}
+              size="sm"
+            >
+              {busy === "launcher:update" ? <Loader2 className="animate-spin" /> : <Download />}
+              下载并安装
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={updateDialog === "maibot"}
         onOpenChange={(next) => {
           if (!next && busy !== "maibot:update") setUpdateDialog(null);
@@ -1591,100 +2133,184 @@ export function HomePanel({
       >
         <DialogContent size="lg">
           <DialogHeader
-            description="选择要同步的 MaiBot 版本。更新前需要停止 MaiBot Core，用户数据目录会保留。"
             icon={<Server className="size-4" />}
             title="更新 MaiBot"
             tone="primary"
           />
           <DialogBody className="space-y-4">
             {error && updateDialog === "maibot" ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
-            <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
-              <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} />
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+              <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="最新正式版" value={snapshot.moduleVersions.maibotLatestStableTag} />
-              <DetailRow label="最新测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} />
-              <DetailRow label="最新旧版" value={snapshot.moduleVersions.maibotLatestLegacyTag} />
+              <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} retro={useRetroHome} />
+              <DetailRow label="测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
+              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再执行更新。
               </div>
             ) : null}
             <div className="grid gap-1.5">
-              <p className="text-xs font-medium">目标版本</p>
               <ChoiceSwitch
                 value={maibotChannel}
-                onChange={setMaibotChannel}
+                onChange={(value) => {
+                  setMaibotChannel(value);
+                  if (value === "other") {
+                    void loadMaiBotRefs();
+                  }
+                }}
                 options={[
-                  { value: "stable", label: "最新正式版", version: maibotTargets.stable },
-                  { value: "test", label: "最新测试版", version: maibotTargets.test },
-                  { value: "legacy", label: "最新旧版", version: maibotTargets.legacy },
+                  { value: "stable", label: "正式版", version: maibotTargets.stable },
+                  { value: "test", label: "测试版", version: maibotTargets.test },
+                  { value: "other", label: "其他版本", version: maibotRefsLoading ? undefined : maibotTargets.other },
                 ]}
+                retro={useRetroHome}
               />
             </div>
-            <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium">更新源</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    会同步保存到设置中心的模块更新源。
-                  </p>
-                </div>
-                <Button
-                  disabled={busy !== null}
-                  onClick={() => void reloadModuleSourceOptions()}
-                  size="sm"
-                  variant="ghost"
-                >
-                  <RefreshCw />
-                  重新读取
-                </Button>
-              </div>
-              <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)] md:items-end">
+            {maibotChannel === "other" ? (
+              <div className={cn(useRetroHome ? "retro-control grid gap-3 p-3 md:grid-cols-2" : "grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2")}>
                 <label className="grid gap-1.5 text-xs font-medium">
-                  源预设
+                  分支
                   <select
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                    disabled={busy !== null || !moduleSourceConfig}
+                    className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
+                    disabled={busy !== null || maibotRefsLoading}
                     onChange={(event) => {
-                      const preset = event.target.value as ModuleSourcePreset;
-                      setModuleSourcePreset(preset);
-                      const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
-                      if (option) {
-                        setCustomMaiBotUrl(option.maibotUrl);
-                        setCustomNapcatAdapterUrl(option.napcatAdapterUrl);
+                      setSelectedMaiBotBranch(event.target.value);
+                      if (event.target.value) {
+                        setSelectedMaiBotTag("");
                       }
                     }}
-                    value={moduleSourcePreset}
+                    value={selectedMaiBotBranch}
                   >
-                    {moduleSourceConfig?.options.map((option) => (
-                      <option key={option.preset} value={option.preset}>
-                        {option.label}
+                    <option value="">不指定分支</option>
+                    {maibotBranches.map((branch) => (
+                      <option key={branch.name} value={branch.name}>
+                        {branch.name}
                       </option>
                     ))}
-                    <option value="custom">自定义</option>
                   </select>
                 </label>
                 <label className="grid gap-1.5 text-xs font-medium">
-                  MaiBot 仓库
-                  <Input
-                    disabled={busy !== null || moduleSourcePreset !== "custom"}
-                    onChange={(event) => setCustomMaiBotUrl(event.target.value)}
-                    value={customMaiBotUrl}
-                  />
+                  Tag
+                  <select
+                    className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
+                    disabled={busy !== null || maibotRefsLoading}
+                    onChange={(event) => {
+                      setSelectedMaiBotTag(event.target.value);
+                      if (event.target.value) {
+                        setSelectedMaiBotBranch("");
+                      }
+                    }}
+                    value={selectedMaiBotTag}
+                  >
+                    <option value="">最新内容</option>
+                    {maibotTags.map((tag) => (
+                      <option key={tag.name} value={tag.name}>
+                        {tag.name}{tag.isPrerelease ? " (测试)" : ""}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
+            ) : null}
+            <div className={cn(useRetroHome ? "retro-control grid gap-3 p-3" : "grid gap-3 rounded-lg border border-border bg-muted/40 p-3")}>
+              <button
+                className="flex w-full items-center justify-between gap-3 text-left"
+                onClick={() => setModuleSourceExpanded((expanded) => !expanded)}
+                type="button"
+              >
+                <span className="text-xs font-medium">更新源</span>
+                <ChevronDown
+                  className={cn("size-4 shrink-0 text-muted-foreground transition-transform", moduleSourceExpanded && "rotate-180")}
+                />
+              </button>
+              {moduleSourceExpanded ? (
+                <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_auto] md:items-end">
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      源预设
+                      <select
+                        className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
+                        disabled={busy !== null || moduleSourceSaving || !moduleSourceConfig}
+                        onChange={(event) => {
+                          const preset = event.target.value as ModuleSourcePreset;
+                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
+                          const nextMaiBotUrl = option?.maibotUrl ?? customMaiBotUrl;
+                          const nextNapcatAdapterUrl = option?.napcatAdapterUrl ?? customNapcatAdapterUrl;
+                          setModuleSourcePreset(preset);
+                          if (option) {
+                            setCustomMaiBotUrl(nextMaiBotUrl);
+                            setCustomNapcatAdapterUrl(nextNapcatAdapterUrl);
+                          }
+                          void saveModuleSourceConfig({
+                            preset,
+                            maibotUrl: nextMaiBotUrl,
+                            napcatAdapterUrl: nextNapcatAdapterUrl,
+                          }).catch((nextError: unknown) => setError(messageFromError(nextError)));
+                        }}
+                        value={moduleSourcePreset}
+                      >
+                        {moduleSourceConfig?.options.map((option) => (
+                          <option key={option.preset} value={option.preset}>
+                            {option.label}
+                          </option>
+                        ))}
+                        <option value="custom">自定义</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-1.5 text-xs font-medium">
+                      MaiBot 仓库
+                      <Input
+                        disabled={busy !== null || moduleSourceSaving || moduleSourcePreset !== "custom"}
+                        onBlur={(event) => {
+                          if (moduleSourcePreset === "custom") {
+                            void saveModuleSourceConfig({
+                              preset: "custom",
+                              maibotUrl: event.currentTarget.value,
+                              napcatAdapterUrl: customNapcatAdapterUrl,
+                            }).catch((nextError: unknown) => setError(messageFromError(nextError)));
+                          }
+                        }}
+                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
+                        value={customMaiBotUrl}
+                      />
+                    </label>
+                    <Button
+                      disabled={busy !== null || moduleSourceSaving}
+                      onClick={() => {
+                        void (async () => {
+                          await reloadModuleSourceOptions();
+                          await loadMaiBotRefs();
+                        })().catch((nextError: unknown) => setError(messageFromError(nextError)));
+                      }}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      <RefreshCw className={cn((maibotRefsLoading || moduleSourceSaving) && "animate-spin")} />
+                      刷新
+                    </Button>
+                  </div>
+              ) : null}
             </div>
           </DialogBody>
           <DialogFooter>
             <Button disabled={busy === "maibot:update"} onClick={() => setUpdateDialog(null)} size="sm" variant="ghost">
               取消
             </Button>
-            <Button disabled={busy !== null || maibotUpdateBlocked || !maibotTargets[maibotChannel]} onClick={() => void updateMaiBot()} size="sm">
+            <Button
+              disabled={
+                busy !== null ||
+                moduleSourceSaving ||
+                maibotUpdateBlocked ||
+                !maibotTargets[maibotChannel] ||
+                (maibotChannel === "other" && maibotRefsLoading)
+              }
+              onClick={() => void updateMaiBot()}
+              size="sm"
+            >
               {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               开始更新
             </Button>
@@ -1707,18 +2333,18 @@ export function HomePanel({
           />
           <DialogBody className="space-y-4">
             {error && updateDialog === "dashboard" ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
-            <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
-              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} />
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="最新正式版" value={dashboardTargets.stable} />
-              <DetailRow label="最新测试版" value={dashboardTargets.test} />
+              <DetailRow label="最新正式版" value={dashboardTargets.stable} retro={useRetroHome} />
+              <DetailRow label="最新测试版" value={dashboardTargets.test} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
-              <div className="rounded-lg border border-warning/40 bg-warning/15 px-3 py-2 text-xs">
+              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再更新 WebUI 覆盖依赖。
               </div>
             ) : null}
@@ -1731,6 +2357,7 @@ export function HomePanel({
                   { value: "stable", label: "最新正式版", version: dashboardTargets.stable },
                   { value: "test", label: "最新测试版", version: dashboardTargets.test },
                 ]}
+                retro={useRetroHome}
               />
             </div>
           </DialogBody>

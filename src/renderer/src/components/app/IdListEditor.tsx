@@ -140,10 +140,10 @@ export function IdListEditor({
         <span className="text-[12px] font-medium text-foreground">{label}</span>
         <span
           className={cn(
-            "rounded-full px-2 py-0.5 text-[10.5px] font-medium tabular-nums",
+            "rounded-sm border border-transparent px-2 py-0.5 text-[10.5px] font-medium tabular-nums",
             values.length > 0
-              ? "bg-primary/12 text-primary"
-              : "bg-muted text-muted-foreground",
+              ? "border-primary/25 bg-primary/10 text-primary"
+              : "border-border bg-muted/60 text-muted-foreground",
           )}
         >
           {values.length} 项

@@ -1,11 +1,16 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   CloseAction,
+  AppIconId,
+  AppIconSettings,
   DesktopBridge,
   DesktopSnapshot,
   InitRepairResult,
   InitState,
+  LauncherUpdateApplyResult,
+  LauncherUpdateInfo,
   LogEntry,
+  Live2dModelImportResult,
   LocalChatConnectionState,
   LocalChatConnectRequest,
   LocalChatEvent,
@@ -17,18 +22,38 @@ import type {
   MaiBotDataImportResult,
   MaiBotDataResetResult,
   MaiBotInstalledPlugin,
+  MaiBotPluginBlueprintCreateRequest,
+  MaiBotPluginBlueprintCreateResult,
+  MaiBotPluginBlueprintParseResult,
+  MaiBotPluginBuilderBlueprintExportRequest,
+  MaiBotPluginBuilderBlueprintExportResult,
+  MaiBotPluginBuilderBlueprintImportResult,
+  MaiBotPluginBuilderLibraryDeleteResult,
+  MaiBotPluginBuilderLibraryListResult,
+  MaiBotPluginBuilderLibraryLoadResult,
+  MaiBotPluginBuilderLibrarySaveRequest,
+  MaiBotPluginBuilderLibrarySaveResult,
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
+  MaiBotPluginDownloadResult,
   MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
+  MaiBotPluginRatingResult,
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
+  MaiBotPluginUserState,
+  MaiBotPluginUserStates,
+  MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
+  ModuleBranchOption,
+  ModuleUpdateTarget,
   ModuleUpdateResult,
+  NetworkProxySettings,
+  OpenCodeSettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -61,6 +86,7 @@ import type {
   StartupAgreementConfirmResult,
   StartupAgreementState,
   TerminalSettings,
+  WindowResizeEdge,
   WindowState,
 } from "../shared/contracts";
 
@@ -92,7 +118,7 @@ const desktopBridge: DesktopBridge = {
     onIpc("desktop:snapshot", callback),
   window: {
     minimize: () => ipcRenderer.invoke("desktop:window:minimize") as Promise<void>,
-    toggleMaximize: () => ipcRenderer.invoke("desktop:window:toggleMaximize") as Promise<void>,
+    toggleMaximize: () => ipcRenderer.invoke("desktop:window:toggleMaximize") as Promise<WindowState>,
     close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
     setFloatingMode: (enabled: boolean) =>
       ipcRenderer.invoke("desktop:window:setFloatingMode", enabled) as Promise<WindowState>,
@@ -100,10 +126,16 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("desktop:window:setFloatingPanelExpanded", expanded) as Promise<WindowState>,
     moveFloatingBy: (deltaX: number, deltaY: number) =>
       ipcRenderer.invoke("desktop:window:moveFloatingBy", deltaX, deltaY) as Promise<WindowState>,
-    moveFloatingTo: (screenX: number, screenY: number, offsetX: number, offsetY: number) =>
-      ipcRenderer.invoke("desktop:window:moveFloatingTo", screenX, screenY, offsetX, offsetY) as Promise<WindowState>,
+    moveFloatingTo: (offsetX: number, offsetY: number) =>
+      ipcRenderer.invoke("desktop:window:moveFloatingTo", offsetX, offsetY) as Promise<WindowState>,
     finishFloatingDrag: () =>
       ipcRenderer.invoke("desktop:window:finishFloatingDrag") as Promise<WindowState>,
+    startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) =>
+      ipcRenderer.invoke("desktop:window:startResize", edge, screenX, screenY) as Promise<WindowState>,
+    resizeTo: (screenX: number, screenY: number) =>
+      ipcRenderer.invoke("desktop:window:resizeTo", screenX, screenY) as Promise<WindowState>,
+    finishResize: () =>
+      ipcRenderer.invoke("desktop:window:finishResize") as Promise<WindowState>,
     getState: () => ipcRenderer.invoke("desktop:window:getState") as Promise<WindowState>,
     onState: (callback: (state: WindowState) => void) => onIpc("desktop:window-state", callback),
   },
@@ -122,7 +154,9 @@ const desktopBridge: DesktopBridge = {
     confirm: () => ipcRenderer.invoke("agreements:confirm") as Promise<StartupAgreementConfirmResult>,
   },
   modules: {
-    updateMaiBot: (tag?: string) => ipcRenderer.invoke("modules:updateMaibot", tag) as Promise<ModuleUpdateResult>,
+    updateMaiBot: (target?: ModuleUpdateTarget) =>
+      ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
+    listMaiBotBranches: () => ipcRenderer.invoke("modules:listMaibotBranches") as Promise<ModuleBranchOption[]>,
     listMaiBotTags: () => ipcRenderer.invoke("modules:listMaibotTags") as Promise<ModuleTagOption[]>,
     getSourceConfig: () => ipcRenderer.invoke("modules:getSourceConfig") as Promise<ModuleSourceConfig>,
     saveSourceConfig: (config: ModuleSourceUpdate) =>
@@ -140,10 +174,26 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },
   launcher: {
+    saveNetworkProxySettings: (settings: NetworkProxySettings) =>
+      ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
+    saveOpenCodeSettings: (settings: OpenCodeSettings) =>
+      ipcRenderer.invoke("launcher:saveOpenCodeSettings", settings) as Promise<OpenCodeSettings>,
+    selectAppIcon: (iconId: AppIconId) =>
+      ipcRenderer.invoke("launcher:selectAppIcon", iconId) as Promise<AppIconSettings>,
+    checkUpdate: () =>
+      ipcRenderer.invoke("launcher:checkUpdate") as Promise<LauncherUpdateInfo>,
+    downloadAndInstallUpdate: () =>
+      ipcRenderer.invoke("launcher:downloadAndInstallUpdate") as Promise<LauncherUpdateApplyResult>,
     resetSettings: () =>
       ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
     resetAll: () =>
       ipcRenderer.invoke("launcher:resetAll") as Promise<LauncherResetResult>,
+  },
+  live2d: {
+    getLibraryRoot: () => ipcRenderer.invoke("live2d:getLibraryRoot") as Promise<string>,
+    openLibrary: () => ipcRenderer.invoke("live2d:openLibrary") as Promise<void>,
+    importModel: (sourcePath?: string) =>
+      ipcRenderer.invoke("live2d:importModel", sourcePath) as Promise<Live2dModelImportResult | null>,
   },
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) =>
@@ -156,6 +206,24 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
     uninstall: (pluginId: string) =>
       ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
+    createFromBlueprint: (request: MaiBotPluginBlueprintCreateRequest) =>
+      ipcRenderer.invoke("plugins:createFromBlueprint", request) as Promise<MaiBotPluginBlueprintCreateResult>,
+    parseToBlueprint: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:parseToBlueprint", pluginId) as Promise<MaiBotPluginBlueprintParseResult>,
+    listBuilderLibrary: () =>
+      ipcRenderer.invoke("plugins:listBuilderLibrary") as Promise<MaiBotPluginBuilderLibraryListResult>,
+    saveBuilderLibrary: (request: MaiBotPluginBuilderLibrarySaveRequest) =>
+      ipcRenderer.invoke("plugins:saveBuilderLibrary", request) as Promise<MaiBotPluginBuilderLibrarySaveResult>,
+    loadBuilderLibrary: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:loadBuilderLibrary", pluginId) as Promise<MaiBotPluginBuilderLibraryLoadResult>,
+    deleteBuilderLibrary: (pluginId: string) =>
+      ipcRenderer.invoke("plugins:deleteBuilderLibrary", pluginId) as Promise<MaiBotPluginBuilderLibraryDeleteResult>,
+    exportBuilderBlueprint: (request: MaiBotPluginBuilderBlueprintExportRequest) =>
+      ipcRenderer.invoke("plugins:exportBuilderBlueprint", request) as Promise<MaiBotPluginBuilderBlueprintExportResult | null>,
+    importBuilderBlueprint: (sourcePath?: string) =>
+      ipcRenderer.invoke("plugins:importBuilderBlueprint", sourcePath) as Promise<MaiBotPluginBuilderBlueprintImportResult | null>,
+    openBuilderLibrary: () =>
+      ipcRenderer.invoke("plugins:openBuilderLibrary") as Promise<void>,
     getConfig: (pluginId: string, serviceUrl?: string) =>
       ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
     saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>
@@ -164,6 +232,18 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl) as Promise<MaiBotPluginReadmeResult>,
     getStats: (pluginId: string) =>
       ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
+    getUserState: (pluginId: string, userId: string) =>
+      ipcRenderer.invoke("plugins:getUserState", pluginId, userId) as Promise<MaiBotPluginUserState | null>,
+    getUserStates: (userId: string) =>
+      ipcRenderer.invoke("plugins:getUserStates", userId) as Promise<MaiBotPluginUserStates>,
+    like: (pluginId: string, userId: string) =>
+      ipcRenderer.invoke("plugins:like", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
+    dislike: (pluginId: string, userId: string) =>
+      ipcRenderer.invoke("plugins:dislike", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
+    rate: (pluginId: string, rating: number | null | undefined, comment: string | null | undefined, userId: string) =>
+      ipcRenderer.invoke("plugins:rate", pluginId, rating, comment, userId) as Promise<MaiBotPluginRatingResult>,
+    recordDownload: (pluginId: string, userId?: string, fingerprint?: string) =>
+      ipcRenderer.invoke("plugins:recordDownload", pluginId, userId, fingerprint) as Promise<MaiBotPluginDownloadResult>,
   },
   statistics: {
     getMaiBot: () =>
@@ -235,6 +315,7 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("pty:start", request) as Promise<PtySessionSnapshot>,
     stop: (request: PtyStopRequest) => ipcRenderer.invoke("pty:stop", request) as Promise<void>,
     kill: (sessionId: string) => ipcRenderer.invoke("pty:kill", sessionId) as Promise<void>,
+    close: (sessionId: string) => ipcRenderer.invoke("pty:close", sessionId) as Promise<void>,
     input: (request: PtyInputRequest) => ipcRenderer.invoke("pty:input", request) as Promise<void>,
     resize: (request: PtyResizeRequest) =>
       ipcRenderer.invoke("pty:resize", request) as Promise<void>,

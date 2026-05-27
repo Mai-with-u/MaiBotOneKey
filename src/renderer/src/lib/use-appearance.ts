@@ -1,67 +1,51 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type AccentColor = "orange" | "green" | "blue" | "pink" | "neutral";
+export type AppearanceMode = "future-retro" | "modern";
 export type FontFamily = "system" | "rounded" | "serif";
 export type InterfaceScale = "compact" | "normal" | "comfortable";
+export type WindowCornerRadii = Record<AppearanceMode, number>;
 
 export interface AppearancePreference {
   accent: AccentColor;
   font: FontFamily;
+  mode: AppearanceMode;
+  retroPaperTexture: boolean;
   scale: InterfaceScale;
+  windowCornerRadius: number;
+  windowCornerRadii: WindowCornerRadii;
 }
 
 export interface AppearanceApi extends AppearancePreference {
   setAccent: (accent: AccentColor) => void;
   setFont: (font: FontFamily) => void;
+  setMode: (mode: AppearanceMode) => void;
+  setRetroPaperTexture: (enabled: boolean) => void;
   setScale: (scale: InterfaceScale) => void;
+  setWindowCornerRadius: (radius: number) => void;
   reset: () => void;
 }
 
 const STORAGE_KEY = "maibot-appearance";
 const CHANGE_EVENT = "maibot-appearance-change";
+export const RETRO_WINDOW_CORNER_RADIUS_MIN = 0;
+export const WINDOW_CORNER_RADIUS_MIN = 12;
+export const WINDOW_CORNER_RADIUS_MAX = 32;
+
+const DEFAULT_APPEARANCE_MODE: AppearanceMode = "future-retro";
+const DEFAULT_WINDOW_CORNER_RADII: WindowCornerRadii = {
+  "future-retro": 16,
+  modern: 16,
+};
 
 const DEFAULT_APPEARANCE: AppearancePreference = {
   accent: "orange",
   font: "system",
+  mode: DEFAULT_APPEARANCE_MODE,
+  retroPaperTexture: true,
   scale: "normal",
-};
-
-const ACCENT_TOKENS: Record<AccentColor, { primary: string; primaryForeground: string; accent: string; accentForeground: string; ring: string }> = {
-  orange: {
-    primary: "oklch(0.71 0.175 52)",
-    primaryForeground: "oklch(0.99 0.008 80)",
-    accent: "oklch(0.962 0.02 70)",
-    accentForeground: "oklch(0.32 0.06 50)",
-    ring: "oklch(0.71 0.175 52 / 0.55)",
-  },
-  green: {
-    primary: "oklch(0.62 0.145 150)",
-    primaryForeground: "oklch(0.99 0.01 150)",
-    accent: "oklch(0.952 0.024 150)",
-    accentForeground: "oklch(0.25 0.07 150)",
-    ring: "oklch(0.62 0.145 150 / 0.55)",
-  },
-  blue: {
-    primary: "oklch(0.62 0.145 250)",
-    primaryForeground: "oklch(0.99 0.01 250)",
-    accent: "oklch(0.952 0.02 250)",
-    accentForeground: "oklch(0.25 0.07 250)",
-    ring: "oklch(0.62 0.145 250 / 0.55)",
-  },
-  pink: {
-    primary: "oklch(0.66 0.17 18)",
-    primaryForeground: "oklch(0.99 0.008 18)",
-    accent: "oklch(0.956 0.025 18)",
-    accentForeground: "oklch(0.3 0.07 18)",
-    ring: "oklch(0.66 0.17 18 / 0.55)",
-  },
-  neutral: {
-    primary: "oklch(0.5 0.02 70)",
-    primaryForeground: "oklch(0.99 0.005 80)",
-    accent: "oklch(0.95 0.004 75)",
-    accentForeground: "oklch(0.24 0.018 55)",
-    ring: "oklch(0.5 0.02 70 / 0.45)",
-  },
+  windowCornerRadius: DEFAULT_WINDOW_CORNER_RADII[DEFAULT_APPEARANCE_MODE],
+  windowCornerRadii: DEFAULT_WINDOW_CORNER_RADII,
 };
 
 const FONT_TOKENS: Record<FontFamily, string> = {
@@ -76,13 +60,74 @@ const SCALE_TOKENS: Record<InterfaceScale, string> = {
   comfortable: "16px",
 };
 
-function isAppearancePreference(value: unknown): value is AppearancePreference {
+const LEGACY_INLINE_COLOR_TOKENS = [
+  "--primary",
+  "--primary-foreground",
+  "--accent",
+  "--accent-foreground",
+  "--ring",
+] as const;
+
+function isAccentColor(value: unknown): value is AccentColor {
+  return value === "orange" || value === "green" || value === "blue" || value === "pink" || value === "neutral";
+}
+
+function isFontFamily(value: unknown): value is FontFamily {
+  return value === "system" || value === "rounded" || value === "serif";
+}
+
+function isAppearanceMode(value: unknown): value is AppearanceMode {
+  return value === "future-retro" || value === "modern";
+}
+
+function isInterfaceScale(value: unknown): value is InterfaceScale {
+  return value === "compact" || value === "normal" || value === "comfortable";
+}
+
+function windowCornerRadiusMin(mode: AppearanceMode): number {
+  return mode === "future-retro" ? RETRO_WINDOW_CORNER_RADIUS_MIN : WINDOW_CORNER_RADIUS_MIN;
+}
+
+function clampWindowCornerRadius(value: unknown, mode: AppearanceMode): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_WINDOW_CORNER_RADII[mode];
+  }
+  return Math.min(WINDOW_CORNER_RADIUS_MAX, Math.max(windowCornerRadiusMin(mode), Math.round(numeric)));
+}
+
+function normalizeWindowCornerRadii(record: Record<string, unknown>): WindowCornerRadii {
+  const storedRadii = record.windowCornerRadii && typeof record.windowCornerRadii === "object"
+    ? record.windowCornerRadii as Record<string, unknown>
+    : {};
+  const radiusFor = (mode: AppearanceMode): number =>
+    clampWindowCornerRadius(storedRadii[mode] ?? record.windowCornerRadius, mode);
+
+  return {
+    "future-retro": radiusFor("future-retro"),
+    modern: radiusFor("modern"),
+  };
+}
+
+function normalizeAppearance(value: unknown): AppearancePreference {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  return (
-    (record.accent === "orange" || record.accent === "green" || record.accent === "blue" || record.accent === "pink" || record.accent === "neutral") &&
-    (record.font === "system" || record.font === "rounded" || record.font === "serif") &&
-    (record.scale === "compact" || record.scale === "normal" || record.scale === "comfortable")
-  );
+  const mode = isAppearanceMode(record.mode)
+    ? record.mode
+    : record.mode === "future" || record.liquidGlass === true
+      ? "modern"
+      : DEFAULT_APPEARANCE.mode;
+  const windowCornerRadii = normalizeWindowCornerRadii(record);
+  return {
+    accent: isAccentColor(record.accent) ? record.accent : DEFAULT_APPEARANCE.accent,
+    font: isFontFamily(record.font) ? record.font : DEFAULT_APPEARANCE.font,
+    mode,
+    retroPaperTexture: typeof record.retroPaperTexture === "boolean"
+      ? record.retroPaperTexture
+      : DEFAULT_APPEARANCE.retroPaperTexture,
+    scale: isInterfaceScale(record.scale) ? record.scale : DEFAULT_APPEARANCE.scale,
+    windowCornerRadius: windowCornerRadii[mode],
+    windowCornerRadii,
+  };
 }
 
 function readStored(): AppearancePreference {
@@ -95,7 +140,7 @@ function readStored(): AppearancePreference {
       return DEFAULT_APPEARANCE;
     }
     const parsed = JSON.parse(raw);
-    return isAppearancePreference(parsed) ? parsed : DEFAULT_APPEARANCE;
+    return normalizeAppearance(parsed);
   } catch {
     return DEFAULT_APPEARANCE;
   }
@@ -106,16 +151,16 @@ function applyAppearance(appearance: AppearancePreference): void {
     return;
   }
   const root = document.documentElement;
-  const accent = ACCENT_TOKENS[appearance.accent];
-  root.style.setProperty("--primary", accent.primary);
-  root.style.setProperty("--primary-foreground", accent.primaryForeground);
-  root.style.setProperty("--accent", accent.accent);
-  root.style.setProperty("--accent-foreground", accent.accentForeground);
-  root.style.setProperty("--ring", accent.ring);
+  const mode = isAppearanceMode(appearance.mode) ? appearance.mode : DEFAULT_APPEARANCE.mode;
+  const windowCornerRadius = clampWindowCornerRadius(appearance.windowCornerRadius, mode);
+  LEGACY_INLINE_COLOR_TOKENS.forEach((token) => root.style.removeProperty(token));
   root.style.setProperty("--font-sans", FONT_TOKENS[appearance.font]);
   root.style.setProperty("font-size", SCALE_TOKENS[appearance.scale]);
+  root.style.setProperty("--app-window-radius", `${windowCornerRadius}px`);
+  root.dataset.appearanceMode = mode;
   root.dataset.accent = appearance.accent;
   root.dataset.font = appearance.font;
+  root.dataset.retroPaperTexture = appearance.retroPaperTexture ? "true" : "false";
   root.dataset.scale = appearance.scale;
 }
 
@@ -139,17 +184,18 @@ export function useAppearance(): AppearanceApi {
   useEffect(() => {
     const listener = (event: Event): void => {
       const detail = (event as CustomEvent<AppearancePreference>).detail;
-      if (isAppearancePreference(detail)) {
-        setAppearance(detail);
+      if (detail && typeof detail === "object") {
+        setAppearance(normalizeAppearance(detail));
       }
     };
     window.addEventListener(CHANGE_EVENT, listener);
     return () => window.removeEventListener(CHANGE_EVENT, listener);
   }, []);
 
-  const update = useCallback((partial: Partial<AppearancePreference>) => {
+  const update = useCallback((nextValue: Partial<AppearancePreference> | ((current: AppearancePreference) => Partial<AppearancePreference>)) => {
     setAppearance((current) => {
-      const next = { ...current, ...partial };
+      const partial = typeof nextValue === "function" ? nextValue(current) : nextValue;
+      const next = normalizeAppearance({ ...current, ...partial });
       saveAppearance(next);
       return next;
     });
@@ -159,7 +205,16 @@ export function useAppearance(): AppearanceApi {
     ...appearance,
     setAccent: (accent) => update({ accent }),
     setFont: (font) => update({ font }),
+    setMode: (mode) => update({ mode }),
+    setRetroPaperTexture: (retroPaperTexture) => update({ retroPaperTexture }),
     setScale: (scale) => update({ scale }),
+    setWindowCornerRadius: (windowCornerRadius) =>
+      update((current) => ({
+        windowCornerRadii: {
+          ...current.windowCornerRadii,
+          [current.mode]: clampWindowCornerRadius(windowCornerRadius, current.mode),
+        },
+      })),
     reset: () => {
       setAppearance(DEFAULT_APPEARANCE);
       saveAppearance(DEFAULT_APPEARANCE);
