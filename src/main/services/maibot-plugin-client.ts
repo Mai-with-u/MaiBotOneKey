@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
@@ -34,6 +34,7 @@ import type {
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
   MaiBotPluginUserState,
+  MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
   ModuleSourceConfig,
 } from "../../shared/contracts";
@@ -51,6 +52,9 @@ const MARKET_TIMEOUT_MS = 10_000;
 const MAIBOT_API_TIMEOUT_MS = 3_000;
 const PLUGIN_MARKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const PLUGIN_CONFIG_FILE = "config.toml";
+const PLUGIN_CONFIG_BACKUP_DIR = "config_back";
+const PLUGIN_UPDATE_BACKUP_DIR = ".update_backups";
+const PLUGIN_UPDATE_TMP_DIR = ".update_tmp";
 
 export interface MaiBotPluginClientOptions {
   maibotRoot: string;
@@ -235,13 +239,18 @@ export class MaiBotPluginClient {
     if (latestVersion && !isNewerVersion(latestVersion, oldVersion)) {
       throw new Error("Already on the latest version; no update needed");
     }
+    const resolvedRepositoryUrl = await this.resolveSourceUrl(repositoryUrl);
+    if (!(await isDirectory(join(pluginPath, ".git")))) {
+      return this.replaceNonGitPlugin(pluginId, pluginPath, resolvedRepositoryUrl, branch, oldVersion);
+    }
+
     const beforeCommit = await this.currentGitCommit(pluginPath);
     if (!beforeCommit) {
-      throw new Error("插件目录不是可更新的 Git 仓库，无法执行强制 pull");
+      throw new Error("Plugin Git repository cannot be read; update cannot continue");
     }
 
     try {
-      await this.forcePullRepository(pluginPath, await this.resolveSourceUrl(repositoryUrl), branch);
+      await this.forcePullRepository(pluginPath, resolvedRepositoryUrl, branch);
       const newManifest = await this.validateInstalledManifest(pluginPath, pluginId, false);
       return {
         success: true,
@@ -495,6 +504,15 @@ export class MaiBotPluginClient {
     return data ? normalizePluginUserState(data) : null;
   }
 
+  async getUserStates(userId: string): Promise<MaiBotPluginUserStates> {
+    const query = new URLSearchParams({ user_id: userId });
+    const data = await requestPluginStatsService("GET", `/stats/user-states?${query.toString()}`);
+    if (isUnknownRecord(data) && data.success === false) {
+      throw new Error(typeof data.error === "string" ? data.error : "Plugin user states request failed");
+    }
+    return normalizePluginUserStates(data);
+  }
+
   async likePlugin(pluginId: string, userId: string): Promise<MaiBotPluginVoteResult> {
     const result = await this.postPluginVote("/stats/like", pluginId, userId);
     this.mergeCachedPluginStats(pluginId, {
@@ -515,20 +533,29 @@ export class MaiBotPluginClient {
 
   async ratePlugin(
     pluginId: string,
-    rating: number,
-    comment: string | undefined,
+    rating: number | null | undefined,
+    comment: string | null | undefined,
     userId: string,
   ): Promise<MaiBotPluginRatingResult> {
-    if (rating < 1 || rating > 5) {
+    if (rating !== undefined && rating !== null && (rating < 1 || rating > 5)) {
       return { success: false, error: "评分必须在 1-5 之间" };
     }
+    if (rating === undefined && comment === undefined) {
+      return { success: false, error: "评分和评论至少需要提交一项" };
+    }
 
-    const data = await requestPluginStatsService("POST", "/stats/rate", {
+    const payload: Record<string, unknown> = {
       plugin_id: pluginId,
-      rating,
-      comment,
       user_id: userId,
-    });
+    };
+    if (rating !== undefined) {
+      payload.rating = rating;
+    }
+    if (comment !== undefined) {
+      payload.comment = comment;
+    }
+
+    const data = await requestPluginStatsService("POST", "/stats/rate", payload);
     const result = normalizePluginRatingResult(data);
     this.mergeCachedPluginStats(pluginId, {
       rating: result.rating,
@@ -626,7 +653,7 @@ export class MaiBotPluginClient {
 
   private async getPluginStatsSummary(options: MaiBotPluginListOptions): Promise<Record<string, MaiBotPluginStats>> {
     const cached = await this.readCache(
-      "onekey-plugin-market-stats-cache.json",
+      "onekey-plugin-market-stats-cache-v2.json",
       this.statsCache,
       isPluginStatsMap,
     );
@@ -640,7 +667,7 @@ export class MaiBotPluginClient {
         .then(async (stats) => {
           const nextCache = { timestamp: Date.now(), data: stats };
           this.statsCache = nextCache;
-          await this.writeCache("onekey-plugin-market-stats-cache.json", nextCache);
+          await this.writeCache("onekey-plugin-market-stats-cache-v2.json", nextCache);
           return stats;
         })
         .catch((error) => {
@@ -752,6 +779,93 @@ export class MaiBotPluginClient {
     return result.exitCode === 0 && result.output.trim() ? result.output.trim().split(/\s+/u)[0] : null;
   }
 
+  private async replaceNonGitPlugin(
+    pluginId: string,
+    pluginPath: string,
+    repositoryUrl: string,
+    branch: string,
+    oldVersion: string,
+  ): Promise<MaiBotPluginOperationResult> {
+    const { backupPath, tempPath } = this.createPluginUpdateWorkspace(pluginId);
+
+    await mkdir(dirname(backupPath), { recursive: true });
+    await mkdir(dirname(tempPath), { recursive: true });
+    await rename(pluginPath, backupPath);
+
+    try {
+      await this.cloneRepository(repositoryUrl, tempPath, branch);
+      const newManifest = await this.validateReplacementManifest(tempPath, pluginId);
+      await this.restoreOfficialPluginConfig(backupPath, tempPath);
+      await rename(tempPath, pluginPath);
+
+      return {
+        success: true,
+        message: "Plugin updated successfully",
+        plugin_id: pluginId,
+        plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
+        old_version: oldVersion,
+        new_version: pluginVersion(newManifest),
+      };
+    } catch (error) {
+      await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
+      await this.restoreUpdateBackup(backupPath, pluginPath);
+      throw error;
+    }
+  }
+
+  private createPluginUpdateWorkspace(pluginId: string): { backupPath: string; tempPath: string } {
+    const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
+    const safeId = sanitizeUpdateWorkspaceName(validatePluginId(pluginId));
+    const folderName = `${safeId}.${timestamp}.${process.pid}`;
+    const backupPath = resolve(this.pluginsRoot, PLUGIN_UPDATE_BACKUP_DIR, folderName);
+    const tempPath = resolve(this.pluginsRoot, PLUGIN_UPDATE_TMP_DIR, folderName);
+
+    if (!isPathInside(this.pluginsRoot, backupPath) || !isPathInside(this.pluginsRoot, tempPath)) {
+      throw new Error("Plugin update workspace path is outside the allowed range");
+    }
+    return { backupPath, tempPath };
+  }
+
+  private async restoreUpdateBackup(backupPath: string, pluginPath: string): Promise<void> {
+    if (!(await pathExists(backupPath))) {
+      return;
+    }
+
+    if (await pathExists(pluginPath)) {
+      await rm(pluginPath, { recursive: true, force: true });
+    }
+    await rename(backupPath, pluginPath);
+  }
+
+  private async restoreOfficialPluginConfig(backupPath: string, pluginPath: string): Promise<void> {
+    await this.restorePluginConfigEntry(backupPath, pluginPath, PLUGIN_CONFIG_FILE);
+    await this.restorePluginConfigEntry(backupPath, pluginPath, PLUGIN_CONFIG_BACKUP_DIR);
+  }
+
+  private async restorePluginConfigEntry(
+    backupPath: string,
+    pluginPath: string,
+    entryName: string,
+  ): Promise<void> {
+    const sourcePath = resolve(backupPath, entryName);
+    const targetPath = resolve(pluginPath, entryName);
+    if (!isPathInside(backupPath, sourcePath) || !isPathInside(pluginPath, targetPath)) {
+      throw new Error("Plugin config restore path is outside the allowed range");
+    }
+    if (!(await pathExists(sourcePath))) {
+      return;
+    }
+
+    const sourceStat = await stat(sourcePath);
+    await rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
+    if (sourceStat.isDirectory()) {
+      await cp(sourcePath, targetPath, { recursive: true, force: true });
+    } else if (sourceStat.isFile()) {
+      await mkdir(dirname(targetPath), { recursive: true });
+      await copyFile(sourcePath, targetPath);
+    }
+  }
+
   private async forcePullRepository(pluginPath: string, repositoryUrl: string, branch: string): Promise<void> {
     const remote = repositoryUrl.trim();
     const targetBranch = branch || "main";
@@ -771,6 +885,32 @@ export class MaiBotPluginClient {
     if (result.exitCode !== 0 && !optional) {
       throw new Error(result.output || message);
     }
+  }
+
+  private async validateReplacementManifest(pluginPath: string, pluginId: string): Promise<MaiBotPluginManifest> {
+    const manifest = await this.readManifest(pluginPath);
+    if (!manifest) {
+      throw new Error("Invalid plugin: missing _manifest.json");
+    }
+
+    const expectedId = validatePluginId(pluginId);
+    const manifestId = manifest.id?.trim();
+    if (manifestId !== expectedId) {
+      throw new Error(`Invalid _manifest.json: plugin id must be ${expectedId}`);
+    }
+    if (!manifest.name?.trim()) {
+      throw new Error("Invalid _manifest.json: missing required field name");
+    }
+    if (!manifest.version?.trim()) {
+      throw new Error("Invalid _manifest.json: missing required field version");
+    }
+
+    const authorName = typeof manifest.author === "string" ? manifest.author.trim() : manifest.author?.name?.trim();
+    if (!authorName) {
+      throw new Error("Invalid _manifest.json: missing required field author");
+    }
+
+    return { ...manifest, id: manifestId };
   }
 
   private async validateInstalledManifest(pluginPath: string, pluginId: string, removeOnFailure = true): Promise<MaiBotPluginManifest> {
@@ -1393,7 +1533,7 @@ function normalizePluginStats(pluginId: string, rawStats: unknown): [string, Mai
   const commentCount = normalizeStatsNumber(rawStats.comment_count)
     ?? normalizeStatsNumber(rawStats.comments)
     ?? recentRatings?.filter((rating) => rating.comment?.trim()).length
-    ?? ratingCount;
+    ?? 0;
   return [
     pluginId,
     {
@@ -1427,14 +1567,14 @@ function normalizePluginRatings(rawRatings: unknown): MaiBotPluginStats["recent_
     .map((rating) => ({
       id: typeof rating.id === "string" ? rating.id : undefined,
       user_id: String(rating.user_id ?? "匿名用户"),
-      rating: normalizeStatsNumber(rating.rating) ?? 0,
+      rating: rating.rating === null ? null : normalizeStatsNumber(rating.rating),
       comment: typeof rating.comment === "string" ? rating.comment : undefined,
       created_at: String(rating.created_at ?? ""),
       updated_at: typeof rating.updated_at === "string" ? rating.updated_at : undefined,
       likes: normalizeStatsNumber(rating.likes) ?? normalizeStatsNumber(rating.like_count),
       dislikes: normalizeStatsNumber(rating.dislikes) ?? normalizeStatsNumber(rating.dislike_count),
     }))
-    .filter((rating) => rating.rating > 0 || rating.comment);
+    .filter((rating) => (typeof rating.rating === "number" && rating.rating > 0) || rating.comment);
 }
 
 function createEmptyPluginStats(pluginId: string): MaiBotPluginStats {
@@ -1457,9 +1597,30 @@ function normalizePluginUserState(rawData: unknown): MaiBotPluginUserState | nul
   return {
     liked: rawData.liked === true,
     disliked: rawData.disliked === true,
-    rating: normalizeStatsNumber(rawData.rating) ?? 0,
+    rating: rawData.rating === null ? null : normalizeStatsNumber(rawData.rating) ?? 0,
     comment: typeof rawData.comment === "string" ? rawData.comment : "",
   };
+}
+
+function normalizePluginUserStates(rawData: unknown): MaiBotPluginUserStates {
+  if (!isUnknownRecord(rawData) || rawData.success === false || !isUnknownRecord(rawData.states)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(rawData.states)
+      .map(([pluginId, rawState]) => {
+        const state = normalizePluginUserState(rawState);
+        if (!state) {
+          return null;
+        }
+        const normalizedPluginId = isUnknownRecord(rawState) && typeof rawState.plugin_id === "string"
+          ? rawState.plugin_id
+          : pluginId;
+        return [normalizedPluginId, state] as const;
+      })
+      .filter((entry): entry is readonly [string, MaiBotPluginUserState] => entry !== null),
+  );
 }
 
 function normalizePluginVoteResult(rawData: unknown): MaiBotPluginVoteResult {
@@ -1486,10 +1647,10 @@ function normalizePluginRatingResult(rawData: unknown): MaiBotPluginRatingResult
   return {
     success: rawData.success === true,
     error: typeof rawData.error === "string" ? rawData.error : undefined,
-    user_rating: normalizeStatsNumber(rawData.user_rating),
+    user_rating: rawData.user_rating === null ? null : normalizeStatsNumber(rawData.user_rating),
     rating: normalizeStatsNumber(rawData.rating),
     rating_count: normalizeStatsNumber(rawData.rating_count),
-    comment_count: normalizeStatsNumber(rawData.comment_count) ?? normalizeStatsNumber(rawData.rating_count),
+    comment_count: normalizeStatsNumber(rawData.comment_count) ?? normalizeStatsNumber(rawData.comments),
     remaining: normalizeStatsNumber(rawData.remaining),
   };
 }
@@ -1596,6 +1757,10 @@ function validatePluginId(pluginId: string): string {
     throw new Error("Plugin ID contains invalid characters");
   }
   return normalized;
+}
+
+function sanitizeUpdateWorkspaceName(pluginId: string): string {
+  return pluginId.replace(/[^a-zA-Z0-9._-]/gu, "_").replace(/\.+/gu, ".");
 }
 
 function pluginName(plugin: { id: string; manifest: MaiBotPluginManifest }): string {
@@ -1763,7 +1928,7 @@ function parsePythonConfigFields(block: string): LocalPythonConfigField[] {
       name,
       annotation,
       defaultFactory: extractPythonIdentifierKeyword(expression, "default_factory"),
-      defaultValue: extractPythonDefaultValue(expression, annotation),
+      defaultValue: extractPythonDefaultValue(expression),
       label: extra.label,
       description: extractPythonStringKeyword(expression, "description") ?? extra.description,
       hint: extra.hint,
@@ -2027,10 +2192,7 @@ function extractPythonFieldExtra(expression: string): Partial<LocalPythonConfigF
   };
 }
 
-function extractPythonDefaultValue(
-  expression: string,
-  annotation: string,
-): MaiBotPluginConfigValue | undefined {
+function extractPythonDefaultValue(expression: string): MaiBotPluginConfigValue | undefined {
   const rawDefault = extractPythonKeywordExpression(expression, "default");
   if (rawDefault !== undefined) {
     return parsePythonLiteral(rawDefault);

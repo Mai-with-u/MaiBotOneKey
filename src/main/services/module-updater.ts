@@ -177,7 +177,7 @@ export class ModuleUpdater {
    * 直接用一键包内置的 napcat-adapter 快照覆盖可写目录里的对应插件，不走任何网络。
    * 适用场景：用户因 .gitignore 历史问题导致 plugins/napcat-adapter/runtime/ 缺失，
    * 报 `[E_PLUGIN_NOT_FOUND] No module named '_maibot_plugin_maibot_team_napcat_adapter.runtime'`，
-   * 又不想等 git fetch 联网。强制清空再整目录复制 bundled，含 .git。
+   * 又不想等 git fetch 联网。强制清空再整目录复制 bundled 快照。
    */
   async repairNapcatAdapterFromBundled(): Promise<ModuleUpdateResult> {
     const moduleId: ModuleUpdateResult["moduleId"] = "napcat-adapter";
@@ -209,7 +209,7 @@ export class ModuleUpdater {
       await rm(cwd, { recursive: true, force: true });
     }
 
-    output.push(`[${moduleName}] 复制内置快照（含 .git）...`);
+    output.push(`[${moduleName}] 复制内置快照...`);
     await cp(bundled, cwd, {
       recursive: true,
       force: true,
@@ -325,11 +325,25 @@ export class ModuleUpdater {
           )
         ).output,
       );
-      upstream = spec.targetTag
-        ? `refs/tags/${spec.targetTag}`
-        : spec.targetBranch
-          ? `origin/${spec.targetBranch}`
-          : await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
+      if (spec.targetBranch) {
+        upstream = `origin/${spec.targetBranch}`;
+        append(
+          `[${moduleName}] checkout --force -B ${spec.targetBranch} ${upstream}`,
+          (await this.runGit(gitPath, cwd, ["checkout", "--force", "-B", spec.targetBranch, upstream])).output,
+        );
+        append(
+          `[${moduleName}] branch --set-upstream-to ${upstream} ${spec.targetBranch}`,
+          (await this.runGit(gitPath, cwd, ["branch", "--set-upstream-to", upstream, spec.targetBranch])).output,
+        );
+      } else if (spec.targetTag) {
+        upstream = `refs/tags/${spec.targetTag}`;
+        append(
+          `[${moduleName}] checkout --force --detach ${upstream}`,
+          (await this.runGit(gitPath, cwd, ["checkout", "--force", "--detach", upstream])).output,
+        );
+      } else {
+        upstream = await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
+      }
       append(
         `[${moduleName}] reset --hard ${upstream}`,
         (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
@@ -337,7 +351,16 @@ export class ModuleUpdater {
     } catch (originErr) {
       remoteError = toDetail(originErr);
       output.push(`[${moduleName}] 远端拉取或更新失败: ${remoteError}`);
-      await this.restoreRepositoryBeforeUpdate(gitPath, cwd, moduleName, before, originalRemote, hadOriginRemote, output);
+      await this.restoreRepositoryBeforeUpdate(
+        gitPath,
+        cwd,
+        moduleName,
+        before,
+        branch,
+        originalRemote,
+        hadOriginRemote,
+        output,
+      );
       const failure = spec.targetTag
         ? `无法拉取远端 tag ${spec.targetTag}，已恢复到更新前状态: ${remoteError}`
         : spec.targetBranch
@@ -373,7 +396,16 @@ export class ModuleUpdater {
         if (spec.throwOnFailure) {
           const remoteError = toDetail(subErr);
           output.push(`[${moduleName}] 子模块更新失败: ${remoteError}`);
-          await this.restoreRepositoryBeforeUpdate(gitPath, cwd, moduleName, before, originalRemote, hadOriginRemote, output);
+          await this.restoreRepositoryBeforeUpdate(
+            gitPath,
+            cwd,
+            moduleName,
+            before,
+            branch,
+            originalRemote,
+            hadOriginRemote,
+            output,
+          );
           throw new Error(`子模块更新失败，已恢复到更新前状态: ${remoteError}`);
         } else {
           output.push(`[${moduleName}] 子模块更新失败（已忽略）: ${toDetail(subErr)}`);
@@ -382,6 +414,7 @@ export class ModuleUpdater {
     }
 
     const after = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
+    const afterBranch = await this.readGitValue(gitPath, cwd, ["branch", "--show-current"]);
 
     return {
       moduleId,
@@ -389,11 +422,11 @@ export class ModuleUpdater {
       cwd,
       gitPath,
       remote,
-      branch,
+      branch: afterBranch,
       upstream,
       before,
       after,
-      changed: before ? Boolean(after && before !== after) : Boolean(after),
+      changed: before ? Boolean(after && (before !== after || branch !== afterBranch)) : Boolean(after),
       output,
       updatedAt: Date.now(),
       source: "remote",
@@ -435,10 +468,23 @@ export class ModuleUpdater {
     cwd: string,
     moduleName: string,
     before: string | undefined,
+    branch: string | undefined,
     originalRemote: string | undefined,
     hadOriginRemote: boolean,
     output: string[],
   ): Promise<void> {
+    try {
+      if (branch) {
+        output.push(`[${moduleName}] 恢复到更新前分支 ${branch} ...`);
+        output.push(...(await this.runGit(gitPath, cwd, ["checkout", "--force", branch], 60_000)).output);
+      } else if (before) {
+        output.push(`[${moduleName}] 恢复到更新前 detached HEAD ${before} ...`);
+        output.push(...(await this.runGit(gitPath, cwd, ["checkout", "--force", "--detach", before], 60_000)).output);
+      }
+    } catch (restoreError) {
+      output.push(`[${moduleName}] 恢复分支失败: ${toDetail(restoreError)}`);
+    }
+
     try {
       if (before) {
         output.push(`[${moduleName}] 恢复到更新前提交 ${before} ...`);

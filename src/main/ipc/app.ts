@@ -48,6 +48,7 @@ import type {
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
   MaiBotPluginUserState,
+  MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
@@ -101,6 +102,7 @@ import { PluginBuilderLibrary } from "../services/plugin-builder-library";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
+import { getWindowWorkAreaBounds, isWindowVisuallyMaximized } from "../window-state";
 
 const LAUNCHER_SETTING_FILES = [
   "resource-paths.json",
@@ -120,6 +122,8 @@ const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "live2d", "
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
 const REMOVE_RETRY_OPTIONS = { recursive: true, force: true, maxRetries: 8, retryDelay: 250 } as const;
 const NORMAL_MINIMUM_SIZE = { width: 1080, height: 720 };
+const NORMAL_DEFAULT_SIZE = { width: 1280, height: 820 };
+const NORMAL_RESTORE_MARGIN = 48;
 const FLOATING_BALL_SIZE = { width: 96, height: 96 };
 const FLOATING_PANEL_SIZE = { width: 380, height: 520 };
 const FLOATING_STRIP_SIZE = { width: 28, height: 112 };
@@ -137,6 +141,7 @@ const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
 const ONEKEY_REPOSITORY_URL = "https://github.com/DrSmoothl/MaiBotOneKey.git";
 const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/tags?per_page=100";
 const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/releases/latest";
+const ONEKEY_RELEASES_API_URL = "https://api.github.com/repos/DrSmoothl/MaiBotOneKey/releases?per_page=100";
 const ONEKEY_RELEASE_SOURCE = "DrSmoothl/MaiBotOneKey";
 
 interface GitHubReleaseAsset {
@@ -192,6 +197,7 @@ function readWindowState(
   window: BrowserWindow | null,
   isFloating = false,
   floatingEdgeSide: "left" | "right" | null = null,
+  isShellMaximized = false,
 ): WindowState {
   if (!window || window.isDestroyed()) {
     return {
@@ -205,7 +211,7 @@ function readWindowState(
   }
 
   return {
-    isMaximized: window.isMaximized(),
+    isMaximized: isShellMaximized || isWindowVisuallyMaximized(window),
     isFullScreen: window.isFullScreen(),
     isFocused: window.isFocused(),
     isFloating,
@@ -567,6 +573,52 @@ function selectLauncherUpdateAsset(rawAssets: unknown): GitHubReleaseAsset | und
     ?? executableAssets[0];
 }
 
+async function fetchLauncherReleaseNotesInRange(currentTag: string, latestTag: string): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(ONEKEY_RELEASES_API_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+    }
+
+    const releases = (await response.json()) as unknown;
+    if (!Array.isArray(releases)) {
+      return undefined;
+    }
+
+    const notes = releases
+      .filter((release): release is GitHubReleasePayload => {
+        if (!release || typeof release !== "object") {
+          return false;
+        }
+        const tag = release.tag_name;
+        return (
+          release.draft !== true
+          && typeof tag === "string"
+          && compareVersionTags(tag, currentTag) > 0
+          && compareVersionTags(tag, latestTag) <= 0
+        );
+      })
+      .sort((left, right) => compareVersionTags(String(right.tag_name), String(left.tag_name)))
+      .map((release) => {
+        const tag = String(release.tag_name);
+        const title = typeof release.name === "string" && release.name.trim() ? release.name.trim() : tag;
+        const body = typeof release.body === "string" && release.body.trim()
+          ? release.body.trim()
+          : "此版本没有填写更新说明。";
+        return `## ${title}\n\n${body}`;
+      });
+
+    return notes.length > 1 ? notes.join("\n\n---\n\n") : undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchLauncherUpdateInfo(currentVersion: string): Promise<LauncherUpdateInternalInfo> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -588,13 +640,17 @@ async function fetchLauncherUpdateInfo(currentVersion: string): Promise<Launcher
     const latestTag = release.tag_name;
     const currentTag = `v${currentVersion}`;
     const available = compareVersionTags(latestTag, currentTag) > 0;
+    const latestReleaseNotes = typeof release.body === "string" ? release.body : undefined;
+    const releaseNotes = available
+      ? await fetchLauncherReleaseNotesInRange(currentTag, latestTag).catch(() => latestReleaseNotes)
+      : latestReleaseNotes;
     return {
       currentVersion,
       latestTag,
       latestVersion: releaseTagToVersion(latestTag),
       releaseName: typeof release.name === "string" ? release.name : latestTag,
       releaseUrl: typeof release.html_url === "string" ? release.html_url : "https://github.com/DrSmoothl/MaiBotOneKey/releases",
-      releaseNotes: typeof release.body === "string" ? release.body : undefined,
+      releaseNotes,
       assetName: typeof asset?.name === "string" ? asset.name : undefined,
       assetSize: typeof asset?.size === "number" ? asset.size : undefined,
       available,
@@ -848,10 +904,15 @@ export function registerAppIpc({
   let floatingPanelExpanded = false;
   let floatingEdgeSide: "left" | "right" | null = null;
   let normalBounds: Electron.Rectangle | null = null;
+  let shellMaximized = false;
+  let shellRestoreBounds: Electron.Rectangle | null = null;
   let resizeState: WindowResizeState | null = null;
 
+  const readManagedWindowState = (window: BrowserWindow | null): WindowState =>
+    readWindowState(window, floatingMode, floatingEdgeSide, shellMaximized);
+
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
-    const state = readWindowState(window, floatingMode, floatingEdgeSide);
+    const state = readManagedWindowState(window);
     window?.webContents.send("desktop:window-state", state);
     return state;
   };
@@ -903,6 +964,79 @@ export function registerAppIpc({
     window.setMinimumSize(NORMAL_MINIMUM_SIZE.width, NORMAL_MINIMUM_SIZE.height);
   };
 
+  const clampNormalBounds = (bounds: Electron.Rectangle): Electron.Rectangle => {
+    const workArea = screen.getDisplayMatching(bounds).workArea;
+    const width = Math.min(Math.max(bounds.width, NORMAL_MINIMUM_SIZE.width), workArea.width);
+    const height = Math.min(Math.max(bounds.height, NORMAL_MINIMUM_SIZE.height), workArea.height);
+    return {
+      x: Math.round(Math.min(Math.max(bounds.x, workArea.x), workArea.x + workArea.width - width)),
+      y: Math.round(Math.min(Math.max(bounds.y, workArea.y), workArea.y + workArea.height - height)),
+      width: Math.round(width),
+      height: Math.round(height),
+    };
+  };
+
+  const fallbackNormalBounds = (window: BrowserWindow): Electron.Rectangle => {
+    const workArea = getWindowWorkAreaBounds(window);
+    const width = Math.min(
+      Math.max(NORMAL_MINIMUM_SIZE.width, Math.min(NORMAL_DEFAULT_SIZE.width, workArea.width - NORMAL_RESTORE_MARGIN * 2)),
+      workArea.width,
+    );
+    const height = Math.min(
+      Math.max(NORMAL_MINIMUM_SIZE.height, Math.min(NORMAL_DEFAULT_SIZE.height, workArea.height - NORMAL_RESTORE_MARGIN * 2)),
+      workArea.height,
+    );
+    return {
+      x: Math.round(workArea.x + (workArea.width - width) / 2),
+      y: Math.round(workArea.y + (workArea.height - height) / 2),
+      width: Math.round(width),
+      height: Math.round(height),
+    };
+  };
+
+  const isShellWindowMaximized = (window: BrowserWindow): boolean =>
+    shellMaximized || isWindowVisuallyMaximized(window);
+
+  const rememberShellRestoreBounds = (window: BrowserWindow): void => {
+    if (!isShellWindowMaximized(window)) {
+      shellRestoreBounds = clampNormalBounds(window.getBounds());
+    }
+  };
+
+  const getShellRestoreBounds = (window: BrowserWindow): Electron.Rectangle => {
+    if (shellRestoreBounds) {
+      return clampNormalBounds(shellRestoreBounds);
+    }
+    if (window.isMaximized()) {
+      return clampNormalBounds(window.getNormalBounds());
+    }
+    return fallbackNormalBounds(window);
+  };
+
+  const maximizeShellWindow = (window: BrowserWindow): WindowState => {
+    resizeState = null;
+    rememberShellRestoreBounds(window);
+    restoreNormalWindowChrome(window);
+    shellMaximized = true;
+    window.setBounds(getWindowWorkAreaBounds(window), true);
+    window.show();
+    return sendWindowState(window);
+  };
+
+  const restoreShellWindow = (window: BrowserWindow): WindowState => {
+    resizeState = null;
+    const restoreBounds = getShellRestoreBounds(window);
+    shellMaximized = false;
+    shellRestoreBounds = null;
+    if (window.isMaximized()) {
+      window.unmaximize();
+    }
+    restoreNormalWindowChrome(window);
+    window.setBounds(restoreBounds, true);
+    window.show();
+    return sendWindowState(window);
+  };
+
   const startWindowResize = (
     edge: WindowResizeEdge,
     screenX: number,
@@ -910,9 +1044,9 @@ export function registerAppIpc({
   ): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
-    if (floatingMode || window.isMaximized() || window.isFullScreen() || !WINDOW_RESIZE_EDGES.has(edge)) {
+    if (floatingMode || isShellWindowMaximized(window) || window.isFullScreen() || !WINDOW_RESIZE_EDGES.has(edge)) {
       return sendWindowState(window);
     }
 
@@ -930,9 +1064,9 @@ export function registerAppIpc({
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
       resizeState = null;
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
-    if (!resizeState || floatingMode || window.isMaximized() || window.isFullScreen()) {
+    if (!resizeState || floatingMode || isShellWindowMaximized(window) || window.isFullScreen()) {
       return sendWindowState(window);
     }
 
@@ -973,12 +1107,16 @@ export function registerAppIpc({
   const applyFloatingMode = (enabled: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
 
     if (enabled && !floatingMode) {
       resizeState = null;
-      normalBounds = window.getBounds();
+      normalBounds = isShellWindowMaximized(window)
+        ? getShellRestoreBounds(window)
+        : window.getBounds();
+      shellMaximized = false;
+      shellRestoreBounds = null;
       if (window.isMaximized()) {
         window.unmaximize();
       }
@@ -1017,7 +1155,7 @@ export function registerAppIpc({
   const applyFloatingPanelExpanded = (expanded: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
     if (!floatingMode) {
       return sendWindowState(window);
@@ -1044,7 +1182,7 @@ export function registerAppIpc({
   const moveFloatingBy = (deltaX: number, deltaY: number): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
     if (!floatingMode) {
       return sendWindowState(window);
@@ -1076,10 +1214,10 @@ export function registerAppIpc({
     return sendWindowState(window);
   };
 
-  const moveFloatingTo = (screenX: number, screenY: number, offsetX: number, offsetY: number): WindowState => {
+  const moveFloatingTo = (offsetX: number, offsetY: number): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
     if (!floatingMode) {
       return sendWindowState(window);
@@ -1124,7 +1262,7 @@ export function registerAppIpc({
   const finishFloatingDrag = (): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
-      return readWindowState(window, floatingMode, floatingEdgeSide);
+      return readManagedWindowState(window);
     }
     if (!floatingMode) {
       return sendWindowState(window);
@@ -1294,7 +1432,7 @@ export function registerAppIpc({
     appLatestSource: remoteAppVersionCache.appLatestSource,
     moduleVersions: await readModuleVersions(),
     platform: process.platform,
-    windowState: readWindowState(getMainWindow(), floatingMode, floatingEdgeSide),
+    windowState: readManagedWindowState(getMainWindow()),
     initState: await initManager.getState({ refreshDependencies: options.refreshDependencies ?? false }),
     startupAgreement: await initManager.getAgreementState(),
     recentLogs: logStore.list(),
@@ -2061,6 +2199,13 @@ export function registerAppIpc({
     return maibotPluginClient.getUserState(pluginId, userId);
   });
 
+  ipcMain.handle("plugins:getUserStates", async (
+    _event,
+    userId: string,
+  ): Promise<MaiBotPluginUserStates> => {
+    return maibotPluginClient.getUserStates(userId);
+  });
+
   ipcMain.handle("plugins:like", async (
     _event,
     pluginId: string,
@@ -2080,8 +2225,8 @@ export function registerAppIpc({
   ipcMain.handle("plugins:rate", async (
     _event,
     pluginId: string,
-    rating: number,
-    comment: string | undefined,
+    rating: number | null | undefined,
+    comment: string | null | undefined,
     userId: string,
   ): Promise<MaiBotPluginRatingResult> => {
     return maibotPluginClient.ratePlugin(pluginId, rating, comment, userId);
@@ -2317,14 +2462,12 @@ export function registerAppIpc({
     getMainWindow()?.minimize();
   });
 
-  ipcMain.handle("desktop:window:toggleMaximize", (): void => {
+  ipcMain.handle("desktop:window:toggleMaximize", (): WindowState | void => {
     const window = getMainWindow();
     if (!window) return;
-    if (window.isMaximized()) {
-      window.unmaximize();
-    } else {
-      window.maximize();
-    }
+    return isShellWindowMaximized(window)
+      ? restoreShellWindow(window)
+      : maximizeShellWindow(window);
   });
 
   ipcMain.handle("desktop:window:close", (): void => {
@@ -2342,8 +2485,8 @@ export function registerAppIpc({
   );
   ipcMain.handle(
     "desktop:window:moveFloatingTo",
-    (_event, screenX: number, screenY: number, offsetX: number, offsetY: number): WindowState =>
-      moveFloatingTo(screenX, screenY, offsetX, offsetY),
+    (_event, offsetX: number, offsetY: number): WindowState =>
+      moveFloatingTo(offsetX, offsetY),
   );
 
   ipcMain.handle("desktop:window:finishFloatingDrag", (): WindowState => finishFloatingDrag());
@@ -2361,7 +2504,7 @@ export function registerAppIpc({
   ipcMain.handle("desktop:window:finishResize", (): WindowState => finishWindowResize());
 
   ipcMain.handle("desktop:window:getState", (): WindowState =>
-    readWindowState(getMainWindow(), floatingMode, floatingEdgeSide),
+    readManagedWindowState(getMainWindow()),
   );
 
   return {

@@ -393,7 +393,7 @@ function buildFlowBody(
   }
 
   const lines: string[] = [`        message = "${escapePythonString(defaultMessage)}"`];
-  const availableVariables = collectAvailablePythonVariables(component, parameters);
+  const availableVariables = collectAvailablePythonVariables(parameters);
   let returned = false;
   for (const node of nodes) {
     if (node.kind === "comment") {
@@ -524,10 +524,7 @@ function buildFailureReturnLines(
   return [`${indent}return False, message, True`];
 }
 
-function collectAvailablePythonVariables(
-  component: MaiBotPluginBlueprintComponent,
-  parameters: MaiBotPluginBlueprintParameter[],
-): Set<string> {
+function collectAvailablePythonVariables(parameters: MaiBotPluginBlueprintParameter[]): Set<string> {
   const variables = new Set(["message", "stream_id", "config_value"]);
   for (const parameter of parameters) {
     variables.add(toPythonIdentifier(parameter.name));

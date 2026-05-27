@@ -33,6 +33,7 @@ const MANAGED_PACKAGES: ManagedPythonPackage[] = [
 const PYTHON_OVERLAY_TARGET_ENV = "MAIBOT_PYTHON_OVERLAY_TARGET";
 const REQUEST_TIMEOUT_MS = 60_000;
 const PIP_TIMEOUT_MS = 10 * 60 * 1000;
+const STARTUP_UPGRADE_IDLE_TIMEOUT_MS = 10_000;
 const SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json, application/json;q=0.9, text/html;q=0.8";
 
 interface SimpleProjectFile {
@@ -524,6 +525,29 @@ export class PythonDependencyManager {
       }
     }
     return true;
+  }
+
+  async waitForStartupUpgradeIdle(timeoutMs = STARTUP_UPGRADE_IDLE_TIMEOUT_MS): Promise<void> {
+    const currentUpgrade = this.startupUpgradePromise;
+    if (!currentUpgrade) {
+      return;
+    }
+
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        currentUpgrade.catch(() => undefined).then(() => undefined),
+        new Promise<void>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error("Timed out waiting for Python dependency install to stop"));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   private async installProjectDeclaredDependencies(

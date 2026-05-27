@@ -45,6 +45,7 @@ import type {
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
   MaiBotPluginUserState,
+  MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   ManagedPythonPackageName,
@@ -117,7 +118,7 @@ const desktopBridge: DesktopBridge = {
     onIpc("desktop:snapshot", callback),
   window: {
     minimize: () => ipcRenderer.invoke("desktop:window:minimize") as Promise<void>,
-    toggleMaximize: () => ipcRenderer.invoke("desktop:window:toggleMaximize") as Promise<void>,
+    toggleMaximize: () => ipcRenderer.invoke("desktop:window:toggleMaximize") as Promise<WindowState>,
     close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
     setFloatingMode: (enabled: boolean) =>
       ipcRenderer.invoke("desktop:window:setFloatingMode", enabled) as Promise<WindowState>,
@@ -125,8 +126,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("desktop:window:setFloatingPanelExpanded", expanded) as Promise<WindowState>,
     moveFloatingBy: (deltaX: number, deltaY: number) =>
       ipcRenderer.invoke("desktop:window:moveFloatingBy", deltaX, deltaY) as Promise<WindowState>,
-    moveFloatingTo: (screenX: number, screenY: number, offsetX: number, offsetY: number) =>
-      ipcRenderer.invoke("desktop:window:moveFloatingTo", screenX, screenY, offsetX, offsetY) as Promise<WindowState>,
+    moveFloatingTo: (offsetX: number, offsetY: number) =>
+      ipcRenderer.invoke("desktop:window:moveFloatingTo", offsetX, offsetY) as Promise<WindowState>,
     finishFloatingDrag: () =>
       ipcRenderer.invoke("desktop:window:finishFloatingDrag") as Promise<WindowState>,
     startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) =>
@@ -233,11 +234,13 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
     getUserState: (pluginId: string, userId: string) =>
       ipcRenderer.invoke("plugins:getUserState", pluginId, userId) as Promise<MaiBotPluginUserState | null>,
+    getUserStates: (userId: string) =>
+      ipcRenderer.invoke("plugins:getUserStates", userId) as Promise<MaiBotPluginUserStates>,
     like: (pluginId: string, userId: string) =>
       ipcRenderer.invoke("plugins:like", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
     dislike: (pluginId: string, userId: string) =>
       ipcRenderer.invoke("plugins:dislike", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
-    rate: (pluginId: string, rating: number, comment: string | undefined, userId: string) =>
+    rate: (pluginId: string, rating: number | null | undefined, comment: string | null | undefined, userId: string) =>
       ipcRenderer.invoke("plugins:rate", pluginId, rating, comment, userId) as Promise<MaiBotPluginRatingResult>,
     recordDownload: (pluginId: string, userId?: string, fingerprint?: string) =>
       ipcRenderer.invoke("plugins:recordDownload", pluginId, userId, fingerprint) as Promise<MaiBotPluginDownloadResult>,

@@ -106,6 +106,7 @@ const MAX_RESTART_ATTEMPTS = 3;
 const RESTART_DELAY_MS = 2_500;
 const SERVICE_TERMINAL_COLS = 260;
 const SERVICE_TERMINAL_ROWS = 36;
+const LOCAL_DASHBOARD_ENV_NAME = "MAIBOT_WEBUI_USE_LOCAL_DASHBOARD";
 const COMMAND_CONFIG_FILE = "service-commands.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const TERMINAL_SETTINGS_FILE = "terminal-settings.json";
@@ -263,6 +264,24 @@ function createServiceEnv(extraEnv: Record<string, string> | undefined): NodeJS.
   }
 
   return env;
+}
+
+function isDevRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === "development" ||
+    Boolean(process.env.ELECTRON_RENDERER_URL) ||
+    Boolean(process.env.VITE_DEV_SERVER_URL)
+  );
+}
+
+function createServiceSpecificEnv(serviceId: ServiceId): Record<string, string> {
+  if (serviceId === "maibot" && isDevRuntime()) {
+    return {
+      [LOCAL_DASHBOARD_ENV_NAME]: "1",
+    };
+  }
+
+  return {};
 }
 
 function killWindowsProcessTree(pid: number, force: boolean): Promise<void> {
@@ -556,6 +575,9 @@ export class ServiceManager extends EventEmitter {
 
   async restart(serviceId: ServiceId): Promise<ServiceDescriptor> {
     await this.stop(serviceId);
+    if (serviceId === "maibot") {
+      await this.pythonDependencyManager?.waitForStartupUpgradeIdle();
+    }
     return this.start(serviceId);
   }
 
@@ -642,7 +664,11 @@ export class ServiceManager extends EventEmitter {
       const agreementEnv = await this.initManager.getAgreementEnvVars();
       const usePythonOverlay = definition.id === "maibot" && !this.isCustomPythonRuntimeEnabled();
       const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
-      const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv };
+      const serviceEnv = createServiceSpecificEnv(definition.id);
+      const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv, ...serviceEnv };
+      if (serviceEnv[LOCAL_DASHBOARD_ENV_NAME]) {
+        this.logs.append("maibot", "system", `dev local dashboard enabled: ${LOCAL_DASHBOARD_ENV_NAME}=1`);
+      }
       if (usePythonOverlay && this.pythonDependencyManager) {
         const syncedPythonOverrides = await this.initManager.ensureBundledPythonOverrides();
         if (syncedPythonOverrides.length > 0) {
@@ -1375,7 +1401,14 @@ export class ServiceManager extends EventEmitter {
   private async resolveNapCatUrl(fallback: string): Promise<string> {
     try {
       const { token } = await this.initManager.readNapCatWebUiToken();
-      return token ? `http://127.0.0.1:6099/webui?token=${encodeURIComponent(token)}` : fallback;
+      if (!token) {
+        return fallback;
+      }
+      const target = new URL(fallback);
+      target.pathname = "/webui/web_login";
+      target.search = "";
+      target.searchParams.set("token", token);
+      return target.toString();
     } catch {
       // Any read error falls back to the normal login page, avoiding a blocked main panel.
       return fallback;

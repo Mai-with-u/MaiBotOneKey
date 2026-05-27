@@ -22,6 +22,7 @@ import type {
   MaiBotPluginReadmeResult,
   MaiBotPluginStats,
   MaiBotPluginUserState,
+  MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
   ServiceDescriptor,
 } from "@shared/contracts";
@@ -41,6 +42,7 @@ export type InstalledPlugin = MaiBotInstalledPlugin;
 export type PluginOperationResponse = MaiBotPluginOperationResult;
 export type PluginStats = MaiBotPluginStats;
 export type PluginUserState = MaiBotPluginUserState;
+export type PluginUserStates = MaiBotPluginUserStates;
 export type PluginVoteResponse = MaiBotPluginVoteResult;
 export type PluginRatingResponse = MaiBotPluginRatingResult;
 export type PluginDownloadResponse = MaiBotPluginDownloadResult;
@@ -275,6 +277,10 @@ export function fetchPluginUserState(pluginId: string): Promise<PluginUserState 
   return requirePluginBridge().getUserState(pluginId, getPluginStatsUserId());
 }
 
+export function fetchPluginUserStates(): Promise<PluginUserStates> {
+  return requirePluginBridge().getUserStates(getPluginStatsUserId());
+}
+
 export function likePlugin(pluginId: string): Promise<PluginVoteResponse> {
   return requirePluginBridge().like(pluginId, getPluginStatsUserId());
 }
@@ -285,8 +291,8 @@ export function dislikePlugin(pluginId: string): Promise<PluginVoteResponse> {
 
 export function ratePlugin(
   pluginId: string,
-  rating: number,
-  comment?: string,
+  rating?: number | null,
+  comment?: string | null,
 ): Promise<PluginRatingResponse> {
   return requirePluginBridge().rate(pluginId, rating, comment, getPluginStatsUserId());
 }

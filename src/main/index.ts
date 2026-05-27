@@ -17,6 +17,7 @@ import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
 import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
+import { isWindowVisuallyMaximized } from "./window-state";
 
 const runtimePaths = configureRuntimePaths();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
@@ -161,7 +162,7 @@ function broadcastWindowState(window: BrowserWindow): void {
   }
 
   window.webContents.send("desktop:window-state", {
-    isMaximized: window.isMaximized(),
+    isMaximized: isWindowVisuallyMaximized(window),
     isFullScreen: window.isFullScreen(),
     isFocused: window.isFocused(),
   });

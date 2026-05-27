@@ -551,6 +551,42 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+function normalizeTomlLineEndings(content: string): string {
+  return content.replace(/\r\n?/gu, "\n");
+}
+
+function readTomlTable(content: string, tableName: string): Record<string, unknown> | undefined {
+  const normalized = normalizeTomlLineEndings(content);
+  const tablePattern = new RegExp(
+    `(^|\\n)\\s*\\[${escapeRegExp(tableName)}\\]\\s*(?:#.*)?(?:\\n|$)`,
+    "u",
+  );
+  const tableMatch = tablePattern.exec(normalized);
+  if (!tableMatch) {
+    return undefined;
+  }
+
+  const tableStart = tableMatch.index + tableMatch[0].length;
+  const nextTableOffset = normalized
+    .slice(tableStart)
+    .search(/\n\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?(?:\n|$)/u);
+  const tableBody = nextTableOffset === -1
+    ? normalized.slice(tableStart)
+    : normalized.slice(tableStart, tableStart + nextTableOffset);
+
+  try {
+    const parsed = parseToml(`[${tableName}]\n${tableBody.trimEnd()}\n`);
+    const table = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)[tableName]
+      : undefined;
+    return table && typeof table === "object" && !Array.isArray(table)
+      ? table as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureBotQqConfig(content: string, account: string): string {
   return ensureBotPlatformConfig(content, {
     platform: "qq",
@@ -1853,17 +1889,11 @@ export class InitManager {
 
     for (const candidate of candidates) {
       try {
-        const parsed = parseToml(readFileSync(candidate, "utf8"));
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        const config = readTomlTable(readFileSync(candidate, "utf8"), "webui");
+        if (!config) {
           continue;
         }
 
-        const webui = (parsed as Record<string, unknown>)["webui"];
-        if (!webui || typeof webui !== "object" || Array.isArray(webui)) {
-          continue;
-        }
-
-        const config = webui as Record<string, unknown>;
         return buildMaiBotWebUiEndpoint(
           asString(config["host"], fallback.host),
           asTcpPort(config["port"], fallback.port),

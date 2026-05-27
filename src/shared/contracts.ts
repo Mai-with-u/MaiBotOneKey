@@ -147,7 +147,7 @@ export interface AppIconSettings {
   options: AppIconOption[];
 }
 
-export type PluginBuilderMode = "agent" | "nodes" | "disabled";
+export type PluginBuilderMode = "agent" | "disabled";
 
 export interface NetworkProxySettings {
   enabled: boolean;
@@ -558,7 +558,7 @@ export interface MaiBotPluginStats {
 export interface MaiBotPluginRating {
   id?: string;
   user_id: string;
-  rating: number;
+  rating?: number | null;
   comment?: string;
   created_at: string;
   updated_at?: string;
@@ -569,9 +569,11 @@ export interface MaiBotPluginRating {
 export interface MaiBotPluginUserState {
   liked: boolean;
   disliked: boolean;
-  rating: number;
+  rating: number | null;
   comment: string;
 }
+
+export type MaiBotPluginUserStates = Record<string, MaiBotPluginUserState>;
 
 export interface MaiBotPluginVoteResult {
   success: boolean;
@@ -586,7 +588,7 @@ export interface MaiBotPluginVoteResult {
 export interface MaiBotPluginRatingResult {
   success: boolean;
   error?: string;
-  user_rating?: number;
+  user_rating?: number | null;
   rating?: number;
   rating_count?: number;
   comment_count?: number;
@@ -1097,12 +1099,12 @@ export interface DesktopBridge {
   onSnapshot: (callback: (snapshot: DesktopSnapshot) => void) => () => void;
   window: {
     minimize: () => Promise<void>;
-    toggleMaximize: () => Promise<void>;
+    toggleMaximize: () => Promise<WindowState>;
     close: () => Promise<void>;
     setFloatingMode: (enabled: boolean) => Promise<WindowState>;
     setFloatingPanelExpanded: (expanded: boolean) => Promise<WindowState>;
     moveFloatingBy: (deltaX: number, deltaY: number) => Promise<WindowState>;
-    moveFloatingTo: (screenX: number, screenY: number, offsetX: number, offsetY: number) => Promise<WindowState>;
+    moveFloatingTo: (offsetX: number, offsetY: number) => Promise<WindowState>;
     finishFloatingDrag: () => Promise<WindowState>;
     startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) => Promise<WindowState>;
     resizeTo: (screenX: number, screenY: number) => Promise<WindowState>;
@@ -1175,12 +1177,13 @@ export interface DesktopBridge {
     getReadme: (pluginId: string, repositoryUrl?: string) => Promise<MaiBotPluginReadmeResult>;
     getStats: (pluginId: string) => Promise<MaiBotPluginStats | null>;
     getUserState: (pluginId: string, userId: string) => Promise<MaiBotPluginUserState | null>;
+    getUserStates: (userId: string) => Promise<MaiBotPluginUserStates>;
     like: (pluginId: string, userId: string) => Promise<MaiBotPluginVoteResult>;
     dislike: (pluginId: string, userId: string) => Promise<MaiBotPluginVoteResult>;
     rate: (
       pluginId: string,
-      rating: number,
-      comment: string | undefined,
+      rating: number | null | undefined,
+      comment: string | null | undefined,
       userId: string,
     ) => Promise<MaiBotPluginRatingResult>;
     recordDownload: (
