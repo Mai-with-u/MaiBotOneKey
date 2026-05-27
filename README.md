@@ -13,6 +13,29 @@ bun run dev
 
 本地预览默认使用 `bun run dev`。除非特别说明要验证 `out/` 构建产物或发布形态，不要优先使用 `bun run preview`。
 
+### Electron dev 启动排障
+
+如果 `bun run dev` 在 `start electron app...` 后立刻退出，并在日志里看到类似下面的错误：
+
+```text
+TypeError: Cannot read properties of undefined (reading 'isPackaged')
+```
+
+通常是当前 shell 环境里设置了 `ELECTRON_RUN_AS_NODE=1`。这个变量会强制 Electron 以普通 Node 模式运行，导致主进程里的 `electron.app` 为空。
+
+PowerShell 下先清掉该变量，再启动开发版：
+
+```powershell
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+bun run dev
+```
+
+如果只是想临时确认当前 shell 是否带了这个变量：
+
+```powershell
+$env:ELECTRON_RUN_AS_NODE
+```
+
 常用检查：
 
 ```bash
