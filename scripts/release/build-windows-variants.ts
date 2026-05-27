@@ -62,7 +62,7 @@ async function buildWindowsInstaller(): Promise<void> {
     "--win",
     "nsis",
     "--x64",
-    "--config.win.artifactName=MaiBot OK-${version}-win.${ext}",
+    "--config.win.artifactName=MaiBot-OK-${version}-win.${ext}",
   ]);
 
   await copyLatestMetadata();

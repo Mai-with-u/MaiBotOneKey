@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.4.2",
+  "version": "0.4.4",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "![1779700604525](image/package/1779700604525.png)otricSeven",
   "license": "GPL-3.0-only",
@@ -103,23 +103,63 @@
         "to": "modules",
         "filter": [
           "**/*",
+          "!**/.git/**",
           "!**/__pycache__/**",
           "!**/*.pyc",
-          "!**/.git/index.lock",
-          "!**/.git/objects/pack/.tmp-*",
           "!MaiBot/config/**",
           "!MaiBot/data/**",
+          "!MaiBot/dashboard/.vite/**",
+          "!MaiBot/dashboard/node_modules/**",
           "!MaiBot/maibot_statistics.html",
-          "!MaiBot/plugins/__init__.py",
-          "!MaiBot/plugins/napcat-adapter/.git/**",
-          "!MaiBot/plugins/snowluma-adapter/.git/**",
+          "!MaiBot/plugins/**",
           "!napcat/napcat/config/webui.json",
           "!napcat/**/*linux*",
           "!napcat/**/*darwin*",
           "!napcat/**/*arm64*",
           "!napcat/versions/**/resources/app/napcat/config/webui.json",
-          "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json",
-          "!napcat/.git/**"
+          "!napcatframework/versions/**/resources/app/LiteLoader/plugins/NapCat/config/webui.json"
+        ]
+      },
+      {
+        "from": "modules/MaiBot/plugins/napcat-adapter",
+        "to": "modules/MaiBot/plugins/napcat-adapter",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/config.toml",
+          "!**/config.toml.*",
+          "!**/config_back/**",
+          "!**/data/**",
+          "!**/logs/**",
+          "!**/*.bak",
+          "!**/*.backup*",
+          "!**/*.db",
+          "!**/*.sqlite",
+          "!**/*.sqlite3",
+          "!**/*.log"
+        ]
+      },
+      {
+        "from": "modules/MaiBot/plugins/snowluma-adapter",
+        "to": "modules/MaiBot/plugins/snowluma-adapter",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/config.toml",
+          "!**/config.toml.*",
+          "!**/config_back/**",
+          "!**/data/**",
+          "!**/logs/**",
+          "!**/*.bak",
+          "!**/*.backup*",
+          "!**/*.db",
+          "!**/*.sqlite",
+          "!**/*.sqlite3",
+          "!**/*.log"
         ]
       }
     ],
