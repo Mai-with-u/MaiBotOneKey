@@ -134,10 +134,13 @@ export function InitializationWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pythonDeps, setPythonDeps] = useState<PythonOverridesState | null>(null);
+  const [sourceSaving, setSourceSaving] = useState(false);
+  const [downloadRestarting, setDownloadRestarting] = useState(false);
   const [localUserName, setLocalUserName] = useState(readLocalUserName);
   const [step, setStep] = useState<WizardStep>("core");
   const autoStartRequested = useRef(false);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startupRunId = useRef(0);
   const agreementPending = !snapshot.startupAgreement.isConfirmed;
   const service = maibotServiceFrom(snapshot);
   const logs = useMemo(() => dependencyLogs(snapshot.recentLogs ?? []), [snapshot.recentLogs]);
@@ -146,6 +149,7 @@ export function InitializationWizard({
   const starting = service?.status === "starting";
   const open = !agreementPending && !seen;
   const progress = serviceProgress(service, busy);
+  const restartDownloadVisible = step === "core" && starting && !running;
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();
@@ -177,21 +181,67 @@ export function InitializationWizard({
     setSeen(true);
   }, []);
 
-  const startMaiCore = useCallback(async () => {
+  const runMaiCoreStartup = useCallback(async ({
+    repairFirst,
+    startService,
+  }: {
+    repairFirst: boolean;
+    startService: () => Promise<void>;
+  }) => {
+    const runId = startupRunId.current + 1;
+    startupRunId.current = runId;
     setBusy(true);
     setError(null);
     try {
-      await window.maibotDesktop?.init.repair();
-      await window.maibotDesktop?.services.start("maibot");
+      if (repairFirst) {
+        await window.maibotDesktop?.init.repair();
+        if (startupRunId.current !== runId) {
+          return;
+        }
+      }
+      await startService();
+      if (startupRunId.current !== runId) {
+        return;
+      }
       await waitForMaiBotWebUi();
-      setStep("profile");
+      if (startupRunId.current === runId) {
+        setStep("profile");
+      }
     } catch (nextError) {
-      setError(messageFromError(nextError));
-      await refreshSnapshot().catch(() => undefined);
+      if (startupRunId.current === runId) {
+        setError(messageFromError(nextError));
+        await refreshSnapshot().catch(() => undefined);
+      }
     } finally {
-      setBusy(false);
+      if (startupRunId.current === runId) {
+        setBusy(false);
+      }
     }
   }, [refreshSnapshot, waitForMaiBotWebUi]);
+
+  const startMaiCore = useCallback(async () => {
+    await runMaiCoreStartup({
+      repairFirst: true,
+      startService: async () => {
+        await window.maibotDesktop?.services.start("maibot");
+      },
+    });
+  }, [runMaiCoreStartup]);
+
+  const restartDependencyDownload = useCallback(async () => {
+    autoStartRequested.current = true;
+    setDownloadRestarting(true);
+    try {
+      await runMaiCoreStartup({
+        repairFirst: false,
+        startService: async () => {
+          await window.maibotDesktop?.services.restart("maibot");
+        },
+      });
+    } finally {
+      setDownloadRestarting(false);
+    }
+  }, [runMaiCoreStartup]);
 
   const saveDependencySource = useCallback(async (preset: PythonPackageSourcePreset) => {
     setError(null);
@@ -202,6 +252,7 @@ export function InitializationWizard({
         autoStartTimer.current = null;
       }
     }
+    setSourceSaving(true);
     try {
       const state = await window.maibotDesktop?.pythonDeps.saveSourcePreset(preset);
       if (state) {
@@ -209,6 +260,8 @@ export function InitializationWizard({
       }
     } catch (nextError) {
       setError(messageFromError(nextError));
+    } finally {
+      setSourceSaving(false);
     }
   }, [busy, running, starting]);
 
@@ -318,7 +371,7 @@ export function InitializationWizard({
                   依赖源
                   <select
                     className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                    disabled={busy || starting || !pythonDeps}
+                    disabled={!pythonDeps || sourceSaving || downloadRestarting || running}
                     onChange={(event) => void saveDependencySource(event.target.value as PythonPackageSourcePreset)}
                     value={pythonDeps?.sourcePreset ?? "tuna"}
                   >
@@ -333,6 +386,21 @@ export function InitializationWizard({
                     ))}
                   </select>
                 </label>
+
+                {restartDownloadVisible ? (
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      disabled={!pythonDeps || sourceSaving || downloadRestarting}
+                      onClick={() => void restartDependencyDownload()}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      {downloadRestarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                      {downloadRestarting ? "正在重新下载" : "重新开始下载"}
+                    </Button>
+                  </div>
+                ) : null}
 
                 <div className="mt-4 space-y-2">
                   <Progress value={progress} />

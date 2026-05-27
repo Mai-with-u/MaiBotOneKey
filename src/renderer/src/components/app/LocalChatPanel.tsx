@@ -8,17 +8,19 @@
   Loader2,
   MessageSquare,
   Mic,
-  Square,
   Paperclip,
+  Play,
   RefreshCw,
   Send,
   Settings,
   Smile,
+  Square,
   Upload,
   UserRound,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   LocalChatEvent,
   LocalChatFileAttachment,
@@ -313,6 +315,159 @@ function AvatarButton({
       />
       <span className="sr-only">{icon}</span>
     </>
+  );
+}
+
+function LocalChatDisconnectedIllustration(): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden
+      className="h-auto w-[min(260px,62vw)] text-[var(--retro-ink,var(--foreground))]"
+      fill="none"
+      viewBox="0 0 260 96"
+    >
+      <path
+        d="M18 47h63"
+        stroke="currentColor"
+        strokeDasharray="4 8"
+        strokeLinecap="round"
+        strokeWidth="2"
+      />
+      <path
+        d="M81 47h18l9-20 12 45 13-58 15 33h25"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2.5"
+      />
+      <path
+        d="M188 47h54"
+        stroke="currentColor"
+        strokeDasharray="4 8"
+        strokeLinecap="round"
+        strokeWidth="2"
+      />
+      <path
+        d="m178 39 15 15m0-15-15 15"
+        stroke="var(--retro-rust,var(--primary))"
+        strokeLinecap="round"
+        strokeWidth="3"
+      />
+    </svg>
+  );
+}
+
+function LocalChatDisconnectedState({
+  actionLabel,
+  busy,
+  disabled,
+  onStart,
+}: {
+  actionLabel: string;
+  busy: boolean;
+  disabled: boolean;
+  onStart: () => void | Promise<void>;
+}): React.JSX.Element {
+  return (
+    <section className="relative grid min-h-0 flex-1 place-items-center overflow-hidden px-6 py-10 text-center text-[var(--retro-ink,var(--foreground))]">
+      <span className="pointer-events-none absolute left-4 top-4 h-5 w-5 border-l border-t border-[var(--retro-line,var(--border))] opacity-70" />
+      <span className="pointer-events-none absolute right-4 top-4 h-5 w-5 border-r border-t border-[var(--retro-line,var(--border))] opacity-70" />
+      <span className="pointer-events-none absolute bottom-4 left-4 h-5 w-5 border-b border-l border-[var(--retro-line,var(--border))] opacity-70" />
+      <span className="pointer-events-none absolute bottom-4 right-4 h-5 w-5 border-b border-r border-[var(--retro-line,var(--border))] opacity-70" />
+
+      <div className="relative z-10 flex w-full max-w-[420px] flex-col items-center">
+        <LocalChatDisconnectedIllustration />
+        <h3 className="mt-5 text-[34px] font-black leading-tight text-[var(--retro-ink,var(--foreground))]">
+          MaiBot 聊天服务未连接
+        </h3>
+        <div className="mt-3 flex w-28 items-center gap-2 text-[var(--retro-rust,var(--primary))]">
+          <span className="h-px flex-1 bg-current" />
+          <span className="size-2 rounded-full bg-current" />
+          <span className="h-px flex-1 bg-current" />
+        </div>
+        <p className="mt-4 text-[15px] font-semibold leading-relaxed text-[var(--retro-ink-soft,var(--muted-foreground))]">
+          请先启动 MaiBot Core
+          <br />
+          连接建立后即可在此发送消息
+        </p>
+        <Button
+          className="mt-7 h-10 min-w-40 border-[var(--retro-line,var(--border))] bg-[var(--retro-recessed,transparent)] px-5 text-sm font-bold text-[var(--retro-ink,var(--foreground))] hover:border-[var(--retro-rust,var(--primary))] hover:bg-[var(--retro-rust,var(--primary))] hover:text-[var(--primary-foreground)]"
+          disabled={disabled}
+          onClick={() => void onStart()}
+          variant="outline"
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <Play />}
+          {actionLabel}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function LocalChatToolbar({
+  connected,
+  embedded,
+  onOpenSettings,
+  onReconnect,
+  onTogglePlanner,
+  origin,
+  showPlanner,
+  state,
+}: {
+  connected: boolean;
+  embedded: boolean;
+  onOpenSettings: () => void;
+  onReconnect: () => void;
+  onTogglePlanner: (checked: boolean) => void;
+  origin: string;
+  showPlanner: boolean;
+  state: ConnectionState;
+}): React.JSX.Element {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center justify-between gap-3",
+        embedded ? "h-full flex-1" : "h-11 shrink-0 border-b border-border bg-card px-4",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        {!embedded ? (
+          <>
+            <MessageSquare className="size-4 shrink-0 text-primary" />
+            <h2 className="shrink-0 text-sm font-semibold">随便聊聊</h2>
+            <Badge
+              dot
+              variant={connected ? "success" : state === "connecting" ? "warning" : state === "error" ? "danger" : "secondary"}
+            >
+              {connected ? "已连接" : state === "connecting" ? "连接中" : state === "error" ? "未连接" : "待连接"}
+            </Badge>
+            <span className="hidden h-3 w-px bg-border sm:block" />
+          </>
+        ) : null}
+        <code
+          className={cn(
+            "hidden min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block",
+            embedded ? "max-w-[28vw] 2xl:max-w-[420px]" : "max-w-[420px]",
+          )}
+          title={`${origin} / simple-chat`}
+        >
+          {origin} / simple-chat
+        </code>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <label className="hidden items-center gap-1.5 rounded-md border border-border bg-muted/35 px-2 py-1 text-[11px] text-muted-foreground sm:flex">
+          <Checkbox checked={showPlanner} onCheckedChange={(checked) => onTogglePlanner(checked === true)} />
+          Planner
+        </label>
+        <Button className="size-7" onClick={onReconnect} size="icon" title="重连" variant="outline">
+          {state === "connecting" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+        </Button>
+        <Button className="h-7 px-2 text-[11px]" onClick={onOpenSettings} size="sm" variant="secondary">
+          <Settings />
+          设置
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -812,9 +967,15 @@ function LocalChatLive2DPanel({
 export function LocalChatPanel({
   active,
   maibotService,
+  retro = false,
+  toolbarPlacement = "internal",
+  toolbarTarget = null,
 }: {
   active: boolean;
   maibotService: ServiceDescriptor | undefined;
+  retro?: boolean;
+  toolbarPlacement?: "internal" | "external";
+  toolbarTarget?: HTMLElement | null;
 }): React.JSX.Element {
   const origin = useMemo(() => maibotOrigin(maibotService), [maibotService]);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -845,6 +1006,7 @@ export function LocalChatPanel({
   const [live2dReloadKey, setLive2dReloadKey] = useState(0);
   const [live2dSpeech, setLive2dSpeech] = useState<Live2dSpeechEvent | null>(null);
   const [recording, setRecording] = useState(false);
+  const [startingCore, setStartingCore] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(USER_NAME_STORAGE_KEY, userName);
@@ -900,7 +1062,8 @@ export function LocalChatPanel({
 
     try {
       if (maibotService?.status !== "running") {
-        throw new Error("请先启动 MaiBot Core");
+        setState("idle");
+        return;
       }
 
       const nextState = await window.maibotDesktop?.localChat.connect();
@@ -917,6 +1080,39 @@ export function LocalChatPanel({
       setError(localChatErrorMessage(nextError));
     }
   }, [maibotService?.status]);
+
+  const startMaiBotCore = useCallback(async () => {
+    setError(null);
+
+    if (!maibotService) {
+      setError("未找到 MaiBot Core 服务配置");
+      return;
+    }
+
+    if (maibotService.status === "running") {
+      await connect();
+      return;
+    }
+
+    if (maibotService.status === "starting" || maibotService.status === "stopping") {
+      return;
+    }
+
+    if (!window.maibotDesktop?.services) {
+      setError("Electron bridge 未连接");
+      return;
+    }
+
+    setStartingCore(true);
+    try {
+      await window.maibotDesktop.services.start("maibot");
+    } catch (nextError) {
+      setState("error");
+      setError(localChatErrorMessage(nextError));
+    } finally {
+      setStartingCore(false);
+    }
+  }, [connect, maibotService]);
 
   useEffect(() => {
     if (!active) {
@@ -1188,41 +1384,39 @@ export function LocalChatPanel({
     || pendingFiles.length > 0
     || pendingVoices.length > 0
   );
+  const showDisconnectedState = !connected && messages.length === 0;
+  const coreServiceBusy = startingCore || maibotService?.status === "starting";
+  const disconnectedActionBusy = coreServiceBusy || state === "connecting";
+  const disconnectedActionDisabled = !maibotService
+    || disconnectedActionBusy
+    || maibotService.status === "stopping";
+  const disconnectedActionLabel = !maibotService
+    ? "未找到 MaiBot Core"
+    : maibotService.status === "running"
+      ? state === "connecting"
+        ? "正在连接聊天服务"
+        : "重新连接聊天服务"
+      : coreServiceBusy
+        ? "正在启动 MaiBot Core"
+        : "启动 MaiBot Core";
+  const toolbar = (
+    <LocalChatToolbar
+      connected={connected}
+      embedded={toolbarPlacement === "external"}
+      onOpenSettings={() => setSettingsOpen(true)}
+      onReconnect={() => void connect()}
+      onTogglePlanner={setShowPlanner}
+      origin={origin}
+      showPlanner={showPlanner}
+      state={state}
+    />
+  );
 
   return (
     <>
-      <section className={cn("h-full min-h-0 flex-col bg-background", active ? "flex" : "hidden")}>
-      <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <MessageSquare className="size-4 text-primary" />
-          <h2 className="text-sm font-semibold">随便聊聊</h2>
-          <Badge
-            dot
-            variant={connected ? "success" : state === "connecting" ? "warning" : state === "error" ? "danger" : "secondary"}
-          >
-            {connected ? "已连接" : state === "connecting" ? "连接中" : state === "error" ? "未连接" : "待连接"}
-          </Badge>
-          <code className="hidden truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block">
-            {origin} / simple-chat
-          </code>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <label className="hidden items-center gap-1.5 rounded-md border border-border bg-muted/35 px-2 py-1 text-[11px] text-muted-foreground sm:flex">
-            <Checkbox
-              checked={showPlanner}
-              onCheckedChange={(checked) => setShowPlanner(checked === true)}
-            />
-            Planner
-          </label>
-          <Button className="size-7" onClick={() => void connect()} size="icon" title="重连" variant="outline">
-            {state === "connecting" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          </Button>
-          <Button className="h-7 px-2 text-[11px]" onClick={() => setSettingsOpen(true)} size="sm" variant="secondary">
-            <Settings />
-            设置
-          </Button>
-        </div>
-      </div>
+      {toolbarPlacement === "external" && active && toolbarTarget ? createPortal(toolbar, toolbarTarget) : null}
+      <section className={cn("h-full min-h-0 flex-col", retro ? "bg-transparent" : "bg-background", active ? "flex" : "hidden")}>
+      <div className={cn(toolbarPlacement === "external" && "hidden")}>{toolbar}</div>
 
       {error ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/15 px-4 py-2 text-[12px]">
@@ -1231,6 +1425,14 @@ export function LocalChatPanel({
         </div>
       ) : null}
 
+      {showDisconnectedState ? (
+        <LocalChatDisconnectedState
+          actionLabel={disconnectedActionLabel}
+          busy={disconnectedActionBusy}
+          disabled={disconnectedActionDisabled}
+          onStart={startMaiBotCore}
+        />
+      ) : (
       <div className={cn("grid min-h-0 flex-1 grid-cols-1", live2dEnabled && "lg:grid-cols-[260px_minmax(0,1fr)]")}>
         {live2dEnabled ? (
           <LocalChatLive2DPanel
@@ -1620,6 +1822,7 @@ export function LocalChatPanel({
       </div>
         </div>
       </div>
+      )}
       </section>
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
       <DialogContent size="lg">

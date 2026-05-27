@@ -8,9 +8,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/use-shortcut";
 
 interface WebviewPanelProps {
@@ -19,6 +21,10 @@ interface WebviewPanelProps {
   emptyText: string;
   /** When false, this panel is hidden and shortcuts are disabled. */
   active?: boolean;
+  /** Changing to a truthy value forces the webview to remount. */
+  reloadTrigger?: string | number | boolean | null;
+  toolbarPlacement?: "internal" | "external";
+  toolbarTarget?: HTMLElement | null;
 }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -36,8 +42,17 @@ type DidFailLoadEvent = Event & {
   isMainFrame?: boolean;
 };
 
+type WebviewNavigationEvent = Event & {
+  url?: string;
+  isMainFrame?: boolean;
+};
+
 const LOAD_TIMEOUT_MS = 12_000;
 const AUTO_RETRY_SECONDS = 8;
+
+function isDisplayableUrl(value: string | undefined): value is string {
+  return Boolean(value && value !== "about:blank");
+}
 
 function externalOpen(url: string): void {
   if (window.maibotDesktop) {
@@ -72,16 +87,38 @@ export function WebviewPanel({
   url,
   emptyText,
   active = true,
+  reloadTrigger = null,
+  toolbarPlacement = "internal",
+  toolbarTarget = null,
 }: WebviewPanelProps): React.JSX.Element {
   const webviewRef = useRef<WebviewElement | null>(null);
   const domReadyRef = useRef(false);
   const failedRef = useRef(false);
   const hasRenderedPageRef = useRef(false);
+  const reloadTriggerRef = useRef<WebviewPanelProps["reloadTrigger"]>(reloadTrigger);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [hasRenderedPage, setHasRenderedPage] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [currentUrl, setCurrentUrl] = useState(url);
   const [reloadKey, setReloadKey] = useState(0);
   const [retryIn, setRetryIn] = useState<number | null>(null);
+
+  const readLiveWebviewUrl = useCallback(() => {
+    if (!domReadyRef.current) {
+      return undefined;
+    }
+    try {
+      return webviewRef.current?.getURL?.();
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const syncCurrentUrl = useCallback((eventUrl?: string) => {
+    const liveUrl = readLiveWebviewUrl();
+    const nextUrl = isDisplayableUrl(liveUrl) ? liveUrl : isDisplayableUrl(eventUrl) ? eventUrl : url;
+    setCurrentUrl((current) => (current === nextUrl ? current : nextUrl));
+  }, [readLiveWebviewUrl, url]);
 
   const remountWebview = useCallback(() => {
     domReadyRef.current = false;
@@ -108,11 +145,22 @@ export function WebviewPanel({
   }, [remountWebview]);
 
   const openExternal = useCallback(() => {
-    externalOpen(url);
-  }, [url]);
+    externalOpen(currentUrl);
+  }, [currentUrl]);
 
   useShortcut("Mod+R", refresh, { enabled: active });
   useShortcut("Mod+Shift+O", openExternal, { enabled: active });
+
+  useEffect(() => {
+    if (Object.is(reloadTriggerRef.current, reloadTrigger)) {
+      return;
+    }
+
+    reloadTriggerRef.current = reloadTrigger;
+    if (reloadTrigger) {
+      remountWebview();
+    }
+  }, [reloadTrigger, remountWebview]);
 
   // Reset state when URL or remount key changes.
   useEffect(() => {
@@ -122,6 +170,7 @@ export function WebviewPanel({
     setHasRenderedPage(false);
     setLoadState("loading");
     setErrorMessage(null);
+    setCurrentUrl(url);
     setRetryIn(null);
   }, [url, reloadKey]);
 
@@ -136,16 +185,20 @@ export function WebviewPanel({
       // A new navigation starts. Before the first successful page load, show
       // the connection fallback; after that, keep WebUI route changes visible.
       failedRef.current = false;
+      syncCurrentUrl();
       setLoadState(hasRenderedPageRef.current ? "ready" : "loading");
       setErrorMessage(null);
     };
-    const handleReady = (): void => {
+    const handleReady = (event: Event): void => {
       // Chromium also fires dom-ready / did-finish-load for its built-in
       // error page; ignore those so the overlay stays visible.
       if (failedRef.current) {
         return;
       }
-      domReadyRef.current = true;
+      if (event.type === "dom-ready") {
+        domReadyRef.current = true;
+      }
+      syncCurrentUrl();
       hasRenderedPageRef.current = true;
       setHasRenderedPage(true);
       setLoadState("ready");
@@ -154,6 +207,7 @@ export function WebviewPanel({
     };
     const handleFail = (event: Event): void => {
       const failEvent = event as DidFailLoadEvent;
+      syncCurrentUrl(failEvent.validatedURL);
       if (failEvent.errorCode === -3 || failEvent.isMainFrame === false) {
         return;
       }
@@ -168,19 +222,36 @@ export function WebviewPanel({
       setLoadState("error");
       setErrorMessage(failEvent.errorDescription ?? null);
     };
+    const handleNavigation = (event: Event): void => {
+      const navigationEvent = event as WebviewNavigationEvent;
+      if (navigationEvent.isMainFrame === false) {
+        return;
+      }
+      syncCurrentUrl(navigationEvent.url);
+    };
 
     webview.addEventListener("did-start-loading", handleStart);
+    webview.addEventListener("did-start-navigation", handleNavigation);
+    webview.addEventListener("did-redirect-navigation", handleNavigation);
+    webview.addEventListener("did-navigate", handleNavigation);
+    webview.addEventListener("did-navigate-in-page", handleNavigation);
+    webview.addEventListener("did-frame-navigate", handleNavigation);
     webview.addEventListener("did-finish-load", handleReady);
     webview.addEventListener("dom-ready", handleReady);
     webview.addEventListener("did-fail-load", handleFail);
 
     return () => {
       webview.removeEventListener("did-start-loading", handleStart);
+      webview.removeEventListener("did-start-navigation", handleNavigation);
+      webview.removeEventListener("did-redirect-navigation", handleNavigation);
+      webview.removeEventListener("did-navigate", handleNavigation);
+      webview.removeEventListener("did-navigate-in-page", handleNavigation);
+      webview.removeEventListener("did-frame-navigate", handleNavigation);
       webview.removeEventListener("did-finish-load", handleReady);
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [reloadKey, url]);
+  }, [reloadKey, syncCurrentUrl, url]);
 
   // Loading watchdog: if it stays in "loading" too long without ready/fail,
   // flip to error so the user gets the default panel instead of a white screen.
@@ -223,10 +294,27 @@ export function WebviewPanel({
   const friendlyError = describeError(errorMessage);
   const showOverlay = !hasRenderedPage && loadState !== "ready";
   const showWebview = hasRenderedPage || loadState === "ready";
+  const toolbar = (
+    <WebviewToolbar
+      embedded={toolbarPlacement === "external"}
+      loadState={loadState}
+      onOpenExternal={openExternal}
+      onRefresh={refresh}
+      title={title}
+      url={currentUrl}
+    />
+  );
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 ">
+    <>
+      {toolbarPlacement === "external" && active && toolbarTarget ? createPortal(toolbar, toolbarTarget) : null}
+      <section className="flex h-full min-h-0 flex-col bg-background">
+      <div
+        className={cn(
+          "flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3",
+          toolbarPlacement === "external" && "hidden",
+        )}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="shrink-0 text-[12px] font-semibold">{title}</h2>
           <Badge
@@ -252,9 +340,9 @@ export function WebviewPanel({
           <span className="hidden h-3 w-px bg-border sm:block" />
           <code
             className="hidden min-w-0 max-w-[420px] truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block"
-            title={url}
+            title={currentUrl}
           >
-            {url}
+            {currentUrl}
           </code>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -305,11 +393,93 @@ export function WebviewPanel({
             onRetry={loadState === "error" ? remountWebview : refresh}
             retryIn={retryIn}
             title={title}
-            url={url}
+            url={currentUrl}
           />
         ) : null}
       </div>
-    </section>
+      </section>
+    </>
+  );
+}
+
+function WebviewToolbar({
+  embedded,
+  loadState,
+  onOpenExternal,
+  onRefresh,
+  title,
+  url,
+}: {
+  embedded: boolean;
+  loadState: LoadState;
+  onOpenExternal: () => void;
+  onRefresh: () => void;
+  title: string;
+  url: string;
+}): React.JSX.Element {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center justify-between gap-3",
+        embedded ? "h-full flex-1" : "h-9 shrink-0 border-b border-border bg-card px-3",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <h2 className="shrink-0 text-[12px] font-semibold">{title}</h2>
+        <Badge
+          dot
+          variant={
+            loadState === "ready"
+              ? "success"
+              : loadState === "error"
+                ? "danger"
+                : loadState === "loading"
+                  ? "warning"
+                  : "secondary"
+          }
+        >
+          {loadState === "ready"
+            ? "已载入"
+            : loadState === "error"
+              ? "未连接"
+              : loadState === "loading"
+                ? "载入中"
+                : "待载入"}
+        </Badge>
+        <span className="hidden h-3 w-px bg-border sm:block" />
+        <code
+          className={cn(
+            "hidden min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block",
+            embedded ? "max-w-[28vw] 2xl:max-w-[420px]" : "max-w-[420px]",
+          )}
+          title={url}
+        >
+          {url}
+        </code>
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          aria-label="刷新"
+          className="h-7 px-2 text-[11px]"
+          onClick={onRefresh}
+          size="sm"
+          title="刷新 (Mod+R)"
+          variant="ghost"
+        >
+          {loadState === "loading" ? <Loader2 className="animate-spin" /> : <RotateCw />}
+        </Button>
+        <Button
+          aria-label="外部打开"
+          className="h-7 px-2 text-[11px]"
+          onClick={onOpenExternal}
+          size="sm"
+          title="外部浏览器打开 (Mod+Shift+O)"
+          variant="ghost"
+        >
+          <ExternalLink />
+        </Button>
+      </div>
+    </div>
   );
 }
 

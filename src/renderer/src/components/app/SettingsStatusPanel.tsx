@@ -6,7 +6,6 @@
   ClipboardCheck,
   Code2,
   Download,
-  Droplets,
   FolderOpen,
   HardDrive,
   ImageIcon,
@@ -56,7 +55,7 @@ import type {
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -78,8 +77,7 @@ import {
   type ClosePreference,
 } from "@/lib/close-preference";
 import {
-  LIQUID_GLASS_TRANSPARENCY_MAX,
-  LIQUID_GLASS_TRANSPARENCY_MIN,
+  RETRO_WINDOW_CORNER_RADIUS_MIN,
   WINDOW_CORNER_RADIUS_MAX,
   WINDOW_CORNER_RADIUS_MIN,
   useAppearance,
@@ -142,6 +140,12 @@ const closePreferenceText: Record<ClosePreference, string> = {
   quit: "关闭应用",
 };
 
+const closePreferenceOptions: Array<{ value: ClosePreference; label: string }> = [
+  { value: "ask", label: "每次询问" },
+  { value: "minimize", label: "最小化到托盘" },
+  { value: "quit", label: "关闭应用" },
+];
+
 const themeOptions: Array<{ value: ThemePreference; label: string; description: string }> = [
   { value: "system", label: "跟随系统", description: "根据系统浅色/深色模式自动切换。" },
   { value: "light", label: "浅色", description: "保持明亮、低干扰的工作界面。" },
@@ -171,7 +175,11 @@ const scaleOptions: Array<{ value: InterfaceScale; label: string; description: s
 const appearanceModeOptions: Array<{ value: AppearanceMode; label: string; description: string }> = [
   { value: "future-retro", label: "未来复古", description: "纸面颗粒、硬朗描边和控制台式切角。" },
   { value: "modern", label: "现代", description: "干净卡片、主题色和更通用的桌面应用质感。" },
-  { value: "future", label: "未来", description: "透明玻璃、模糊折射和更轻的空间层次。" },
+];
+
+const qqBackendOptions: Array<{ value: QqBackend; label: string; description: string }> = [
+  { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接，WebUI 端口 6099。" },
+  { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程，WebUI 端口 5099，OneBot 端口 7988。" },
 ];
 
 const defaultNetworkProxySettings: NetworkProxySettings = {
@@ -385,6 +393,10 @@ function AppearanceScaleControl({ appearance }: { appearance: AppearanceApi }): 
 }
 
 function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
+  const windowCornerRadiusMin = appearance.mode === "future-retro"
+    ? RETRO_WINDOW_CORNER_RADIUS_MIN
+    : WINDOW_CORNER_RADIUS_MIN;
+
   return (
     <label className="grid gap-2 rounded-md border border-border bg-card p-3">
       <span className="flex items-center justify-between gap-3">
@@ -399,42 +411,14 @@ function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }):
       <input
         className="w-full accent-primary"
         max={WINDOW_CORNER_RADIUS_MAX}
-        min={WINDOW_CORNER_RADIUS_MIN}
+        min={windowCornerRadiusMin}
         onChange={(event) => appearance.setWindowCornerRadius(Number(event.target.value))}
         type="range"
         value={appearance.windowCornerRadius}
       />
       <span className="flex justify-between font-mono text-[10px] text-muted-foreground">
-        <span>{WINDOW_CORNER_RADIUS_MIN}px</span>
+        <span>{windowCornerRadiusMin}px</span>
         <span>{WINDOW_CORNER_RADIUS_MAX}px</span>
-      </span>
-    </label>
-  );
-}
-
-function AppearanceGlassControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
-  return (
-    <label className="grid gap-2 rounded-md border border-border bg-card p-3">
-      <span className="flex items-center justify-between gap-3">
-        <span className="min-w-0">
-          <span className="block text-sm font-medium">玻璃透度</span>
-          <span className="mt-1 block text-xs text-muted-foreground">数值越高，背景越透明。</span>
-        </span>
-        <Badge className="shrink-0" variant="secondary">
-          {appearance.liquidGlassTransparency}%
-        </Badge>
-      </span>
-      <input
-        className="w-full accent-primary"
-        max={LIQUID_GLASS_TRANSPARENCY_MAX}
-        min={LIQUID_GLASS_TRANSPARENCY_MIN}
-        onChange={(event) => appearance.setLiquidGlassTransparency(Number(event.target.value))}
-        type="range"
-        value={appearance.liquidGlassTransparency}
-      />
-      <span className="flex justify-between font-mono text-[10px] text-muted-foreground">
-        <span>{LIQUID_GLASS_TRANSPARENCY_MIN}%</span>
-        <span>{LIQUID_GLASS_TRANSPARENCY_MAX}%</span>
       </span>
     </label>
   );
@@ -846,6 +830,7 @@ export function SettingsStatusPanel({
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
   const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
+  const [confirmPluginBuilderEnableOpen, setConfirmPluginBuilderEnableOpen] = useState(false);
   const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
   const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
@@ -869,6 +854,7 @@ export function SettingsStatusPanel({
   const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
+  const pluginBuilderEnabled = pluginBuilderMode !== "disabled";
   const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
   const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
   const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
@@ -899,6 +885,8 @@ export function SettingsStatusPanel({
   const networkProxyDirty =
     networkProxyDraft.enabled !== networkProxySettings.enabled ||
     networkProxyDraft.port !== networkProxySettings.port;
+  const selectedQqBackendOption =
+    qqBackendOptions.find((option) => option.value === qqBackend) ?? qqBackendOptions[0];
 
   useEffect(() => {
     setNetworkProxyDraft(networkProxySettings);
@@ -994,6 +982,27 @@ export function SettingsStatusPanel({
     setClosePreferenceState(preference);
     toast.success(`关闭行为已设为：${closePreferenceText[preference]}`);
   }, []);
+
+  const requestPluginBuilderEnabledChange = useCallback(
+    (enabled: boolean) => {
+      if (enabled) {
+        if (pluginBuilderMode === "disabled") {
+          setConfirmPluginBuilderEnableOpen(true);
+        }
+        return;
+      }
+
+      onPluginBuilderModeChange("disabled");
+      toast.success("插件编写器入口已关闭");
+    },
+    [onPluginBuilderModeChange, pluginBuilderMode],
+  );
+
+  const confirmPluginBuilderEnable = useCallback(() => {
+    onPluginBuilderModeChange("agent");
+    setConfirmPluginBuilderEnableOpen(false);
+    toast.success("插件编写器入口已打开");
+  }, [onPluginBuilderModeChange]);
 
   const repair = useCallback(async () => {
     setBusy("repair");
@@ -1613,7 +1622,12 @@ export function SettingsStatusPanel({
 
   return (
     <>
-    <section className="h-full overflow-auto bg-background px-6 py-6">
+    <section
+      className={cn(
+        "h-full overflow-auto px-6 py-6",
+        appearance.mode === "future-retro" ? "bg-transparent" : "bg-background",
+      )}
+    >
       <div className="mx-auto w-full max-w-[1180px]">
         <Card className="border-border bg-card ">
           <CardHeader className="space-y-3">
@@ -1669,23 +1683,20 @@ export function SettingsStatusPanel({
               </TabsList>
 
               <TabsContent className="space-y-4" value="general">
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Settings className="size-4" />
+                    </span>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                          <Settings className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">窗口关闭行为</p>
-                        </div>
-                      </div>
+                      <p className="text-sm font-medium">窗口关闭行为</p>
+                      <p className="text-xs text-muted-foreground">关闭主窗口时如何处理。</p>
                     </div>
-                    <Badge variant="secondary">{closePreferenceText[closePreference]}</Badge>
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
+                    aria-label="窗口关闭行为"
+                    className="grid w-full grid-cols-3 gap-1 rounded-md border border-border bg-background/70 p-1 text-xs sm:w-auto"
                     onValueChange={(value) => {
                       if (isClosePreference(value)) {
                         saveClosePreference(value);
@@ -1693,37 +1704,18 @@ export function SettingsStatusPanel({
                     }}
                     value={closePreference}
                   >
-                    {([
-                      {
-                        value: "ask",
-                        label: "每次询问",
-                        description: "关闭窗口时弹出选择框，由你当次决定。",
-                      },
-                      {
-                        value: "minimize",
-                        label: "最小化到托盘",
-                        description: "关闭窗口时隐藏主界面，托管服务继续运行。",
-                      },
-                      {
-                        value: "quit",
-                        label: "关闭应用",
-                        description: "关闭窗口时停止托管进程并退出 MaiBot OneKey。",
-                      },
-                    ] as const).map((option) => (
+                    {closePreferenceOptions.map((option) => (
                       <label
-                        className={[
-                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                        className={cn(
+                          "flex h-7 min-w-0 cursor-pointer items-center justify-center rounded-sm px-2.5 font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/40",
                           closePreference === option.value
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                        ].join(" ")}
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                        )}
                         key={option.value}
                       >
-                        <RadioGroupItem className="mt-0.5" value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
+                        <RadioGroupItem className="sr-only" value={option.value} />
+                        <span className="truncate">{option.label}</span>
                       </label>
                     ))}
                   </RadioGroup>
@@ -1735,165 +1727,126 @@ export function SettingsStatusPanel({
                       <TerminalSquare className="size-4" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium">终端模式</p>
+                      <p className="text-sm font-medium">终端设置</p>
                       <p className="text-xs text-muted-foreground">
                         {terminalSettings.useEmbeddedTerminal
-                          ? "服务会在应用内终端页运行"
-                          : "服务会在外部 Windows 终端窗口运行"}
+                          ? `服务在应用内终端页运行，字号 ${terminalSettings.fontSize}px。`
+                          : `服务在外部 Windows 终端窗口运行，内嵌字号 ${terminalSettings.fontSize}px。`}
                       </p>
                     </div>
                   </div>
-                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                    <Checkbox
-                      checked={terminalSettings.useEmbeddedTerminal}
-                      disabled={busy !== null}
-                      onCheckedChange={(checked) =>
-                        void saveTerminalSettings({ ...terminalSettings, useEmbeddedTerminal: checked === true })
-                      }
-                    />
-                    使用内嵌终端
-                  </label>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <TerminalSquare className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">终端字体大小</p>
-                      <p className="text-xs text-muted-foreground">调整内嵌 PTY 终端字号，保存后会立即应用。</p>
-                    </div>
-                  </div>
-                  <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                    <Input
-                      className="h-8 w-20 font-mono text-sm"
-                      inputMode="numeric"
-                      max={22}
-                      min={10}
-                      onChange={(event) =>
-                        void saveTerminalSettings({
-                          ...terminalSettings,
-                          fontSize: Number(event.target.value),
-                        })
-                      }
-                      type="number"
-                      value={terminalSettings.fontSize}
-                    />
-                    px
-                  </label>
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Code2 className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">插件编写器模式</p>
-                        <p className="text-xs text-muted-foreground">
-                          {pluginBuilderMode === "disabled"
-                            ? "不显示编写器入口"
-                            : pluginBuilderMode === "agent"
-                            ? "默认进入内置 Coding Agent"
-                            : "默认进入可视化节点编辑器"}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge variant="secondary">
-                      {pluginBuilderMode === "disabled"
-                        ? "不启用"
-                        : pluginBuilderMode === "agent"
-                          ? "Coding Agent"
-                          : "节点编辑器"}
-                    </Badge>
-                  </div>
-
-                  <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
-                    onValueChange={(value) =>
-                      onPluginBuilderModeChange(value === "nodes" || value === "disabled" ? value : "agent")
-                    }
-                    value={pluginBuilderMode}
-                  >
-                    {([
-                      {
-                        value: "agent",
-                        label: "内置 Coding Agent",
-                        description: "用自然语言描述插件需求，默认进入这个模式。",
-                      },
-                      {
-                        value: "nodes",
-                        label: "节点编辑器",
-                        description: "使用蓝图节点、组件库和文件预览手动搭建插件。",
-                      },
-                      {
-                        value: "disabled",
-                        label: "不启用",
-                        description: "不会显示顶部编写器 tab。",
-                      },
-                    ] as const).map((option) => (
-                      <label
-                        className={[
-                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
-                          pluginBuilderMode === option.value
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                        ].join(" ")}
-                        key={option.value}
-                      >
-                        <RadioGroupItem className="mt-0.5" value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </RadioGroup>
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Code2 className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">OpenCode 插件说明</p>
-                        <p className="text-xs text-muted-foreground">
-                          {openCodeSettings.useBundledPluginInstructions
-                            ? "启动 OpenCode 时使用内置 plugin_code.md，并跳过 MaiBot 自带 AGENTS.md。"
-                            : "按 OpenCode 默认规则读取项目内 AGENTS.md。"}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge variant={openCodeSettings.useBundledPluginInstructions ? "success" : "outline"}>
-                      {openCodeSettings.useBundledPluginInstructions ? "内置说明" : "项目默认"}
-                    </Badge>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                    <label className="flex h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
                       <Checkbox
-                        checked={openCodeSettings.useBundledPluginInstructions}
+                        checked={terminalSettings.useEmbeddedTerminal}
                         disabled={busy !== null}
                         onCheckedChange={(checked) =>
-                          void saveOpenCodeSettings({
-                            ...openCodeSettings,
-                            useBundledPluginInstructions: checked === true,
-                          })
+                          void saveTerminalSettings({ ...terminalSettings, useEmbeddedTerminal: checked === true })
                         }
                       />
-                      使用内置插件编写说明
+                      使用内嵌终端
                     </label>
-                    <p
-                      className="min-w-[260px] flex-1 truncate rounded-md border border-border bg-card px-3 py-2 font-mono text-[11px] text-muted-foreground"
-                      title={snapshot.paths.opencodePluginInstructionsPath}
+                    <label className="flex h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
+                      <span className="text-muted-foreground">字号</span>
+                      <Input
+                        className="h-8 w-20 font-mono text-sm"
+                        inputMode="numeric"
+                        max={22}
+                        min={10}
+                        onChange={(event) =>
+                          void saveTerminalSettings({
+                            ...terminalSettings,
+                            fontSize: Number(event.target.value),
+                          })
+                        }
+                        type="number"
+                        value={terminalSettings.fontSize}
+                      />
+                      px
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Code2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">插件编写器</p>
+                        <p className="text-xs text-muted-foreground">
+                          {pluginBuilderEnabled
+                            ? "顶部显示编写器入口，并使用内置 Coding Agent。"
+                            : "顶部不显示编写器入口。"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <Badge variant={pluginBuilderEnabled ? "success" : "outline"}>
+                        {pluginBuilderEnabled ? "已打开" : "已关闭"}
+                      </Badge>
+                      <Badge variant={openCodeSettings.useBundledPluginInstructions ? "secondary" : "outline"}>
+                        {openCodeSettings.useBundledPluginInstructions ? "内置说明" : "项目默认"}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <label
+                      className={cn(
+                        "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                        pluginBuilderEnabled
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                      )}
                     >
-                      {snapshot.paths.opencodePluginInstructionsPath}
-                    </p>
-                    {busy === "opencode-settings" ? (
-                      <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-                    ) : null}
+                      <Checkbox
+                        checked={pluginBuilderEnabled}
+                        disabled={busy !== null}
+                        onCheckedChange={(checked) => requestPluginBuilderEnabledChange(checked === true)}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium">打开插件编写器</span>
+                        <span className="mt-1 block text-xs leading-relaxed">
+                          在顶部显示“编写器”入口，进入内置 Coding Agent 工作区。
+                        </span>
+                      </span>
+                    </label>
+
+                    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+                      <label className="flex min-w-0 cursor-pointer items-start gap-3">
+                        <Checkbox
+                          checked={openCodeSettings.useBundledPluginInstructions}
+                          disabled={busy !== null}
+                          onCheckedChange={(checked) =>
+                            void saveOpenCodeSettings({
+                              ...openCodeSettings,
+                              useBundledPluginInstructions: checked === true,
+                            })
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">使用内置插件编写说明</span>
+                          <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                            {openCodeSettings.useBundledPluginInstructions
+                              ? "启动 OpenCode 时使用内置 plugin_code.md，并跳过 MaiBot 自带 AGENTS.md。"
+                              : "按 OpenCode 默认规则读取项目内 AGENTS.md。"}
+                          </span>
+                        </span>
+                      </label>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <p
+                          className="min-w-[260px] flex-1 truncate rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] text-muted-foreground"
+                          title={snapshot.paths.opencodePluginInstructionsPath}
+                        >
+                          {snapshot.paths.opencodePluginInstructionsPath}
+                        </p>
+                        {busy === "opencode-settings" ? (
+                          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -2056,45 +2009,6 @@ export function SettingsStatusPanel({
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Palette className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">主题模式</p>
-                        <p className="text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
-                      </div>
-                    </div>
-                    <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
-                  </div>
-
-                  <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
-                    onValueChange={(value) => theme.setPreference(value as ThemePreference)}
-                    value={theme.preference}
-                  >
-                    {themeOptions.map((option) => (
-                      <label
-                        className={cn(
-                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
-                          theme.preference === option.value
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                        )}
-                        key={option.value}
-                      >
-                        <RadioGroupItem className="mt-0.5" value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </RadioGroup>
-                </div>
-
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <ImageIcon className="size-4" />
                       </span>
                       <div className="min-w-0">
@@ -2219,6 +2133,39 @@ export function SettingsStatusPanel({
                         <p className="text-xs text-muted-foreground">控制主题色、字体、圆角和信息密度。</p>
                       </div>
                     </div>
+                    <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">主题模式</p>
+                          <p className="mt-1 text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
+                        </div>
+                        <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
+                      </div>
+
+                      <RadioGroup
+                        className="grid gap-2 md:grid-cols-3"
+                        onValueChange={(value) => theme.setPreference(value as ThemePreference)}
+                        value={theme.preference}
+                      >
+                        {themeOptions.map((option) => (
+                          <label
+                            className={cn(
+                              "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                              theme.preference === option.value
+                                ? "border-primary bg-primary/10 text-foreground"
+                                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                            )}
+                            key={option.value}
+                          >
+                            <RadioGroupItem className="mt-0.5" value={option.value} />
+                            <span className="min-w-0">
+                              <span className="block text-sm font-medium">{option.label}</span>
+                              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </RadioGroup>
+                    </div>
                     <AppearanceAccentControl appearance={appearance} />
                     <div className="grid gap-3 md:grid-cols-2">
                       <AppearanceFontControl appearance={appearance} />
@@ -2228,39 +2175,15 @@ export function SettingsStatusPanel({
                   </div>
                 ) : null}
 
-                {appearance.mode === "future" ? (
-                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Droplets className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">未来配置</p>
-                        <p className="text-xs text-muted-foreground">液态玻璃会自动启用；可调玻璃透度、主题色和界面密度。</p>
-                      </div>
-                    </div>
-                    <AppearanceGlassControl appearance={appearance} />
-                    <AppearanceAccentControl appearance={appearance} />
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <AppearanceScaleControl appearance={appearance} />
-                      <AppearanceRadiusControl appearance={appearance} />
-                    </div>
-                  </div>
-                ) : null}
-
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">外观预览</p>
-                    <p className="mt-1 text-xs text-muted-foreground">设置会立即生效，并保存在本机浏览器存储中。</p>
+                    <p className="text-sm font-medium">外观设置</p>
+                    <p className="mt-1 text-xs text-muted-foreground">调整会立即生效，并自动保存在本机浏览器存储中。</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <Button onClick={appearance.reset} size="sm" variant="secondary">
                       <RotateCcw className="size-4" />
-                      恢复默认
-                    </Button>
-                    <Button size="sm">
-                      <Save className="size-4" />
-                      已自动保存
+                      恢复默认外观
                     </Button>
                   </div>
                 </div>
@@ -2270,43 +2193,50 @@ export function SettingsStatusPanel({
                 <p className="text-xs text-muted-foreground">
                   选择当前使用的 QQ 后端。MaiBot Core 或 QQ 后端运行中不能切换。
                 </p>
-                <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2">
-                  {([
-                    { value: "napcat", label: "NapCat", description: "使用 NapCat 启动 QQ 与 OneBot 连接，WebUI 端口 6099。" },
-                    { value: "snowluma", label: "SnowLuma", description: "使用 SnowLuma 注入 QQ 进程，WebUI 端口 5099，OneBot 端口 7988。" },
-                  ] as const).map((option) => (
-                    <button
-                      className={[
-                        "rounded-md border p-3 text-left transition-colors",
-                        qqBackendSwitchBlocked && qqBackend !== option.value
-                          ? "cursor-not-allowed opacity-55"
-                          : "",
-                        qqBackend === option.value
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                      ].join(" ")}
-                      disabled={qqBackendSwitchBlocked && qqBackend !== option.value}
-                      key={option.value}
-                      onClick={() => setQqBackend(option.value)}
-                      type="button"
-                    >
-                      <span className="text-sm font-semibold">{option.label}</span>
-                      <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                    </button>
-                  ))}
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">QQ 后端</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {selectedQqBackendOption.description}
+                    </p>
+                  </div>
+                  <RadioGroup
+                    aria-label="QQ 后端"
+                    className="grid w-full shrink-0 grid-cols-2 gap-1 rounded-md border border-border bg-card p-1 sm:w-[320px]"
+                    onValueChange={(value) => setQqBackend(value as QqBackend)}
+                    value={qqBackend}
+                  >
+                    {qqBackendOptions.map((option) => {
+                      const selected = qqBackend === option.value;
+                      const disabled = qqBackendSwitchBlocked && !selected;
+
+                      return (
+                        <label
+                          className={cn(
+                            "flex h-8 min-w-0 cursor-pointer items-center justify-center rounded-sm px-3 text-xs font-semibold transition-colors",
+                            selected
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                            disabled && "cursor-not-allowed opacity-55 hover:bg-transparent hover:text-muted-foreground",
+                          )}
+                          key={option.value}
+                        >
+                          <RadioGroupItem className="sr-only" disabled={disabled} value={option.value} />
+                          <span className="truncate">{option.label}</span>
+                        </label>
+                      );
+                    })}
+                  </RadioGroup>
+                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
+                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
+                    保存后端
+                  </Button>
                 </div>
                 {qqBackendSwitchBlocked ? (
                   <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
                     MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
                   </div>
                 ) : null}
-                <div className="flex justify-end rounded-lg border border-border bg-muted/40 p-3">
-                  <Button disabled={!canSaveQqBackend} onClick={saveQqBackend}>
-                    {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
-                    保存后端
-                    <Kbd className="ml-1" keys="Mod+Enter" size="xs" tone="inverse" />
-                  </Button>
-                </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">重置 SnowLuma 组件</p>
@@ -2482,6 +2412,37 @@ export function SettingsStatusPanel({
           安装选中版本
         </Button>
       </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog
+      open={confirmPluginBuilderEnableOpen}
+      onOpenChange={(next) => {
+        if (!next) setConfirmPluginBuilderEnableOpen(false);
+      }}
+    >
+      <DialogContent size="md">
+        <DialogHeader
+          description="OpenCode 这类 AI Agent CLI 会在 MaiBot 工作目录中运行，并可能读取、创建、修改文件或执行命令。"
+          icon={<AlertTriangle className="size-4" />}
+          title="确认打开插件编写器？"
+          tone="warning"
+        />
+        <DialogBody className="space-y-3 text-sm">
+          <div className="rounded-md border border-warning/40 bg-warning/15 p-3 text-xs leading-relaxed text-warning-foreground">
+            只在你信任当前工作区、理解操作影响，并准备好查看 AI Agent 执行内容时打开。建议避免输入敏感密钥、账号密码或私人文件路径。
+          </div>
+          <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+            该设置只会显示编写器入口；真正启动 OpenCode 后，终端会切到对应会话，你仍需要关注它的命令输出和文件改动。
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button onClick={() => setConfirmPluginBuilderEnableOpen(false)} size="sm" variant="ghost">
+            取消
+          </Button>
+          <Button onClick={confirmPluginBuilderEnable} size="sm" variant="default">
+            我已了解，打开
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
       <Dialog

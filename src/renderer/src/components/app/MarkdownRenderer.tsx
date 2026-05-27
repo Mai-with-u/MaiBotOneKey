@@ -131,6 +131,13 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps):
       continue;
     }
 
+    if (/^[-*_]{3,}$/u.test(trimmed)) {
+      flushParagraph();
+      flushList();
+      blocks.push(<hr className="border-border/70" key={`hr-${blocks.length}`} />);
+      continue;
+    }
+
     const heading = trimmed.match(/^(#{1,4})\s+(.+)$/u);
     if (heading) {
       flushParagraph();

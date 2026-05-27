@@ -8,8 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { useShortcut } from "@/lib/use-shortcut";
+import { cn } from "@/lib/utils";
 
 const XTERM_THEME = {
   background: "#0c100e",
@@ -216,6 +216,7 @@ export function TerminalPanel({
   active = true,
   recentLogs = [],
   requestedSessionId,
+  retro = false,
   services = [],
   terminalSettings,
   maibotRoot,
@@ -223,6 +224,7 @@ export function TerminalPanel({
   active?: boolean;
   recentLogs?: LogEntry[];
   requestedSessionId?: string | null;
+  retro?: boolean;
   services?: ServiceDescriptor[];
   terminalSettings?: TerminalSettings;
   maibotRoot?: string;
@@ -840,12 +842,72 @@ export function TerminalPanel({
     setActiveSessionId(sessionId);
   }, []);
 
+  const terminalTabs = (
+    <>
+      {terminalEntries.map((item) => {
+        const session = sessionsRef.current.get(item.sessionId);
+        const service = item.serviceId ? servicesById.get(item.serviceId) : undefined;
+        const selected = activeTerminal.sessionId === item.sessionId;
+        return (
+          <div
+            className={[
+              "flex h-7 min-w-[154px] shrink-0 items-center justify-between gap-2 rounded-md border px-2.5 text-left transition-colors",
+              selected
+                ? "border-primary/60 bg-primary/10 text-foreground"
+                : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent/40 hover:text-foreground",
+            ].join(" ")}
+            key={item.sessionId}
+            onClick={() => selectTerminal(item.sessionId)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                selectTerminal(item.sessionId);
+              }
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <span className="min-w-0 truncate text-[11px] font-semibold">{service?.name ?? item.title}</span>
+            <span className="flex shrink-0 items-center gap-1">
+              {item.kind === "service" ? (
+                <Badge className="h-4 px-1.5 text-[9.5px]" variant={serviceBadgeVariant(service)}>
+                  {service?.status === "running" ? "服务运行" : service?.status === "error" ? "异常" : "未运行"}
+                </Badge>
+              ) : (
+                <Badge className="h-4 px-1.5 text-[9.5px]" variant="outline">
+                  Shell
+                </Badge>
+              )}
+              <Badge className="h-4 px-1.5 text-[9.5px]" variant="outline">
+                {session ? statusText[session.status] : item.kind === "service" ? "无 PTY" : "未启动"}
+              </Badge>
+              {item.kind === "user" ? (
+                <button
+                  aria-label={`关闭 ${item.title}`}
+                  className="grid size-4 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeUserTerminal(item.sessionId);
+                  }}
+                  title="关闭终端"
+                  type="button"
+                >
+                  <X className="size-3" />
+                </button>
+              ) : null}
+            </span>
+          </div>
+        );
+      })}
+    </>
+  );
+
   useShortcut("Mod+Shift+R", refreshSessions, { enabled: active });
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background text-foreground">
-      <div className="flex min-h-9 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 py-1">
-        <div className="flex min-w-0 items-center gap-2">
+    <section className={cn("flex h-full min-h-0 flex-col text-foreground", retro ? "bg-transparent" : "bg-background")}>
+      <div className="flex min-h-9 shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-1">
+        <div className="flex min-w-[142px] shrink-0 items-center gap-2">
           <TerminalSquare className="size-3.5 shrink-0 text-primary" />
           <div className="min-w-0">
             <h2 className="truncate text-[13px] font-semibold text-foreground">
@@ -855,6 +917,9 @@ export function TerminalPanel({
               {activePidText} · Ctrl+C 复制选中内容
             </p>
           </div>
+        </div>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-0.5">
+          {terminalTabs}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <Button
@@ -886,67 +951,8 @@ export function TerminalPanel({
           >
             {isRefreshing ? <Loader2 className="animate-spin" /> : <RotateCcw />}
             重连
-            <Kbd className="ml-1" keys="Mod+Shift+R" size="xs" tone="muted" />
           </Button>
         </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border bg-card/60 px-2.5 py-1">
-        {terminalEntries.map((item) => {
-          const session = sessionsRef.current.get(item.sessionId);
-          const service = item.serviceId ? servicesById.get(item.serviceId) : undefined;
-          const selected = activeTerminal.sessionId === item.sessionId;
-          return (
-            <div
-              className={[
-                "flex h-7 min-w-[154px] shrink-0 items-center justify-between gap-2 rounded-md border px-2.5 text-left transition-colors",
-                selected
-                  ? "border-primary/60 bg-primary/10 text-foreground"
-                  : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent/40 hover:text-foreground",
-              ].join(" ")}
-              key={item.sessionId}
-              onClick={() => selectTerminal(item.sessionId)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  selectTerminal(item.sessionId);
-                }
-              }}
-              role="button"
-              tabIndex={0}
-            >
-              <span className="min-w-0 truncate text-[11px] font-semibold">{service?.name ?? item.title}</span>
-              <span className="flex shrink-0 items-center gap-1">
-                {item.kind === "service" ? (
-                  <Badge className="h-4 px-1.5 text-[9.5px]" variant={serviceBadgeVariant(service)}>
-                    {service?.status === "running" ? "服务运行" : service?.status === "error" ? "异常" : "未运行"}
-                  </Badge>
-                ) : (
-                  <Badge className="h-4 px-1.5 text-[9.5px]" variant="outline">
-                    Shell
-                  </Badge>
-                )}
-                <Badge className="h-4 px-1.5 text-[9.5px]" variant="outline">
-                  {session ? statusText[session.status] : item.kind === "service" ? "无 PTY" : "未启动"}
-                </Badge>
-                {item.kind === "user" ? (
-                  <button
-                    aria-label={`关闭 ${item.title}`}
-                    className="grid size-4 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeUserTerminal(item.sessionId);
-                    }}
-                    title="关闭终端"
-                    type="button"
-                  >
-                    <X className="size-3" />
-                  </button>
-                ) : null}
-              </span>
-            </div>
-          );
-        })}
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-2">

@@ -1,10 +1,11 @@
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import { Children, isValidElement } from "react";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-[background,color,border-color,box-shadow] outline-none select-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium leading-none transition-[background,color,border-color,box-shadow] outline-none select-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:block [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -40,14 +41,39 @@ export interface ButtonProps
   asChild?: boolean;
 }
 
+function hasTextChild(children: React.ReactNode): boolean {
+  return Children.toArray(children).some((child) => {
+    if (typeof child === "string") {
+      return child.trim().length > 0;
+    }
+    if (typeof child === "number") {
+      return true;
+    }
+    if (isValidElement<{ children?: React.ReactNode }>(child)) {
+      return hasTextChild(child.props.children);
+    }
+    return false;
+  });
+}
+
 export function Button({
   className,
   variant,
   size,
   asChild = false,
+  children,
   ...props
 }: ButtonProps): React.JSX.Element {
   const Comp = asChild ? Slot : "button";
 
-  return <Comp className={cn(buttonVariants({ variant, size, className }))} {...props} />;
+  return (
+    <Comp
+      className={cn(buttonVariants({ variant, size, className }))}
+      data-has-label={hasTextChild(children) ? "true" : undefined}
+      data-slot="button"
+      {...props}
+    >
+      {children}
+    </Comp>
+  );
 }

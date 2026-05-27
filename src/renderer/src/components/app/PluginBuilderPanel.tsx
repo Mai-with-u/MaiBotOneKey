@@ -81,12 +81,6 @@ const scalarTypes: Array<{ value: MaiBotPluginBlueprintScalarType; label: string
   { value: "boolean", label: "布尔值" },
 ];
 
-const legacyFlowNodeTypes: Array<{ value: MaiBotPluginBlueprintFlowNodeKind; label: string }> = [
-  { value: "send_text", label: "发送文本" },
-  { value: "read_config", label: "读取配置" },
-  { value: "return_success", label: "成功返回" },
-];
-
 const capabilityLibrary = [
   { value: "send.text", label: "发送文本", description: "允许插件发送文字消息" },
   { value: "config.get", label: "读取配置", description: "允许插件读取自己的配置项" },
@@ -1546,22 +1540,6 @@ function BuilderProjectSelect({
   );
 }
 
-function formatBuilderDate(value: number | undefined): string {
-  if (!value) {
-    return "未保存";
-  }
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return new Date(value).toLocaleString();
-  }
-}
-
 function explainPreviewFile(blueprint: MaiBotPluginBlueprint, relativePath: string): { title: string; detail: string } {
   if (relativePath === "_manifest.json") {
     return {
@@ -1971,185 +1949,6 @@ function ComponentLibrarySection({
   );
 }
 
-function FlowNodeEditor({
-  component,
-  onAdd,
-  onChange,
-  onConnect,
-  onRemove,
-}: {
-  component: MaiBotPluginBlueprintComponent;
-  onAdd: (kind: MaiBotPluginBlueprintFlowNodeKind) => void;
-  onChange: (nodeId: string, patch: Partial<MaiBotPluginBlueprintFlowNode>) => void;
-  onConnect: (fromNodeId: string, toNodeId: string) => void;
-  onRemove: (nodeId: string) => void;
-}): React.JSX.Element {
-  const nodes = component.flowNodes ?? [];
-  const nextById = useMemo(() => new Map((component.flowEdges ?? []).map((edge) => [edge.fromNodeId, edge.toNodeId])), [component.flowEdges]);
-  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
-  const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null);
-
-  const startDrag = useCallback((event: React.DragEvent<HTMLButtonElement>, nodeId: string) => {
-    setDraggingNodeId(nodeId);
-    event.dataTransfer.effectAllowed = "link";
-    event.dataTransfer.setData("application/x-maibot-flow-node", nodeId);
-  }, []);
-
-  const finishDrag = useCallback(() => {
-    setDraggingNodeId(null);
-    setDragOverNodeId(null);
-  }, []);
-
-  const dropOnNode = useCallback((event: React.DragEvent<HTMLElement>, nodeId: string) => {
-    event.preventDefault();
-    const fromNodeId = event.dataTransfer.getData("application/x-maibot-flow-node") || draggingNodeId;
-    if (fromNodeId && fromNodeId !== nodeId) {
-      onConnect(fromNodeId, nodeId);
-    }
-    finishDrag();
-  }, [draggingNodeId, finishDrag, onConnect]);
-
-  return (
-    <div className="grid gap-2 rounded-md border border-border bg-card p-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-xs font-medium">
-          <Link2 className="size-3.5 text-muted-foreground" />
-          积木流程
-        </span>
-        <select
-          className="h-7 rounded-md border border-input bg-background px-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          onChange={(event) => {
-            if (event.target.value) {
-              onAdd(event.target.value as MaiBotPluginBlueprintFlowNodeKind);
-              event.target.value = "";
-            }
-          }}
-          value=""
-        >
-          <option value="">添加积木</option>
-          {flowNodeLibraryGroups.map((group) => (
-            <optgroup key={group.title} label={group.title}>
-              {group.items.map((type) => (
-                <option key={type.value} value={type.value}>{type.label}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </div>
-
-      {nodes.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border px-3 py-3 text-center text-[11px] text-muted-foreground">
-          添加“发送文本”或“成功返回”积木，就能像拼流程一样生成代码。
-        </div>
-      ) : (
-        <div className="grid gap-2">
-          <p className="rounded-md bg-muted/45 px-2 py-1.5 text-[11px] text-muted-foreground">
-            拖动积木右侧圆点到另一个积木上，即可设置下一步。
-          </p>
-          {nodes.map((node) => (
-            <div
-              className={cn(
-                "grid gap-2 rounded-md border bg-background p-2 transition-colors",
-                dragOverNodeId === node.id && draggingNodeId !== node.id
-                  ? "border-primary bg-primary/5"
-                  : "border-border",
-                draggingNodeId === node.id && "opacity-70",
-              )}
-              key={node.id}
-              onDragLeave={() => setDragOverNodeId((current) => (current === node.id ? null : current))}
-              onDragOver={(event) => {
-                if (draggingNodeId && draggingNodeId !== node.id) {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "link";
-                  setDragOverNodeId(node.id);
-                }
-              }}
-              onDrop={(event) => dropOnNode(event, node.id)}
-            >
-              <div className="grid grid-cols-[96px_1fr_32px_32px] gap-2">
-                <select
-                  className="h-8 rounded-md border border-input bg-card px-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                  onChange={(event) => onChange(node.id, { kind: event.target.value as MaiBotPluginBlueprintFlowNodeKind })}
-                  value={node.kind}
-                >
-                  {flowNodeLibraryGroups.map((group) => (
-                    <optgroup key={group.title} label={group.title}>
-                      {group.items.map((type) => (
-                        <option key={type.value} value={type.value}>{type.label}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <Input className="h-8 text-xs" onChange={(event) => onChange(node.id, { label: event.target.value })} value={node.label} />
-                <Button aria-label="移除积木" onClick={() => onRemove(node.id)} size="icon-sm" type="button" variant="ghost">
-                  <Trash2 className="size-3.5" />
-                </Button>
-                <button
-                  aria-label={`拖拽连接 ${node.label || flowNodeLabel(node.kind)}`}
-                  className="grid size-8 cursor-grab place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary active:cursor-grabbing"
-                  draggable
-                  onDragEnd={finishDrag}
-                  onDragStart={(event) => startDrag(event, node.id)}
-                  title="拖动到另一个积木上进行连接"
-                  type="button"
-                >
-                  <span className="size-2.5 rounded-full bg-current" />
-                </button>
-              </div>
-
-              {node.kind === "send_text" || node.kind === "log_info" || node.kind === "comment" ? (
-                <Input className="h-8 text-xs" onChange={(event) => onChange(node.id, { value: event.target.value })} value={node.value ?? ""} />
-              ) : node.kind === "read_config" ? (
-                <Input
-                  className="h-8 text-xs"
-                  monospace
-                  onChange={(event) => onChange(node.id, { configPath: event.target.value })}
-                  placeholder="greeting.message"
-                  value={node.configPath ?? ""}
-                />
-              ) : node.kind === "set_variable" || node.kind === "guard_config" || node.kind === "loop" ? (
-                <div className="grid grid-cols-[1fr_1fr] gap-2">
-                  <Input
-                    className="h-8 text-xs"
-                    monospace
-                    onChange={(event) => onChange(node.id, { configPath: event.target.value })}
-                    placeholder={node.kind === "set_variable" ? "result" : node.kind === "loop" ? "item" : "plugin.enabled"}
-                    value={node.configPath ?? ""}
-                  />
-                  <Input
-                    className="h-8 text-xs"
-                    onChange={(event) => onChange(node.id, { value: event.target.value })}
-                    placeholder={node.kind === "set_variable" ? "ok" : node.kind === "loop" ? "range(3)" : "true"}
-                    value={node.value ?? ""}
-                  />
-                </div>
-              ) : (
-                <div className="rounded-md bg-muted/45 px-2 py-1.5 text-[11px] text-muted-foreground">
-                  结束当前流程并告诉 MaiBot 执行成功。
-                </div>
-              )}
-
-              <label className="grid grid-cols-[48px_1fr] items-center gap-2 text-[11px] text-muted-foreground">
-                <span>下一</span>
-                <select
-                  className="h-8 rounded-md border border-input bg-card px-2 text-[11px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                  onChange={(event) => onConnect(node.id, event.target.value)}
-                  value={nextById.get(node.id) ?? ""}
-                >
-                  <option value=""></option>
-                  {nodes.filter((item) => item.id !== node.id).map((item) => (
-                    <option key={item.id} value={item.id}>{item.label || flowNodeLabel(item.kind)}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function componentKindLabel(kind: MaiBotPluginBlueprintComponentKind): string {
   if (kind === "tool") return "Tool";
   return "Command";
@@ -2494,7 +2293,6 @@ function FreeBlueprintCanvas({
     () => getBlueprintCanvasBounds(nodeIdList, positions, defaultPositions, 260, 144),
     [defaultPositions, nodeIdList, positions],
   );
-  const previousCanvasBoundsRef = useRef(canvasBounds);
   const pendingZoomScrollRef = useRef<{ logicalX: number; logicalY: number; viewportX: number; viewportY: number; scale: number } | null>(null);
 
   const updateCanvasViewport = useCallback(() => {
@@ -4129,66 +3927,6 @@ function flowEdgeLabel(node: MaiBotPluginBlueprintFlowNode | undefined): string 
   return "下一步";
 }
 
-function BlueprintCanvas({ blueprint }: { blueprint: MaiBotPluginBlueprint }): React.JSX.Element {
-  const toolCount = blueprint.components.filter((component) => component.kind === "tool").length;
-  const commandCount = blueprint.components.filter((component) => component.kind === "command").length;
-  const blueprintSummary = blueprintEntrySummary(toolCount, commandCount);
-  return (
-    <div className="mx-auto grid max-w-4xl gap-5 p-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold">节点</h3>
-          {blueprintSummary ? <p className="truncate text-xs text-muted-foreground">{blueprintSummary}</p> : null}
-        </div>
-        <Badge variant="secondary">{blueprint.manifest.version}</Badge>
-      </div>
-
-      <div className="grid gap-5">
-        <CanvasNode icon={<FileJson />} title={blueprint.manifest.name} tone="primary" subtitle={blueprint.manifest.pluginId}>
-          <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
-            <span>Manifest v2</span>
-            <span className="truncate text-right">{blueprint.manifest.license}</span>
-          </div>
-        </CanvasNode>
-
-        <Connector />
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <CanvasNode icon={<Settings2 />} title="配置模型" tone="warning" subtitle="PluginConfigBase + config.toml">
-            <div className="flex flex-wrap gap-1">
-              {blueprint.configFields.slice(0, 4).map((field) => (
-                <Badge key={field.id} variant="secondary">{field.section}.{field.name}</Badge>
-              ))}
-              {blueprint.configFields.length > 4 ? <Badge variant="secondary">+{blueprint.configFields.length - 4}</Badge> : null}
-            </div>
-          </CanvasNode>
-        </div>
-
-        <Connector />
-
-        <div className="grid gap-3 md:grid-cols-2">
-          {blueprint.components.map((component) => (
-            <CanvasNode
-              icon={component.kind === "tool" ? <Wrench /> : <TerminalSquare />}
-              key={component.id}
-              subtitle={component.description}
-              title={component.name}
-              tone={component.kind === "tool" ? "info" : "neutral"}
-            >
-              <div className="flex flex-wrap gap-1">
-                <Badge variant="secondary">{componentKindLabel(component.kind)}</Badge>
-                {component.kind === "command" ? <Badge variant="secondary">{component.trigger || "^/command$"}</Badge> : null}
-                {component.kind === "tool" ? <Badge variant="secondary">{component.parameters?.length ?? 0} 参数</Badge> : null}
-                <Badge variant="secondary">{component.flowNodes?.length ?? 0} 积木</Badge>
-              </div>
-            </CanvasNode>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function FilePreviewPanel({
   activeFile,
   blueprint,
@@ -4252,61 +3990,6 @@ function FilePreviewPanel({
       <pre className="min-h-0 flex-1 overflow-auto bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground">
         <code>{activeFile?.content ?? ""}</code>
       </pre>
-    </div>
-  );
-}
-
-function CanvasNode({
-  icon,
-  title,
-  subtitle,
-  tone,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  tone: "primary" | "success" | "warning" | "info" | "neutral";
-  children?: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border bg-card p-4 shadow-sm",
-        tone === "primary" && "border-primary/35",
-        tone === "success" && "border-success/35",
-        tone === "warning" && "border-warning/45",
-        tone === "info" && "border-blue-400/35",
-        tone === "neutral" && "border-border",
-      )}
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className={cn(
-            "grid size-9 shrink-0 place-items-center rounded-md",
-            tone === "primary" && "bg-primary/15 text-primary",
-            tone === "success" && "bg-success/15 text-success",
-            tone === "warning" && "bg-warning/20 text-warning-foreground",
-            tone === "info" && "bg-blue-500/12 text-blue-500",
-            tone === "neutral" && "bg-secondary text-secondary-foreground",
-          )}
-        >
-          {icon}
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{title}</p>
-          {subtitle ? <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{subtitle}</p> : null}
-          {children ? <div className="mt-3">{children}</div> : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Connector(): React.JSX.Element {
-  return (
-    <div aria-hidden className="grid h-6 place-items-center">
-      <div className="h-6 w-px bg-border" />
     </div>
   );
 }

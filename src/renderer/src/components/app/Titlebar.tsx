@@ -1,10 +1,7 @@
 import {
   Maximize2,
   Minus,
-  MonitorCog,
-  Moon,
   Square,
-  Sun,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -12,13 +9,10 @@ import type { WindowState } from "@shared/contracts";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/platform";
 import { useShortcut } from "@/lib/use-shortcut";
-import type { ThemeApi } from "@/lib/use-theme";
 
 interface TitlebarProps {
   appVersion: string;
-  liquidGlass?: boolean;
   retro?: boolean;
-  theme: ThemeApi;
 }
 
 function useWindowState(): WindowState {
@@ -81,12 +75,20 @@ function MacTrafficLights(): React.JSX.Element {
   );
 }
 
-function WinControls({ isMaximized }: { isMaximized: boolean }): React.JSX.Element {
+function WinControls({ isMaximized, retro = false }: { isMaximized: boolean; retro?: boolean }): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   const baseBtn =
     "grid h-full w-12 place-items-center text-foreground/75 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
   return (
-    <div className="flex h-full items-stretch" data-app-region="no-drag">
+    <div
+      className="flex h-full items-stretch"
+      data-app-region="no-drag"
+      style={{
+        paddingRight: retro
+          ? "clamp(0px, calc(var(--app-window-radius, 16px) * 0.8 + 2px), 32px)"
+          : undefined,
+      }}
+    >
       <button
         aria-label="最小化"
         className={baseBtn}
@@ -130,20 +132,9 @@ function WinControls({ isMaximized }: { isMaximized: boolean }): React.JSX.Eleme
   );
 }
 
-const themeLabel = {
-  light: "浅色",
-  dark: "深色",
-  system: "跟随系统",
-} as const;
-
-const titlebarBtn =
-  "inline-grid h-7 place-items-center rounded-sm border border-transparent px-1.5 text-foreground/70 transition-colors hover:border-border hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50";
-
 export function Titlebar({
   appVersion,
-  liquidGlass = false,
   retro = false,
-  theme,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
   const state = useWindowState();
@@ -153,20 +144,15 @@ export function Titlebar({
   useShortcut("Mod+M", () => bridge?.minimize());
   useShortcut("Mod+Shift+M", () => bridge?.toggleMaximize());
 
-  const ThemeIcon =
-    theme.preference === "system" ? MonitorCog : theme.resolved === "dark" ? Moon : Sun;
-  const themeTitle = `主题：${themeLabel[theme.preference]}（点击切换）`;
-
   return (
     <div
       className={cn(
         "relative z-40 flex h-12 shrink-0 items-stretch border-b-2",
         retro ? "border-[var(--retro-titlebar-line)]" : "border-border",
-        liquidGlass ? "bg-transparent" : "bg-card",
+        "bg-card",
         !state.isFocused && "opacity-90",
       )}
       data-app-region="drag"
-      data-liquid-titlebar={liquidGlass ? "true" : undefined}
     >
       {isMac ? <MacTrafficLights /> : null}
 
@@ -191,18 +177,9 @@ export function Titlebar({
         <span className="retro-value hidden text-[12px] text-foreground md:inline-block">
           v{appVersion}
         </span>
-        <button
-          aria-label={themeTitle}
-          className={titlebarBtn}
-          onClick={theme.cycle}
-          title={themeTitle}
-          type="button"
-        >
-          <ThemeIcon className="size-3.5" strokeWidth={1.8} />
-        </button>
       </div>
 
-      {!isMac ? <WinControls isMaximized={state.isMaximized} /> : null}
+      {!isMac ? <WinControls isMaximized={state.isMaximized} retro={retro} /> : null}
     </div>
   );
 }

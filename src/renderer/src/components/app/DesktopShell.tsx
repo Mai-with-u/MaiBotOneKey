@@ -3,6 +3,7 @@
   Code2,
   GripHorizontal,
   Home,
+  Info,
   ListTree,
   Loader2,
   MessageSquare,
@@ -44,9 +45,7 @@ import { Toaster } from "@/components/ui/sonner";
 import maiMascotImage from "@/assets/mai2.png";
 import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
-import { LiquidGlassLayer } from "./LiquidGlassLayer";
 import { LocalChatPanel } from "./LocalChatPanel";
-import { PluginBuilderPanel } from "./PluginBuilderPanel";
 import { PluginMarketPanel } from "./PluginMarketPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
@@ -115,7 +114,7 @@ function readPluginBuilderMode(): PluginBuilderMode {
     return "agent";
   }
   const mode = window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY);
-  return mode === "nodes" || mode === "disabled" ? mode : "agent";
+  return mode === "disabled" ? "disabled" : "agent";
 }
 
 function errorMessage(error: unknown): string {
@@ -298,7 +297,7 @@ function ServiceTabControls({
   }
 
   return (
-    <div className={cn("flex h-full shrink-0 items-center px-0.5", !retro && "border-l border-current/20")}>
+    <div className={cn("flex h-full shrink-0 items-center pl-0.5 pr-2.5", !retro && "border-l border-current/20")}>
       <ServiceControlButtons
         service={service}
         busy={busy}
@@ -310,10 +309,196 @@ function ServiceTabControls({
   );
 }
 
+function MaiBotOfflineIllustration({ waiting }: { waiting: boolean }): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden
+      className="mx-auto h-auto w-[min(385px,52vw)] text-[var(--retro-ink,var(--foreground))]"
+      fill="none"
+      viewBox="0 0 320 220"
+    >
+      <defs>
+        <linearGradient id="maibot-offline-screen" x1="76" x2="244" y1="46" y2="128" gradientUnits="userSpaceOnUse">
+          <stop stopColor="var(--retro-ink, currentColor)" stopOpacity=".98" />
+          <stop offset="1" stopColor="var(--retro-ink, currentColor)" stopOpacity=".88" />
+        </linearGradient>
+      </defs>
+      <rect
+        fill="var(--retro-recessed, transparent)"
+        fillOpacity=".9"
+        height="150"
+        rx="6"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        width="238"
+        x="41"
+        y="18"
+      />
+      <rect
+        fill="url(#maibot-offline-screen)"
+        height="130"
+        rx="5"
+        width="216"
+        x="52"
+        y="27"
+      />
+      {waiting ? (
+        <path
+          className="animate-pulse"
+          d="M60 90h25c5 0 7-6 11-6 5 0 7 17 13 17 7 0 9-31 17-31 8 0 11 41 20 41 8 0 11-55 21-55 9 0 13 45 22 45 7 0 9-21 16-21 5 0 7 10 12 10h47"
+          stroke="var(--retro-paper-soft,var(--background))"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeOpacity=".32"
+          strokeWidth="2.5"
+        />
+      ) : null}
+      <path
+        d="M60 90h204"
+        stroke="var(--retro-paper-soft,var(--background))"
+        strokeDasharray="12 9"
+        strokeLinecap="round"
+        strokeOpacity=".24"
+        strokeWidth="3"
+      />
+      <path d="M93 168v12M227 168v12" stroke="currentColor" strokeLinecap="round" strokeWidth="1.75" />
+      <rect
+        fill="var(--retro-recessed, transparent)"
+        fillOpacity=".9"
+        height="30"
+        rx="4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        width="238"
+        x="41"
+        y="180"
+      />
+      {[60, 78, 96, 114].map((x) => (
+        <path d={`M${x} 189h9`} key={x} stroke="currentColor" strokeLinecap="round" strokeWidth="3" />
+      ))}
+      {[60, 78, 96, 114].map((x) => (
+        <path d={`M${x} 199h9`} key={x} stroke="currentColor" strokeLinecap="round" strokeWidth="3" />
+      ))}
+      <circle cx="222" cy="194" fill="currentColor" r="4.2" />
+      <circle cx="241" cy="194" fill="currentColor" r="4.2" />
+      <circle fill="var(--retro-rust, var(--primary))" cx="263" cy="194" r="7.5" />
+    </svg>
+  );
+}
+
+function MaiBotWebuiStatusPanel({
+  service,
+  busy,
+  onStart,
+  retro,
+}: {
+  service: ServiceDescriptor | undefined;
+  busy: boolean;
+  onStart: (id: ServiceId) => void;
+  retro: boolean;
+}): React.JSX.Element {
+  const status = service?.status ?? "stopped";
+  const health = service?.health ?? "unknown";
+  const [showWebUiUnavailable, setShowWebUiUnavailable] = useState(false);
+  const webUiUnreachable = status === "running" && health === "unreachable";
+
+  useEffect(() => {
+    if (!webUiUnreachable) {
+      setShowWebUiUnavailable(false);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setShowWebUiUnavailable(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [webUiUnreachable]);
+
+  const canStart = service && (status === "stopped" || status === "error");
+  const waiting =
+    busy
+    || status === "starting"
+    || status === "stopping"
+    || (status === "running" && (health !== "unreachable" || !showWebUiUnavailable));
+  const title = !service
+    ? "MAIBOT 未发现"
+    : status === "stopped"
+      ? "MAIBOT 尚未启动"
+      : status === "starting"
+        ? "MAIBOT 正在启动"
+        : status === "running"
+          ? showWebUiUnavailable
+            ? "MAIBOT WEBUI 暂不可访问"
+            : "等待 WebUI 启动"
+          : status === "stopping"
+            ? "MAIBOT 正在停止"
+            : "MAIBOT 启动异常";
+  const description = !service || status === "stopped"
+    ? "当前没有运行中的 Maibot 实例，信号连接未建立。"
+    : status === "starting"
+      ? "正在启动 Maibot Core，请稍等片刻。"
+      : status === "running"
+        ? showWebUiUnavailable
+          ? "服务进程已启动，但 WebUI 端口暂不可访问。"
+          : "WebUI 正在加载，完成后会自动打开。"
+        : status === "stopping"
+          ? "正在停止 Maibot Core。"
+          : "启动过程中发生异常，请查看终端日志。";
+
+  return (
+    <section className="relative grid h-full min-h-0 place-items-center overflow-hidden bg-transparent p-6 text-[var(--retro-ink,var(--foreground))]">
+      <div className="relative z-10 flex w-full max-w-[530px] flex-col items-center text-center">
+        {retro ? <MaiBotOfflineIllustration waiting={waiting} /> : null}
+
+        <h3 className={cn(retro ? "mt-4" : "mt-0", "text-[34px] font-black leading-tight tracking-[0.02em] text-[var(--retro-ink,var(--foreground))]")}>
+          {title}
+        </h3>
+        <p className="mt-3 text-[15px] font-semibold text-[var(--retro-ink-soft,var(--muted-foreground))]">
+          {description}
+        </p>
+
+        <div className="my-7 flex w-full items-center gap-3 text-[var(--retro-ink-soft,var(--muted-foreground))]">
+          <span className="size-2.5 rounded-full bg-current opacity-70" />
+          <span className="h-px flex-1 bg-current opacity-45" />
+          <span className="size-2.5 rounded-full bg-current opacity-70" />
+        </div>
+
+        <div className="w-[min(500px,100%)] border-2 border-[var(--retro-line,var(--border))] bg-[var(--retro-recessed,transparent)] px-4 py-3 text-left">
+          <div className="flex items-start gap-3">
+            <span className="grid size-8 shrink-0 place-items-center text-[var(--retro-ink,var(--foreground))]">
+              <Info className="size-6" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-black text-[var(--retro-ink,var(--foreground))]">提示</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm font-semibold text-[var(--retro-ink-soft,var(--muted-foreground))]">
+                {canStart ? (
+                  <>
+                    <span>点击</span>
+                    <Button
+                      className="h-7 border-[var(--retro-rust,var(--primary))] px-2 text-xs"
+                      disabled={busy}
+                      onClick={() => onStart(service.id)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                      启动
+                    </Button>
+                    <span>建立连接并开始使用。</span>
+                  </>
+                ) : (
+                  <span>{waiting ? "正在等待 Maibot 建立连接。" : "请先在服务状态中确认 Maibot 配置。"}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function FloatingShell({
   expanded,
   edge,
-  liquidGlass,
   maibotService,
   onExpand,
   onCollapse,
@@ -322,7 +507,6 @@ function FloatingShell({
 }: {
   expanded: boolean;
   edge: "left" | "right" | null;
-  liquidGlass: boolean;
   maibotService: ServiceDescriptor | undefined;
   onExpand: () => void;
   onCollapse: () => void;
@@ -341,8 +525,6 @@ function FloatingShell({
   const dragPointRef = useRef<{
     clientX: number;
     clientY: number;
-    screenX: number;
-    screenY: number;
   } | null>(null);
   const dragFrameRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
@@ -384,7 +566,7 @@ function FloatingShell({
     dragPointRef.current = null;
     dragRequestPendingRef.current = true;
     void window.maibotDesktop?.window
-      .moveFloatingTo(point.screenX, point.screenY, point.clientX, point.clientY)
+      .moveFloatingTo(point.clientX, point.clientY)
       .then(updateFloatingState)
       .finally(() => {
         dragRequestPendingRef.current = false;
@@ -456,8 +638,6 @@ function FloatingShell({
     }
     current.moved = true;
     dragPointRef.current = {
-      screenX: event.screenX,
-      screenY: event.screenY,
       clientX: current.offsetX,
       clientY: current.offsetY,
     };
@@ -501,11 +681,7 @@ function FloatingShell({
           title="拖动悬浮条，点击展开"
         >
           <div
-            className={cn(
-              "grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 shadow-xl",
-              liquidGlass ? "bg-transparent" : "bg-card",
-            )}
-            data-liquid-edge-chip={liquidGlass ? "true" : undefined}
+            className="grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl"
           >
             <img
               alt=""
@@ -521,12 +697,8 @@ function FloatingShell({
     return (
       <div className="grid h-screen place-items-center bg-transparent" data-floating-shell="true">
         <button
-          className={cn(
-            "relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 shadow-xl active:cursor-grabbing",
-            liquidGlass ? "bg-transparent" : "bg-card",
-          )}
+          className="relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl active:cursor-grabbing"
           data-app-region="no-drag"
-          data-liquid-floating-orb={liquidGlass ? "true" : undefined}
           onClick={expandFromClick}
           onPointerCancel={(event) => finishDrag(event)}
           onPointerDown={startDrag}
@@ -544,22 +716,15 @@ function FloatingShell({
 
   return (
     <div
-      className={cn(
-        "flex h-screen min-h-0 flex-col overflow-hidden border border-border text-foreground shadow-2xl",
-        liquidGlass ? "bg-transparent" : "bg-background",
-      )}
+      className="flex h-screen min-h-0 flex-col overflow-hidden border border-border bg-background text-foreground shadow-2xl"
       data-floating-shell="true"
       style={{
         borderRadius: "var(--app-window-radius, 16px)",
       }}
     >
       <div
-        className={cn(
-          "flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border px-2 active:cursor-grabbing",
-          liquidGlass ? "bg-transparent" : "bg-card",
-        )}
+        className="flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-card px-2 active:cursor-grabbing"
         data-app-region="no-drag"
-        data-liquid-titlebar={liquidGlass ? "true" : undefined}
         onPointerCancel={(event) => finishDrag(event)}
         onPointerDown={startDrag}
         onPointerMove={drag}
@@ -590,14 +755,14 @@ function FloatingShell({
 function PluginCodingAgentPanel({
   isStartingOpenCode,
   onStartOpenCode,
-  openCodePath,
+  retro,
 }: {
   isStartingOpenCode: boolean;
   onStartOpenCode: () => void;
-  openCodePath: string;
+  retro: boolean;
 }): React.JSX.Element {
   return (
-    <section className="flex h-full min-h-0 bg-background">
+    <section className={cn("flex h-full min-h-0", retro ? "bg-transparent" : "bg-background")}>
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 overflow-auto px-6 py-6">
         <div className="retro-panel retro-panel-bare p-4">
           <div className="min-w-0">
@@ -641,6 +806,35 @@ function retroTabItemForValue(list: HTMLElement, value: string): HTMLElement | n
   ) ?? null;
 }
 
+function formatCssPixel(value: number): string {
+  return `${Number(value.toFixed(3))}px`;
+}
+
+function syncRetroTabDividers(list: HTMLElement | null): void {
+  if (!list) {
+    return;
+  }
+
+  const items = Array.from(list.querySelectorAll<HTMLElement>(RETRO_TAB_ITEM_SELECTOR));
+  if (items.length < 2) {
+    list.style.setProperty("--retro-tab-divider-background", "none");
+    return;
+  }
+
+  const pixelRatio = Math.max(window.devicePixelRatio || 1, 1);
+  const lineWidth = 2 / pixelRatio;
+  const listLeft = list.getBoundingClientRect().left;
+  const layers = items.slice(0, -1).map((item) => {
+    const itemRight = item.getBoundingClientRect().right - listLeft;
+    const x = Math.round(itemRight * pixelRatio) / pixelRatio;
+    const from = formatCssPixel(x);
+    const to = formatCssPixel(x + lineWidth);
+    return `linear-gradient(to right, transparent 0 ${from}, var(--retro-tab-divider-color) ${from} ${to}, transparent ${to} 100%)`;
+  });
+
+  list.style.setProperty("--retro-tab-divider-background", layers.join(", "));
+}
+
 function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | null): void {
   if (!list || !item) {
     list?.style.setProperty("--retro-tab-indicator-opacity", "0");
@@ -657,6 +851,7 @@ function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | nul
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
+  const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
   const [pluginMode, setPluginMode] = useState<"market" | "manage">("manage");
   const [pluginBuilderMode, setPluginBuilderModeState] = useState<PluginBuilderMode>(() => readPluginBuilderMode());
   const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
@@ -670,7 +865,6 @@ export function DesktopShell(): React.JSX.Element {
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const theme = useTheme();
-  const liquidGlass = appearance.mode === "future";
   const useRetroChrome = appearance.mode === "future-retro";
 
   const setPluginBuilderMode = useCallback((mode: PluginBuilderMode) => {
@@ -734,6 +928,11 @@ export function DesktopShell(): React.JSX.Element {
     [services],
   );
   const maibotService = serviceById.get("maibot");
+  const maibotWebviewReady = maibotService?.status === "running" && maibotService.health === "ready";
+  const maibotWebviewReloadTrigger =
+    maibotWebviewReady
+      ? maibotService.url
+      : null;
   const qqBackendService = serviceById.get("napcat");
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
@@ -984,20 +1183,37 @@ export function DesktopShell(): React.JSX.Element {
   useEffect(() => {
     if (!useRetroChrome) {
       moveRetroTabIndicator(retroTabsRef.current, null);
+      syncRetroTabDividers(retroTabsRef.current);
       return;
     }
 
-    let frame = window.requestAnimationFrame(() => syncRetroTabIndicator(activeTab));
+    let frame = 0;
+    const syncNow = (): void => {
+      syncRetroTabDividers(retroTabsRef.current);
+      syncRetroTabIndicator(activeTab);
+    };
     const sync = (): void => {
       window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => syncRetroTabIndicator(activeTab));
+      frame = window.requestAnimationFrame(syncNow);
     };
+
+    sync();
+    const observer = new ResizeObserver(sync);
+    const list = retroTabsRef.current;
+    if (list) {
+      observer.observe(list);
+      for (const item of list.querySelectorAll<HTMLElement>(RETRO_TAB_ITEM_SELECTOR)) {
+        observer.observe(item);
+      }
+    }
+
     window.addEventListener("resize", sync);
     return () => {
       window.cancelAnimationFrame(frame);
+      observer.disconnect();
       window.removeEventListener("resize", sync);
     };
-  }, [activeTab, pluginBuilderMode, showTerminalTab, syncRetroTabIndicator, useRetroChrome]);
+  }, [activeTab, maibotService?.status, pluginBuilderMode, showTerminalTab, syncRetroTabIndicator, useRetroChrome]);
 
   useEffect(() => {
     const list = retroTabsRef.current;
@@ -1029,16 +1245,9 @@ export function DesktopShell(): React.JSX.Element {
   if (floatingMode) {
     return (
       <TooltipProvider delayDuration={250}>
-        {floatingExpanded ? (
-          <LiquidGlassLayer
-            dark={theme.resolved === "dark"}
-            enabled={liquidGlass}
-          />
-        ) : null}
         <FloatingShell
           edge={floatingEdge}
           expanded={floatingExpanded}
-          liquidGlass={liquidGlass}
           maibotService={maibotService}
           onCollapse={() => setFloatingPanel(false)}
           onExpand={() => setFloatingPanel(true)}
@@ -1056,24 +1265,14 @@ export function DesktopShell(): React.JSX.Element {
       <div
         className={cn(
           "relative flex h-screen min-h-0 flex-col overflow-hidden text-foreground",
-          liquidGlass ? "bg-transparent" : "bg-background",
+          "bg-background",
           useRetroChrome && "retro-shell",
         )}
-        data-liquid-shell={liquidGlass ? "true" : undefined}
-        style={{
-          borderRadius: "var(--app-window-radius, 16px)",
-        }}
       >
-        <LiquidGlassLayer
-          dark={theme.resolved === "dark"}
-          enabled={liquidGlass}
-        />
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
           <Titlebar
             appVersion={snapshot?.appVersion ?? "0.1.0"}
-            liquidGlass={liquidGlass}
             retro={useRetroChrome}
-            theme={theme}
           />
 
           {actionError ? (
@@ -1094,9 +1293,8 @@ export function DesktopShell(): React.JSX.Element {
                   useRetroChrome
                     ? "flex h-12 shrink-0 items-stretch gap-0 border-b-3 border-[var(--retro-tabbar-line)] pl-6 pr-5"
                     : "flex h-10 shrink-0 items-center gap-3 border-b border-border px-3",
-                  liquidGlass ? "bg-transparent" : "bg-card",
+                  "bg-card",
                 )}
-                data-liquid-band={liquidGlass ? "true" : undefined}
               >
                 <TabsList
                   className={cn(useRetroChrome ? "retro-tabs h-full" : "h-8 bg-card")}
@@ -1119,7 +1317,7 @@ export function DesktopShell(): React.JSX.Element {
                   <div
                     className={cn(
                       useRetroChrome
-                        ? "relative flex h-full shrink-0 items-center border-0 bg-transparent text-muted-foreground transition-colors after:absolute after:bottom-3 after:right-0 after:top-3 after:w-px after:bg-border/70 hover:text-foreground/90"
+                        ? "relative flex h-full shrink-0 items-center border-0 bg-transparent text-muted-foreground transition-colors hover:text-foreground/90"
                         : "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
                       activeTab === "maibot" && (
                         useRetroChrome
@@ -1136,7 +1334,7 @@ export function DesktopShell(): React.JSX.Element {
                       className={cn(
                         "h-full flex-none gap-1.5 border-0 bg-transparent text-inherit hover:text-inherit",
                         useRetroChrome
-                          ? "px-4 after:hidden data-[state=active]:bg-transparent data-[state=active]:text-inherit"
+                          ? "px-2 data-[state=active]:bg-transparent data-[state=active]:text-inherit"
                           : "px-2.5 data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none",
                       )}
                     >
@@ -1212,7 +1410,22 @@ export function DesktopShell(): React.JSX.Element {
                     </TabsTrigger>
                   ) : null}
                 </TabsList>
-              <div className={cn("ml-auto flex shrink-0 items-center gap-1", useRetroChrome && "py-1")}>
+                <div
+                  className={cn(
+                    activeTab === "maibot" || activeTab === "localchat"
+                      ? "ml-auto flex min-w-0 flex-1 items-center justify-end"
+                      : "hidden",
+                    useRetroChrome ? "h-full px-2 py-1" : "h-full",
+                  )}
+                  ref={setWebviewToolbarHost}
+                />
+                <div
+                  className={cn(
+                    "flex shrink-0 items-center gap-1",
+                    activeTab !== "maibot" && activeTab !== "localchat" && "ml-auto",
+                    useRetroChrome && "py-1",
+                  )}
+                >
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1406,12 +1619,24 @@ export function DesktopShell(): React.JSX.Element {
               value="maibot"
               className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
             >
-              <WebviewPanel
-                active={activeTab === "maibot"}
-                emptyText="MaiBot Core 启动后会在这里载入官方 WebUI。"
-                title="MaiBot WebUI"
-                url={maibotService?.url ?? "http://127.0.0.1:8001"}
-              />
+              {maibotWebviewReady ? (
+                <WebviewPanel
+                  active={activeTab === "maibot"}
+                  emptyText="MaiBot Core 启动后会在这里载入官方 WebUI。"
+                  title="MaiBot WebUI"
+                  toolbarPlacement="external"
+                  toolbarTarget={webviewToolbarHost}
+                  reloadTrigger={maibotWebviewReloadTrigger}
+                  url={maibotService?.url ?? "http://127.0.0.1:8001"}
+                />
+              ) : (
+                <MaiBotWebuiStatusPanel
+                  busy={actionBusy?.startsWith("maibot:") ?? false}
+                  onStart={startService}
+                  retro={useRetroChrome}
+                  service={maibotService}
+                />
+              )}
             </TabsContent>
 
             <TabsContent
@@ -1422,6 +1647,9 @@ export function DesktopShell(): React.JSX.Element {
               <LocalChatPanel
                 active={activeTab === "localchat"}
                 maibotService={maibotService}
+                retro={useRetroChrome}
+                toolbarPlacement="external"
+                toolbarTarget={webviewToolbarHost}
               />
             </TabsContent>
 
@@ -1435,6 +1663,7 @@ export function DesktopShell(): React.JSX.Element {
                   active={activeTab === "terminal"}
                   recentLogs={snapshot?.recentLogs ?? []}
                   requestedSessionId={terminalFocusSessionId}
+                  retro={useRetroChrome}
                   services={services}
                   terminalSettings={snapshot?.terminalSettings}
                   maibotRoot={snapshot?.paths.maibotRoot}
@@ -1452,6 +1681,7 @@ export function DesktopShell(): React.JSX.Element {
                 mode={pluginMode}
                 onModeChange={setPluginMode}
                 onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
+                retro={useRetroChrome}
                 requestedConfigPluginId={requestedConfigPluginId}
               />
             </TabsContent>
@@ -1461,25 +1691,17 @@ export function DesktopShell(): React.JSX.Element {
                 value="pluginbuilder"
                 className="min-h-0 flex-1 overflow-hidden outline-none"
               >
-                {pluginBuilderMode === "nodes" ? (
-                  <PluginBuilderPanel
-                    isStartingOpenCode={isStartingOpenCode}
-                    onStartOpenCode={startOpenCode}
-                    openCodePath={openCodePath}
-                  />
-                ) : (
-                  <PluginCodingAgentPanel
-                    isStartingOpenCode={isStartingOpenCode}
-                    onStartOpenCode={startOpenCode}
-                    openCodePath={openCodePath}
-                  />
-                )}
+                <PluginCodingAgentPanel
+                  isStartingOpenCode={isStartingOpenCode}
+                  onStartOpenCode={startOpenCode}
+                  retro={useRetroChrome}
+                />
               </TabsContent>
             ) : null}
 
             <TabsContent
               value="settings"
-              className="min-h-0 flex-1 overflow-hidden outline-none"
+              className="settings-scroll-scope min-h-0 flex-1 overflow-hidden outline-none"
             >
               {snapshot ? (
                 <SettingsStatusPanel

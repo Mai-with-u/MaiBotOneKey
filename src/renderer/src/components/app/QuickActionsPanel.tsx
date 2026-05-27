@@ -42,8 +42,8 @@ function ResultDetails({
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <div className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-foreground">
-      <div className="flex items-center gap-1.5 font-medium text-success">
+    <div className="rounded-md border border-primary/30 bg-primary/10 p-3 text-[12px] text-foreground">
+      <div className="flex items-center gap-1.5 font-medium text-primary">
         <CheckCircle2 className="size-3.5" />
         {title}
       </div>

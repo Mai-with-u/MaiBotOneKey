@@ -26,6 +26,7 @@ import mai2DropImage from "@/assets/home-drops/mai2.png";
 import maiMascotImage from "@/assets/mai2.png";
 import type {
   DesktopSnapshot,
+  LauncherUpdateInfo,
   LocalChatEvent,
   LocalChatMessageEvent,
   MaiBotStatisticSummary,
@@ -55,6 +56,7 @@ import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 type MaiBotUpdateChannel = "stable" | "test" | "other";
 type DashboardUpdateChannel = "stable" | "test";
@@ -140,6 +142,24 @@ const statusColor: Record<ServiceStatus, string> = {
 
 function valueOrFallback(value: string | undefined): string {
   return value && value.trim().length > 0 ? value : "未读取";
+}
+
+function versionAsTag(version: string | undefined): string | undefined {
+  const trimmed = version?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return /^v/iu.test(trimmed) ? trimmed : `v${trimmed}`;
+}
+
+function formatFileSize(bytes: number | undefined): string | undefined {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) {
+    return undefined;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function ServiceStatusText({
@@ -369,8 +389,6 @@ function LocalChatQuickCard({
     }
   }, [connected, draft, sending]);
 
-  const statusLabel =
-    connected ? "已连接" : state === "connecting" ? "连接中" : maibotService?.status === "running" ? "未连接" : "MaiBot 未启动";
   const visibleMessages = messages
     .map((message) => ({ ...message, text: localChatText(message) }))
     .filter((message) => message.text.length > 0)
@@ -379,11 +397,8 @@ function LocalChatQuickCard({
   return (
     <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
       <div className={cn("mb-3 flex items-center gap-2", retro ? "justify-between" : "justify-end")}>
-        {retro ? <p className="retro-title text-2xl text-foreground">Local Chat</p> : null}
+        {retro ? <p className="retro-title text-2xl text-foreground">聊聊</p> : null}
         <div className="flex shrink-0 items-center gap-2">
-          <Badge dot variant={connected ? "success" : state === "connecting" ? "warning" : "secondary"}>
-            {statusLabel}
-          </Badge>
           <Button className="size-7" onClick={onOpenFull} size="icon" title="展开随便聊聊" variant="secondary">
             <Maximize2 className="size-3.5" />
           </Button>
@@ -665,52 +680,58 @@ function MessagePlatformConnectCard({
 
 function LauncherUpdateCard({
   appVersion,
-  busy,
   latestTag,
-  onCheckUpdate,
-  onInstallUpdate,
-  onOpenRelease,
+  updateBusy,
+  onUpdate,
   retro,
 }: {
   appVersion: string;
-  busy?: "check" | "install" | null;
   latestTag?: string;
-  onCheckUpdate: () => void;
-  onInstallUpdate: () => void;
-  onOpenRelease: () => void;
+  updateBusy?: boolean;
+  onUpdate: () => void;
   retro: boolean;
 }): React.JSX.Element {
-  const currentTag = `v${appVersion}`;
+  const currentTag = versionAsTag(appVersion);
   const updateAvailable = latestTag ? compareVersionText(latestTag, currentTag) > 0 : false;
-  const busyRunning = busy !== null && busy !== undefined;
 
   return (
     <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
       {retro ? (
         <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="retro-title text-2xl text-foreground">OneKey Launcher</p>
+          <p className="retro-title text-2xl text-foreground">一键包信息</p>
           {updateAvailable ? <Badge variant="warning">可更新</Badge> : <Badge variant="outline">已同步</Badge>}
         </div>
       ) : null}
-      <div className={cn(retro ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs")}>
-        <DetailRow label="本地版本" value={currentTag} retro={retro} />
-        <DetailRow label="最新版本" value={latestTag} retro={retro} />
-      </div>
-      <div className="mt-3 flex flex-wrap justify-end gap-2">
-        <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onCheckUpdate} size="sm" variant="secondary">
-          {busy === "check" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          检查更新
+      <div
+        className={cn(
+          "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
+          retro ? "retro-control p-3 text-xs" : "rounded-md border border-border bg-muted/30 p-3 text-xs",
+        )}
+      >
+        <div className="grid min-w-0 gap-2">
+          <DetailRow label="本地版本" value={currentTag} retro={retro} />
+          <DetailRow label="最新版本" value={latestTag} retro={retro} />
+        </div>
+        <Button
+          aria-label="更新一键包"
+          className={cn("relative justify-self-end", retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]")}
+          disabled={updateBusy}
+          onClick={onUpdate}
+          size={retro ? "icon" : "sm"}
+          variant="secondary"
+        >
+          {updateAvailable ? (
+            <span
+              className={cn(
+                "absolute bg-warning",
+                retro
+                  ? "right-[var(--retro-stroke)] top-[var(--retro-stroke)] size-2 rounded-none"
+                  : "right-1 top-1 size-2 rounded-full",
+              )}
+            />
+          ) : null}
+          {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
         </Button>
-        <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onOpenRelease} size="sm" variant="secondary">
-          <ExternalLink className="size-3.5" />
-          查看更新
-        </Button>
-        {updateAvailable ? (
-          <Button className="h-8 px-3 text-xs" disabled={busyRunning} onClick={onInstallUpdate} size="sm">
-            {busy === "install" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-            下载并安装
-          </Button>
-        ) : null}
       </div>
     </section>
   );
@@ -799,12 +820,10 @@ function MaiBotOverviewCard({
 
 function HomeStatsPanel({
   snapshot,
-  services,
   onOpenQuickActions,
   retro,
 }: {
   snapshot: DesktopSnapshot;
-  services: ServiceDescriptor[];
   onOpenQuickActions: () => void;
   retro: boolean;
 }): React.JSX.Element {
@@ -875,7 +894,7 @@ function HomeStatsPanel({
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
             {maibotStats?.periodLabel ? (
-              <span className={cn("bg-muted px-2 py-0.5 text-[10px] text-muted-foreground", retro ? "rounded-sm" : "rounded-full")}>
+              <span className="rounded-sm border border-border bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
                 {maibotStats.periodLabel}
               </span>
             ) : null}
@@ -1442,9 +1461,10 @@ export function HomePanel({
   onStopService: (id: ServiceId) => void;
   serviceActionBusy: string | null;
 }): React.JSX.Element {
-  const [updateDialog, setUpdateDialog] = useState<"maibot" | "dashboard" | null>(null);
+  const [updateDialog, setUpdateDialog] = useState<"launcher" | "maibot" | "dashboard" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
   const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const [mascotIntroOpen, setMascotIntroOpen] = useState(false);
@@ -1482,6 +1502,13 @@ export function HomePanel({
     napcat?.status === "starting" || napcat?.status === "running" || napcat?.status === "stopping" || Boolean(napcat?.managed);
   const maibotUpdateBlocked =
     maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping";
+  const launcherCurrentTag = versionAsTag(launcherUpdateInfo?.currentVersion ?? snapshot.appVersion);
+  const launcherLatestTag =
+    launcherUpdateInfo?.latestTag
+    ?? versionAsTag(launcherUpdateInfo?.latestVersion)
+    ?? snapshot.appLatestTag;
+  const launcherUpdateAvailable =
+    launcherUpdateInfo?.available ?? (compareVersionText(launcherLatestTag, launcherCurrentTag) > 0);
 
   const maibotTargets: Record<MaiBotUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.maibotLatestStableTag,
@@ -1641,13 +1668,24 @@ export function HomePanel({
     snapshot.moduleVersions.maibotLatestStableTag,
   ]);
 
+  const openLauncherUpdate = useCallback(() => {
+    setError(null);
+    setUpdateDialog("launcher");
+  }, []);
+
   const openLauncherRelease = useCallback(() => {
-    const tag = snapshot.appLatestTag?.trim();
+    const releaseUrl = launcherUpdateInfo?.releaseUrl?.trim();
+    if (releaseUrl) {
+      void window.maibotDesktop?.openExternal(releaseUrl);
+      return;
+    }
+
+    const tag = launcherLatestTag?.trim();
     const url = tag
       ? `https://github.com/DrSmoothl/MaiBotOneKey/releases/tag/${encodeURIComponent(tag)}`
       : "https://github.com/DrSmoothl/MaiBotOneKey/releases";
     void window.maibotDesktop?.openExternal(url);
-  }, [snapshot.appLatestTag]);
+  }, [launcherLatestTag, launcherUpdateInfo?.releaseUrl]);
 
   const checkLauncherUpdate = useCallback(async () => {
     if (!window.maibotDesktop?.launcher) {
@@ -1659,6 +1697,7 @@ export function HomePanel({
     setError(null);
     try {
       const update = await window.maibotDesktop.launcher.checkUpdate();
+      setLauncherUpdateInfo(update);
       toast.success(update.available
         ? `发现新版本 ${update.latestTag ?? update.latestVersion ?? ""}`
         : "启动器已是最新版本");
@@ -1680,6 +1719,7 @@ export function HomePanel({
     setError(null);
     try {
       const result = await window.maibotDesktop.launcher.downloadAndInstallUpdate();
+      setLauncherUpdateInfo(result.update);
       toast.success(result.willQuit ? "安装器已启动，启动器即将退出" : "安装器已启动");
     } catch (nextError) {
       setError(messageFromError(nextError));
@@ -1792,7 +1832,7 @@ export function HomePanel({
 
   return (
     <>
-      <div className={cn("h-full overflow-auto px-5 py-4", useRetroHome && "pb-24", !useRetroHome && "bg-background", active ? "block" : "hidden")}>
+      <div className={cn("h-full overflow-auto px-5 py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", useRetroHome && "pb-24", !useRetroHome && "bg-background", active ? "block" : "hidden")}>
         <div className={cn("mx-auto grid", useRetroHome ? "max-w-[1480px] gap-4" : "max-w-6xl gap-4")}>
           <div
             className={cn(
@@ -1848,12 +1888,10 @@ export function HomePanel({
               )}
               <LauncherUpdateCard
                 appVersion={snapshot.appVersion}
-                busy={busy === "launcher:check" ? "check" : busy === "launcher:update" ? "install" : null}
-                latestTag={snapshot.appLatestTag}
-                onCheckUpdate={() => void checkLauncherUpdate()}
-                onInstallUpdate={() => void installLauncherUpdate()}
-                onOpenRelease={openLauncherRelease}
+                latestTag={launcherLatestTag}
+                onUpdate={openLauncherUpdate}
                 retro={useRetroHome}
+                updateBusy={busy === "launcher:check" || busy === "launcher:update"}
               />
             </div>
             {useRetroHome ? (
@@ -1861,7 +1899,6 @@ export function HomePanel({
                 <HomeStatsPanel
                   onOpenQuickActions={() => setQuickActionsOpen(true)}
                   retro={useRetroHome}
-                  services={services}
                   snapshot={snapshot}
                 />
                 <ElasticMascot
@@ -1874,7 +1911,6 @@ export function HomePanel({
               <HomeStatsPanel
                 onOpenQuickActions={() => setQuickActionsOpen(true)}
                 retro={useRetroHome}
-                services={services}
                 snapshot={snapshot}
               />
             )}
@@ -2017,6 +2053,73 @@ export function HomePanel({
             >
               {busy === "message-platform:setup" ? <Loader2 className="animate-spin" /> : <Server />}
               配置并启动
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={updateDialog === "launcher"}
+        onOpenChange={(next) => {
+          if (!next && busy !== "launcher:check" && busy !== "launcher:update") setUpdateDialog(null);
+        }}
+      >
+        <DialogContent size="lg">
+          <DialogHeader
+            description="检查 MaiBot OneKey 的最新安装包，并在确认后启动安装器。"
+            icon={<PackageCheck className="size-4" />}
+            title="更新一键包"
+            tone="primary"
+          />
+          <DialogBody className="space-y-4">
+            {error && updateDialog === "launcher" ? (
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
+                {error}
+              </div>
+            ) : null}
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+              <DetailRow label="本地版本" value={launcherCurrentTag} retro={useRetroHome} />
+              <DetailRow label="最新版本" value={launcherLatestTag} retro={useRetroHome} />
+              <div className="my-1 border-t border-border/70" />
+              <DetailRow label="发布版本" value={launcherUpdateInfo?.releaseName ?? launcherLatestTag} retro={useRetroHome} />
+              <DetailRow label="安装包" value={launcherUpdateInfo?.assetName} retro={useRetroHome} />
+              <DetailRow label="大小" value={formatFileSize(launcherUpdateInfo?.assetSize)} retro={useRetroHome} />
+              <DetailRow label="更新源" value={launcherUpdateInfo?.source ?? snapshot.appLatestSource} retro={useRetroHome} />
+            </div>
+            {launcherUpdateInfo?.releaseNotes ? (
+              <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3")}>
+                <p className="text-xs font-medium">更新说明</p>
+                <MarkdownRenderer
+                  className="max-h-48 overflow-auto break-words pr-1 text-xs"
+                  content={launcherUpdateInfo.releaseNotes}
+                />
+              </div>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              disabled={busy === "launcher:check" || busy === "launcher:update"}
+              onClick={() => setUpdateDialog(null)}
+              size="sm"
+              variant="ghost"
+            >
+              取消
+            </Button>
+            <Button disabled={busy !== null} onClick={() => void checkLauncherUpdate()} size="sm" variant="secondary">
+              {busy === "launcher:check" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              检查更新
+            </Button>
+            <Button disabled={busy !== null} onClick={openLauncherRelease} size="sm" variant="secondary">
+              <ExternalLink />
+              查看更新
+            </Button>
+            <Button
+              disabled={busy !== null || !launcherUpdateAvailable}
+              onClick={() => void installLauncherUpdate()}
+              size="sm"
+            >
+              {busy === "launcher:update" ? <Loader2 className="animate-spin" /> : <Download />}
+              下载并安装
             </Button>
           </DialogFooter>
         </DialogContent>
