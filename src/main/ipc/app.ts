@@ -25,6 +25,9 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  MaiBotStorageCleanupResult,
+  MaiBotStorageCleanupTarget,
+  MaiBotStorageStats,
   MaiBotInstalledPlugin,
   MaiBotPluginBlueprint,
   MaiBotPluginBlueprintCreateRequest,
@@ -1975,6 +1978,34 @@ export function registerAppIpc({
       );
       await broadcastSnapshot();
       return importResult;
+    },
+  );
+
+  ipcMain.handle("data:getMaibotStorageStats", async (): Promise<MaiBotStorageStats> => {
+    return initManager.getMaiBotStorageStats();
+  });
+
+  ipcMain.handle(
+    "data:cleanupMaibotStorage",
+    async (_event, target: MaiBotStorageCleanupTarget): Promise<MaiBotStorageCleanupResult> => {
+      const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("Stop MaiBot Core before cleaning local data.");
+      }
+
+      const result = await initManager.cleanupMaiBotStorage(target);
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot storage cleanup ${target}: ${result.removedEntries.length} entries, ${result.removedBytes} bytes`,
+      );
+      await broadcastSnapshot();
+      return result;
     },
   );
 

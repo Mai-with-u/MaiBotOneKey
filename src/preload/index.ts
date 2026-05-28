@@ -22,6 +22,9 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  MaiBotStorageCleanupResult,
+  MaiBotStorageCleanupTarget,
+  MaiBotStorageStats,
   MaiBotInstalledPlugin,
   MaiBotPluginBlueprintCreateRequest,
   MaiBotPluginBlueprintCreateResult,
@@ -174,6 +177,10 @@ const desktopBridge: DesktopBridge = {
         "data:importMaibotConfig",
         fileName,
       ) as Promise<MaiBotConfigImportResult | null>,
+    getMaiBotStorageStats: () =>
+      ipcRenderer.invoke("data:getMaibotStorageStats") as Promise<MaiBotStorageStats>,
+    cleanupMaiBotStorage: (target: MaiBotStorageCleanupTarget) =>
+      ipcRenderer.invoke("data:cleanupMaibotStorage", target) as Promise<MaiBotStorageCleanupResult>,
     resetMaiBotData: () =>
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },

@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
-import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
   AgreementDocument,
@@ -14,6 +14,10 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  MaiBotStorageCategory,
+  MaiBotStorageCleanupResult,
+  MaiBotStorageCleanupTarget,
+  MaiBotStorageStats,
   NapcatAdapterChatConfig,
   NapcatAdapterConfig,
   NapcatChatListMode,
@@ -106,6 +110,87 @@ function sameOrInsidePath(parent: string, child: string): boolean {
   }
   const diff = relative(resolve(parent), resolve(child));
   return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`);
+}
+
+interface StorageStatSummary {
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+  latestModifiedAt?: number;
+}
+
+const emptyStorageStat: StorageStatSummary = {
+  exists: false,
+  sizeBytes: 0,
+  fileCount: 0,
+  directoryCount: 0,
+};
+
+function mergeStorageStats(stats: StorageStatSummary[]): StorageStatSummary {
+  return stats.reduce<StorageStatSummary>(
+    (merged, item) => ({
+      exists: merged.exists || item.exists,
+      sizeBytes: merged.sizeBytes + item.sizeBytes,
+      fileCount: merged.fileCount + item.fileCount,
+      directoryCount: merged.directoryCount + item.directoryCount,
+      latestModifiedAt: Math.max(merged.latestModifiedAt ?? 0, item.latestModifiedAt ?? 0) || undefined,
+    }),
+    { ...emptyStorageStat },
+  );
+}
+
+async function readStorageStats(targetPath: string): Promise<StorageStatSummary> {
+  if (!existsSync(targetPath)) {
+    return { ...emptyStorageStat };
+  }
+
+  const targetStat = await stat(targetPath);
+  const latestModifiedAt = targetStat.mtimeMs;
+  if (!targetStat.isDirectory()) {
+    return {
+      exists: true,
+      sizeBytes: targetStat.size,
+      fileCount: targetStat.isFile() ? 1 : 0,
+      directoryCount: 0,
+      latestModifiedAt,
+    };
+  }
+
+  const children = await readdir(targetPath, { withFileTypes: true });
+  const childStats = await Promise.all(
+    children.map(async (entry) => readStorageStats(join(targetPath, entry.name))),
+  );
+  const mergedChildren = mergeStorageStats(childStats);
+  return {
+    exists: true,
+    sizeBytes: mergedChildren.sizeBytes,
+    fileCount: mergedChildren.fileCount,
+    directoryCount: mergedChildren.directoryCount + 1,
+    latestModifiedAt: Math.max(latestModifiedAt, mergedChildren.latestModifiedAt ?? 0) || latestModifiedAt,
+  };
+}
+
+function storageCategory(
+  key: MaiBotStorageCategory["key"],
+  label: string,
+  description: string,
+  path: string,
+  stats: StorageStatSummary,
+  cleanupTarget?: MaiBotStorageCleanupTarget,
+): MaiBotStorageCategory {
+  return {
+    key,
+    label,
+    description,
+    path,
+    exists: stats.exists,
+    sizeBytes: stats.sizeBytes,
+    fileCount: stats.fileCount,
+    directoryCount: stats.directoryCount,
+    latestModifiedAt: stats.latestModifiedAt,
+    cleanupTarget,
+  };
 }
 
 function normalizeRelativePath(path: string): string {
@@ -1099,6 +1184,201 @@ export class InitManager {
     }
 
     return { dataDir, removedEntries: removed, clearedAt: Date.now() };
+  }
+
+  async getMaiBotStorageStats(): Promise<MaiBotStorageStats> {
+    const dataDir = this.getMaiBotDataDir();
+    const logsDir = join(this.paths.maibotRoot, "logs");
+    const databasePaths = ["MaiBot.db", "MaiBot.db-shm", "MaiBot.db-wal"].map((fileName) => join(dataDir, fileName));
+    const marketCachePaths = await this.getMaiBotMarketCachePaths(dataDir);
+    const webuiPaths = ["webui.json", "local_store.json"].map((fileName) => join(dataDir, fileName));
+    const knownDataNames = new Set([
+      "MaiBot.db",
+      "MaiBot.db-shm",
+      "MaiBot.db-wal",
+      "a-memorix",
+      "custom_prompts",
+      "emoji",
+      "emoji_thumbnails",
+      "images",
+      "plugins",
+      "webui.json",
+      "local_store.json",
+      ...marketCachePaths.map((path) => basename(path)),
+    ]);
+    const otherDataPaths = await this.getMaiBotOtherDataPaths(dataDir, knownDataNames);
+
+    const categories = [
+      storageCategory(
+        "database",
+        "数据库",
+        "MaiBot.db 以及 SQLite 辅助文件；当前只展示占用，不在这里清理。",
+        join(dataDir, "MaiBot.db"),
+        mergeStorageStats(await Promise.all(databasePaths.map(readStorageStats))),
+      ),
+      storageCategory(
+        "images",
+        "图片缓存",
+        "聊天图片与消息图片文件。",
+        join(dataDir, "images"),
+        await readStorageStats(join(dataDir, "images")),
+        "images",
+      ),
+      storageCategory(
+        "emoji",
+        "表情包缓存",
+        "表情包文件与缩略图缓存。",
+        join(dataDir, "emoji"),
+        mergeStorageStats(await Promise.all([join(dataDir, "emoji"), join(dataDir, "emoji_thumbnails")].map(readStorageStats))),
+        "emoji",
+      ),
+      storageCategory(
+        "memory",
+        "记忆数据",
+        "A-Memorix 等长期记忆数据；当前只展示占用。",
+        join(dataDir, "a-memorix"),
+        await readStorageStats(join(dataDir, "a-memorix")),
+      ),
+      storageCategory(
+        "plugins",
+        "插件数据",
+        "插件运行时写入 data/plugins 的数据。",
+        join(dataDir, "plugins"),
+        await readStorageStats(join(dataDir, "plugins")),
+      ),
+      storageCategory(
+        "prompts",
+        "自定义提示词",
+        "Dashboard 保存的自定义 prompt 覆盖文件。",
+        join(dataDir, "custom_prompts"),
+        await readStorageStats(join(dataDir, "custom_prompts")),
+      ),
+      storageCategory(
+        "webui",
+        "WebUI 偏好",
+        "webui.json 与本地偏好文件。",
+        join(dataDir, "webui.json"),
+        mergeStorageStats(await Promise.all(webuiPaths.map(readStorageStats))),
+      ),
+      storageCategory(
+        "marketCache",
+        "插件市场缓存",
+        "OneKey 插件市场列表与统计缓存，可随时重建。",
+        dataDir,
+        mergeStorageStats(await Promise.all(marketCachePaths.map(readStorageStats))),
+        "marketCache",
+      ),
+      storageCategory(
+        "logs",
+        "MaiBot 日志",
+        "MaiBot Core 写入的本地日志目录。",
+        logsDir,
+        await readStorageStats(logsDir),
+        "logs",
+      ),
+      storageCategory(
+        "other",
+        "其他 data 项",
+        "未归类的 data 目录项。",
+        dataDir,
+        mergeStorageStats(await Promise.all(otherDataPaths.map(readStorageStats))),
+      ),
+    ] satisfies MaiBotStorageCategory[];
+
+    return {
+      maibotRoot: this.paths.maibotRoot,
+      dataDir,
+      logsDir,
+      totalSizeBytes: categories.reduce((total, category) => total + category.sizeBytes, 0),
+      categories,
+      scannedAt: Date.now(),
+    };
+  }
+
+  async cleanupMaiBotStorage(target: MaiBotStorageCleanupTarget): Promise<MaiBotStorageCleanupResult> {
+    if (samePath(this.paths.maibotRoot, join(this.paths.bundledModulesRoot, "MaiBot"))) {
+      throw new Error("当前指向内置模板目录，拒绝清理数据；请在打包后的环境执行。");
+    }
+
+    const dataDir = this.getMaiBotDataDir();
+    const logsDir = join(this.paths.maibotRoot, "logs");
+    const paths =
+      target === "images"
+        ? [join(dataDir, "images")]
+        : target === "emoji"
+          ? [join(dataDir, "emoji"), join(dataDir, "emoji_thumbnails")]
+          : target === "marketCache"
+            ? await this.getMaiBotMarketCachePaths(dataDir)
+            : [logsDir];
+    const root = target === "logs" ? logsDir : dataDir;
+
+    let removedBytes = 0;
+    const removedEntries: string[] = [];
+    for (const targetPath of paths) {
+      const result = await this.removeStorageTargetContents(root, targetPath);
+      removedBytes += result.removedBytes;
+      removedEntries.push(...result.removedEntries);
+    }
+
+    return {
+      target,
+      removedEntries,
+      removedBytes,
+      cleanedAt: Date.now(),
+    };
+  }
+
+  private async getMaiBotMarketCachePaths(dataDir: string): Promise<string[]> {
+    if (!existsSync(dataDir)) {
+      return [];
+    }
+
+    const entries = await readdir(dataDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && /^onekey-plugin-market-.+\.json$/u.test(entry.name))
+      .map((entry) => join(dataDir, entry.name));
+  }
+
+  private async getMaiBotOtherDataPaths(dataDir: string, knownNames: Set<string>): Promise<string[]> {
+    if (!existsSync(dataDir)) {
+      return [];
+    }
+
+    const entries = await readdir(dataDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => !knownNames.has(entry.name))
+      .map((entry) => join(dataDir, entry.name));
+  }
+
+  private async removeStorageTargetContents(
+    root: string,
+    targetPath: string,
+  ): Promise<{ removedEntries: string[]; removedBytes: number }> {
+    if (!existsSync(targetPath)) {
+      return { removedEntries: [], removedBytes: 0 };
+    }
+    if (!sameOrInsidePath(root, targetPath)) {
+      throw new Error(`拒绝清理不在允许目录内的路径: ${targetPath}`);
+    }
+
+    const targetStats = await stat(targetPath);
+    if (targetStats.isDirectory()) {
+      const entries = await readdir(targetPath);
+      let removedBytes = 0;
+      const removedEntries: string[] = [];
+      for (const entry of entries) {
+        const entryPath = join(targetPath, entry);
+        const stats = await readStorageStats(entryPath);
+        removedBytes += stats.sizeBytes;
+        await rm(entryPath, { recursive: true, force: true });
+        removedEntries.push(entryPath);
+      }
+      return { removedEntries, removedBytes };
+    }
+
+    const stats = await readStorageStats(targetPath);
+    await rm(targetPath, { force: true });
+    return { removedEntries: [targetPath], removedBytes: stats.sizeBytes };
   }
 
   async resetSnowLumaComponent(): Promise<SnowLumaResetResult> {

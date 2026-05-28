@@ -5,13 +5,13 @@
   CircleAlert,
   ClipboardCheck,
   Code2,
+  Database,
   Download,
   FolderOpen,
   HardDrive,
   ImageIcon,
   Loader2,
   Network,
-  Package,
   Palette,
   RefreshCw,
   RotateCcw,
@@ -32,13 +32,12 @@ import type {
   InitCheckStatus,
   LogEntry,
   MaiBotDataResetResult,
-  ManagedPythonPackageName,
+  MaiBotStorageCategory,
+  MaiBotStorageCleanupTarget,
+  MaiBotStorageStats,
   NetworkProxySettings,
   OpenCodeSettings,
   PluginBuilderMode,
-  PythonOverridesState,
-  PythonPackageInstallResult,
-  PythonPackageVersionList,
   PythonRuntimeCandidate,
   QqBackend,
   RuntimePathConfig,
@@ -67,7 +66,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   CLOSE_PREFERENCE_CHANGE_EVENT,
@@ -193,13 +191,31 @@ const defaultOpenCodeSettings: OpenCodeSettings = {
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
 
-const managedPythonPackages: Array<{ name: ManagedPythonPackageName; label: string }> = [
-  { name: "maibot-dashboard", label: "MaiBot Dashboard" },
-  { name: "maim-message", label: "Maim Message" },
-];
+const storageCleanupLabel: Record<MaiBotStorageCleanupTarget, string> = {
+  images: "清理图片",
+  emoji: "清理表情",
+  marketCache: "清理缓存",
+  logs: "清理日志",
+};
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function formatTime(timestamp?: number): string {
@@ -220,37 +236,11 @@ function formatDateTime(timestamp?: number): string {
   }
 
   return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
   }).format(timestamp);
-}
-
-function PythonInstallOutput({ result }: { result: PythonPackageInstallResult }): React.JSX.Element {
-  const output = result.output.slice(-80).join("\n");
-
-  return (
-    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="success">已安装</Badge>
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {result.packageName}=={result.version}
-        </span>
-        <span className="text-[11px] text-muted-foreground">{formatDateTime(result.installedAt)}</span>
-      </div>
-      <p className="truncate font-mono text-[11px] text-muted-foreground" title={result.targetDir}>
-        覆盖目录: {result.targetDir}
-      </p>
-      {output.length > 0 ? (
-        <pre className="max-h-48 overflow-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-foreground/80">
-          {output}
-        </pre>
-      ) : null}
-    </div>
-  );
 }
 
 function PathField({
@@ -286,6 +276,65 @@ function PathField({
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function StorageCategoryItem({
+  category,
+  busy,
+  cleanupBlocked,
+  onCleanup,
+  onOpenPath,
+}: {
+  category: MaiBotStorageCategory;
+  busy: boolean;
+  cleanupBlocked: boolean;
+  onCleanup: (target: MaiBotStorageCleanupTarget) => void;
+  onOpenPath: (path: string) => void;
+}): React.JSX.Element {
+  const cleanupDisabled =
+    busy ||
+    cleanupBlocked ||
+    !category.cleanupTarget ||
+    !category.exists ||
+    category.sizeBytes <= 0;
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-border bg-card p-3">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{category.label}</span>
+            <Badge variant={category.exists ? "secondary" : "outline"}>
+              {category.exists ? formatBytes(category.sizeBytes) : "未生成"}
+            </Badge>
+            {category.cleanupTarget ? <Badge variant="outline">可清理</Badge> : null}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{category.description}</p>
+        </div>
+        <Button aria-label={`打开 ${category.label}`} onClick={() => onOpenPath(category.path)} size="icon" variant="ghost">
+          <FolderOpen />
+        </Button>
+      </div>
+      <div className="grid gap-1 font-mono text-[11px] text-muted-foreground sm:grid-cols-3">
+        <span>文件 {category.fileCount}</span>
+        <span>目录 {Math.max(0, category.directoryCount)}</span>
+        <span>更新 {formatDateTime(category.latestModifiedAt)}</span>
+      </div>
+      {category.cleanupTarget ? (
+        <div className="flex justify-end">
+          <Button
+            disabled={cleanupDisabled}
+            onClick={() => category.cleanupTarget && onCleanup(category.cleanupTarget)}
+            size="sm"
+            variant="outline"
+          >
+            {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
+            {storageCleanupLabel[category.cleanupTarget]}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -831,14 +880,12 @@ export function SettingsStatusPanel({
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
   const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
+  const [confirmStorageCleanupTarget, setConfirmStorageCleanupTarget] = useState<MaiBotStorageCleanupTarget | null>(null);
   const [confirmPluginBuilderEnableOpen, setConfirmPluginBuilderEnableOpen] = useState(false);
   const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
-  const [pythonDepsState, setPythonDepsState] = useState<PythonOverridesState | null>(null);
-  const [pythonVersionsOpen, setPythonVersionsOpen] = useState(false);
-  const [pythonVersions, setPythonVersions] = useState<PythonPackageVersionList | null>(null);
-  const [selectedPythonVersion, setSelectedPythonVersion] = useState("");
-  const [pythonInstallResult, setPythonInstallResult] = useState<PythonPackageInstallResult | null>(null);
+  const [storageStats, setStorageStats] = useState<MaiBotStorageStats | null>(null);
+  const [storageStatsLoading, setStorageStatsLoading] = useState(false);
   const [pythonRuntimeCandidates, setPythonRuntimeCandidates] = useState<PythonRuntimeCandidate[]>([]);
   const [pythonRuntimeCandidatesLoading, setPythonRuntimeCandidatesLoading] = useState(false);
   const initState = snapshot.initState ?? {
@@ -848,11 +895,11 @@ export function SettingsStatusPanel({
     checks: [],
   };
   const services = snapshot.services ?? [];
+  const maibotService = services.find((service) => service.id === "maibot");
   const serviceCommands = snapshot.serviceCommands ?? [];
   const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
-  const customPythonRuntimeEnabled = runtimePathConfigs.some((config) => config.key === "python" && config.customized);
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
   const pluginBuilderEnabled = pluginBuilderMode !== "disabled";
@@ -862,20 +909,18 @@ export function SettingsStatusPanel({
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
   const environmentServicesContentId = useId();
   const recentLogEntries = snapshot.recentLogs ?? [];
-  const maibotService = services.find((service) => service.id === "maibot");
-  const maibotUpdateBlocked = Boolean(
-    maibotService &&
-      (maibotService.managed ||
-        maibotService.status === "starting" ||
-        maibotService.status === "running" ||
-        maibotService.status === "stopping"),
-  );
   const resourceMoveBlocked = services.some(
     (service) =>
       service.managed ||
       service.status === "starting" ||
       service.status === "running" ||
       service.status === "stopping",
+  );
+  const maibotDataBlocked = Boolean(
+    maibotService?.managed ||
+      maibotService?.status === "starting" ||
+      maibotService?.status === "running" ||
+      maibotService?.status === "stopping",
   );
   const qqBackendSwitchBlocked = services.some(
     (service) =>
@@ -915,32 +960,6 @@ export function SettingsStatusPanel({
     };
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    window.maibotDesktop?.pythonDeps
-      .getState()
-      .then((state) => {
-        if (mounted) {
-          setPythonDepsState(state);
-        }
-      })
-      .catch(() => undefined);
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!snapshot.paths.pythonOverridesRoot) {
-      return;
-    }
-
-    setPythonDepsState((state) =>
-      state ? { ...state, root: snapshot.paths.pythonOverridesRoot } : state,
-    );
-  }, [snapshot.paths.pythonOverridesRoot]);
-
   const refreshPythonRuntimeCandidates = useCallback(async () => {
     setPythonRuntimeCandidatesLoading(true);
     try {
@@ -969,6 +988,24 @@ export function SettingsStatusPanel({
       onSnapshot(nextSnapshot);
     }
   }, [onSnapshot]);
+
+  const refreshStorageStats = useCallback(async () => {
+    setStorageStatsLoading(true);
+    try {
+      const nextStats = await window.maibotDesktop?.data.getMaiBotStorageStats();
+      if (nextStats) {
+        setStorageStats(nextStats);
+      }
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setStorageStatsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStorageStats();
+  }, [refreshStorageStats]);
 
   const openPath = useCallback((path: string) => {
     void window.maibotDesktop?.openPath(path);
@@ -1162,13 +1199,42 @@ export function SettingsStatusPanel({
       toast.success(`已清空 MaiBot 数据（共 ${result.removedEntries.length} 项）`, {
         description: result.dataDir,
       });
+      await refreshStorageStats();
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [refreshSnapshot]);
+  }, [refreshSnapshot, refreshStorageStats]);
+
+  const cleanupMaiBotStorage = useCallback(async () => {
+    if (!confirmStorageCleanupTarget) {
+      return;
+    }
+    if (maibotDataBlocked) {
+      setError("请先停止 MaiBot Core，再清理本地数据。");
+      return;
+    }
+
+    setBusy(`storage:cleanup:${confirmStorageCleanupTarget}`);
+    setError(null);
+    try {
+      if (!window.maibotDesktop?.data) {
+        throw new Error("桌面桥未就绪，无法清理 MaiBot 数据");
+      }
+      const result = await window.maibotDesktop.data.cleanupMaiBotStorage(confirmStorageCleanupTarget);
+      setConfirmStorageCleanupTarget(null);
+      toast.success(`${storageCleanupLabel[result.target]}完成`, {
+        description: `移除 ${result.removedEntries.length} 项，释放 ${formatBytes(result.removedBytes)}`,
+      });
+      await refreshStorageStats();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [confirmStorageCleanupTarget, maibotDataBlocked, refreshStorageStats]);
 
   const clearLogs = useCallback(async () => {
     setBusy("logs");
@@ -1182,52 +1248,6 @@ export function SettingsStatusPanel({
       setBusy(null);
     }
   }, [refreshSnapshot]);
-
-  const openPythonVersions = useCallback(async (packageName: ManagedPythonPackageName) => {
-    setPythonVersionsOpen(true);
-    setPythonVersions(null);
-    setSelectedPythonVersion("");
-    setBusy(`py:list:${packageName}`);
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.pythonDeps) {
-        throw new Error("桌面桥未就绪，无法更新 Python 依赖");
-      }
-
-      const versions = await window.maibotDesktop.pythonDeps.listVersions(packageName);
-      setPythonVersions(versions);
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, []);
-
-  const installPythonVersion = useCallback(async () => {
-    if (!pythonVersions || selectedPythonVersion.length === 0) {
-      return;
-    }
-
-    setBusy(`py:install:${pythonVersions.packageName}`);
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.pythonDeps) {
-        throw new Error("桌面桥未就绪，无法更新 Python 依赖");
-      }
-
-      const result = await window.maibotDesktop.pythonDeps.installVersion({
-        packageName: pythonVersions.packageName,
-        version: selectedPythonVersion,
-      });
-      setPythonInstallResult(result);
-      setPythonVersionsOpen(false);
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [pythonVersions, refreshSnapshot, selectedPythonVersion]);
 
   const saveCommandConfig = useCallback(
     async (config: ServiceCommandUpdate) => {
@@ -1583,65 +1603,6 @@ export function SettingsStatusPanel({
     </>
   );
 
-  const manualPythonDependenciesPanel = (
-    <>
-      <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
-                <Package className="size-4" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium">手动更新 Python 依赖</p>
-                <p
-                  className="truncate font-mono text-[11px] text-muted-foreground"
-                  title={pythonDepsState?.root ?? ""}
-                >
-                  {pythonDepsState?.root ?? "读取覆盖目录中"}
-                </p>
-              </div>
-            </div>
-          </div>
-          <Badge variant="secondary">清华源</Badge>
-        </div>
-        {customPythonRuntimeEnabled ? (
-          <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-            已启用自定义 Python 路径，MaiBot Core 将直接使用该 Python，不再注入 Python 覆盖依赖。
-          </div>
-        ) : null}
-        <div className="grid gap-2 md:grid-cols-2">
-          {managedPythonPackages.map((pythonPackage) => (
-            <div
-              className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card p-2.5"
-              key={pythonPackage.name}
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{pythonPackage.label}</p>
-                <p className="truncate font-mono text-[11px] text-muted-foreground">{pythonPackage.name}</p>
-              </div>
-              <Button
-                disabled={busy !== null || maibotUpdateBlocked || customPythonRuntimeEnabled}
-                onClick={() => void openPythonVersions(pythonPackage.name)}
-                size="sm"
-                variant="outline"
-              >
-                {busy === `py:list:${pythonPackage.name}` ? <Loader2 className="animate-spin" /> : <Download />}
-                选择版本
-              </Button>
-            </div>
-          ))}
-        </div>
-        {maibotUpdateBlocked ? (
-          <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-            请先停止 MaiBot Core，再更新 Python 覆盖依赖。
-          </div>
-        ) : null}
-      </div>
-      {pythonInstallResult ? <PythonInstallOutput result={pythonInstallResult} /> : null}
-    </>
-  );
-
   return (
     <>
     <section
@@ -1697,6 +1658,10 @@ export function SettingsStatusPanel({
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="paths">
                   <ShieldCheck className="size-3" />
                   实例路径
+                </TabsTrigger>
+                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="data">
+                  <Database className="size-3" />
+                  数据
                 </TabsTrigger>
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="logs">
                   <HardDrive className="size-3" />
@@ -1955,7 +1920,7 @@ export function SettingsStatusPanel({
                       </div>
                     </div>
                     <Button
-                      disabled={busy !== null}
+                      disabled={busy !== null || maibotDataBlocked}
                       onClick={() => setConfirmMaiBotDataResetFirstOpen(true)}
                       size="sm"
                       variant="destructive"
@@ -2023,7 +1988,6 @@ export function SettingsStatusPanel({
                 </div>
 
                 {environmentServicesPanel}
-                {manualPythonDependenciesPanel}
               </TabsContent>
 
               <TabsContent className="space-y-4" value="appearance">
@@ -2359,6 +2323,94 @@ export function SettingsStatusPanel({
                 <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
               </TabsContent>
 
+              <TabsContent className="space-y-3" value="data">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Database className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">MaiBot 本地数据</p>
+                      <p className="text-xs text-muted-foreground">
+                        {storageStats
+                          ? `共 ${formatBytes(storageStats.totalSizeBytes)}，扫描于 ${formatDateTime(storageStats.scannedAt)}。`
+                          : "统计 data、logs 与常见缓存目录。"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    {storageStats ? (
+                      <Button onClick={() => openPath(storageStats.dataDir)} size="sm" variant="outline">
+                        <FolderOpen className="size-4" />
+                        打开 data
+                      </Button>
+                    ) : null}
+                    <Button disabled={storageStatsLoading} onClick={() => void refreshStorageStats()} size="sm" variant="secondary">
+                      {storageStatsLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                      重新扫描
+                    </Button>
+                  </div>
+                </div>
+
+                {maibotDataBlocked ? (
+                  <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+                    MaiBot Core 正在运行或启动中，暂不能清理本地数据。统计和打开目录仍可使用。
+                  </div>
+                ) : null}
+
+                {storageStatsLoading && !storageStats ? (
+                  <div className="rounded-lg border border-border bg-card px-3 py-8 text-center text-xs text-muted-foreground">
+                    正在扫描本地数据...
+                  </div>
+                ) : null}
+
+                {storageStats ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {storageStats.categories.map((category) => (
+                      <StorageCategoryItem
+                        busy={busy === `storage:cleanup:${category.cleanupTarget ?? ""}`}
+                        category={category}
+                        cleanupBlocked={maibotDataBlocked || busy !== null}
+                        key={category.key}
+                        onCleanup={setConfirmStorageCleanupTarget}
+                        onOpenPath={openPath}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
+                        <Trash2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">彻底重置 data 目录</p>
+                        <p className="text-xs text-muted-foreground">
+                          清空数据库、记忆、WebUI 偏好和所有 data 内容。该操作不可恢复。
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      disabled={busy !== null || maibotDataBlocked}
+                      onClick={() => setConfirmMaiBotDataResetFirstOpen(true)}
+                      size="sm"
+                      variant="destructive"
+                    >
+                      <Trash2 className="size-4" />
+                      重置 data
+                    </Button>
+                  </div>
+                  {lastMaiBotDataReset ? (
+                    <div className="rounded-md border border-warning/40 bg-warning/15 p-3 text-[12px] text-foreground">
+                      最近一次重置移除 {lastMaiBotDataReset.removedEntries.length} 项，
+                      时间 {formatTime(lastMaiBotDataReset.clearedAt)}
+                    </div>
+                  ) : null}
+                </div>
+              </TabsContent>
+
               <TabsContent className="space-y-3" value="logs">
                 <p className="text-xs text-muted-foreground">
                   服务 stdout、stderr 和桌面壳系统事件会写入日志目录。
@@ -2380,78 +2432,6 @@ export function SettingsStatusPanel({
         </Card>
       </div>
     </section>
-    <Dialog
-      open={pythonVersionsOpen}
-      onOpenChange={(next) => {
-        if (!next && busy?.startsWith("py:") !== true) setPythonVersionsOpen(false);
-      }}
-    >
-      <DialogContent size="lg">
-      <DialogHeader
-        description="版本列表来自清华 PyPI 镜像，并按发布时间降序排列；dev 与预发布版本会额外标记。"
-        icon={<Package className="size-4" />}
-        title={pythonVersions ? `选择 ${pythonVersions.packageName} 版本` : "读取 Python 依赖版本"}
-        tone="primary"
-      />
-      <DialogBody className="space-y-3">
-        {pythonVersions ? (
-          <>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant="secondary">{pythonVersions.versions.length} 个版本</Badge>
-              <span>源: {pythonVersions.sourceUrl}</span>
-              <span>获取: {formatDateTime(pythonVersions.fetchedAt)}</span>
-              {selectedPythonVersion.length === 0 ? <Badge variant="outline">未选择</Badge> : null}
-            </div>
-            <ScrollArea className="h-[min(52vh,520px)] rounded-lg border border-border bg-muted/30 p-2">
-              <div className="space-y-1">
-                {pythonVersions.versions.map((version) => (
-                  <label
-                    className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-muted"
-                    key={version.version}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <input
-                        checked={selectedPythonVersion === version.version}
-                        className="size-3.5 accent-primary"
-                        disabled={busy !== null}
-                        name="python-version"
-                        onChange={() => setSelectedPythonVersion(version.version)}
-                        type="radio"
-                      />
-                      <span className="truncate font-mono">{version.version}</span>
-                      {version.isDev ? <Badge variant="warning">dev</Badge> : null}
-                      {!version.isDev && version.isPrerelease ? <Badge variant="warning">预发布</Badge> : null}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {version.uploadedAtMs ? formatDateTime(version.uploadedAtMs) : "未知时间"}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </ScrollArea>
-          </>
-        ) : (
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-8 text-sm text-muted-foreground">
-            <Loader2 className="animate-spin" />
-            正在从清华源读取版本列表
-          </div>
-        )}
-      </DialogBody>
-      <DialogFooter>
-        <Button disabled={busy?.startsWith("py:install") === true} onClick={() => setPythonVersionsOpen(false)} size="sm" variant="ghost">
-          取消
-        </Button>
-        <Button
-          disabled={!pythonVersions || selectedPythonVersion.length === 0 || busy !== null}
-          onClick={installPythonVersion}
-          size="sm"
-        >
-          {busy?.startsWith("py:install") === true ? <Loader2 className="animate-spin" /> : <Download />}
-          安装选中版本
-        </Button>
-      </DialogFooter>
-      </DialogContent>
-    </Dialog>
     <Dialog
       open={confirmPluginBuilderEnableOpen}
       onOpenChange={(next) => {
@@ -2483,6 +2463,45 @@ export function SettingsStatusPanel({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+      <Dialog
+        open={confirmStorageCleanupTarget !== null}
+        onOpenChange={(next) => {
+          if (!next && !busy?.startsWith("storage:cleanup:")) setConfirmStorageCleanupTarget(null);
+        }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader
+            description="只会删除所选类别中的缓存或日志文件，不会清理数据库和记忆目录。"
+            icon={<Trash2 className="size-4" />}
+            title={confirmStorageCleanupTarget ? `${storageCleanupLabel[confirmStorageCleanupTarget]}？` : "清理本地数据？"}
+            tone="warning"
+          />
+          <DialogBody>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              建议确认 MaiBot Core 已停止。清理后相关缓存可能会在下次使用时重新生成。
+            </p>
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              disabled={busy?.startsWith("storage:cleanup:") === true}
+              onClick={() => setConfirmStorageCleanupTarget(null)}
+              size="sm"
+              variant="ghost"
+            >
+              取消
+            </Button>
+            <Button
+              disabled={busy?.startsWith("storage:cleanup:") === true || maibotDataBlocked}
+              onClick={cleanupMaiBotStorage}
+              size="sm"
+              variant="destructive"
+            >
+              {busy?.startsWith("storage:cleanup:") === true ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              确认清理
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={confirmMaiBotDataResetFirstOpen}
         onOpenChange={(next) => {

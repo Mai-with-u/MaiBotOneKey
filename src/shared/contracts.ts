@@ -418,6 +418,49 @@ export interface MaiBotDataResetResult {
   clearedAt: number;
 }
 
+export type MaiBotStorageCleanupTarget = "images" | "emoji" | "marketCache" | "logs";
+
+export type MaiBotStorageCategoryKey =
+  | "database"
+  | "images"
+  | "emoji"
+  | "memory"
+  | "plugins"
+  | "prompts"
+  | "webui"
+  | "marketCache"
+  | "logs"
+  | "other";
+
+export interface MaiBotStorageCategory {
+  key: MaiBotStorageCategoryKey;
+  label: string;
+  description: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+  latestModifiedAt?: number;
+  cleanupTarget?: MaiBotStorageCleanupTarget;
+}
+
+export interface MaiBotStorageStats {
+  maibotRoot: string;
+  dataDir: string;
+  logsDir: string;
+  totalSizeBytes: number;
+  categories: MaiBotStorageCategory[];
+  scannedAt: number;
+}
+
+export interface MaiBotStorageCleanupResult {
+  target: MaiBotStorageCleanupTarget;
+  removedEntries: string[];
+  removedBytes: number;
+  cleanedAt: number;
+}
+
 export interface SnowLumaResetResult {
   snowlumaRoot: string;
   bundledRoot: string;
@@ -1166,6 +1209,8 @@ export interface DesktopBridge {
   data: {
     importMaiBotDatabase: () => Promise<MaiBotDataImportResult | null>;
     importMaiBotConfig: (fileName: MaiBotConfigFileName) => Promise<MaiBotConfigImportResult | null>;
+    getMaiBotStorageStats: () => Promise<MaiBotStorageStats>;
+    cleanupMaiBotStorage: (target: MaiBotStorageCleanupTarget) => Promise<MaiBotStorageCleanupResult>;
     resetMaiBotData: () => Promise<MaiBotDataResetResult>;
   };
   launcher: {
