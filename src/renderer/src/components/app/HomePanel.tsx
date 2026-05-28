@@ -433,7 +433,7 @@ function LocalChatQuickCard({
           ))
         ) : (
           <div className="grid place-items-center text-xs text-muted-foreground">
-            {error ?? "暂无本地聊天消息"}
+            {error ?? "无信号"}
           </div>
         )}
       </div>
