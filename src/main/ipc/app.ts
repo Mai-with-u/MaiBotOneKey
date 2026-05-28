@@ -71,6 +71,7 @@ import type {
   PythonPackageVersionList,
   QqBackend,
   QqAccountSetupRequest,
+  QqComponentUpgradeResult,
   RuntimePaths,
   RuntimePathConfig,
   RuntimePathKey,
@@ -120,6 +121,7 @@ const LAUNCHER_SETTING_FILES = [
   "network-proxy.json",
   "opencode-settings.json",
   "app-icon-settings.json",
+  "qq-component-upgrade-state.json",
 ];
 const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "live2d", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
@@ -1791,6 +1793,22 @@ export function registerAppIpc({
     const result = await initManager.resetSnowLumaComponent();
     serviceManager.reloadRuntimePaths();
     logStore.append("desktop", "system", `SnowLuma 组件已重置: ${result.snowlumaRoot}`);
+    await broadcastSnapshot();
+    return result;
+  });
+
+  ipcMain.handle("init:upgradeQqComponents", async (): Promise<QqComponentUpgradeResult> => {
+    await serviceManager.refresh();
+    if (serviceManager.snapshot().some(isRuntimeBusy)) {
+      throw new Error("Stop MaiBot Core and QQ backend before upgrading NapCat / SnowLuma.");
+    }
+
+    const result = await initManager.upgradeQqComponents();
+    serviceManager.reloadRuntimePaths();
+    const summary = result.components
+      .map((component) => `${component.name}${component.skipped ? " skipped" : ` preserved ${component.preservedEntries.length}`}`)
+      .join(", ");
+    logStore.append("desktop", "system", `QQ backend components upgraded: ${summary}`);
     await broadcastSnapshot();
     return result;
   });

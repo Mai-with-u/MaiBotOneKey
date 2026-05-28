@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, nativeImage, net, protocol, session, shell, Tray } from "electron";
-import { stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AppIconId, RuntimePaths } from "../shared/contracts";
@@ -33,6 +33,7 @@ const openCodeSettingsManager = new OpenCodeSettingsManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
 const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager);
 const ptySessionManager = new PtySessionManager();
+const QQ_COMPONENT_UPGRADE_STATE_FILE = "qq-component-upgrade-state.json";
 const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, ptySessionManager, pythonDependencyManager);
 const appIconManager = new AppIconManager(runtimePaths, app.isPackaged);
 
@@ -174,6 +175,49 @@ function cleanupLauncherUpdateDownloadsOnStartup(): void {
     .catch((error: unknown) => {
       logStore.append("desktop", "system", `启动器更新安装包缓存清理失败: ${String(error)}`);
     });
+}
+
+async function upgradeQqComponentsAfterLauncherUpdate(): Promise<void> {
+  const statePath = join(runtimePaths.userDataRoot, QQ_COMPONENT_UPGRADE_STATE_FILE);
+  const currentVersion = app.getVersion();
+  const rawState = await readFile(statePath, "utf8").catch(() => undefined);
+  let previousVersion: unknown;
+  if (rawState) {
+    try {
+      previousVersion = (JSON.parse(rawState) as { launcherVersion?: unknown }).launcherVersion;
+    } catch {
+      previousVersion = undefined;
+    }
+  }
+  if (previousVersion === currentVersion) {
+    return;
+  }
+
+  const result = await initManager.upgradeQqComponents();
+  await mkdir(runtimePaths.userDataRoot, { recursive: true });
+  await writeFile(
+    statePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        launcherVersion: currentVersion,
+        upgradedAt: Date.now(),
+        components: result.components.map((component) => ({
+          id: component.id,
+          copied: component.copied,
+          skipped: component.skipped,
+          preservedEntries: component.preservedEntries.length,
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  const summary = result.components
+    .map((component) => `${component.name}${component.skipped ? " skipped" : ` preserved ${component.preservedEntries.length}`}`)
+    .join(", ");
+  logStore.append("desktop", "system", `QQ backend components auto-upgraded for ${currentVersion}: ${summary}`);
 }
 
 function formatCleanupFailures(failed: LauncherUpdateCleanupResult["failed"]): string {
@@ -340,6 +384,9 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
     registerAppIconResourceProtocol();
     await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
       logStore.append("desktop", "system", `network proxy apply failed: ${String(error)}`);
+    });
+    await upgradeQqComponentsAfterLauncherUpdate().catch((error: unknown) => {
+      logStore.append("desktop", "system", `QQ backend components auto-upgrade failed: ${String(error)}`);
     });
     mainWindow = createMainWindow();
     tray = createTray();

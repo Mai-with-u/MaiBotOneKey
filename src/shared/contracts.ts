@@ -426,6 +426,24 @@ export interface SnowLumaResetResult {
   resetAt: number;
 }
 
+export type QqComponentUpgradeId = "napcat" | "snowluma";
+
+export interface QqComponentUpgradeEntry {
+  id: QqComponentUpgradeId;
+  name: string;
+  root: string;
+  bundledRoot: string;
+  preservedEntries: string[];
+  copied: boolean;
+  skipped: boolean;
+  upgradedAt: number;
+}
+
+export interface QqComponentUpgradeResult {
+  components: QqComponentUpgradeEntry[];
+  upgradedAt: number;
+}
+
 export interface LauncherResetResult {
   mode: "settings" | "all";
   root: string;
@@ -1130,6 +1148,7 @@ export interface DesktopBridge {
     getState: () => Promise<InitState>;
     repair: () => Promise<InitRepairResult>;
     resetSnowLuma: () => Promise<SnowLumaResetResult>;
+    upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };

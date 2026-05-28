@@ -826,6 +826,7 @@ export function SettingsStatusPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmSnowLumaResetOpen, setConfirmSnowLumaResetOpen] = useState(false);
+  const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
   const [confirmLauncherSettingsResetOpen, setConfirmLauncherSettingsResetOpen] = useState(false);
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
   const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
@@ -1055,6 +1056,27 @@ export function SettingsStatusPanel({
       await window.maibotDesktop?.init.resetSnowLuma();
       setConfirmSnowLumaResetOpen(false);
       toast.success("SnowLuma 组件已重置");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [qqBackendSwitchBlocked, refreshSnapshot]);
+
+  const upgradeQqComponents = useCallback(async () => {
+    if (qqBackendSwitchBlocked) {
+      setError("请先停止 MaiBot Core 和 QQ 后端，再升级 NapCat / SnowLuma。");
+      return;
+    }
+
+    setBusy("qq-components:upgrade");
+    setError(null);
+    try {
+      const result = await window.maibotDesktop?.init.upgradeQqComponents();
+      setConfirmQqComponentsUpgradeOpen(false);
+      const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
+      toast.success(`NapCat / SnowLuma 已升级，保留 ${preservedCount} 项配置与数据`);
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
@@ -2239,6 +2261,22 @@ export function SettingsStatusPanel({
                 ) : null}
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="min-w-0">
+                    <p className="text-sm font-medium">升级 NapCat / SnowLuma</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      使用当前一键包内置组件覆盖程序文件，保留配置、数据和日志。
+                    </p>
+                  </div>
+                  <Button
+                    disabled={busy !== null || qqBackendSwitchBlocked}
+                    onClick={() => setConfirmQqComponentsUpgradeOpen(true)}
+                    variant="secondary"
+                  >
+                    {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
+                    升级组件
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="min-w-0">
                     <p className="text-sm font-medium">重置 SnowLuma 组件</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       清空已安装的 SnowLuma 目录和配置，再从一键包内置模板复制一份新的。
@@ -2598,6 +2636,45 @@ export function SettingsStatusPanel({
         >
           {busy === "launcher:reset-all" ? <Loader2 className="animate-spin" /> : <Trash2 />}
           确认还原
+        </Button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog
+      open={confirmQqComponentsUpgradeOpen}
+      onOpenChange={(next) => {
+        if (!next && busy !== "qq-components:upgrade") setConfirmQqComponentsUpgradeOpen(false);
+      }}
+    >
+      <DialogContent size="md">
+      <DialogHeader
+        description="这会用一键包内置的 NapCat 与 SnowLuma 程序文件覆盖现有组件。"
+        icon={<Download className="size-4" />}
+        title="确认升级组件？"
+        tone="warning"
+      />
+      <DialogBody className="space-y-3 text-sm">
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+          配置、数据和日志会被保留；执行前请确认 MaiBot Core 与 QQ 后端都已停止。
+        </div>
+        {qqBackendSwitchBlocked ? (
+          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
+            MaiBot Core 或 QQ 后端仍在运行，请先停止全部服务。
+          </div>
+        ) : null}
+      </DialogBody>
+      <DialogFooter>
+        <Button disabled={busy === "qq-components:upgrade"} onClick={() => setConfirmQqComponentsUpgradeOpen(false)} size="sm" variant="ghost">
+          取消
+        </Button>
+        <Button
+          disabled={busy === "qq-components:upgrade" || qqBackendSwitchBlocked}
+          onClick={upgradeQqComponents}
+          size="sm"
+          variant="secondary"
+        >
+          {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
+          升级组件
         </Button>
       </DialogFooter>
       </DialogContent>

@@ -1,7 +1,7 @@
 ﻿import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
@@ -17,6 +17,9 @@ import type {
   NapcatAdapterChatConfig,
   NapcatAdapterConfig,
   NapcatChatListMode,
+  QqComponentUpgradeEntry,
+  QqComponentUpgradeId,
+  QqComponentUpgradeResult,
   QqBackend,
   RuntimePaths,
   PythonRuntimeCandidate,
@@ -27,6 +30,7 @@ import type {
 } from "../../shared/contracts";
 
 const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
+const QQ_ACCOUNT_ASSIGNMENT_PATTERN = /^(\s*qq_account\s*=\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^#\r\n]*?)(\s*#.*)?$/mu;
 const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
 const GIT_RUNTIME_DIR = "git";
@@ -39,6 +43,19 @@ const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
 const QQ_BACKEND_FILE = "qq-backend.json";
 const MESSAGE_PLATFORM_FILE = "message-platform.json";
 const PYTHON_OVERRIDES_IGNORED_ENTRIES = new Set([".keep", "resource.lock"]);
+const NAPCAT_COMPONENT_PROTECTED_PATHS = [
+  "config",
+  "data",
+  "logs",
+  "config.json",
+  "napcat/config",
+  "napcat/data",
+  "napcat/logs",
+];
+const SNOWLUMA_COMPONENT_PROTECTED_PATHS = ["config", "data", "logs"];
+const NAPCAT_VERSION_CONFIG_PATTERN = /^versions\/[^/]+\/resources\/app\/napcat\/config(?:\/|$)/iu;
+const COMPONENT_DATA_FILE_PATTERN = /(?:\.db|\.sqlite|\.sqlite3)(?:-(?:shm|wal))?$/iu;
+const COMPONENT_LOG_FILE_PATTERN = /\.log$/iu;
 
 function uniqueExistingPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -90,6 +107,33 @@ function sameOrInsidePath(parent: string, child: string): boolean {
   }
   const diff = relative(resolve(parent), resolve(child));
   return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`);
+}
+
+function normalizeRelativePath(path: string): string {
+  return path.split(/[\\/]+/u).filter(Boolean).join("/");
+}
+
+function isExactOrInsideRelativePath(path: string, protectedPath: string): boolean {
+  return path === protectedPath || path.startsWith(`${protectedPath}/`);
+}
+
+function isProtectedByList(path: string, protectedPaths: string[]): boolean {
+  return protectedPaths.some((protectedPath) => isExactOrInsideRelativePath(path, protectedPath));
+}
+
+function isNapcatComponentProtectedPath(relativePath: string): boolean {
+  const normalized = normalizeRelativePath(relativePath);
+  const fileName = normalized.split("/").at(-1) ?? normalized;
+  return (
+    isProtectedByList(normalized, NAPCAT_COMPONENT_PROTECTED_PATHS) ||
+    NAPCAT_VERSION_CONFIG_PATTERN.test(normalized) ||
+    COMPONENT_DATA_FILE_PATTERN.test(fileName) ||
+    COMPONENT_LOG_FILE_PATTERN.test(fileName)
+  );
+}
+
+function isSnowLumaComponentProtectedPath(relativePath: string): boolean {
+  return isProtectedByList(normalizeRelativePath(relativePath), SNOWLUMA_COMPONENT_PROTECTED_PATHS);
 }
 
 function cleanPathEntry(entry: string): string {
@@ -542,6 +586,13 @@ interface StoredMessagePlatformFile {
   adapterConfigInitialized?: Partial<Record<QqBackend, number>>;
 }
 
+interface BundledComponentUpgradeSpec {
+  id: QqComponentUpgradeId;
+  name: string;
+  moduleName: string;
+  isProtectedPath: (relativePath: string) => boolean;
+}
+
 function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
 }
@@ -629,8 +680,8 @@ function ensureBotPlatformConfig(
   if (options.qqAccount) {
     if (/^\s*qq_account\s*=/mu.test(nextBotSection)) {
       nextBotSection = nextBotSection.replace(
-        /^\s*qq_account\s*=\s*["']?[^"'\r\n]+["']?(\s*#.*)?$/mu,
-        `qq_account = ${options.qqAccount}$1`,
+        QQ_ACCOUNT_ASSIGNMENT_PATTERN,
+        `$1${options.qqAccount}$2`,
       );
     } else {
       nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${options.qqAccount}\n`;
@@ -804,7 +855,7 @@ export class InitManager {
     );
     await this.ensureServiceReady("napcat");
     if (options.syncAdapters !== false) {
-      const qqAccount = await this.readQqAccount();
+      const qqAccount = await this.readConfiguredQqAccount();
       if (qqAccount) {
         const syncedPaths = await this.syncSelectedQqAdapterConfigs();
         const selectedConfigPath = backend === "snowluma"
@@ -818,7 +869,8 @@ export class InitManager {
   }
 
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
-    const qqAccount = await this.readQqAccount();
+    await this.repairBotConfigQqAccountFromMessagePlatformStore();
+    const qqAccount = await this.readConfiguredQqAccount();
     const qqBackend = await this.readQqBackend();
     const messagePlatformConfigured = this.hasMessagePlatformConfigured();
     const dependencyChecks = options.refreshDependencies === false
@@ -857,6 +909,10 @@ export class InitManager {
 
   async repair(): Promise<InitRepairResult> {
     const changedFiles = await this.ensureModulesReady();
+    const repairedQqAccount = await this.repairBotConfigQqAccountFromMessagePlatformStore();
+    if (repairedQqAccount) {
+      changedFiles.push(repairedQqAccount);
+    }
 
     const state = {
       ...(await this.getState()),
@@ -1076,6 +1132,27 @@ export class InitManager {
       copied: true,
       resetAt: Date.now(),
     };
+  }
+
+  async upgradeQqComponents(): Promise<QqComponentUpgradeResult> {
+    const components: QqComponentUpgradeEntry[] = [];
+    components.push(
+      await this.upgradeBundledComponent({
+        id: "napcat",
+        name: "NapCat",
+        moduleName: "napcat",
+        isProtectedPath: isNapcatComponentProtectedPath,
+      }),
+    );
+    components.push(
+      await this.upgradeBundledComponent({
+        id: "snowluma",
+        name: "SnowLuma",
+        moduleName: "SnowLuma",
+        isProtectedPath: isSnowLumaComponentProtectedPath,
+      }),
+    );
+    return { components, upgradedAt: Date.now() };
   }
 
   private agreementStorePath(): string {
@@ -1461,6 +1538,132 @@ export class InitManager {
     return changedFiles;
   }
 
+  private async upgradeBundledComponent(spec: BundledComponentUpgradeSpec): Promise<QqComponentUpgradeEntry> {
+    const bundledRoot = join(this.paths.bundledModulesRoot, spec.moduleName);
+    const targetRoot = this.moduleTargetRoot(spec.moduleName);
+    const upgradedAt = Date.now();
+
+    if (!existsSync(bundledRoot)) {
+      throw new Error(`内置 ${spec.name} 模板缺失: ${bundledRoot}`);
+    }
+
+    if (samePath(bundledRoot, targetRoot)) {
+      return {
+        id: spec.id,
+        name: spec.name,
+        root: targetRoot,
+        bundledRoot,
+        preservedEntries: [],
+        copied: false,
+        skipped: true,
+        upgradedAt,
+      };
+    }
+
+    const backupRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-${upgradedAt}`);
+    const preservedEntries = existsSync(targetRoot)
+      ? await this.moveProtectedComponentEntries(targetRoot, backupRoot, spec.isProtectedPath)
+      : [];
+
+    try {
+      await rm(targetRoot, { recursive: true, force: true });
+      await mkdir(dirname(targetRoot), { recursive: true });
+      await runWithoutAsar(() =>
+        cp(bundledRoot, targetRoot, {
+          recursive: true,
+          force: true,
+          errorOnExist: false,
+          filter: (sourcePath) => {
+            if (samePath(sourcePath, bundledRoot)) {
+              return true;
+            }
+            const relativePath = normalizeRelativePath(relative(bundledRoot, sourcePath));
+            return !spec.isProtectedPath(relativePath);
+          },
+        }),
+      );
+      await this.restoreProtectedComponentEntries(backupRoot, targetRoot, preservedEntries);
+    } catch (error) {
+      await this.restoreProtectedComponentEntries(backupRoot, targetRoot, preservedEntries).catch(() => undefined);
+      throw error;
+    } finally {
+      await rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+
+    return {
+      id: spec.id,
+      name: spec.name,
+      root: targetRoot,
+      bundledRoot,
+      preservedEntries,
+      copied: true,
+      skipped: false,
+      upgradedAt,
+    };
+  }
+
+  private async moveProtectedComponentEntries(
+    root: string,
+    backupRoot: string,
+    isProtectedPath: (relativePath: string) => boolean,
+  ): Promise<string[]> {
+    const entries: string[] = [];
+
+    const visit = async (currentRoot: string, relativeRoot = ""): Promise<void> => {
+      let children: Dirent[];
+      try {
+        children = await readdir(currentRoot, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      for (const child of children) {
+        const relativePath = normalizeRelativePath(join(relativeRoot, child.name));
+        const sourcePath = join(root, relativePath);
+        if (isProtectedPath(relativePath)) {
+          const backupPath = join(backupRoot, ...relativePath.split("/"));
+          await mkdir(dirname(backupPath), { recursive: true });
+          await this.movePath(sourcePath, backupPath);
+          entries.push(relativePath);
+          continue;
+        }
+
+        if (child.isDirectory()) {
+          await visit(sourcePath, relativePath);
+        }
+      }
+    };
+
+    await visit(root);
+    return entries;
+  }
+
+  private async restoreProtectedComponentEntries(backupRoot: string, targetRoot: string, relativePaths: string[]): Promise<void> {
+    for (const relativePath of relativePaths) {
+      const backupPath = join(backupRoot, ...relativePath.split("/"));
+      if (!existsSync(backupPath)) {
+        continue;
+      }
+      const targetPath = join(targetRoot, ...relativePath.split("/"));
+      await mkdir(dirname(targetPath), { recursive: true });
+      await rm(targetPath, { recursive: true, force: true });
+      await this.movePath(backupPath, targetPath);
+    }
+  }
+
+  private async movePath(source: string, target: string): Promise<void> {
+    try {
+      await rename(source, target);
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+      if (code !== "EXDEV") {
+        throw error;
+      }
+      await cp(source, target, { recursive: true, force: true, errorOnExist: false });
+      await rm(source, { recursive: true, force: true });
+    }
+  }
+
   async ensureBundledPythonOverrides(): Promise<string[]> {
     const bundledRoot = join(dirname(this.paths.runtimeRoot), "python-overrides");
     const targetRoot = this.paths.pythonOverridesRoot;
@@ -1537,6 +1740,38 @@ export class InitManager {
     const content = await readFile(botConfigPath, "utf8");
     const match = content.match(QQ_PATTERN);
     return match?.[1];
+  }
+
+  private async readConfiguredQqAccount(): Promise<string | undefined> {
+    const qqAccount = await this.readQqAccount();
+    if (qqAccount) {
+      return qqAccount;
+    }
+
+    return this.readStoredMessagePlatformQqAccount();
+  }
+
+  private readStoredMessagePlatformQqAccount(): string | undefined {
+    const storedQqAccount = this.readMessagePlatformStore()?.qqAccount?.trim();
+    return storedQqAccount && isDigits(storedQqAccount) ? storedQqAccount : undefined;
+  }
+
+  private async repairBotConfigQqAccountFromMessagePlatformStore(): Promise<string | undefined> {
+    const storedQqAccount = this.readStoredMessagePlatformQqAccount();
+    if (!storedQqAccount || await this.readQqAccount()) {
+      return undefined;
+    }
+
+    const botConfigPath = this.botConfigPath();
+    const content = await this.readOrCreateBotConfigContent();
+    const repaired = ensureBotQqConfig(content, storedQqAccount);
+    if (repaired === content) {
+      return undefined;
+    }
+
+    await mkdir(dirname(botConfigPath), { recursive: true });
+    await writeFile(botConfigPath, repaired, "utf8");
+    return botConfigPath;
   }
 
   getPythonPath(): string {

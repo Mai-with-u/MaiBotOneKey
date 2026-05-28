@@ -74,6 +74,7 @@ import type {
   PtyStopRequest,
   QqBackend,
   QqAccountSetupRequest,
+  QqComponentUpgradeResult,
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
@@ -145,6 +146,8 @@ const desktopBridge: DesktopBridge = {
     repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
     resetSnowLuma: () =>
       ipcRenderer.invoke("init:resetSnowLuma") as Promise<SnowLumaResetResult>,
+    upgradeQqComponents: () =>
+      ipcRenderer.invoke("init:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
     setQqBackend: (backend: QqBackend) =>
       ipcRenderer.invoke("init:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
