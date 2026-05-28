@@ -653,9 +653,11 @@ async function fetchLauncherUpdateInfo(currentVersion: string): Promise<Launcher
     const latestTag = release.tag_name;
     const currentTag = `v${currentVersion}`;
     const available = compareVersionTags(latestTag, currentTag) > 0;
-    const latestReleaseNotes = typeof release.body === "string" ? release.body : undefined;
+    const latestReleaseNotes = typeof release.body === "string" && release.body.trim()
+      ? release.body.trim()
+      : undefined;
     const releaseNotes = available
-      ? await fetchLauncherReleaseNotesInRange(currentTag, latestTag).catch(() => latestReleaseNotes)
+      ? (await fetchLauncherReleaseNotesInRange(currentTag, latestTag).catch(() => undefined)) ?? latestReleaseNotes
       : latestReleaseNotes;
     return {
       currentVersion,
