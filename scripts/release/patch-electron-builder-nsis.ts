@@ -52,6 +52,14 @@ await patchFile(
 );
 
 await patchFile(
+  join(nsisTemplateRoot, "include", "installer.nsh"),
+  "write uninstaller to final install dir",
+  /\r?\n  File "\/oname=\$\{UNINSTALL_FILENAME\}" "\$\{UNINSTALLER_OUT_FILE\}"/u,
+  `\n  SetOutPath $INSTDIR\n  File "/oname=\${UNINSTALL_FILENAME}" "\${UNINSTALLER_OUT_FILE}"`,
+  'SetOutPath $INSTDIR\n  File "/oname=${UNINSTALL_FILENAME}" "${UNINSTALLER_OUT_FILE}"',
+);
+
+await patchFile(
   join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
   "stage app extraction beside install dir before rename",
   /Push \$OUTDIR\r?\n  CreateDirectory "\$PLUGINSDIR\\7z-out"\r?\n  ClearErrors\r?\n  SetOutPath "\$PLUGINSDIR\\7z-out"([\s\S]*?)CopyFiles (?:\/SILENT )?"\$PLUGINSDIR\\7z-out\\\*" \$OUTDIR([\s\S]*?)RMDir \/r "\$PLUGINSDIR\\7z-out"([\s\S]*?)DoneExtract7za:\r?\n!macroend/u,

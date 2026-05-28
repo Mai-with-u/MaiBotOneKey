@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "![1779700604525](image/package/1779700604525.png)otricSeven",
   "license": "GPL-3.0-only",
@@ -188,6 +188,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false,
+      "installerSidebar": "resources/installerSidebar.bmp",
+      "uninstallerSidebar": "resources/uninstallerSidebar.bmp",
       "shortcutName": "MaiBot OneKey"
     }
   }
