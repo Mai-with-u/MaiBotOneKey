@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.6 - 2026-05-28
+
+本版本把 QQ 后端组件升级纳入一键包更新流程：启动器升级后会用新安装包内置的 NapCat / SnowLuma 程序文件刷新本地组件，同时保护用户配置、登录数据、运行数据和日志。SnowLuma 预置包同步到官方 v1.9.2，并继续收紧 Windows 打包内容，减少把本地运行痕迹带入安装包的风险。
+
+### NapCat / SnowLuma 组件升级
+- 一键包版本变化后首次启动会自动同步 NapCat 与 SnowLuma 程序文件，并记录当前启动器版本，避免每次启动重复覆盖。
+- 设置中心新增“升级 NapCat / SnowLuma”入口，可在停止 MaiBot Core 和 QQ 后端后手动刷新两个组件。
+- 组件升级会强制覆盖程序文件，但会保留 NapCat 的 `config` / `data` / `logs`、`napcat/config` / `napcat/data` / `napcat/logs`、版本资源中的 NapCat 配置、根目录 `config.json`、数据库与日志文件。
+- SnowLuma 升级会保留 `config`、`data` 和 `logs`，避免清空 WebUI、OneBot、账号登录、消息数据库和运行日志。
+- 升级流程失败时会尽量把已临时移出的受保护文件恢复回原目录，降低半途中断造成配置丢失的概率。
+
+### SnowLuma
+- 内置 SnowLuma 预置包更新到官方 v1.9.2 Windows x64 包。
+- SnowLuma 预置包继续作为干净程序模板使用，运行时配置、数据和日志不再随安装包模板一起分发。
+
+### 打包与更新
+- Windows 打包排除 SnowLuma 的 `config`、`data`、`logs`，避免把本地账号、WebUI、OneBot、数据库和日志带入安装包。
+- Windows 打包补充排除 NapCat 根目录的 `config.json`、数据库文件和日志文件，进一步清理内置模板。
+- 重置启动器设置时会清理组件自动升级记录，后续重新初始化时可按当前版本重新同步组件。
+
 ## 0.4.5 - 2026-05-27
 
 本版本继续收紧 0.4.x 的更新与启动流程：一键包自更新能看到下载进度，消息平台未配置时不会误启动 QQ 后端，NapCat 打包和运行目录也进一步清理，减少把本地配置、缓存或旧框架内容带进安装包的概率。
