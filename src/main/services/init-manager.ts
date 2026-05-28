@@ -47,7 +47,6 @@ const NAPCAT_COMPONENT_PROTECTED_PATHS = [
   "config",
   "data",
   "logs",
-  "config.json",
   "napcat/config",
   "napcat/data",
   "napcat/logs",
@@ -1520,6 +1519,7 @@ export class InitManager {
     const changedFiles = await this.ensureBundledModuleSubtree("napcat", [
       "node.exe",
       "index.js",
+      "config.json",
       join("napcat", "package.json"),
     ], {
       excludeRelativePaths: [
