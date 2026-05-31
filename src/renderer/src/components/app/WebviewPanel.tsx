@@ -31,7 +31,7 @@ type LoadState = "idle" | "loading" | "ready" | "error";
 
 type WebviewElement = HTMLElement & {
   getURL?: () => string;
-  loadURL?: (url: string) => void;
+  loadURL?: (url: string) => Promise<void> | void;
   reload?: () => void;
   reloadIgnoringCache?: () => void;
 };
@@ -146,6 +146,19 @@ export function WebviewPanel({
     await window.maibotDesktop?.clearWebviewCache?.();
   }, []);
 
+  const handleLoadUrlFailure = useCallback((error: unknown) => {
+    if (hasRenderedPageRef.current) {
+      setLoadState("ready");
+      setErrorMessage(null);
+      return;
+    }
+
+    failedRef.current = true;
+    domReadyRef.current = false;
+    setLoadState("error");
+    setErrorMessage(error instanceof Error ? error.message : String(error));
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoadState("loading");
     setErrorMessage(null);
@@ -154,10 +167,11 @@ export function WebviewPanel({
     const webview = webviewRef.current;
     if (domReadyRef.current && webview?.loadURL) {
       try {
-        const nextToken = Date.now();
-        const nextUrl = withCacheBust(url, nextToken);
-        setCacheBustToken(nextToken);
-        webview.loadURL(nextUrl);
+        const nextUrl = withCacheBust(url, Date.now());
+        const navigation = webview.loadURL(nextUrl);
+        if (navigation && typeof navigation.catch === "function") {
+          void navigation.catch(handleLoadUrlFailure);
+        }
         return;
       } catch {
         /* fall through to reload/remount */
@@ -173,7 +187,7 @@ export function WebviewPanel({
     }
 
     remountWebview();
-  }, [clearWebviewCache, remountWebview, url]);
+  }, [clearWebviewCache, handleLoadUrlFailure, remountWebview, url]);
 
   const openExternal = useCallback(() => {
     externalOpen(currentUrl);
