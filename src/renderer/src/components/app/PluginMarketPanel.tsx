@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
 import type { MaiBotPluginDisplayIcon, MaiBotPluginType, ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -82,6 +82,8 @@ const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
   "enable_chat_list_filter",
   "show_dropped_chat_list_messages",
 ]);
+const SURPRISE_PLUGIN_COUNT = 4;
+const SURPRISE_CANDIDATE_LIMIT = 20;
 
 const PLUGIN_TYPE_LABELS: Record<MaiBotPluginType, string> = {
   adapter: "适配器",
@@ -728,6 +730,7 @@ export function PluginMarketPanel({
               plugins={filteredMarket}
               quickRatingPluginId={quickRatingPluginId}
               quickStatsBusy={quickStatsBusy}
+              sortBy={marketSortBy}
             />
           ) : (
             <InstalledGrid
@@ -850,6 +853,67 @@ function pluginFallbackIcon(
   return resolvePluginLucideIcon(manifest?.display?.icon?.fallback) ?? DEFAULT_PLUGIN_TYPE_ICONS[pluginType({ manifest })];
 }
 
+function pluginIdentity(plugin: MarketPlugin): string {
+  return plugin.manifest.id || plugin.id || plugin.marketplace_id || plugin.manifest.name || plugin.id;
+}
+
+function parsePluginTime(value: string | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function pluginFreshness(plugin: MarketPlugin): number {
+  const publishedTime = parsePluginTime(plugin.published_at);
+  if (publishedTime > 0) {
+    return publishedTime;
+  }
+  const updatedTime = parsePluginTime(plugin.updated_at);
+  if (updatedTime > 0) {
+    return updatedTime;
+  }
+  return plugin.marketplace_order ?? 0;
+}
+
+function stableRandomRank(seed: string, plugin: MarketPlugin): number {
+  const value = `${seed}:${pluginIdentity(plugin)}`;
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function selectSurprisePlugins(
+  plugins: MarketPlugin[],
+  sortBy: MarketSortKey,
+  seed: string,
+): MarketPlugin[] {
+  if (sortBy !== "default" || plugins.length <= SURPRISE_PLUGIN_COUNT) {
+    return [];
+  }
+
+  const candidateCount = Math.min(
+    SURPRISE_CANDIDATE_LIMIT,
+    Math.max(SURPRISE_PLUGIN_COUNT, Math.ceil(plugins.length * 0.3)),
+  );
+
+  return [...plugins]
+    .sort((left, right) => {
+      const freshnessDiff = pluginFreshness(right) - pluginFreshness(left);
+      if (freshnessDiff !== 0) {
+        return freshnessDiff;
+      }
+      return (right.marketplace_order ?? 0) - (left.marketplace_order ?? 0);
+    })
+    .slice(0, candidateCount)
+    .sort((left, right) => stableRandomRank(seed, left) - stableRandomRank(seed, right))
+    .slice(0, SURPRISE_PLUGIN_COUNT);
+}
+
 function sortMarketPlugins(
   plugins: MarketPlugin[],
   options: {
@@ -934,6 +998,7 @@ function ErrorPanel({
 
 function PluginGrid({
   plugins,
+  sortBy,
   onOperate,
   onDetail,
   onComment,
@@ -947,6 +1012,7 @@ function PluginGrid({
   quickStatsBusy,
 }: {
   plugins: MarketPlugin[];
+  sortBy: MarketSortKey;
   onOperate: (operation: PendingOperation) => void;
   onDetail: (plugin: MarketPlugin) => void;
   onComment: (plugin: MarketPlugin) => void;
@@ -959,13 +1025,25 @@ function PluginGrid({
   quickRatingPluginId: string | null;
   quickStatsBusy: QuickStatsBusy;
 }): React.JSX.Element {
+  const surpriseSeed = useMemo(() => Math.random().toString(36).slice(2), []);
+  const surprisePlugins = useMemo(
+    () => selectSurprisePlugins(plugins, sortBy, surpriseSeed),
+    [plugins, sortBy, surpriseSeed],
+  );
+  const surprisePluginIds = useMemo(
+    () => new Set(surprisePlugins.map(pluginIdentity)),
+    [surprisePlugins],
+  );
+  const mainPlugins = useMemo(
+    () => plugins.filter((plugin) => !surprisePluginIds.has(pluginIdentity(plugin))),
+    [plugins, surprisePluginIds],
+  );
+
   if (plugins.length === 0) {
     return <EmptyState icon={<Download />} title="没有匹配的插件" />;
   }
 
-  return (
-    <div className="plugin-card-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {plugins.map((plugin) => {
+  const renderPluginCard = (plugin: MarketPlugin): React.JSX.Element => {
         const repositoryUrl = pluginRepositoryUrl(plugin.manifest);
         const incompatibleReason = getPluginCompatibilityReason(plugin.manifest, maibotVersion);
         const statsId = pluginStatsPrimaryId(plugin);
@@ -1015,7 +1093,25 @@ function PluginGrid({
             status={plugin.installed ? `本地 ${plugin.installedVersion ?? "-"}` : undefined}
           />
         );
-      })}
+  };
+
+  return (
+    <div className="grid gap-5">
+      {surprisePlugins.length > 0 ? (
+        <section className="grid gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="size-4 text-primary" />
+            <h3 className="text-base font-semibold">惊喜随意</h3>
+          </div>
+          <div className="plugin-card-grid grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-1 xl:auto-cols-auto xl:grid-cols-4">
+            {surprisePlugins.map(renderPluginCard)}
+          </div>
+        </section>
+      ) : null}
+
+      <div className="plugin-card-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {mainPlugins.map(renderPluginCard)}
+      </div>
     </div>
   );
 }

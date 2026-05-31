@@ -621,6 +621,10 @@ export interface MaiBotMarketPlugin {
   manifest: MaiBotPluginManifest;
   installed?: boolean;
   installedVersion?: string;
+  marketplace_id?: string;
+  marketplace_order?: number;
+  published_at?: string;
+  updated_at?: string;
   source?: string;
   downloads?: number;
   rating?: number;

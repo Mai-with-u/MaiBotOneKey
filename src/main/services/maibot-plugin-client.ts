@@ -1433,7 +1433,7 @@ function dedupeBlueprintComponents(components: MaiBotPluginBlueprintComponent[])
   });
 }
 
-function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
+function normalizeMarketPlugin(raw: unknown, index = 0): MaiBotMarketPlugin | null {
   if (!raw || typeof raw !== "object" || !("manifest" in raw)) {
     return null;
   }
@@ -1441,6 +1441,13 @@ function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
   const item = raw as {
     id?: string;
     manifest?: MaiBotPluginManifest;
+    marketplace_id?: string;
+    marketplace_order?: unknown;
+    published_at?: unknown;
+    created_at?: unknown;
+    added_at?: unknown;
+    updated_at?: unknown;
+    modified_at?: unknown;
     source?: string;
     downloads?: unknown;
     rating?: unknown;
@@ -1457,6 +1464,10 @@ function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
   return {
     id,
     manifest: normalizePluginManifestDisplay({ ...manifest, id }),
+    marketplace_id: typeof item.marketplace_id === "string" ? item.marketplace_id : item.id,
+    marketplace_order: numberOrUndefined(item.marketplace_order) ?? index,
+    published_at: normalizeDateString(item.published_at ?? item.created_at ?? item.added_at),
+    updated_at: normalizeDateString(item.updated_at ?? item.modified_at),
     source: item.source,
     downloads: normalizeStatsNumber(item.downloads),
     rating: normalizeStatsNumber(item.rating),
@@ -1556,6 +1567,16 @@ function localIconMimeType(filePath: string): string | null {
   }
 }
 
+function normalizeDateString(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return undefined;
+}
+
 function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
   if (!isUnknownRecord(raw) || !isUnknownRecord(raw.manifest)) {
     return null;
@@ -1594,7 +1615,7 @@ async function fetchMarketPluginsUncached(marketUrl: string): Promise<MaiBotMark
   const rawList = (await response.json()) as unknown;
   const sourceList = Array.isArray(rawList) ? rawList : [];
   return sourceList
-    .map(normalizeMarketPlugin)
+    .map((item, index) => normalizeMarketPlugin(item, index))
     .filter((plugin): plugin is MaiBotMarketPlugin => plugin !== null);
 }
 
