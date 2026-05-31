@@ -655,12 +655,9 @@ function MessagePlatformConnectCard({
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
-            <Server className="size-4.5" />
-          </span>
           <div className="min-w-0">
             <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>
-              {retro ? "Message Platform" : "连接到消息软件平台......."}
+              消息平台
             </p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               新增 QQ-NapCat 或 QQ-SnowLuma，自动写入连接配置并启动后端。
