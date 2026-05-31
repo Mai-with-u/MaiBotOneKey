@@ -586,11 +586,34 @@ export interface MaiBotPluginManifest {
   urls?: { repository?: string; homepage?: string };
   keywords?: string[];
   categories?: string[];
+  plugin_type?: MaiBotPluginType;
+  display?: {
+    icon?: MaiBotPluginDisplayIcon;
+  };
   host_application?: { min_version?: string; max_version?: string };
   sdk?: { min_version?: string; max_version?: string };
   dependencies?: string[];
   capabilities?: string[];
   manifest_version?: number;
+}
+
+export type MaiBotPluginType =
+  | "adapter"
+  | "tool"
+  | "provider"
+  | "management"
+  | "data"
+  | "media"
+  | "game"
+  | "integration"
+  | "extension"
+  | "other";
+
+export interface MaiBotPluginDisplayIcon {
+  type: "lucide" | "emoji" | "local";
+  value: string;
+  fallback?: string;
+  background?: string;
 }
 
 export interface MaiBotMarketPlugin {

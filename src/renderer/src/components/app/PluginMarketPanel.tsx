@@ -1,5 +1,5 @@
-import { AlertTriangle, Download, ExternalLink, Info, Loader2, MessageSquare, Plus, Puzzle, RefreshCw, Save, Search, Settings, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X } from "lucide-react";
-import type { ServiceDescriptor } from "@shared/contracts";
+import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import type { MaiBotPluginDisplayIcon, MaiBotPluginType, ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -56,6 +56,7 @@ type LoadState = "idle" | "loading" | "ready" | "error";
 type OperationKind = "install" | "update" | "uninstall";
 type ConfigBusyState = "load" | "save" | null;
 type MarketSortKey = "default" | "downloads" | "likes" | "rating" | "comments";
+type PluginTypeFilter = "all" | MaiBotPluginType;
 
 type PendingOperation = {
   kind: OperationKind;
@@ -81,6 +82,66 @@ const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
   "enable_chat_list_filter",
   "show_dropped_chat_list_messages",
 ]);
+
+const PLUGIN_TYPE_LABELS: Record<MaiBotPluginType, string> = {
+  adapter: "适配器",
+  tool: "工具",
+  provider: "服务提供方",
+  management: "管理",
+  data: "数据",
+  media: "媒体",
+  game: "游戏娱乐",
+  integration: "外部集成",
+  extension: "通用扩展",
+  other: "其他",
+};
+
+const PLUGIN_TYPE_OPTIONS: Array<{ value: MaiBotPluginType; label: string }> = [
+  { value: "adapter", label: PLUGIN_TYPE_LABELS.adapter },
+  { value: "tool", label: PLUGIN_TYPE_LABELS.tool },
+  { value: "provider", label: PLUGIN_TYPE_LABELS.provider },
+  { value: "management", label: PLUGIN_TYPE_LABELS.management },
+  { value: "data", label: PLUGIN_TYPE_LABELS.data },
+  { value: "media", label: PLUGIN_TYPE_LABELS.media },
+  { value: "game", label: PLUGIN_TYPE_LABELS.game },
+  { value: "integration", label: PLUGIN_TYPE_LABELS.integration },
+  { value: "extension", label: PLUGIN_TYPE_LABELS.extension },
+  { value: "other", label: PLUGIN_TYPE_LABELS.other },
+];
+const PLUGIN_TYPE_VALUES = new Set<MaiBotPluginType>(PLUGIN_TYPE_OPTIONS.map((option) => option.value));
+
+const LUCIDE_PLUGIN_ICONS: Record<string, LucideIcon> = {
+  "bar-chart-3": BarChart3,
+  bar_chart_3: BarChart3,
+  bot: Bot,
+  cloud: Cloud,
+  database: Database,
+  gamepad2: Gamepad2,
+  "gamepad-2": Gamepad2,
+  image: ImageIcon,
+  link: Link,
+  package: Package,
+  plug: Plug,
+  puzzle: Puzzle,
+  "scroll-text": ScrollText,
+  scroll_text: ScrollText,
+  settings: Settings,
+  shield: Shield,
+  wrench: Wrench,
+};
+
+const DEFAULT_PLUGIN_TYPE_ICONS: Record<MaiBotPluginType, LucideIcon> = {
+  adapter: Plug,
+  tool: Wrench,
+  provider: Cloud,
+  management: Shield,
+  data: BarChart3,
+  media: ImageIcon,
+  game: Gamepad2,
+  integration: Link,
+  extension: Puzzle,
+  other: Package,
+};
 
 interface AdapterConfigView {
   kind: "napcat" | "snowluma";
@@ -139,6 +200,7 @@ export function PluginMarketPanel({
   const [query, setQuery] = useState("");
   const [preferCompatible, setPreferCompatible] = useState(true);
   const [marketSortBy, setMarketSortBy] = useState<MarketSortKey>("default");
+  const [pluginTypeFilter, setPluginTypeFilter] = useState<PluginTypeFilter>("all");
   const [marketPlugins, setMarketPlugins] = useState<MarketPlugin[]>([]);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
   const [pluginStats, setPluginStats] = useState<Record<string, PluginStats>>({});
@@ -536,15 +598,18 @@ export function PluginMarketPanel({
     [installedPlugins, marketById],
   );
   const filteredMarket = useMemo(
-    () => sortMarketPlugins(filterPlugins(marketPlugins, query), {
+    () => sortMarketPlugins(filterPlugins(marketPlugins, query, pluginTypeFilter), {
       maibotVersion,
       pluginStats,
       preferCompatible,
       sortBy: marketSortBy,
     }),
-    [maibotVersion, marketPlugins, marketSortBy, pluginStats, preferCompatible, query],
+    [maibotVersion, marketPlugins, marketSortBy, pluginStats, pluginTypeFilter, preferCompatible, query],
   );
-  const filteredInstalled = useMemo(() => filterPlugins(installedViews, query), [installedViews, query]);
+  const filteredInstalled = useMemo(
+    () => filterPlugins(installedViews, query, pluginTypeFilter),
+    [installedViews, pluginTypeFilter, query],
+  );
   const isMarket = mode === "market";
   const maibotRunning = maibotService?.status === "running";
   const title = isMarket ? "插件商店" : "插件管理";
@@ -600,6 +665,19 @@ export function PluginMarketPanel({
               value={query}
             />
             <Badge variant="secondary">{isMarket ? filteredMarket.length : filteredInstalled.length}</Badge>
+            <select
+              className="h-8 shrink-0 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
+              onChange={(event) => setPluginTypeFilter(event.target.value as PluginTypeFilter)}
+              title="插件类型"
+              value={pluginTypeFilter}
+            >
+              <option value="all">全部类型</option>
+              {PLUGIN_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           {isMarket ? (
@@ -721,17 +799,28 @@ export function PluginMarketPanel({
   );
 }
 
-function filterPlugins<T extends { id: string; manifest: MarketPlugin["manifest"] }>(plugins: T[], query: string): T[] {
+function filterPlugins<T extends { id: string; manifest: MarketPlugin["manifest"] }>(
+  plugins: T[],
+  query: string,
+  pluginTypeFilter: PluginTypeFilter,
+): T[] {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) {
+  if (!normalized && pluginTypeFilter === "all") {
     return plugins;
   }
   return plugins.filter((plugin) => {
+    if (pluginTypeFilter !== "all" && pluginType(plugin) !== pluginTypeFilter) {
+      return false;
+    }
+    if (!normalized) {
+      return true;
+    }
     const haystack = [
       plugin.id,
       plugin.manifest.name,
       plugin.manifest.description,
       pluginAuthor(plugin.manifest),
+      pluginTypeLabel(plugin),
       ...(plugin.manifest.keywords ?? []),
       ...(plugin.manifest.categories ?? []),
     ]
@@ -740,6 +829,25 @@ function filterPlugins<T extends { id: string; manifest: MarketPlugin["manifest"
       .toLowerCase();
     return haystack.includes(normalized);
   });
+}
+
+function pluginType(plugin: { manifest?: { plugin_type?: MaiBotPluginType } }): MaiBotPluginType {
+  const value = plugin.manifest?.plugin_type;
+  return value && PLUGIN_TYPE_VALUES.has(value) ? value : "extension";
+}
+
+function pluginTypeLabel(plugin: { manifest?: { plugin_type?: MaiBotPluginType } }): string {
+  return PLUGIN_TYPE_LABELS[pluginType(plugin)];
+}
+
+function resolvePluginLucideIcon(name: string | undefined): LucideIcon | undefined {
+  return name ? LUCIDE_PLUGIN_ICONS[name.trim().toLowerCase()] : undefined;
+}
+
+function pluginFallbackIcon(
+  manifest?: { plugin_type?: MaiBotPluginType; display?: { icon?: MaiBotPluginDisplayIcon } },
+): LucideIcon {
+  return resolvePluginLucideIcon(manifest?.display?.icon?.fallback) ?? DEFAULT_PLUGIN_TYPE_ICONS[pluginType({ manifest })];
 }
 
 function sortMarketPlugins(
@@ -1006,6 +1114,64 @@ function InstalledGrid({
   );
 }
 
+function PluginDisplayIcon({
+  plugin,
+  className,
+  iconClassName,
+}: {
+  plugin: { id: string; manifest: MarketPlugin["manifest"] };
+  className?: string;
+  iconClassName?: string;
+}): React.JSX.Element {
+  const icon = plugin.manifest.display?.icon;
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageSource = icon?.type === "local" && icon.value.startsWith("data:") ? icon.value : null;
+  const style: React.CSSProperties | undefined = icon?.background ? { backgroundColor: icon.background } : undefined;
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageSource]);
+
+  const baseClassName = cn(
+    "plugin-card-display-icon flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-primary/10 text-primary",
+    className,
+  );
+
+  if (icon?.type === "emoji") {
+    return (
+      <div className={baseClassName} style={style}>
+        <span aria-hidden="true" className={cn("text-xl leading-none", iconClassName)}>
+          {icon.value}
+        </span>
+      </div>
+    );
+  }
+
+  if (imageSource && !imageFailed) {
+    return (
+      <div className={baseClassName} style={style}>
+        <img
+          alt=""
+          className="size-full object-cover"
+          loading="lazy"
+          onError={() => setImageFailed(true)}
+          src={imageSource}
+        />
+      </div>
+    );
+  }
+
+  const Icon = icon?.type === "lucide"
+    ? resolvePluginLucideIcon(icon.value) ?? pluginFallbackIcon(plugin.manifest)
+    : pluginFallbackIcon(plugin.manifest);
+
+  return (
+    <div className={baseClassName} style={style}>
+      <Icon className={cn("size-5", iconClassName)} />
+    </div>
+  );
+}
+
 function PluginCard({
   plugin,
   onDetail,
@@ -1076,16 +1242,20 @@ function PluginCard({
       tabIndex={0}
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p
-            className={cn("plugin-card-title truncate font-sans text-base font-semibold leading-tight", titleMuted && "text-muted-foreground")}
-            title={pluginTitle}
-          >
-            {pluginTitle}
-          </p>
-          <p className="plugin-card-meta mt-1 truncate text-xs text-muted-foreground">
-            v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <PluginDisplayIcon plugin={plugin} />
+          <div className="min-w-0">
+            <p
+              className={cn("plugin-card-title truncate font-sans text-base font-semibold leading-tight", titleMuted && "text-muted-foreground")}
+              title={pluginTitle}
+            >
+              {pluginTitle}
+            </p>
+            <p className="plugin-card-meta mt-1 truncate text-xs text-muted-foreground">
+              v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
+            </p>
+            <Badge className="mt-2" variant="secondary">{pluginTypeLabel(plugin)}</Badge>
+          </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           {topActions.length ? (
@@ -1740,11 +1910,15 @@ function PluginDetailDialog({
               <div className="grid gap-3 md:grid-cols-[1.25fr_0.75fr]">
                 <div className="rounded-lg border border-border bg-card p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="truncate text-base font-semibold">{pluginName(plugin)}</h3>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
-                      </p>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <PluginDisplayIcon className="size-12" iconClassName="size-6" plugin={plugin} />
+                      <div className="min-w-0">
+                        <h3 className="truncate text-base font-semibold">{pluginName(plugin)}</h3>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
+                        </p>
+                        <Badge className="mt-2" variant="secondary">{pluginTypeLabel(plugin)}</Badge>
+                      </div>
                     </div>
                     {compatibilityReason ? <Badge variant="warning">不兼容</Badge> : null}
                   </div>

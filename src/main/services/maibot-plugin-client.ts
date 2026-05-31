@@ -27,8 +27,10 @@ import type {
   MaiBotPluginDownloadResult,
   MaiBotPluginListOptions,
   MaiBotMarketPlugin,
+  MaiBotPluginDisplayIcon,
   MaiBotPluginListResult,
   MaiBotPluginManifest,
+  MaiBotPluginType,
   MaiBotPluginOperationResult,
   MaiBotPluginRatingResult,
   MaiBotPluginReadmeResult,
@@ -55,6 +57,18 @@ const PLUGIN_CONFIG_FILE = "config.toml";
 const PLUGIN_CONFIG_BACKUP_DIR = "config_back";
 const PLUGIN_UPDATE_BACKUP_DIR = ".update_backups";
 const PLUGIN_UPDATE_TMP_DIR = ".update_tmp";
+const PLUGIN_TYPES = new Set<MaiBotPluginType>([
+  "adapter",
+  "tool",
+  "provider",
+  "management",
+  "data",
+  "media",
+  "game",
+  "integration",
+  "extension",
+  "other",
+]);
 
 export interface MaiBotPluginClientOptions {
   maibotRoot: string;
@@ -170,7 +184,7 @@ export class MaiBotPluginClient {
 
       plugins.push({
         id,
-        manifest: { ...manifest, id },
+        manifest: await enrichInstalledManifestDisplayIcon({ ...normalizePluginManifestDisplay(manifest), id }, pluginPath),
         path: pluginPath,
         enabled,
         loaded: undefined,
@@ -1442,13 +1456,104 @@ function normalizeMarketPlugin(raw: unknown): MaiBotMarketPlugin | null {
 
   return {
     id,
-    manifest: { ...manifest, id },
+    manifest: normalizePluginManifestDisplay({ ...manifest, id }),
     source: item.source,
     downloads: normalizeStatsNumber(item.downloads),
     rating: normalizeStatsNumber(item.rating),
     likes: normalizeStatsNumber(item.likes),
     comment_count: normalizeStatsNumber(item.comment_count) ?? normalizeStatsNumber(item.comments),
   };
+}
+
+function normalizePluginManifestDisplay(manifest: MaiBotPluginManifest): MaiBotPluginManifest {
+  const pluginType = normalizePluginType(manifest.plugin_type);
+  const icon = normalizePluginDisplayIcon(manifest.display?.icon);
+  const display = manifest.display
+    ? { ...manifest.display, icon }
+    : undefined;
+  return {
+    ...manifest,
+    plugin_type: pluginType,
+    display,
+  };
+}
+
+function normalizePluginType(value: unknown): MaiBotPluginType {
+  return typeof value === "string" && PLUGIN_TYPES.has(value as MaiBotPluginType)
+    ? value as MaiBotPluginType
+    : "extension";
+}
+
+function normalizePluginDisplayIcon(icon: unknown): MaiBotPluginDisplayIcon | undefined {
+  if (!isUnknownRecord(icon)) {
+    return undefined;
+  }
+  const type = icon.type;
+  const value = typeof icon.value === "string" ? icon.value.trim() : "";
+  if ((type !== "lucide" && type !== "emoji" && type !== "local") || !value) {
+    return undefined;
+  }
+  const fallback = typeof icon.fallback === "string" && icon.fallback.trim() ? icon.fallback.trim() : undefined;
+  const background = typeof icon.background === "string" && /^#[0-9a-f]{6}$/iu.test(icon.background.trim())
+    ? icon.background.trim()
+    : undefined;
+  return { type, value, fallback, background };
+}
+
+async function enrichInstalledManifestDisplayIcon(
+  manifest: MaiBotPluginManifest,
+  pluginPath: string,
+): Promise<MaiBotPluginManifest> {
+  const icon = manifest.display?.icon;
+  if (icon?.type !== "local" || icon.value.startsWith("data:")) {
+    return manifest;
+  }
+
+  const iconPath = resolve(pluginPath, icon.value);
+  if (!isPathInside(pluginPath, iconPath) || !(await pathExists(iconPath))) {
+    return manifest;
+  }
+
+  const mimeType = localIconMimeType(iconPath);
+  if (!mimeType) {
+    return manifest;
+  }
+
+  try {
+    const data = await readFile(iconPath);
+    if (data.byteLength > 256 * 1024) {
+      return manifest;
+    }
+    return {
+      ...manifest,
+      display: {
+        ...manifest.display,
+        icon: {
+          ...icon,
+          value: `data:${mimeType};base64,${data.toString("base64")}`,
+        },
+      },
+    };
+  } catch {
+    return manifest;
+  }
+}
+
+function localIconMimeType(filePath: string): string | null {
+  const suffix = filePath.toLowerCase().split(".").at(-1);
+  switch (suffix) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "svg":
+      return "image/svg+xml";
+    case "webp":
+      return "image/webp";
+    default:
+      return null;
+  }
 }
 
 function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
@@ -1472,7 +1577,7 @@ function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
 
   return {
     id,
-    manifest: { ...manifest, id: manifest.id?.trim() || id },
+    manifest: normalizePluginManifestDisplay({ ...manifest, id: manifest.id?.trim() || id }),
     path: typeof raw.path === "string" ? raw.path : "",
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : typeof raw.disabled === "boolean" ? !raw.disabled : true,
     loaded,
