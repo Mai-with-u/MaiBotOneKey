@@ -2150,6 +2150,45 @@ export function SettingsStatusPanel({
                   </RadioGroup>
                 </div>
 
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Palette className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">配色</p>
+                        <p className="text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
+                  </div>
+
+                  <RadioGroup
+                    className="grid gap-2 md:grid-cols-3"
+                    onValueChange={(value) => theme.setPreference(value as ThemePreference)}
+                    value={theme.preference}
+                  >
+                    {themeOptions.map((option) => (
+                      <label
+                        className={cn(
+                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          theme.preference === option.value
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                        )}
+                        key={option.value}
+                      >
+                        <RadioGroupItem className="mt-0.5" value={option.value} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
                 {appearance.mode === "future-retro" ? (
                   <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2187,39 +2226,6 @@ export function SettingsStatusPanel({
                         <p className="text-sm font-medium">现代配置</p>
                         <p className="text-xs text-muted-foreground">控制主题色、字体、圆角和信息密度。</p>
                       </div>
-                    </div>
-                    <div className="grid gap-3 rounded-md border border-border bg-card p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">主题模式</p>
-                          <p className="mt-1 text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
-                        </div>
-                        <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
-                      </div>
-
-                      <RadioGroup
-                        className="grid gap-2 md:grid-cols-3"
-                        onValueChange={(value) => theme.setPreference(value as ThemePreference)}
-                        value={theme.preference}
-                      >
-                        {themeOptions.map((option) => (
-                          <label
-                            className={cn(
-                              "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
-                              theme.preference === option.value
-                                ? "border-primary bg-primary/10 text-foreground"
-                                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                            )}
-                            key={option.value}
-                          >
-                            <RadioGroupItem className="mt-0.5" value={option.value} />
-                            <span className="min-w-0">
-                              <span className="block text-sm font-medium">{option.label}</span>
-                              <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </RadioGroup>
                     </div>
                     <AppearanceAccentControl appearance={appearance} />
                     <div className="grid gap-3 md:grid-cols-2">
