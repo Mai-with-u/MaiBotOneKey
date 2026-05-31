@@ -110,14 +110,7 @@ export class ModuleUpdater {
   }
 
   async listMaiBotTags(): Promise<ModuleTagOption[]> {
-    const gitPath = this.initManager.getGitPath();
-    const sourceConfig = await this.getSourceConfig();
-    const result = await this.runGit(
-      gitPath,
-      this.paths.installRoot,
-      ["ls-remote", "--tags", "--refs", sourceConfig.maibotUrl],
-      FETCH_ORIGIN_TIMEOUT_MS,
-    );
+    const result = await this.listMaiBotRemoteRefs("tags");
     return result.output
       .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
       .filter((tag): tag is string => Boolean(tag))
@@ -127,14 +120,7 @@ export class ModuleUpdater {
   }
 
   async listMaiBotBranches(): Promise<ModuleBranchOption[]> {
-    const gitPath = this.initManager.getGitPath();
-    const sourceConfig = await this.getSourceConfig();
-    const result = await this.runGit(
-      gitPath,
-      this.paths.installRoot,
-      ["ls-remote", "--heads", "--refs", sourceConfig.maibotUrl],
-      FETCH_ORIGIN_TIMEOUT_MS,
-    );
+    const result = await this.listMaiBotRemoteRefs("heads");
     return result.output
       .map((line) => line.match(/refs\/heads\/(.+)$/u)?.[1])
       .filter((branch): branch is string => Boolean(branch))
@@ -147,6 +133,31 @@ export class ModuleUpdater {
       })
       .slice(0, 80)
       .map((name) => ({ name }));
+  }
+
+  private async listMaiBotRemoteRefs(refType: "heads" | "tags"): Promise<GitRunResult> {
+    const gitPath = this.initManager.getGitPath();
+    const sourceConfig = await this.getSourceConfig();
+    const refArg = refType === "heads" ? "--heads" : "--tags";
+
+    try {
+      return await this.runGit(
+        gitPath,
+        this.paths.installRoot,
+        ["ls-remote", refArg, "--refs", sourceConfig.maibotUrl],
+        FETCH_ORIGIN_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (sourceConfig.maibotUrl === OFFICIAL_MAIBOT_REMOTE_URL) {
+        throw error;
+      }
+      return this.runGit(
+        gitPath,
+        this.paths.installRoot,
+        ["ls-remote", refArg, "--refs", OFFICIAL_MAIBOT_REMOTE_URL],
+        FETCH_ORIGIN_TIMEOUT_MS,
+      );
+    }
   }
 
   async updateMaiBot(target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> {

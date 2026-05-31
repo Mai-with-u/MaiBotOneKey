@@ -901,6 +901,7 @@ export function SettingsStatusPanel({
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
+  const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };
   const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
   const pluginBuilderEnabled = pluginBuilderMode !== "disabled";
   const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
@@ -1337,6 +1338,25 @@ export function SettingsStatusPanel({
         const terminalSettings = await window.maibotDesktop?.services.saveTerminalSettings(settings);
         if (terminalSettings) {
           onSnapshot({ ...snapshot, terminalSettings });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const saveServiceStartupSettings = useCallback(
+    async (settings: typeof serviceStartupSettings) => {
+      setBusy("service-startup-settings");
+      setError(null);
+      try {
+        const nextServiceStartupSettings = await window.maibotDesktop?.services.saveStartupSettings(settings);
+        if (nextServiceStartupSettings) {
+          onSnapshot({ ...snapshot, serviceStartupSettings: nextServiceStartupSettings });
         }
         await refreshSnapshot();
       } catch (nextError) {
@@ -1988,6 +2008,55 @@ export function SettingsStatusPanel({
                 </div>
 
                 {environmentServicesPanel}
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Code2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">MaiBot WebUI 本地构建</p>
+                        <p className="text-xs text-muted-foreground">
+                          {serviceStartupSettings.useLocalDashboard
+                            ? "MaiBot Core 启动时使用 dashboard/dist。"
+                            : "MaiBot Core 启动时使用已安装的 maibot-dashboard 包。"}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={serviceStartupSettings.useLocalDashboard ? "success" : "outline"}>
+                      {serviceStartupSettings.useLocalDashboard ? "本地构建" : "安装包"}
+                    </Badge>
+                  </div>
+                  <label
+                    className={cn(
+                      "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                      serviceStartupSettings.useLocalDashboard
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                    )}
+                  >
+                    <Checkbox
+                      checked={serviceStartupSettings.useLocalDashboard}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) =>
+                        void saveServiceStartupSettings({
+                          ...serviceStartupSettings,
+                          useLocalDashboard: checked === true,
+                        })
+                      }
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">启动时使用本地 Dashboard 构建</span>
+                      <span className="mt-1 block text-xs leading-relaxed">
+                        开启后会向 MaiBot Core 注入 MAIBOT_WEBUI_USE_LOCAL_DASHBOARD=1，下次启动生效。
+                      </span>
+                    </span>
+                    {busy === "service-startup-settings" ? (
+                      <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : null}
+                  </label>
+                </div>
               </TabsContent>
 
               <TabsContent className="space-y-4" value="appearance">

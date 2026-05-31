@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, screen, session, shell } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
@@ -84,6 +84,7 @@ import type {
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
+  ServiceStartupSettings,
   SnowLumaResetResult,
   StartupAgreementConfirmResult,
   StartupAgreementState,
@@ -117,6 +118,7 @@ const LAUNCHER_SETTING_FILES = [
   "service-commands.json",
   "runtime-paths.json",
   "terminal-settings.json",
+  "service-startup-settings.json",
   "qq-backend.json",
   "message-platform.json",
   "module-sources.json",
@@ -146,6 +148,7 @@ const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
   "bottom-right",
   "bottom-left",
 ]);
+const MAIBOT_WEBVIEW_PARTITION = "persist:maibot-webui";
 const ONEKEY_REPOSITORY_URL = "https://github.com/Mai-with-u/MaiBotOneKey.git";
 const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/tags?per_page=100";
 const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
@@ -1533,6 +1536,7 @@ export function registerAppIpc({
     runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
     runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
     terminalSettings: serviceManager.getTerminalSettings(),
+    serviceStartupSettings: serviceManager.getStartupSettings(),
     openCodeSettings: openCodeSettingsManager.getSettings(),
     appIconSettings: appIconManager.getSettings(),
     networkProxySettings: networkProxyManager.getSettings(),
@@ -1638,6 +1642,7 @@ export function registerAppIpc({
     await serviceManager.resetRuntimePathConfig("python");
     await serviceManager.resetRuntimePathConfig("git");
     await serviceManager.saveTerminalSettings({ ...serviceManager.getTerminalSettings(), useEmbeddedTerminal: true });
+    await serviceManager.saveStartupSettings({ useLocalDashboard: false });
     await networkProxyManager.resetSettings();
     await openCodeSettingsManager.resetSettings();
     appIconManager.reset();
@@ -1733,6 +1738,14 @@ export function registerAppIpc({
 
   ipcMain.handle("desktop:openPath", async (_event, path: string): Promise<void> => {
     await shell.openPath(path);
+  });
+
+  ipcMain.handle("desktop:clearWebviewCache", async (): Promise<void> => {
+    const webviewSession = session.fromPartition(MAIBOT_WEBVIEW_PARTITION);
+    await webviewSession.clearCache();
+    await webviewSession.clearStorageData({
+      storages: ["cachestorage", "serviceworkers"],
+    });
   });
 
   ipcMain.handle("live2d:getLibraryRoot", async (): Promise<string> => {
@@ -2532,6 +2545,22 @@ export function registerAppIpc({
     await broadcastSnapshot();
     return config;
   });
+
+  ipcMain.handle(
+    "services:saveStartupSettings",
+    async (_event, settings: ServiceStartupSettings): Promise<ServiceStartupSettings> => {
+      const config = await serviceManager.saveStartupSettings(settings);
+      logStore.append(
+        "desktop",
+        "system",
+        config.useLocalDashboard
+          ? "MaiBot Core startup will use local Dashboard build"
+          : "MaiBot Core startup will use installed Dashboard package",
+      );
+      await broadcastSnapshot();
+      return config;
+    },
+  );
 
   const chooseResourcePath = async (title: string): Promise<string | undefined> => {
     const mainWindow = getMainWindow();

@@ -124,6 +124,9 @@ const fallbackSnapshot: DesktopSnapshot = {
     useEmbeddedTerminal: true,
     fontSize: 12,
   },
+  serviceStartupSettings: {
+    useLocalDashboard: false,
+  },
   openCodeSettings: {
     useBundledPluginInstructions: true,
   },
@@ -194,6 +197,7 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
     runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
+    serviceStartupSettings: snapshot.serviceStartupSettings ?? fallbackSnapshot.serviceStartupSettings,
     openCodeSettings: snapshot.openCodeSettings ?? fallbackSnapshot.openCodeSettings,
     appIconSettings: snapshot.appIconSettings ?? fallbackSnapshot.appIconSettings,
     networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,

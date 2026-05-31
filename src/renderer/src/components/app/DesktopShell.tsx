@@ -1,4 +1,5 @@
 ﻿import {
+  CheckCircle2,
   ChevronDown,
   Code2,
   GripHorizontal,
@@ -9,7 +10,6 @@
   MessageSquare,
   Play,
   Puzzle,
-  Radar,
   RefreshCw,
   Settings,
   Square,
@@ -66,6 +66,8 @@ function isServiceProcessActive(service: ServiceDescriptor): boolean {
 }
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
+const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
+const HOME_ENTRY_GUIDE_KEY = "maibot-onekey.home-entry-guide-seen.v2";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
 const toolbarMenuItemClassName =
   "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
@@ -111,6 +113,25 @@ function readPluginBuilderMode(): PluginBuilderMode {
   }
   const mode = window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY);
   return mode === "disabled" ? "disabled" : "agent";
+}
+
+function readStorageFlag(key: string): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStorageFlag(key: string): void {
+  try {
+    window.localStorage.setItem(key, "1");
+  } catch {
+    // Local storage can be unavailable in isolated previews.
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -844,6 +865,191 @@ function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | nul
   list.style.setProperty("--retro-tab-indicator-opacity", "1");
 }
 
+function HomeEntryGuide({
+  open,
+  onConfirm,
+}: {
+  open: boolean;
+  onConfirm: () => void;
+}): React.JSX.Element | null {
+  const [confirmed, setConfirmed] = useState({ localchat: false, messagePlatform: false });
+  const [targets, setTargets] = useState<{
+    localchat: DOMRect | null;
+    messagePlatform: DOMRect | null;
+  }>({ localchat: null, messagePlatform: null });
+
+  useEffect(() => {
+    if (!open) {
+      setConfirmed({ localchat: false, messagePlatform: false });
+      return;
+    }
+
+    const updateTargets = () => {
+      const localchat = document.querySelector<HTMLElement>("[data-home-guide-target='localchat']");
+      const messagePlatform = document.querySelector<HTMLElement>("[data-home-guide-target='message-platform']");
+      setTargets({
+        localchat: localchat?.getBoundingClientRect() ?? null,
+        messagePlatform: messagePlatform?.getBoundingClientRect() ?? null,
+      });
+    };
+
+    updateTargets();
+    const frame = window.requestAnimationFrame(updateTargets);
+    window.addEventListener("resize", updateTargets);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateTargets);
+    };
+  }, [open]);
+
+  const confirmLocalchat = useCallback(() => {
+    setConfirmed((current) => {
+      const next = { ...current, localchat: true };
+      if (next.messagePlatform) {
+        window.setTimeout(onConfirm, 0);
+      }
+      return next;
+    });
+  }, [onConfirm]);
+
+  const confirmMessagePlatform = useCallback(() => {
+    setConfirmed((current) => {
+      const next = { ...current, messagePlatform: true };
+      if (next.localchat) {
+        window.setTimeout(onConfirm, 0);
+      }
+      return next;
+    });
+  }, [onConfirm]);
+
+  if (!open) {
+    return null;
+  }
+
+  const localchatRect = targets.localchat;
+  const messagePlatformRect = targets.messagePlatform;
+  const messagePlatformBubbleTop = messagePlatformRect ? Math.max(64, messagePlatformRect.top - 150) : 300;
+  const messagePlatformBubbleLeft = messagePlatformRect ? Math.max(16, messagePlatformRect.left + 24) : 24;
+  const messagePlatformBubbleWidth = messagePlatformRect ? Math.min(420, messagePlatformRect.width - 48) : 420;
+  const spotlightRects = [
+    localchatRect
+      ? {
+          height: localchatRect.height + 10,
+          rx: 8,
+          x: localchatRect.left - 5,
+          y: localchatRect.top - 5,
+          width: localchatRect.width + 10,
+        }
+      : null,
+    messagePlatformRect
+      ? {
+          height: messagePlatformRect.height + 12,
+          rx: 12,
+          x: messagePlatformRect.left - 6,
+          y: messagePlatformRect.top - 6,
+          width: messagePlatformRect.width + 12,
+        }
+      : null,
+  ].filter((rect): rect is { height: number; rx: number; width: number; x: number; y: number } => Boolean(rect));
+  const viewportWidth = typeof window === "undefined" ? 0 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+  const overlayPath = [
+    `M0 0H${viewportWidth}V${viewportHeight}H0Z`,
+    ...spotlightRects.map((rect) => (
+      `M${rect.x + rect.rx} ${rect.y}` +
+      `H${rect.x + rect.width - rect.rx}` +
+      `Q${rect.x + rect.width} ${rect.y} ${rect.x + rect.width} ${rect.y + rect.rx}` +
+      `V${rect.y + rect.height - rect.rx}` +
+      `Q${rect.x + rect.width} ${rect.y + rect.height} ${rect.x + rect.width - rect.rx} ${rect.y + rect.height}` +
+      `H${rect.x + rect.rx}` +
+      `Q${rect.x} ${rect.y + rect.height} ${rect.x} ${rect.y + rect.height - rect.rx}` +
+      `V${rect.y + rect.rx}` +
+      `Q${rect.x} ${rect.y} ${rect.x + rect.rx} ${rect.y}` +
+      "Z"
+    )),
+  ].join("");
+
+  return (
+    <div className="fixed inset-0 z-[95]">
+      <svg aria-hidden className="pointer-events-none absolute inset-0 size-full">
+        <path d={overlayPath} fill="rgba(18,16,13,0.62)" fillRule="evenodd" />
+      </svg>
+      {spotlightRects.map((rect, index) => (
+        <div
+          className="pointer-events-none absolute border-2 border-primary shadow-[0_0_0_1px_rgb(255_255_255_/_0.25),0_12px_28px_rgb(0_0_0_/_0.18)]"
+          key={index}
+          style={{
+            borderRadius: rect.rx,
+            height: rect.height,
+            left: rect.x,
+            top: rect.y,
+            width: rect.width,
+          }}
+        />
+      ))}
+
+      <section
+        className="absolute w-[min(420px,calc(100vw-2rem))] rounded-md border border-border px-4 py-3 text-card-foreground shadow-2xl"
+        style={{
+          backgroundColor: "var(--retro-paper, var(--card))",
+          backgroundImage: "var(--retro-paper-texture, none)",
+          backgroundSize: "165px 165px",
+          left: localchatRect ? Math.max(16, localchatRect.left - 64) : 188,
+          top: localchatRect ? localchatRect.bottom + 20 : 96,
+        }}
+      >
+        <span
+          className="absolute -top-3 left-20 size-5 rotate-45 border-l border-t border-border"
+          style={{
+            backgroundColor: "var(--retro-paper, var(--card))",
+            backgroundImage: "var(--retro-paper-texture, none)",
+            backgroundSize: "165px 165px",
+          }}
+        />
+        <p className="text-sm font-semibold leading-relaxed text-foreground">
+          可以在聊聊页面进行本地聊天。
+        </p>
+        <div className="mt-3 flex justify-end">
+          <Button disabled={confirmed.localchat} onClick={confirmLocalchat} size="sm">
+            <CheckCircle2 />
+            {confirmed.localchat ? "已确定" : "确定"}
+          </Button>
+        </div>
+      </section>
+
+      <section
+        className="absolute rounded-md border border-border px-4 py-3 text-card-foreground shadow-2xl"
+        style={{
+          backgroundColor: "var(--retro-paper, var(--card))",
+          backgroundImage: "var(--retro-paper-texture, none)",
+          backgroundSize: "165px 165px",
+          left: messagePlatformBubbleLeft,
+          top: messagePlatformBubbleTop,
+          width: `min(${messagePlatformBubbleWidth}px, calc(100vw - 2rem))`,
+        }}
+      >
+          <span
+            className="absolute -bottom-3 left-16 size-5 rotate-45 border-b border-r border-border"
+            style={{
+              backgroundColor: "var(--retro-paper, var(--card))",
+              backgroundImage: "var(--retro-paper-texture, none)",
+              backgroundSize: "165px 165px",
+            }}
+          />
+          <p className="text-sm font-semibold leading-relaxed text-foreground">
+            可以在此处配置 NapCat 来和 QQ 进行连接。只有在这里配置之后，你才可以让麦麦连接 QQ。
+          </p>
+          <div className="mt-3 flex justify-end">
+            <Button disabled={confirmed.messagePlatform} onClick={confirmMessagePlatform} size="sm">
+              <CheckCircle2 />
+              {confirmed.messagePlatform ? "已确定" : "确定"}
+            </Button>
+          </div>
+      </section>
+    </div>
+  );
+}
+
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
@@ -858,6 +1064,7 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingMode, setFloatingMode] = useState(false);
   const [floatingExpanded, setFloatingExpanded] = useState(false);
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
+  const [homeEntryGuideSeen, setHomeEntryGuideSeen] = useState(() => readStorageFlag(HOME_ENTRY_GUIDE_KEY));
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const theme = useTheme();
@@ -943,6 +1150,11 @@ export function DesktopShell(): React.JSX.Element {
   const hasActiveServiceProcess =
     actionBusy === "all:start" ||
     services.some(isServiceProcessActive);
+  const showHomeEntryGuide =
+    activeTab === "home" &&
+    Boolean(snapshot?.startupAgreement.isConfirmed) &&
+    readStorageFlag(STARTUP_WIZARD_KEY) &&
+    !homeEntryGuideSeen;
 
   const openLogs = useCallback(() => {
     void window.maibotDesktop?.openLogsDirectory();
@@ -1055,6 +1267,11 @@ export function DesktopShell(): React.JSX.Element {
       setFloatingMode(state.isFloating === true);
       setFloatingEdge(state.floatingEdge ?? null);
     });
+  }, []);
+
+  const confirmHomeEntryGuide = useCallback(() => {
+    writeStorageFlag(HOME_ENTRY_GUIDE_KEY);
+    setHomeEntryGuideSeen(true);
   }, []);
 
   const syncWindowState = useCallback((state: WindowState) => {
@@ -1355,10 +1572,14 @@ export function DesktopShell(): React.JSX.Element {
                           : "px-2.5 data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none",
                       )}
                     >
-                      <Radar
-                        style={{ color: maibotService ? statusColor[maibotService.status] : "var(--muted-foreground)" }}
-                      />
-                      MaiBot
+                      <span
+                        className="inline-flex h-full items-center leading-none"
+                        style={{
+                          color: maibotService?.status === "running" && activeTab !== "maibot" ? "var(--primary)" : undefined,
+                        }}
+                      >
+                        MaiBot
+                      </span>
                     </TabsTrigger>
                     <ServiceTabControls
                       service={maibotService}
@@ -1370,6 +1591,7 @@ export function DesktopShell(): React.JSX.Element {
                     />
                   </div>
                   <TabsTrigger
+                    data-home-guide-target="localchat"
                     data-retro-active={useRetroChrome && activeTab === "localchat" ? "true" : undefined}
                     data-retro-tab-item={useRetroChrome ? "true" : undefined}
                     data-retro-tab-value={useRetroChrome ? "localchat" : undefined}
@@ -1714,6 +1936,7 @@ export function DesktopShell(): React.JSX.Element {
         {snapshot ? (
           <InitializationWizard onOpenTab={setActiveTab} onSnapshot={setSnapshot} snapshot={snapshot} />
         ) : null}
+          <HomeEntryGuide open={showHomeEntryGuide} onConfirm={confirmHomeEntryGuide} />
           <Toaster />
         </div>
       </div>

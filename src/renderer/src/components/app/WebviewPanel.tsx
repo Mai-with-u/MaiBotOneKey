@@ -33,6 +33,7 @@ type WebviewElement = HTMLElement & {
   getURL?: () => string;
   loadURL?: (url: string) => void;
   reload?: () => void;
+  reloadIgnoringCache?: () => void;
 };
 
 type DidFailLoadEvent = Event & {
@@ -49,6 +50,7 @@ type WebviewNavigationEvent = Event & {
 
 const LOAD_TIMEOUT_MS = 12_000;
 const AUTO_RETRY_SECONDS = 8;
+const CACHE_BUST_PARAM = "__maibot_webview_cache";
 
 function isDisplayableUrl(value: string | undefined): value is string {
   return Boolean(value && value !== "about:blank");
@@ -61,6 +63,16 @@ function externalOpen(url: string): void {
   }
 
   window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function withCacheBust(value: string, token: number): string {
+  try {
+    const nextUrl = new URL(value);
+    nextUrl.searchParams.set(CACHE_BUST_PARAM, String(token));
+    return nextUrl.toString();
+  } catch {
+    return value;
+  }
 }
 
 function describeError(message: string | null): string {
@@ -101,7 +113,9 @@ export function WebviewPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState(url);
   const [reloadKey, setReloadKey] = useState(0);
+  const [cacheBustToken, setCacheBustToken] = useState(() => Date.now());
   const [retryIn, setRetryIn] = useState<number | null>(null);
+  const webviewUrl = withCacheBust(url, cacheBustToken);
 
   const readLiveWebviewUrl = useCallback(() => {
     if (!domReadyRef.current) {
@@ -124,17 +138,34 @@ export function WebviewPanel({
     domReadyRef.current = false;
     setLoadState("loading");
     setErrorMessage(null);
+    setCacheBustToken(Date.now());
     setReloadKey((current) => current + 1);
   }, []);
 
-  const refresh = useCallback(() => {
+  const clearWebviewCache = useCallback(async () => {
+    await window.maibotDesktop?.clearWebviewCache?.();
+  }, []);
+
+  const refresh = useCallback(async () => {
     setLoadState("loading");
     setErrorMessage(null);
+    await clearWebviewCache().catch(() => undefined);
 
     const webview = webviewRef.current;
-    if (domReadyRef.current && webview?.reload) {
+    if (domReadyRef.current && webview?.loadURL) {
       try {
-        webview.reload();
+        const nextToken = Date.now();
+        const nextUrl = withCacheBust(url, nextToken);
+        setCacheBustToken(nextToken);
+        webview.loadURL(nextUrl);
+        return;
+      } catch {
+        /* fall through to reload/remount */
+      }
+    }
+    if (domReadyRef.current && (webview?.reloadIgnoringCache || webview?.reload)) {
+      try {
+        webview.reloadIgnoringCache?.() ?? webview.reload?.();
         return;
       } catch {
         /* fall through to remount */
@@ -142,7 +173,7 @@ export function WebviewPanel({
     }
 
     remountWebview();
-  }, [remountWebview]);
+  }, [clearWebviewCache, remountWebview, url]);
 
   const openExternal = useCallback(() => {
     externalOpen(currentUrl);
@@ -158,9 +189,11 @@ export function WebviewPanel({
 
     reloadTriggerRef.current = reloadTrigger;
     if (reloadTrigger) {
-      remountWebview();
+      void clearWebviewCache()
+        .catch(() => undefined)
+        .finally(remountWebview);
     }
-  }, [reloadTrigger, remountWebview]);
+  }, [clearWebviewCache, reloadTrigger, remountWebview]);
 
   // Reset state when URL or remount key changes.
   useEffect(() => {
@@ -172,7 +205,7 @@ export function WebviewPanel({
     setErrorMessage(null);
     setCurrentUrl(url);
     setRetryIn(null);
-  }, [url, reloadKey]);
+  }, [url, reloadKey, webviewUrl]);
 
   // Wire webview events.
   useEffect(() => {
@@ -376,10 +409,10 @@ export function WebviewPanel({
           className={`absolute inset-0 size-full bg-white transition-opacity duration-200 ${
             showWebview ? "opacity-100" : "opacity-0"
           }`}
-          key={`${url}:${reloadKey}`}
+          key={`${webviewUrl}:${reloadKey}`}
           partition="persist:maibot-webui"
           ref={webviewRef}
-          src={url}
+          src={webviewUrl}
           webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
         />
 

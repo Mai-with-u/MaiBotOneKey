@@ -552,9 +552,9 @@ export function PluginMarketPanel({
 
   return (
     <>
-      <div className={cn("h-full overflow-auto px-5 py-4", retro ? "bg-transparent" : "bg-background")}>
-        <div className="mx-auto grid max-w-6xl gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="plugin-market-surface h-full overflow-auto bg-transparent px-5 py-4">
+        <div className="plugin-market-layout mx-auto grid max-w-none gap-5">
+          <div className="plugin-market-heading flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-lg font-semibold">{title}</h2>
               {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
@@ -566,7 +566,7 @@ export function PluginMarketPanel({
                   onValueChange={(value) => onModeChange(value as PluginPanelMode)}
                   value={mode}
                 >
-                  <TabsList className="h-8 rounded-md bg-muted/40 p-1">
+                  <TabsList className="plugin-market-mode-tabs h-8 rounded-md bg-muted/40 p-1">
                     <TabsTrigger className="h-6 gap-1.5 px-2.5 text-[11px]" value="market">
                       <Store className="size-3.5" />
                       商店
@@ -591,7 +591,7 @@ export function PluginMarketPanel({
             </div>
           </div>
 
-          <div className="retro-plugin-search flex min-w-0 items-center gap-2 rounded-lg border border-border bg-card p-3">
+          <div className="plugin-market-toolbar retro-plugin-search flex min-w-0 items-center gap-2 rounded-lg border border-border bg-card p-3">
             <Search className="size-4 shrink-0 text-muted-foreground" />
             <Input
               className="h-8 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
@@ -603,7 +603,7 @@ export function PluginMarketPanel({
           </div>
 
           {isMarket ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2 text-xs">
+            <div className="plugin-market-toolbar flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2 text-xs">
               <label className="flex items-center gap-2 text-muted-foreground">
                 <Checkbox
                   checked={preferCompatible}
@@ -630,7 +630,7 @@ export function PluginMarketPanel({
           {loadState === "error" ? <ErrorPanel error={error} isMarket={isMarket} /> : null}
 
           {loadState === "loading" && (isMarket ? marketPlugins.length === 0 : installedPlugins.length === 0) ? (
-            <div className="grid min-h-56 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">
+            <div className="plugin-market-loading grid min-h-56 place-items-center rounded-lg border border-border bg-card text-sm text-muted-foreground">
               <span className="flex items-center gap-2">
                 <Loader2 className="size-4 animate-spin" />
                 正在读取插件数据
@@ -856,7 +856,7 @@ function PluginGrid({
   }
 
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="plugin-card-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {plugins.map((plugin) => {
         const repositoryUrl = pluginRepositoryUrl(plugin.manifest);
         const incompatibleReason = getPluginCompatibilityReason(plugin.manifest, maibotVersion);
@@ -867,7 +867,6 @@ function PluginGrid({
                 label: pluginNeedsUpdate(plugin) ? "更新" : "已安装",
                 icon: <Upload />,
                 disabled: !pluginNeedsUpdate(plugin) || !repositoryUrl,
-                placement: "top",
                 onClick: () =>
                   onOperate({
                     kind: "update",
@@ -883,7 +882,6 @@ function PluginGrid({
               {
                 label: "安装",
                 icon: <Download />,
-                iconOnly: true,
                 disabled: !repositoryUrl,
                 onClick: () => onOperate({ kind: "install", plugin, repositoryUrl, branch: "main", incompatibleReason }),
               },
@@ -940,7 +938,7 @@ function InstalledGrid({
   }
 
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="plugin-card-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {plugins.map((plugin) => {
         const updatePlugin = plugin.marketPlugin;
         const repositoryUrl = updatePlugin ? pluginRepositoryUrl(updatePlugin.manifest) : pluginRepositoryUrl(plugin.manifest);
@@ -959,14 +957,14 @@ function InstalledGrid({
                 label: "配置",
                 icon: <Settings />,
                 iconOnly: true,
-                variant: "ghost",
+                variant: "outline",
                 onClick: () => onConfigure(plugin),
               },
               {
                 label: updateLabel,
                 icon: <Upload />,
+                iconOnly: true,
                 disabled: !plugin.updateAvailable || !repositoryUrl,
-                placement: "top",
                 onClick: () =>
                   onOperate({
                     kind: "update",
@@ -979,9 +977,9 @@ function InstalledGrid({
               },
               {
                 label: "卸载",
-                icon: <Trash2 className="text-destructive" />,
+                icon: <Trash2 />,
                 iconOnly: true,
-                variant: "ghost",
+                variant: "destructive",
                 onClick: () => onOperate({ kind: "uninstall", plugin, branch: "main" }),
               },
             ]}
@@ -1071,7 +1069,7 @@ function PluginCard({
   return (
     <div
       aria-label={`查看 ${pluginTitle} 详情`}
-      className="plugin-card flex min-h-44 cursor-pointer flex-col rounded-lg border border-border bg-card p-4 transition-[background-color,border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-[var(--retro-rust,var(--destructive))] hover:bg-card/95 hover:shadow-md hover:shadow-black/5 focus-visible:border-[var(--retro-rust,var(--destructive))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="plugin-card plugin-market-card flex min-h-44 cursor-pointer flex-col rounded-lg border border-border bg-card p-4 transition-[background-color,border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-[var(--retro-rust,var(--destructive))] hover:bg-card/95 hover:shadow-md hover:shadow-black/5 focus-visible:border-[var(--retro-rust,var(--destructive))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       role="button"
@@ -1080,12 +1078,12 @@ function PluginCard({
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <p
-            className={cn("truncate font-sans text-base font-semibold leading-tight", titleMuted && "text-muted-foreground")}
+            className={cn("plugin-card-title truncate font-sans text-base font-semibold leading-tight", titleMuted && "text-muted-foreground")}
             title={pluginTitle}
           >
             {pluginTitle}
           </p>
-          <p className="mt-1 truncate text-xs text-muted-foreground">
+          <p className="plugin-card-meta mt-1 truncate text-xs text-muted-foreground">
             v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
           </p>
         </div>
@@ -1115,7 +1113,7 @@ function PluginCard({
               ))}
             </div>
           ) : null}
-          {status ? <Badge variant="outline">{status}</Badge> : null}
+          {status ? <Badge className="plugin-card-status-badge" variant="outline">{status}</Badge> : null}
           {runtimeState ? <PluginRuntimeLight state={runtimeState} /> : null}
           {compatibilityReason ? <Badge variant="warning">不兼容</Badge> : null}
         </div>
@@ -1125,10 +1123,10 @@ function PluginCard({
           {compatibilityReason}
         </p>
       ) : null}
-      <p className="mt-3 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
+      <p className="plugin-card-description mt-3 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
         {pluginDescription(plugin.manifest)}
       </p>
-      <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+      <div className="plugin-card-stats mt-3 flex items-center gap-3 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1">
           <Download className="size-3.5" />
           {downloads.toLocaleString()}
@@ -1146,7 +1144,16 @@ function PluginCard({
           {comments.toLocaleString()}
         </span>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1">
+      <div className="plugin-card-rule mt-3" />
+      <div className="plugin-card-footer-meta mt-3 space-y-1 text-xs text-muted-foreground">
+        <p className="truncate">
+          v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
+        </p>
+        <p className="truncate">
+          支持: {plugin.manifest.host_application?.min_version ?? "任意"} - {plugin.manifest.host_application?.max_version ?? "最新"}
+        </p>
+      </div>
+      <div className="plugin-card-tags mt-3 flex flex-wrap gap-1">
         {(plugin.manifest.categories ?? plugin.manifest.keywords ?? []).slice(0, 3).map((tag) => (
           <Badge key={tag} variant="secondary">
             {tag}
@@ -1154,7 +1161,7 @@ function PluginCard({
         ))}
       </div>
       <div className="mt-auto flex items-center justify-between gap-3 pt-4">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="plugin-card-secondary-controls flex min-w-0 flex-wrap items-center gap-2">
           {quickStats ? (
             <PluginCardQuickStats
               busy={quickStats.busy}
@@ -1180,7 +1187,7 @@ function PluginCard({
                 aria-label={toggleEnabled.checked ? "禁用插件" : "启用插件"}
                 aria-checked={toggleEnabled.checked}
                 className={cn(
-                  "plugin-card-action relative h-5 w-9 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                  "plugin-card-action relative h-5 w-9 rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
                   toggleEnabled.checked ? "border-primary bg-primary" : "border-border bg-muted",
                   toggleEnabled.busy && "cursor-wait opacity-70",
                 )}
@@ -1194,7 +1201,7 @@ function PluginCard({
               >
                 <span
                   className={cn(
-                    "absolute top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-full bg-background shadow-sm transition-transform",
+                    "absolute top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm bg-background shadow-sm transition-transform",
                     toggleEnabled.checked ? "translate-x-4" : "translate-x-0.5",
                   )}
                 >
@@ -1205,13 +1212,30 @@ function PluginCard({
           ) : null}
         </div>
         <div
-          className="flex shrink-0 items-center gap-1"
+          className="flex shrink-0 flex-wrap items-center justify-end gap-1"
           data-plugin-card-control="true"
           onClick={(event) => event.stopPropagation()}
         >
+          <Button
+            className="plugin-card-action plugin-card-detail-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDetail();
+            }}
+            size="sm"
+            title="查看详情"
+            variant="outline"
+          >
+            <Info />
+            详情
+          </Button>
           {bottomActions.map((action) => (
             <Button
-              className="plugin-card-action"
+              className={cn(
+                "plugin-card-action",
+                action.variant === "outline" ? "plugin-card-detail-action" : "plugin-card-primary-action",
+                action.iconOnly && "plugin-card-icon-action",
+              )}
               disabled={action.disabled}
               key={action.label}
               onClick={(event) => {
@@ -1261,7 +1285,7 @@ function PluginCardQuickStats({
 
   return (
     <div
-      className="flex min-w-0 flex-wrap items-center gap-1.5"
+      className="plugin-card-quick-stats flex min-w-0 flex-wrap items-center gap-1.5"
       data-plugin-card-control="true"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
@@ -1466,7 +1490,7 @@ function PluginRuntimeLight({ state }: { state: PluginRuntimeState }): React.JSX
   }[state];
 
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 text-[11px] text-muted-foreground">
+    <span className="plugin-runtime-light inline-flex h-6 items-center gap-1.5 px-2 text-[11px] text-muted-foreground">
       <span className={["size-2 rounded-full", meta.className].join(" ")} />
       {meta.label}
     </span>

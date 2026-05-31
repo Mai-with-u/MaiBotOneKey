@@ -1,7 +1,8 @@
 ﻿import {
-  Bot,
   CheckCircle2,
   Loader2,
+  MessageSquare,
+  Plug,
   RotateCcw,
   ShieldAlert,
   TerminalSquare,
@@ -36,10 +37,11 @@ interface InitializationWizardProps {
 
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
+const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
 const AUTO_START_DELAY_MS = 2000;
 const WEBUI_READY_TIMEOUT_MS = 90_000;
 const WEBUI_READY_POLL_MS = 1000;
-type WizardStep = "core" | "profile";
+type WizardStep = "core" | "profile" | "webui" | "localchat" | "message-platform";
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -75,6 +77,15 @@ function saveLocalUserName(userName: string): void {
   } catch {
     // Local storage can be unavailable in isolated previews.
   }
+}
+
+function requestMessagePlatformGuide(): void {
+  try {
+    localStorage.setItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY, "1");
+  } catch {
+    // Local storage can be unavailable in isolated previews.
+  }
+  window.dispatchEvent(new Event("maibot:open-message-platform-guide"));
 }
 
 function maibotServiceFrom(snapshot: DesktopSnapshot): ServiceDescriptor | undefined {
@@ -328,7 +339,60 @@ export function InitializationWizard({
     close();
   }, [close, localUserName, onOpenTab]);
 
+  const finishWebUiConfig = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await waitForMaiBotWebUi();
+      onOpenTab("localchat");
+      setStep("localchat");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }, [onOpenTab, waitForMaiBotWebUi]);
+
+  const finishLocalChatGuide = useCallback(() => {
+    onOpenTab("home");
+    setStep("message-platform");
+  }, [onOpenTab]);
+
+  const finishMessagePlatformGuide = useCallback(() => {
+    requestMessagePlatformGuide();
+    close();
+  }, [close]);
+
   useShortcut("Escape", close, { enabled: open && !busy, allowInEditable: true });
+
+  if (open && step === "webui") {
+    return (
+      <div className="pointer-events-none fixed inset-x-4 bottom-4 z-[100] flex justify-end">
+        <section className="pointer-events-auto w-full max-w-md rounded-lg border border-border bg-card/95 p-4 text-card-foreground shadow-2xl backdrop-blur">
+          <p className="text-sm font-semibold">在 WebUI 继续初始设置</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            请在 WebUI 中完成基础配置，并按提示重启 MaiBot Core；重启完成后点这里继续。
+          </p>
+          {error ? (
+            <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
+              <ShieldAlert className="size-3.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : null}
+          <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+            <Button disabled={busy} onClick={close} size="sm" variant="ghost">
+              稍后再说
+              <Kbd className="ml-1" keys="Esc" size="xs" tone="muted" />
+            </Button>
+            <Button disabled={busy} onClick={() => void finishWebUiConfig()} size="sm">
+              {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+              我已配置并重启
+            </Button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next && !busy) close(); }}>
@@ -341,8 +405,7 @@ export function InitializationWizard({
         size="lg"
       >
         <DialogHeader
-          icon={<Bot className="size-4" />}
-          title="初始化 MaiBot Core"
+          title={<span className="text-3xl font-bold tracking-normal">初始化</span>}
           tone="default"
         />
 
@@ -351,16 +414,11 @@ export function InitializationWizard({
             <>
               <section className="rounded-lg border border-border bg-muted/40 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                      <TerminalSquare className="size-5" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold">MaiBot Core</p>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        首次启动会检查运行目录、同步基础文件，并按需安装 Python 覆盖依赖。
-                      </p>
-                    </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">MaiBot Core</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      首次启动会检查运行目录、同步基础文件，并按需安装 Python 覆盖依赖。
+                    </p>
                   </div>
                   <Badge dot variant={ready ? "success" : running || starting || busy ? "warning" : "secondary"}>
                     {ready ? "WebUI 已就绪" : running ? "等待 WebUI" : starting || busy ? "初始化中" : "即将开始"}
@@ -410,12 +468,12 @@ export function InitializationWizard({
                 </div>
               </section>
 
-              <section className="rounded-lg border border-border bg-card p-4">
+              <section className="p-4">
                 <div className="flex items-center gap-2 text-[11px] font-semibold uppercase text-muted-foreground">
                   {ready ? <CheckCircle2 className="size-3.5 text-success" /> : <Loader2 className="size-3.5 animate-spin" />}
                   依赖安装进度
                 </div>
-                <div className="mt-3 max-h-36 space-y-1 overflow-auto rounded-md border border-border bg-muted/30 p-3">
+                <div className="mt-3 max-h-36 space-y-1 overflow-auto rounded-md border border-border p-3">
                   {logs.length > 0 ? (
                     logs.map((entry) => (
                       <p className="font-mono text-[11px] leading-relaxed text-muted-foreground" key={entry.id}>
@@ -430,28 +488,70 @@ export function InitializationWizard({
                 </div>
               </section>
             </>
-          ) : (
-            <section className="rounded-lg border border-border bg-muted/40 p-4">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                  <Bot className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">设置你的用户名</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    这个名称会用于随便聊聊里显示你的本地发送者名称。
-                  </p>
-                </div>
+          ) : step === "profile" ? (
+            <section className="px-4 py-2">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">麦麦如何称呼你？</p>
               </div>
-              <label className="mt-4 grid gap-1.5 text-xs font-medium">
-                你的用户名
+              <div className="mt-3 flex items-center gap-3">
                 <Input
                   autoFocus
+                  className="bg-transparent"
                   onChange={(event) => updateLocalUserName(event.target.value)}
                   placeholder="例如 小明"
                   value={localUserName}
                 />
-              </label>
+                <Button
+                  className="shrink-0 font-sans font-bold"
+                  onClick={finishProfile}
+                  size="sm"
+                  style={{ color: "var(--retro-paper, var(--background))" }}
+                >
+                  完成
+                </Button>
+              </div>
+            </section>
+          ) : step === "webui" ? (
+            <section className="rounded-lg border border-border bg-muted/40 p-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                  <TerminalSquare className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">在WebUI继续初始设置</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    已为你打开 MaiBot WebUI。请在 WebUI 中完成基础配置，并按提示重启 MaiBot Core；重启完成后回到这里继续。
+                  </p>
+                </div>
+              </div>
+            </section>
+          ) : step === "localchat" ? (
+            <section className="rounded-lg border border-border bg-muted/40 p-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                  <MessageSquare className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">试试本地聊天</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    已切到“聊聊”。这里可以直接和本机运行中的 MaiBot 对话，用来测试角色、回复风格和插件效果，不需要先连接 QQ。
+                  </p>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-lg border border-border bg-muted/40 p-4">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                  <Plug className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">连接 QQ 等 IM 平台</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    接下来会回到首页并打开 Message Platform 配置。配置 QQ 号和后端后，MaiBot 就可以通过 QQ 等即时通讯平台收发消息。
+                  </p>
+                </div>
+              </div>
             </section>
           )}
 
@@ -463,24 +563,34 @@ export function InitializationWizard({
           ) : null}
         </DialogBody>
 
-        <DialogFooter>
-          <Button disabled={busy} onClick={close} size="sm" variant="ghost">
-            稍后再说
-            <Kbd className="ml-1" keys="Esc" size="xs" tone="muted" />
-          </Button>
-          {step === "core" && error && !busy && !starting ? (
-            <Button onClick={retry} size="sm">
-              <RotateCcw />
-              重试
-            </Button>
-          ) : null}
-          {step === "profile" ? (
-            <Button onClick={finishProfile} size="sm">
-              <CheckCircle2 />
-              完成
-            </Button>
-          ) : null}
-        </DialogFooter>
+        {step !== "profile" && (step !== "core" || (error && !busy && !starting)) ? (
+          <DialogFooter>
+            {step === "core" && error && !busy && !starting ? (
+              <Button onClick={retry} size="sm">
+                <RotateCcw />
+                重试
+              </Button>
+            ) : null}
+            {step === "webui" ? (
+              <Button disabled={busy} onClick={() => void finishWebUiConfig()} size="sm">
+                {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+                我已配置并重启
+              </Button>
+            ) : null}
+            {step === "localchat" ? (
+              <Button onClick={finishLocalChatGuide} size="sm">
+                <CheckCircle2 />
+                下一步
+              </Button>
+            ) : null}
+            {step === "message-platform" ? (
+              <Button onClick={finishMessagePlatformGuide} size="sm">
+                <Plug />
+                打开配置
+              </Button>
+            ) : null}
+          </DialogFooter>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

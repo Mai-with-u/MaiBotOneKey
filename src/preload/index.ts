@@ -87,6 +87,7 @@ import type {
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
+  ServiceStartupSettings,
   SnowLumaResetResult,
   StartupAgreementConfirmResult,
   StartupAgreementState,
@@ -109,6 +110,7 @@ const desktopBridge: DesktopBridge = {
   openLogsDirectory: () => ipcRenderer.invoke("desktop:openLogsDirectory") as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke("desktop:openPath", path) as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url) as Promise<void>,
+  clearWebviewCache: () => ipcRenderer.invoke("desktop:clearWebviewCache") as Promise<void>,
   chooseCloseAction: (action: CloseAction) =>
     ipcRenderer.invoke("desktop:chooseCloseAction", action) as Promise<void>,
   onCloseRequest: (callback: () => void) => {
@@ -295,6 +297,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("services:selectPythonRuntimePath") as Promise<string | null>,
     saveTerminalSettings: (settings: TerminalSettings) =>
       ipcRenderer.invoke("services:saveTerminalSettings", settings) as Promise<TerminalSettings>,
+    saveStartupSettings: (settings: ServiceStartupSettings) =>
+      ipcRenderer.invoke("services:saveStartupSettings", settings) as Promise<ServiceStartupSettings>,
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) =>
       onIpc("services:snapshot", callback),
   },

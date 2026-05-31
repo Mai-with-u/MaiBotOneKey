@@ -1,6 +1,5 @@
 import {
   ArrowRight,
-  ArrowUp,
   ChevronDown,
   Download,
   ExternalLink,
@@ -24,6 +23,7 @@ import emojiDropImage from "@/assets/home-drops/emoji2.png";
 import maiDropImage from "@/assets/home-drops/mai.png";
 import mai2DropImage from "@/assets/home-drops/mai2.png";
 import maiMascotImage from "@/assets/mai2.png";
+import futureRetroMascotImage from "@/assets/mai-fr.png";
 import type {
   DesktopSnapshot,
   LauncherUpdateInfo,
@@ -64,6 +64,7 @@ type CompactChatState = "idle" | "connecting" | "connected" | "error";
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const QQ_WEBUI_PORT_STORAGE_PREFIX = "maibot.qqWebuiPort";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
+const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
 const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
 const MASCOT_INTRO_TRIGGER_CLICKS = 10;
 
@@ -642,6 +643,7 @@ function MessagePlatformConnectCard({
 }): React.JSX.Element {
   return (
     <button
+      data-home-guide-target="message-platform"
       className={cn(
         "grid gap-3 text-left transition-colors hover:border-primary",
         retro
@@ -726,10 +728,20 @@ function LauncherUpdateCard({
               )}
             />
           ) : null}
-          {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+          {updateBusy ? <Loader2 className="animate-spin" /> : <SolidUpgradeIcon />}
         </Button>
       </div>
     </section>
+  );
+}
+
+function SolidUpgradeIcon(): React.JSX.Element {
+  return (
+    <svg aria-hidden className="size-5" fill="none" viewBox="0 0 24 24">
+      <path d="M12 21V7" stroke="currentColor" strokeWidth="6" />
+      <path d="M4 12 12 4" stroke="currentColor" strokeWidth="6" />
+      <path d="M20 12 12 4" stroke="currentColor" strokeWidth="6" />
+    </svg>
   );
 }
 
@@ -764,18 +776,29 @@ function MaiBotOverviewCard({
             </span>
           ) : null}
           <div className="min-w-0">
-            <p className={cn("truncate", retro ? "retro-title text-[3rem] leading-none text-foreground" : "text-sm font-semibold")}>
-              {service?.name ?? "MaiBot Core"}
+            <p className={cn("flex min-w-0 items-center gap-2", retro ? "retro-title text-[3rem] leading-none text-foreground" : "text-sm font-semibold")}>
+              <span className="min-w-0 truncate">{service?.name ?? "MaiBot Core"}</span>
+              <span
+                aria-hidden
+                className={cn("shrink-0 translate-y-[8px] rounded-full", retro ? "size-3" : "size-2")}
+                style={{ backgroundColor: service?.status === "running" ? "#179f37" : "currentColor" }}
+              />
             </p>
           </div>
         </div>
-        {service ? <ServiceStatusText status={service.status} /> : null}
+        {/* {service ? <ServiceStatusText status={service.status} /> : null} */}
+      </div>
+
+      <div className="-mt-3 grid gap-1" aria-hidden>
+        <span className="h-1 bg-[var(--retro-ink)]" />
+        <span className="h-1 bg-[var(--retro-gold)]" />
+        <span className="h-1 bg-[var(--retro-rust)]" />
       </div>
 
       <div
         className={cn(
           "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
-          retro ? "border-t border-border/70 pt-4" : "rounded-md border border-border bg-muted/30 p-3",
+          retro ? "pt-1" : "rounded-md border border-border bg-muted/30 p-3",
         )}
       >
         <div className="min-w-0">
@@ -790,7 +813,10 @@ function MaiBotOverviewCard({
         <div className="grid min-w-0 gap-1 sm:min-w-44">
           <Button
             aria-label="更新 MaiBot"
-            className={cn("relative mt-1 justify-self-end", retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]")}
+            className={cn(
+              "relative mt-1 justify-self-end bg-transparent shadow-none hover:bg-transparent",
+              retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]",
+            )}
             disabled={updateBusy}
             onClick={onUpdate}
             size={retro ? "icon" : "sm"}
@@ -806,7 +832,7 @@ function MaiBotOverviewCard({
                 )}
               />
             ) : null}
-            {updateBusy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+            {updateBusy ? <Loader2 className="animate-spin" /> : <SolidUpgradeIcon />}
           </Button>
         </div>
       </div>
@@ -866,9 +892,6 @@ function HomeStatsPanel({
         type="button"
       >
         <span className="flex min-w-0 items-center gap-3">
-          <span className={cn("grid shrink-0 place-items-center bg-primary/10 text-primary", retro ? "size-11 border border-primary" : "size-8 rounded-md")}>
-            <ExternalLink className="size-4.5" />
-          </span>
           <span className="min-w-0">
             <span className={cn("block", retro ? "retro-title text-xl" : "text-sm font-semibold")}>官方文档</span>
             <span className={cn("block truncate", retro ? "font-mono text-xs text-foreground" : "text-[11px] text-muted-foreground")}>docs.mai-mai.org</span>
@@ -876,13 +899,10 @@ function HomeStatsPanel({
         </span>
         <ArrowRight className={cn("shrink-0", retro ? "size-5 text-primary" : "size-4 text-muted-foreground")} />
       </button>
-      <aside className={cn(retro ? "retro-panel grid gap-4 p-4 pl-6" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <aside className={cn(retro ? "retro-panel grid gap-4 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
         <div className="flex items-center gap-3">
-          <span className={cn("grid shrink-0 place-items-center text-primary", retro ? "retro-control size-9" : "size-8 rounded-md bg-primary/10")}>
-            <PackageCheck className="size-4.5" />
-          </span>
           <div className="min-w-0">
-            <p className={cn(retro ? "retro-title text-2xl" : "text-sm font-semibold")}>统计信息</p>
+            <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>统计信息</p>
           </div>
         </div>
 
@@ -1369,6 +1389,11 @@ function ElasticMascot({
   const rotate = Math.max(-9, Math.min(9, pose.rotate));
   const x = Math.max(-22, Math.min(22, pose.x));
   const y = Math.max(-18, Math.min(18, pose.y));
+  const mascotImage = placement === "retro-column" ? futureRetroMascotImage : maiMascotImage;
+  const mascotDirection = placement === "retro-column" ? -1 : 1;
+  const mascotTransformOrigin = placement === "retro-column" ? "0 0" : "82% 86%";
+  const mascotOffsetX = placement === "retro-column" ? `${164 + stretch * 82}%` : "0px";
+  const mascotOffsetY = placement === "retro-column" ? `${stretch * 47.3}%` : "0px";
 
   return (
     <div
@@ -1400,13 +1425,13 @@ function ElasticMascot({
         alt=""
         className={cn(
           "pointer-events-none absolute bottom-[-40px] w-32 select-none",
-          placement === "retro-column" ? "left-8" : "right-[-46px]",
+          placement === "retro-column" ? "right-14" : "right-[-46px]",
         )}
         draggable={false}
-        src={maiMascotImage}
+        src={mascotImage}
         style={{
-          transform: `translate3d(${x}px, ${y}px, 0) rotate(${rotate}deg) skew(${squash * 12}deg, ${-squash * 7}deg) scale(${1 + stretch}, ${1 - stretch * 0.55})`,
-          transformOrigin: "82% 86%",
+          transform: `translate3d(calc(${x}px + ${mascotOffsetX}), calc(${y}px + ${mascotOffsetY}), 0) rotate(${rotate}deg) skew(${squash * 12}deg, ${-squash * 7}deg) scale(${mascotDirection * (1 + stretch)}, ${1 - stretch * 0.55})`,
+          transformOrigin: mascotTransformOrigin,
           transition: "filter 160ms ease",
         }}
       />
@@ -1729,6 +1754,26 @@ export function HomePanel({
     setMessagePlatformAccount(snapshot.initState.qqAccount ?? "");
     setMessagePlatformDialogOpen(true);
   }, [snapshot.initState.qqAccount, snapshot.initState.qqBackend]);
+
+  useEffect(() => {
+    const openRequestedGuide = (): void => {
+      try {
+        if (localStorage.getItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY) !== "1") {
+          return;
+        }
+        localStorage.removeItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY);
+      } catch {
+        // Local storage may be unavailable in isolated previews.
+      }
+      openMessagePlatformDialog();
+    };
+
+    openRequestedGuide();
+    window.addEventListener("maibot:open-message-platform-guide", openRequestedGuide);
+    return () => {
+      window.removeEventListener("maibot:open-message-platform-guide", openRequestedGuide);
+    };
+  }, [openMessagePlatformDialog]);
 
   const setupMessagePlatform = useCallback(async () => {
     const qqAccount = messagePlatformAccount.trim();

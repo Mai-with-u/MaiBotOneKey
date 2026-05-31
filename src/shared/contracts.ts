@@ -129,6 +129,10 @@ export interface TerminalSettings {
   fontSize: number;
 }
 
+export interface ServiceStartupSettings {
+  useLocalDashboard: boolean;
+}
+
 export interface OpenCodeSettings {
   useBundledPluginInstructions: boolean;
 }
@@ -287,6 +291,7 @@ export interface DesktopSnapshot {
   runtimePathConfigs: RuntimePathConfig[];
   runtimeResourcePathConfigs: RuntimeResourcePathConfig[];
   terminalSettings: TerminalSettings;
+  serviceStartupSettings: ServiceStartupSettings;
   openCodeSettings: OpenCodeSettings;
   appIconSettings: AppIconSettings;
   networkProxySettings: NetworkProxySettings;
@@ -1169,6 +1174,7 @@ export interface DesktopBridge {
   openLogsDirectory: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   openExternal: (url: string) => Promise<void>;
+  clearWebviewCache: () => Promise<void>;
   chooseCloseAction: (action: CloseAction) => Promise<void>;
   onCloseRequest: (callback: () => void) => () => void;
   onSnapshot: (callback: (snapshot: DesktopSnapshot) => void) => () => void;
@@ -1294,6 +1300,7 @@ export interface DesktopBridge {
     listPythonRuntimeCandidates: () => Promise<PythonRuntimeCandidate[]>;
     selectPythonRuntimePath: () => Promise<string | null>;
     saveTerminalSettings: (settings: TerminalSettings) => Promise<TerminalSettings>;
+    saveStartupSettings: (settings: ServiceStartupSettings) => Promise<ServiceStartupSettings>;
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;
   };
   resources: {

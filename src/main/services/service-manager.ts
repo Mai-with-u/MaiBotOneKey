@@ -19,6 +19,7 @@ import type {
   ServiceDescriptor,
   ServiceHealth,
   ServiceId,
+  ServiceStartupSettings,
   ServiceStatus,
   TerminalMode,
   TerminalSettings,
@@ -100,6 +101,11 @@ interface StoredTerminalSettingsFile {
   fontSize?: number;
 }
 
+interface StoredServiceStartupSettingsFile {
+  version: 1;
+  useLocalDashboard?: boolean;
+}
+
 const STOP_FORCE_AFTER_MS = 10_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_RESTART_ATTEMPTS = 3;
@@ -110,6 +116,7 @@ const LOCAL_DASHBOARD_ENV_NAME = "MAIBOT_WEBUI_USE_LOCAL_DASHBOARD";
 const COMMAND_CONFIG_FILE = "service-commands.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const TERMINAL_SETTINGS_FILE = "terminal-settings.json";
+const SERVICE_STARTUP_SETTINGS_FILE = "service-startup-settings.json";
 const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
 const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   useEmbeddedTerminal: true,
@@ -272,8 +279,11 @@ function isDevRuntime(): boolean {
   );
 }
 
-function createServiceSpecificEnv(serviceId: ServiceId): Record<string, string> {
-  if (serviceId === "maibot" && isDevRuntime()) {
+function createServiceSpecificEnv(
+  serviceId: ServiceId,
+  startupSettings: ServiceStartupSettings,
+): Record<string, string> {
+  if (serviceId === "maibot" && startupSettings.useLocalDashboard) {
     return {
       [LOCAL_DASHBOARD_ENV_NAME]: "1",
     };
@@ -478,6 +488,44 @@ class TerminalSettingsStore {
   }
 }
 
+class ServiceStartupSettingsStore {
+  private readonly path: string;
+  private cache: ServiceStartupSettings;
+
+  constructor(paths: RuntimePaths) {
+    this.path = join(paths.userDataRoot, SERVICE_STARTUP_SETTINGS_FILE);
+    this.cache = this.read();
+  }
+
+  get(): ServiceStartupSettings {
+    return { ...this.cache };
+  }
+
+  async set(settings: ServiceStartupSettings): Promise<ServiceStartupSettings> {
+    this.cache = {
+      useLocalDashboard: settings.useLocalDashboard === true,
+    };
+    await mkdir(dirname(this.path), { recursive: true });
+    await writeFile(
+      this.path,
+      `${JSON.stringify({ version: 1, ...this.cache } satisfies StoredServiceStartupSettingsFile, null, 2)}\n`,
+      "utf8",
+    );
+    return this.get();
+  }
+
+  private read(): ServiceStartupSettings {
+    try {
+      const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredServiceStartupSettingsFile;
+      return {
+        useLocalDashboard: raw.useLocalDashboard ?? isDevRuntime(),
+      };
+    } catch {
+      return { useLocalDashboard: isDevRuntime() };
+    }
+  }
+}
+
 function normalizeTerminalFontSize(value: unknown): number {
   const fontSize = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(fontSize)) {
@@ -493,6 +541,7 @@ export class ServiceManager extends EventEmitter {
   private readonly commandStore: ServiceCommandStore;
   private readonly runtimePathStore: RuntimePathStore;
   private readonly terminalSettingsStore: TerminalSettingsStore;
+  private readonly startupSettingsStore: ServiceStartupSettingsStore;
   private readonly externalProcesses = new Map<ServiceId, ChildProcess>();
   private readonly logLineBuffers = new Map<ServiceId, string>();
 
@@ -507,6 +556,7 @@ export class ServiceManager extends EventEmitter {
     this.commandStore = new ServiceCommandStore(paths);
     this.runtimePathStore = new RuntimePathStore(paths);
     this.terminalSettingsStore = new TerminalSettingsStore(paths);
+    this.startupSettingsStore = new ServiceStartupSettingsStore(paths);
     this.definitions = this.createDefinitions();
     for (const definition of this.definitions) {
       this.states.set(definition.id, {
@@ -673,10 +723,10 @@ export class ServiceManager extends EventEmitter {
       const agreementEnv = await this.initManager.getAgreementEnvVars();
       const usePythonOverlay = definition.id === "maibot" && !this.isCustomPythonRuntimeEnabled();
       const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
-      const serviceEnv = createServiceSpecificEnv(definition.id);
+      const serviceEnv = createServiceSpecificEnv(definition.id, this.startupSettingsStore.get());
       const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv, ...serviceEnv };
       if (serviceEnv[LOCAL_DASHBOARD_ENV_NAME]) {
-        this.logs.append("maibot", "system", `dev local dashboard enabled: ${LOCAL_DASHBOARD_ENV_NAME}=1`);
+        this.logs.append("maibot", "system", `local dashboard enabled: ${LOCAL_DASHBOARD_ENV_NAME}=1`);
       }
       if (usePythonOverlay && this.pythonDependencyManager) {
         const syncedPythonOverrides = await this.initManager.ensureBundledPythonOverrides();
@@ -999,6 +1049,16 @@ export class ServiceManager extends EventEmitter {
 
   async saveTerminalSettings(settings: TerminalSettings): Promise<TerminalSettings> {
     const nextSettings = await this.terminalSettingsStore.set(settings);
+    this.emit("snapshot", this.snapshot());
+    return nextSettings;
+  }
+
+  getStartupSettings(): ServiceStartupSettings {
+    return this.startupSettingsStore.get();
+  }
+
+  async saveStartupSettings(settings: ServiceStartupSettings): Promise<ServiceStartupSettings> {
+    const nextSettings = await this.startupSettingsStore.set(settings);
     this.emit("snapshot", this.snapshot());
     return nextSettings;
   }

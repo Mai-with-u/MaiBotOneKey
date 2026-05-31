@@ -380,12 +380,12 @@ function LocalChatDisconnectedState({
         <h3 className="mt-5 text-[34px] font-black leading-tight text-[var(--retro-ink,var(--foreground))]">
           MaiBot 聊天服务未连接
         </h3>
-        <div className="mt-3 flex w-28 items-center gap-2 text-[var(--retro-rust,var(--primary))]">
-          <span className="h-px flex-1 bg-current" />
-          <span className="size-2 rounded-full bg-current" />
-          <span className="h-px flex-1 bg-current" />
+        <div className="my-7 flex w-full items-center gap-3 text-[var(--retro-ink-soft,var(--muted-foreground))]">
+          <span className="size-2.5 rounded-full bg-current opacity-70" />
+          <span className="h-px flex-1 bg-current opacity-45" />
+          <span className="size-2.5 rounded-full bg-current opacity-70" />
         </div>
-        <p className="mt-4 text-[15px] font-semibold leading-relaxed text-[var(--retro-ink-soft,var(--muted-foreground))]">
+        <p className="text-[15px] font-semibold leading-relaxed text-[var(--retro-ink-soft,var(--muted-foreground))]">
           请先启动 MaiBot Core
           <br />
           连接建立后即可在此发送消息
