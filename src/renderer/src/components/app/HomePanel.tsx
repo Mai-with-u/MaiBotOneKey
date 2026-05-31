@@ -1496,7 +1496,7 @@ export function HomePanel({
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
   const [moduleSourceExpanded, setModuleSourceExpanded] = useState(false);
   const [moduleSourceSaving, setModuleSourceSaving] = useState(false);
-  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("ghproxy");
+  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("official");
   const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
   const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
   const [maibotBranches, setMaibotBranches] = useState<ModuleBranchOption[]>([]);

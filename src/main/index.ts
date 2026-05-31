@@ -16,6 +16,7 @@ import { NetworkProxyManager } from "./services/network-proxy-manager";
 import { OpenCodeSettingsManager } from "./services/opencode-settings-manager";
 import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
+import { RemoteSourceManager } from "./services/remote-source-manager";
 import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
 import { isWindowVisuallyMaximized } from "./window-state";
@@ -31,6 +32,9 @@ const initManager = new InitManager(runtimePaths);
 const networkProxyManager = new NetworkProxyManager(runtimePaths);
 const openCodeSettingsManager = new OpenCodeSettingsManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
+const remoteSourceManager = new RemoteSourceManager({
+  getModuleSourceConfig: () => moduleUpdater.getSourceConfig(),
+});
 const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager);
 const ptySessionManager = new PtySessionManager();
 const QQ_COMPONENT_UPGRADE_STATE_FILE = "qq-component-upgrade-state.json";
@@ -395,6 +399,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       paths: runtimePaths,
       initManager,
       moduleUpdater,
+      remoteSourceManager,
       networkProxyManager,
       openCodeSettingsManager,
       pythonDependencyManager,

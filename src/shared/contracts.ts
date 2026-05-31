@@ -647,8 +647,21 @@ export interface MaiBotPluginListResult {
   stats?: Record<string, MaiBotPluginStats>;
 }
 
+export type GithubSourcePreset =
+  | "configured"
+  | "github"
+  | "gh-proxy-com"
+  | "v6-gh-proxy-org"
+  | "cdn-gh-proxy-com"
+  | "gitproxy-mrhjx-cn"
+  | "ghproxy-net"
+  | "ghproxy-vip";
+
+export type MaiBotPluginMarketSource = GithubSourcePreset;
+
 export interface MaiBotPluginListOptions {
   forceRefresh?: boolean;
+  marketSource?: MaiBotPluginMarketSource;
 }
 
 export interface MaiBotPluginStats {
@@ -1051,7 +1064,16 @@ export interface ModuleUpdateTarget {
   name: string;
 }
 
-export type ModuleSourcePreset = "ghproxy" | "official" | "custom";
+export type ModuleSourcePreset =
+  | "ghproxy"
+  | "gh-proxy-com"
+  | "v6-gh-proxy-org"
+  | "cdn-gh-proxy-com"
+  | "gitproxy-mrhjx-cn"
+  | "ghproxy-net"
+  | "ghproxy-vip"
+  | "official"
+  | "custom";
 
 export interface ModuleSourceOption {
   preset: Exclude<ModuleSourcePreset, "custom">;

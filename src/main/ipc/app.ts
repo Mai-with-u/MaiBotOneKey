@@ -108,6 +108,7 @@ import { NetworkProxyManager } from "../services/network-proxy-manager";
 import { OpenCodeSettingsManager } from "../services/opencode-settings-manager";
 import { PluginBuilderLibrary } from "../services/plugin-builder-library";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
+import { RemoteSourceManager } from "../services/remote-source-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
 import { getWindowWorkAreaBounds, isWindowVisuallyMaximized } from "../window-state";
@@ -187,6 +188,7 @@ interface RegisterAppIpcOptions {
   paths: RuntimePaths;
   initManager: InitManager;
   moduleUpdater: ModuleUpdater;
+  remoteSourceManager: RemoteSourceManager;
   networkProxyManager: NetworkProxyManager;
   openCodeSettingsManager: OpenCodeSettingsManager;
   pythonDependencyManager: PythonDependencyManager;
@@ -996,6 +998,7 @@ export function registerAppIpc({
   paths,
   initManager,
   moduleUpdater,
+  remoteSourceManager,
   networkProxyManager,
   openCodeSettingsManager,
   pythonDependencyManager,
@@ -1599,7 +1602,7 @@ export function registerAppIpc({
     new MaiBotPluginClient({
       maibotRoot: paths.maibotRoot,
       gitPath: initManager.getGitPath(),
-      getModuleSourceConfig: () => moduleUpdater.getSourceConfig(),
+      remoteSourceManager,
     });
   let maibotPluginClient = createMaibotPluginClient();
   const pluginBuilderLibrary = new PluginBuilderLibrary(paths.pluginBuilderRoot);

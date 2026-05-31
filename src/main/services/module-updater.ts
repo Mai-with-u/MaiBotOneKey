@@ -24,13 +24,31 @@ const GHPROXY_MAIBOT_REMOTE_URL = "https://gh.llkk.cc/https://github.com/Mai-wit
 const GHPROXY_NAPCAT_ADAPTER_REMOTE_URL =
   "https://gh.llkk.cc/https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
 const SOURCE_CONFIG_FILE = "module-sources.json";
+const MODULE_SOURCE_PREFIXES = [
+  { preset: "gh-proxy-com", label: "gh-proxy.com", prefix: "https://gh-proxy.com/" },
+  { preset: "v6-gh-proxy-org", label: "v6.gh-proxy.org", prefix: "https://v6.gh-proxy.org/" },
+  { preset: "cdn-gh-proxy-com", label: "cdn.gh-proxy.com", prefix: "https://cdn.gh-proxy.com/" },
+  { preset: "gitproxy-mrhjx-cn", label: "gitproxy.mrhjx.cn", prefix: "https://gitproxy.mrhjx.cn/" },
+  { preset: "ghproxy-net", label: "ghproxy.net", prefix: "https://ghproxy.net/" },
+  { preset: "ghproxy-vip", label: "ghproxy.vip", prefix: "https://ghproxy.vip/" },
+] as const satisfies ReadonlyArray<{
+  preset: Exclude<ModuleSourcePreset, "ghproxy" | "official" | "custom">;
+  label: string;
+  prefix: string;
+}>;
 const SOURCE_OPTIONS: ModuleSourceOption[] = [
   {
     preset: "ghproxy",
-    label: "GitHub 镜像代理",
+    label: "gh.llkk.cc",
     maibotUrl: GHPROXY_MAIBOT_REMOTE_URL,
     napcatAdapterUrl: GHPROXY_NAPCAT_ADAPTER_REMOTE_URL,
   },
+  ...MODULE_SOURCE_PREFIXES.map((source) => ({
+    preset: source.preset,
+    label: source.label,
+    maibotUrl: `${source.prefix}${OFFICIAL_MAIBOT_REMOTE_URL}`,
+    napcatAdapterUrl: `${source.prefix}${OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL}`,
+  })),
   {
     preset: "official",
     label: "官方 GitHub",
@@ -522,7 +540,7 @@ export class ModuleUpdater {
     try {
       const raw = JSON.parse(await readFile(this.sourceConfigPath, "utf8")) as Partial<ModuleSourceUpdate>;
       return {
-        preset: raw.preset ?? "ghproxy",
+        preset: raw.preset ?? "official",
         maibotUrl: raw.maibotUrl,
         napcatAdapterUrl: raw.napcatAdapterUrl,
       };
@@ -550,7 +568,9 @@ export class ModuleUpdater {
   }
 
   private normalizePreset(preset: ModuleSourcePreset | undefined): ModuleSourcePreset {
-    return preset === "official" || preset === "custom" ? preset : "ghproxy";
+    return preset && (preset === "custom" || SOURCE_OPTIONS.some((option) => option.preset === preset))
+      ? preset
+      : "official";
   }
 
   private async readGitValue(gitPath: string, cwd: string, args: string[]): Promise<string | undefined> {

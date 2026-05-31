@@ -24,6 +24,7 @@ import type {
   MaiBotPluginConfigValue,
   MaiBotPluginConfigLocalizedText,
   MaiBotInstalledPlugin,
+  MaiBotPluginMarketSource,
   MaiBotPluginDownloadResult,
   MaiBotPluginListOptions,
   MaiBotMarketPlugin,
@@ -38,14 +39,11 @@ import type {
   MaiBotPluginUserState,
   MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
-  ModuleSourceConfig,
 } from "../../shared/contracts";
+import { RemoteSourceManager } from "./remote-source-manager";
 
 const MARKET_URL =
   "https://raw.githubusercontent.com/Mai-with-u/plugin-repo/main/plugin_details.json";
-const OFFICIAL_GITHUB_BASE_URL = "https://github.com/";
-const OFFICIAL_RAW_GITHUB_BASE_URL = "https://raw.githubusercontent.com/";
-const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
 const PLUGIN_STATS_URL = process.env.MAIBOT_PLUGIN_STATS_BASE_URL
   ? `${process.env.MAIBOT_PLUGIN_STATS_BASE_URL.replace(/\/+$/u, "")}/stats/summary`
   : "http://hyybuth.xyz:10059/stats/summary";
@@ -73,7 +71,7 @@ const PLUGIN_TYPES = new Set<MaiBotPluginType>([
 export interface MaiBotPluginClientOptions {
   maibotRoot: string;
   gitPath: string;
-  getModuleSourceConfig?: () => Promise<ModuleSourceConfig>;
+  remoteSourceManager?: RemoteSourceManager;
 }
 
 interface GitRunResult {
@@ -84,6 +82,11 @@ interface GitRunResult {
 interface CacheFile<T> {
   timestamp: number;
   data: T;
+}
+
+interface MarketRequest {
+  cacheKey: string;
+  promise: Promise<MaiBotMarketPlugin[]>;
 }
 
 interface LocalPythonConfigInspection {
@@ -133,11 +136,11 @@ export class MaiBotPluginClient {
 
   private readonly gitPath: string;
 
-  private readonly getModuleSourceConfig?: () => Promise<ModuleSourceConfig>;
+  private readonly remoteSourceManager: RemoteSourceManager;
 
-  private marketCache: CacheFile<MaiBotMarketPlugin[]> | null = null;
+  private marketCache = new Map<string, CacheFile<MaiBotMarketPlugin[]>>();
 
-  private marketRequest: Promise<MaiBotMarketPlugin[]> | null = null;
+  private marketRequest: MarketRequest | null = null;
 
   private statsCache: CacheFile<Record<string, MaiBotPluginStats>> | null = null;
 
@@ -147,7 +150,7 @@ export class MaiBotPluginClient {
     this.maibotRoot = resolve(options.maibotRoot);
     this.pluginsRoot = resolve(this.maibotRoot, "plugins");
     this.gitPath = options.gitPath;
-    this.getModuleSourceConfig = options.getModuleSourceConfig;
+    this.remoteSourceManager = options.remoteSourceManager ?? new RemoteSourceManager();
   }
 
   async listInstalled(serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> {
@@ -489,13 +492,16 @@ export class MaiBotPluginClient {
       }
     }
 
-    const remoteUrl = repositoryUrl ? githubRawReadmeUrl(await this.resolveSourceUrl(repositoryUrl)) : undefined;
-    if (!remoteUrl) {
+    if (!repositoryUrl) {
       return { success: false, error: "Plugin README not found" };
     }
 
     for (const branch of ["main", "master"]) {
-      const response = await fetchWithTimeout(remoteUrl(branch)).catch(() => null);
+      const remoteUrl = await this.remoteSourceManager.resolveGitHubReadmeUrl(repositoryUrl, branch);
+      if (!remoteUrl) {
+        continue;
+      }
+      const response = await fetchWithTimeout(remoteUrl).catch(() => null);
       if (response?.ok) {
         return { success: true, content: await response.text() };
       }
@@ -632,23 +638,26 @@ export class MaiBotPluginClient {
   }
 
   private async getMarketPlugins(options: MaiBotPluginListOptions): Promise<MaiBotMarketPlugin[]> {
+    const marketSource = normalizeMarketSource(options.marketSource);
+    const cacheKey = marketSourceCacheKey(marketSource);
+    const cacheFileName = `onekey-plugin-market-list-cache-${cacheKey}.json`;
     const cached = await this.readCache(
-      "onekey-plugin-market-list-cache.json",
-      this.marketCache,
+      cacheFileName,
+      this.marketCache.get(cacheKey) ?? null,
       isMarketPluginList,
     );
     if (!options.forceRefresh && cached && Date.now() - cached.timestamp < PLUGIN_MARKET_CACHE_TTL_MS) {
-      this.marketCache = cached;
+      this.marketCache.set(cacheKey, cached);
       return cached.data;
     }
 
-    if (!this.marketRequest || options.forceRefresh) {
-      this.marketRequest = this.resolveSourceUrl(MARKET_URL)
+    if (!this.marketRequest || this.marketRequest.cacheKey !== cacheKey || options.forceRefresh) {
+      const promise = this.resolveMarketUrl(marketSource)
         .then((marketUrl) => fetchMarketPluginsUncached(marketUrl))
         .then(async (plugins) => {
           const nextCache = { timestamp: Date.now(), data: plugins };
-          this.marketCache = nextCache;
-          await this.writeCache("onekey-plugin-market-list-cache.json", nextCache);
+          this.marketCache.set(cacheKey, nextCache);
+          await this.writeCache(cacheFileName, nextCache);
           return plugins;
         })
         .catch((error) => {
@@ -658,11 +667,14 @@ export class MaiBotPluginClient {
           throw error;
         })
         .finally(() => {
-          this.marketRequest = null;
+          if (this.marketRequest?.cacheKey === cacheKey) {
+            this.marketRequest = null;
+          }
         });
+      this.marketRequest = { cacheKey, promise };
     }
 
-    return this.marketRequest;
+    return this.marketRequest.promise;
   }
 
   private async getPluginStatsSummary(options: MaiBotPluginListOptions): Promise<Record<string, MaiBotPluginStats>> {
@@ -729,15 +741,13 @@ export class MaiBotPluginClient {
   }
 
   private async resolveSourceUrl(url: string): Promise<string> {
-    if (!this.getModuleSourceConfig) {
-      return url;
-    }
+    return this.remoteSourceManager.resolveGitHubUrl(url, "plugin-git");
+  }
 
-    try {
-      return rewriteGithubUrl(url, (await this.getModuleSourceConfig()).maibotUrl);
-    } catch {
-      return url;
-    }
+  private async resolveMarketUrl(source: MaiBotPluginMarketSource): Promise<string> {
+    return source === "github"
+      ? this.remoteSourceManager.resolveOfficialGitHubUrl(MARKET_URL)
+      : this.remoteSourceManager.resolveGitHubUrl(MARKET_URL, "plugin-market", source);
   }
 
   private async readCache<T>(
@@ -1499,6 +1509,7 @@ function normalizePluginDisplayIcon(icon: unknown): MaiBotPluginDisplayIcon | un
   if (!isUnknownRecord(icon)) {
     return undefined;
   }
+
   const type = icon.type;
   const value = typeof icon.value === "string" ? icon.value.trim() : "";
   if ((type !== "lucide" && type !== "emoji" && type !== "local") || !value) {
@@ -1575,6 +1586,25 @@ function normalizeDateString(value: unknown): string | undefined {
     return new Date(value).toISOString();
   }
   return undefined;
+}
+
+function normalizeMarketSource(source: MaiBotPluginListOptions["marketSource"]): MaiBotPluginMarketSource {
+  switch (source) {
+    case "github":
+    case "gh-proxy-com":
+    case "v6-gh-proxy-org":
+    case "cdn-gh-proxy-com":
+    case "gitproxy-mrhjx-cn":
+    case "ghproxy-net":
+    case "ghproxy-vip":
+      return source;
+    default:
+      return "configured";
+  }
+}
+
+function marketSourceCacheKey(source: MaiBotPluginMarketSource): string {
+  return source;
 }
 
 function normalizeInstalledPlugin(raw: unknown): MaiBotInstalledPlugin | null {
@@ -1793,55 +1823,6 @@ function normalizePluginDownloadResult(rawData: unknown): MaiBotPluginDownloadRe
     downloads: normalizeStatsNumber(rawData.downloads),
     remaining: normalizeStatsNumber(rawData.remaining),
   };
-}
-
-function githubRawReadmeUrl(repositoryUrl: string): ((branch: string) => string) | undefined {
-  const match = repositoryUrl.match(/github\.com[/:]([^/\s]+)\/([^/\s#?]+?)(?:\.git)?(?:[/?#]|$)/iu);
-  if (!match) {
-    return undefined;
-  }
-  const [, owner, repo] = match;
-  return (branch: string) => `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`;
-}
-
-function rewriteGithubUrl(url: string, sourceMaibotUrl: string): string {
-  const sourcePrefix = githubSourcePrefix(sourceMaibotUrl);
-  if (!sourcePrefix) {
-    return url;
-  }
-
-  const normalized = normalizeGithubUrl(url);
-  return normalized ? `${sourcePrefix}${normalized}` : url;
-}
-
-function githubSourcePrefix(sourceMaibotUrl: string): string | undefined {
-  const normalizedSource = sourceMaibotUrl.trim();
-  const officialSourceIndex = normalizedSource.toLowerCase().indexOf(OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase());
-  if (officialSourceIndex > 0) {
-    return normalizedSource.slice(0, officialSourceIndex);
-  }
-  return undefined;
-}
-
-function normalizeGithubUrl(url: string): string | undefined {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const rawMatch = trimmed.match(/raw\.githubusercontent\.com\/([^/\s]+)\/([^/\s#?]+)\/(.+)$/iu);
-  if (rawMatch) {
-    const [, owner, repo, rest] = rawMatch;
-    return `${OFFICIAL_RAW_GITHUB_BASE_URL}${owner}/${repo.replace(/\.git$/iu, "")}/${rest}`;
-  }
-
-  const repoMatch = trimmed.match(/github\.com[/:]([^/\s]+)\/([^/\s#?]+?)(?:\.git)?(?:[/?#]|$)/iu);
-  if (!repoMatch) {
-    return undefined;
-  }
-
-  const [, owner, repo] = repoMatch;
-  return `${OFFICIAL_GITHUB_BASE_URL}${owner}/${repo.replace(/\.git$/iu, "")}.git`;
 }
 
 function resolvePluginStats(

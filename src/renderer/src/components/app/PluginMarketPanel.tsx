@@ -1,5 +1,5 @@
 import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
-import type { MaiBotPluginDisplayIcon, MaiBotPluginType, ServiceDescriptor } from "@shared/contracts";
+import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -84,6 +84,19 @@ const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
 ]);
 const SURPRISE_PLUGIN_COUNT = 4;
 const SURPRISE_CANDIDATE_LIMIT = 20;
+const PLUGIN_MARKET_SOURCE_STORAGE_KEY = "maibot_plugin_market_source";
+
+const MARKET_SOURCE_OPTIONS: Array<{ value: MaiBotPluginMarketSource; label: string }> = [
+  { value: "configured", label: "首页更新源" },
+  { value: "github", label: "GitHub" },
+  { value: "gh-proxy-com", label: "gh-proxy.com" },
+  { value: "v6-gh-proxy-org", label: "v6.gh-proxy.org" },
+  { value: "cdn-gh-proxy-com", label: "cdn.gh-proxy.com" },
+  { value: "gitproxy-mrhjx-cn", label: "gitproxy.mrhjx.cn" },
+  { value: "ghproxy-net", label: "ghproxy.net" },
+  { value: "ghproxy-vip", label: "ghproxy.vip" },
+];
+const MARKET_SOURCE_VALUES = new Set<MaiBotPluginMarketSource>(MARKET_SOURCE_OPTIONS.map((option) => option.value));
 
 const PLUGIN_TYPE_LABELS: Record<MaiBotPluginType, string> = {
   adapter: "适配器",
@@ -182,6 +195,17 @@ function isPluginCardControlTarget(target: EventTarget, currentTarget: HTMLEleme
   return control !== null && control !== currentTarget && currentTarget.contains(control);
 }
 
+function readStoredMarketSource(): MaiBotPluginMarketSource {
+  try {
+    const value = window.localStorage.getItem(PLUGIN_MARKET_SOURCE_STORAGE_KEY);
+    return MARKET_SOURCE_VALUES.has(value as MaiBotPluginMarketSource)
+      ? value as MaiBotPluginMarketSource
+      : "configured";
+  } catch {
+    return "configured";
+  }
+}
+
 export function PluginMarketPanel({
   mode,
   onModeChange,
@@ -202,6 +226,7 @@ export function PluginMarketPanel({
   const [query, setQuery] = useState("");
   const [preferCompatible, setPreferCompatible] = useState(true);
   const [marketSortBy, setMarketSortBy] = useState<MarketSortKey>("default");
+  const [marketSource, setMarketSource] = useState<MaiBotPluginMarketSource>(() => readStoredMarketSource());
   const [pluginTypeFilter, setPluginTypeFilter] = useState<PluginTypeFilter>("all");
   const [marketPlugins, setMarketPlugins] = useState<MarketPlugin[]>([]);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
@@ -229,7 +254,7 @@ export function PluginMarketPanel({
 
     try {
       if (mode === "market") {
-        const result = await fetchMarketPlugins(maibotService, { forceRefresh });
+        const result = await fetchMarketPlugins(maibotService, { forceRefresh, marketSource });
         setInstalledPlugins(result.installed);
         setMarketPlugins(result.market);
         setPluginStats(result.stats ?? {});
@@ -237,7 +262,7 @@ export function PluginMarketPanel({
         const installed = await fetchInstalledPlugins(maibotService);
         setInstalledPlugins(installed);
         setLoadState("ready");
-        void fetchMarketPlugins(maibotService, { forceRefresh })
+        void fetchMarketPlugins(maibotService, { forceRefresh, marketSource })
           .then((marketResult) => {
             setMarketPlugins(marketResult.market);
             setPluginStats(marketResult.stats ?? {});
@@ -253,11 +278,19 @@ export function PluginMarketPanel({
       setLoadState("error");
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [maibotService, mode]);
+  }, [maibotService, marketSource, mode]);
 
   useEffect(() => {
     void loadPlugins();
   }, [loadPlugins]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PLUGIN_MARKET_SOURCE_STORAGE_KEY, marketSource);
+    } catch {
+      // Source selection is still usable for the current session.
+    }
+  }, [marketSource]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -680,6 +713,20 @@ export function PluginMarketPanel({
                 </option>
               ))}
             </select>
+            {isMarket ? (
+              <select
+                className="h-8 shrink-0 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60"
+                onChange={(event) => setMarketSource(event.target.value as MaiBotPluginMarketSource)}
+                title="更新源"
+                value={marketSource}
+              >
+                {MARKET_SOURCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    更新源：{option.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
           </div>
 
           {isMarket ? (
