@@ -9,6 +9,7 @@ import type { WindowState } from "@shared/contracts";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/platform";
 import { useShortcut } from "@/lib/use-shortcut";
+import { useTheme, type ThemePreference } from "@/lib/use-theme";
 
 interface TitlebarProps {
   appVersion: string;
@@ -132,17 +133,52 @@ function WinControls({ isMaximized, retro = false }: { isMaximized: boolean; ret
   );
 }
 
+const themeLabels: Record<ThemePreference, string> = {
+  dark: "深夜",
+  light: "白天",
+  system: "随系统",
+};
+
+type SystemOrbPhase = "hold" | "fade" | null;
+
+function nextTitlebarTheme(current: ThemePreference): ThemePreference {
+  return current === "dark" ? "light" : current === "light" ? "system" : "dark";
+}
+
 export function Titlebar({
   appVersion,
   retro = false,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
   const state = useWindowState();
+  const theme = useTheme();
+  const [systemOrbPhase, setSystemOrbPhase] = useState<SystemOrbPhase>(null);
   const isMac = platform === "darwin";
   const bridge = window.maibotDesktop?.window;
+  const nextTheme = nextTitlebarTheme(theme.preference);
 
   useShortcut("Mod+M", () => bridge?.minimize());
   useShortcut("Mod+Shift+M", () => bridge?.toggleMaximize());
+
+  useEffect(() => {
+    if (theme.preference !== "system") {
+      setSystemOrbPhase(null);
+      return;
+    }
+    if (systemOrbPhase === "hold") {
+      const timeout = window.setTimeout(() => setSystemOrbPhase("fade"), 5000);
+      return () => window.clearTimeout(timeout);
+    }
+    if (systemOrbPhase === "fade") {
+      const timeout = window.setTimeout(() => setSystemOrbPhase(null), 700);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [systemOrbPhase, theme.preference]);
+
+  const switchTheme = (): void => {
+    setSystemOrbPhase(nextTheme === "system" ? "hold" : null);
+    theme.setPreference(nextTheme);
+  };
 
   return (
     <div
@@ -158,7 +194,33 @@ export function Titlebar({
 
       {/* Brand */}
       <div className="flex items-center gap-3 pl-5 pr-2" data-app-region="no-drag">
-        <span className="size-5 shrink-0 rounded-full bg-primary" />
+        <span
+          aria-label={`切换主题：当前${themeLabels[theme.preference]}，点击切换到${themeLabels[nextTheme]}`}
+          className="relative block size-5 shrink-0 overflow-hidden rounded-full bg-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          onClick={switchTheme}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              switchTheme();
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          title={`主题：${themeLabels[theme.preference]}，点击切换到${themeLabels[nextTheme]}`}
+        >
+          {systemOrbPhase ? (
+            <span
+              aria-hidden
+              className={cn(
+                "absolute inset-0 rounded-full transition-opacity duration-700",
+                systemOrbPhase === "fade" && "opacity-0",
+              )}
+              style={{
+                background: "linear-gradient(90deg, #c24d24 0 50%, hsl(19.2 44.7% 42.5%) 50% 100%)",
+              }}
+            />
+          ) : null}
+        </span>
       </div>
 
       <div
@@ -167,7 +229,7 @@ export function Titlebar({
           isMac ? "justify-center px-3" : "px-1",
         )}
       >
-        <span className={cn("retro-title truncate leading-none", retro ? "text-xl" : "text-lg")}>
+        <span className={cn("retro-title translate-y-[2.2px] truncate leading-none", retro ? "text-xl" : "text-lg")}>
           MaiBot OneKey
         </span>
       </div>

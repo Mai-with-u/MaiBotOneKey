@@ -354,7 +354,7 @@
 
 :root.dark[data-appearance-mode="future-retro"],
 :root.dark[data-appearance-mode="future-retro"][data-accent] {
-  --background: hsl(17 25.9% 10.6%);
+  --background: hsl(20, 35%, 7%);
   --foreground: hsl(34.3 31.8% 74.3%);
   --card: hsl(20 21.3% 13.9%);
   --card-foreground: hsl(34.3 31.8% 74.3%);
