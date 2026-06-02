@@ -8,7 +8,6 @@ import {
   DialogFooter,
   DialogHeader,
 } from "@/components/ui/dialog";
-import { Kbd } from "@/components/ui/kbd";
 import { getClosePreference, setClosePreference } from "@/lib/close-preference";
 import { useShortcut } from "@/lib/use-shortcut";
 
@@ -68,15 +67,12 @@ export function CloseChoiceDialog(): React.JSX.Element | null {
         <DialogFooter>
           <Button onClick={cancel} size="sm" variant="ghost">
             {"\u53d6\u6d88"}
-            <Kbd className="ml-1" keys="Esc" size="xs" tone="muted" />
           </Button>
           <Button onClick={minimize} size="sm" variant="outline">
             {"\u6700\u5c0f\u5316\u5230\u6258\u76d8"}
-            <Kbd className="ml-1" keys="Enter" size="xs" tone="muted" />
           </Button>
           <Button onClick={quit} size="sm" variant="destructive">
             {"\u5173\u95ed\u5e94\u7528"}
-            <Kbd className="ml-1" keys="Mod+Q" size="xs" tone="inverse" />
           </Button>
         </DialogFooter>
       </DialogContent>
