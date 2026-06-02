@@ -7,16 +7,38 @@ export type HomeContentCardType =
   | "stats"
   | "quick-actions"
   | "system-performance"
-  | "plugin-surprise";
+  | "plugin-surprise"
+  | "environment-health"
+  | "recent-logs"
+  | "path-overview"
+  | "daily-fortune"
+  | "service-heartbeat";
 
 export type HomeContentArea = "main" | "side";
 export type HomeContentWidth = "full" | "half";
+export type SystemPerformanceMetricKey = "rings" | "cpu" | "cores" | "memory" | "memory-percent" | "uptime" | "load" | "memory-bar";
+
+export interface SystemPerformanceCardSettings {
+  visibleMetrics?: SystemPerformanceMetricKey[];
+}
+
+export interface PluginSurpriseCardSettings {
+  count?: number;
+}
+
+export interface HomeContentCardSettingsMap {
+  "system-performance": SystemPerformanceCardSettings;
+  "plugin-surprise": PluginSurpriseCardSettings;
+}
+
+export type HomeContentCardSettings = SystemPerformanceCardSettings | PluginSurpriseCardSettings;
 
 export interface HomeContentEntry {
   id: string;
   type: HomeContentCardType;
   area: HomeContentArea;
   width?: HomeContentWidth;
+  settings?: HomeContentCardSettings;
 }
 
 export interface HomeContentCardOption {
@@ -38,6 +60,11 @@ export const HOME_CONTENT_CARD_OPTIONS: HomeContentCardOption[] = [
   { type: "quick-actions", label: "快捷操作", description: "路径、数据库和配置导入等快捷入口。" },
   { type: "system-performance", label: "系统性能", description: "显示 CPU、内存、运行时间等系统状态。" },
   { type: "plugin-surprise", label: "插件惊喜随心推荐", description: "从插件商店随机展示几个推荐插件。" },
+  { type: "environment-health", label: "环境检查", description: "汇总基础目录、Python、Git 等检查结果。" },
+  { type: "recent-logs", label: "最近日志", description: "显示桌面和服务最近输出，便于快速排查。" },
+  { type: "path-overview", label: "路径概览", description: "展示常用运行目录，并可快速打开。" },
+  { type: "daily-fortune", label: "今日小签", description: "给今天的启动器抽一条轻量提示。" },
+  { type: "service-heartbeat", label: "服务心跳", description: "用小灯阵展示各服务当前状态。" },
 ];
 
 export const DEFAULT_HOME_CONTENT_LAYOUT: HomeContentEntry[] = [
@@ -62,11 +89,12 @@ export function createHomeContentEntry(type: HomeContentCardType, area: HomeCont
     type,
     area,
     width: "full",
+    settings: defaultSettingsForType(type),
   };
 }
 
 export function cloneHomeContentLayout(layout: HomeContentEntry[]): HomeContentEntry[] {
-  return layout.map((entry) => ({ ...entry }));
+  return layout.map((entry) => ({ ...entry, settings: cloneSettings(entry.settings) }));
 }
 
 export function readHomeContentLayout(): HomeContentEntry[] {
@@ -119,11 +147,13 @@ function normalizeHomeContentLayout(value: unknown): HomeContentEntry[] {
     const id = (item as { id?: unknown }).id;
     const area = (item as { area?: unknown }).area;
     const width = (item as { width?: unknown }).width;
+    const settings = (item as { settings?: unknown }).settings;
     entries.push({
       id: typeof id === "string" && id.trim() ? id.trim() : cardType,
       type: cardType,
       area: area === "side" || area === "main" ? area : defaultAreaForType(cardType),
       width: width === "half" ? "half" : "full",
+      settings: normalizeSettingsForType(cardType, settings),
     });
   }
 
@@ -140,6 +170,70 @@ function normalizeHomeContentLayout(value: unknown): HomeContentEntry[] {
   }
 
   return orderDefaultSideCards(entries);
+}
+
+export const DEFAULT_SYSTEM_PERFORMANCE_METRICS: SystemPerformanceMetricKey[] = [
+  "rings",
+  "cpu",
+  "cores",
+  "memory",
+  "memory-percent",
+  "uptime",
+  "load",
+  "memory-bar",
+];
+
+export const DEFAULT_PLUGIN_SURPRISE_COUNT = 3;
+
+function defaultSettingsForType(type: HomeContentCardType): HomeContentEntry["settings"] {
+  switch (type) {
+    case "system-performance":
+      return { visibleMetrics: [...DEFAULT_SYSTEM_PERFORMANCE_METRICS] };
+    case "plugin-surprise":
+      return { count: DEFAULT_PLUGIN_SURPRISE_COUNT };
+    default:
+      return undefined;
+  }
+}
+
+function normalizeSettingsForType(type: HomeContentCardType, value: unknown): HomeContentEntry["settings"] {
+  if (!value || typeof value !== "object") {
+    return defaultSettingsForType(type);
+  }
+  switch (type) {
+    case "system-performance": {
+      const rawMetrics = (value as SystemPerformanceCardSettings).visibleMetrics;
+      const visibleMetrics = Array.isArray(rawMetrics)
+        ? rawMetrics.filter((metric): metric is SystemPerformanceMetricKey =>
+            DEFAULT_SYSTEM_PERFORMANCE_METRICS.includes(metric as SystemPerformanceMetricKey),
+          )
+        : DEFAULT_SYSTEM_PERFORMANCE_METRICS;
+      return {
+        visibleMetrics: visibleMetrics.length > 0 ? [...new Set(visibleMetrics)] : [...DEFAULT_SYSTEM_PERFORMANCE_METRICS],
+      };
+    }
+    case "plugin-surprise": {
+      const rawCount = Number((value as PluginSurpriseCardSettings).count);
+      return {
+        count: Number.isFinite(rawCount) ? Math.max(1, Math.min(6, Math.round(rawCount))) : DEFAULT_PLUGIN_SURPRISE_COUNT,
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+function cloneSettings(settings: HomeContentEntry["settings"]): HomeContentEntry["settings"] {
+  if (!settings) {
+    return undefined;
+  }
+  if ("visibleMetrics" in settings) {
+    return { visibleMetrics: settings.visibleMetrics ? [...settings.visibleMetrics] : undefined };
+  }
+  if ("count" in settings) {
+    return { count: settings.count };
+  }
+  return { ...settings };
 }
 
 function defaultAreaForType(type: HomeContentCardType): HomeContentArea {

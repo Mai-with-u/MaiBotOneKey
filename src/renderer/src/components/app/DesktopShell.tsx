@@ -1,7 +1,6 @@
 ﻿import {
   CheckCircle2,
   ChevronDown,
-  Code2,
   GripHorizontal,
   Home,
   Info,
@@ -769,52 +768,6 @@ function FloatingShell({
   );
 }
 
-function PluginCodingAgentPanel({
-  isStartingOpenCode,
-  onStartOpenCode,
-  retro,
-}: {
-  isStartingOpenCode: boolean;
-  onStartOpenCode: () => void;
-  retro: boolean;
-}): React.JSX.Element {
-  return (
-    <section className={cn("flex h-full min-h-0", retro ? "bg-transparent" : "bg-background")}>
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 overflow-auto px-6 py-6">
-        <div className="retro-panel retro-panel-bare p-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="retro-control grid size-8 shrink-0 place-items-center text-primary">
-                <Code2 className="size-4" />
-              </span>
-              <div className="min-w-0">
-                <h2 className="text-base font-semibold">内置 Coding Agent</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  当前编写器默认使用代码代理模式，适合直接用自然语言描述插件需求。
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="retro-panel retro-panel-bare grid min-h-[360px] flex-1 place-items-center p-6 text-center">
-          <div className="max-w-md">
-            <Code2 className="mx-auto size-8 text-primary" />
-            <h3 className="mt-3 text-sm font-semibold">Coding Agent 工作区</h3>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              OpenCode 会在 MaiBot 目录中启动，终端页会自动切到对应会话。
-            </p>
-            <Button className="mt-4" disabled={isStartingOpenCode} onClick={onStartOpenCode} size="sm" variant="default">
-              {isStartingOpenCode ? <Loader2 className="size-4 animate-spin" /> : <TerminalSquare className="size-4" />}
-              启动 OpenCode
-            </Button>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 const RETRO_TAB_ITEM_SELECTOR = "[data-retro-tab-item='true']";
 
 function retroTabItemForValue(list: HTMLElement, value: string): HTMLElement | null {
@@ -1059,6 +1012,7 @@ export function DesktopShell(): React.JSX.Element {
   const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
   const [requestedConfigPluginId, setRequestedConfigPluginId] = useState<string | null>(null);
+  const [requestedDetailPluginId, setRequestedDetailPluginId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [floatingMode, setFloatingMode] = useState(false);
@@ -1294,16 +1248,8 @@ export function DesktopShell(): React.JSX.Element {
       setActiveTab("plugins");
       return;
     }
-    if (value === "pluginbuilder") {
-      if (pluginBuilderMode === "disabled") {
-        setActiveTab("home");
-        return;
-      }
-      setActiveTab("pluginbuilder");
-      return;
-    }
     setActiveTab(value);
-  }, [pluginBuilderMode, showTerminalTab]);
+  }, [showTerminalTab]);
 
   const syncRetroTabIndicator = useCallback((value: string) => {
     const list = retroTabsRef.current;
@@ -1363,6 +1309,12 @@ export function DesktopShell(): React.JSX.Element {
     setActiveTab("plugins");
   }, []);
 
+  const openPluginDetail = useCallback((pluginId: string) => {
+    setPluginMode("market");
+    setRequestedDetailPluginId(pluginId);
+    setActiveTab("plugins");
+  }, []);
+
   const openTerminalSession = useCallback((sessionId: string) => {
     setTerminalFocusSessionId(sessionId);
     setActiveTab("terminal");
@@ -1409,12 +1361,6 @@ export function DesktopShell(): React.JSX.Element {
   }, [activeTab, showTerminalTab]);
 
   useEffect(() => {
-    if (activeTab === "pluginbuilder" && pluginBuilderMode === "disabled") {
-      setActiveTab("home");
-    }
-  }, [activeTab, pluginBuilderMode]);
-
-  useEffect(() => {
     if (!useRetroChrome) {
       moveRetroTabIndicator(retroTabsRef.current, null);
       syncRetroTabDividers(retroTabsRef.current);
@@ -1447,7 +1393,7 @@ export function DesktopShell(): React.JSX.Element {
       observer.disconnect();
       window.removeEventListener("resize", sync);
     };
-  }, [activeTab, maibotService?.status, pluginBuilderMode, showTerminalTab, syncRetroTabIndicator, useRetroChrome]);
+  }, [activeTab, maibotService?.status, showTerminalTab, syncRetroTabIndicator, useRetroChrome]);
 
   useEffect(() => {
     const list = retroTabsRef.current;
@@ -1623,18 +1569,6 @@ export function DesktopShell(): React.JSX.Element {
                     <Puzzle />
                     插件
                   </TabsTrigger>
-                  {pluginBuilderMode !== "disabled" ? (
-                    <TabsTrigger
-                      data-retro-active={useRetroChrome && activeTab === "pluginbuilder" ? "true" : undefined}
-                      data-retro-tab-item={useRetroChrome ? "true" : undefined}
-                      data-retro-tab-value={useRetroChrome ? "pluginbuilder" : undefined}
-                      value="pluginbuilder"
-                      className={cn("gap-1.5", useRetroChrome && "px-5")}
-                    >
-                      <Code2 />
-                      编写器
-                    </TabsTrigger>
-                  ) : null}
                 </TabsList>
                 <div
                   className={cn(
@@ -1803,6 +1737,7 @@ export function DesktopShell(): React.JSX.Element {
                   active={activeTab === "home"}
                   onEnterFloatingMode={enterFloatingMode}
                   onOpenPluginConfig={openPluginConfig}
+                  onOpenPluginDetail={openPluginDetail}
                   onOpenTab={selectTab}
                   onSnapshot={setSnapshot}
                   onRestartService={restartService}
@@ -1883,28 +1818,20 @@ export function DesktopShell(): React.JSX.Element {
               className="min-h-0 flex-1 overflow-hidden outline-none"
             >
               <PluginMarketPanel
+                isStartingPluginBuilder={isStartingOpenCode}
                 maibotService={maibotService}
                 maibotVersion={snapshot?.moduleVersions.maibotLocal}
                 mode={pluginMode}
                 onModeChange={setPluginMode}
+                onRequestedDetailHandled={() => setRequestedDetailPluginId(null)}
+                onStartPluginBuilder={startOpenCode}
                 onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
+                pluginBuilderEnabled={pluginBuilderMode !== "disabled"}
                 retro={useRetroChrome}
                 requestedConfigPluginId={requestedConfigPluginId}
+                requestedDetailPluginId={requestedDetailPluginId}
               />
             </TabsContent>
-
-            {pluginBuilderMode !== "disabled" ? (
-              <TabsContent
-                value="pluginbuilder"
-                className="min-h-0 flex-1 overflow-hidden outline-none"
-              >
-                <PluginCodingAgentPanel
-                  isStartingOpenCode={isStartingOpenCode}
-                  onStartOpenCode={startOpenCode}
-                  retro={useRetroChrome}
-                />
-              </TabsContent>
-            ) : null}
 
             <TabsContent
               value="settings"

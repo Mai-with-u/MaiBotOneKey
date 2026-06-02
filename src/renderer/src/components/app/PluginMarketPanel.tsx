@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, TerminalSquare, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
 import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor, SourceSettings } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -237,21 +237,31 @@ function readStoredMarketSource(): MaiBotPluginMarketSource {
 }
 
 export function PluginMarketPanel({
+  isStartingPluginBuilder = false,
   mode,
   onModeChange,
   maibotService,
   maibotVersion,
+  onStartPluginBuilder,
+  pluginBuilderEnabled = false,
   retro = false,
   requestedConfigPluginId,
+  requestedDetailPluginId,
   onRequestedConfigHandled,
+  onRequestedDetailHandled,
 }: {
+  isStartingPluginBuilder?: boolean;
   mode: PluginPanelMode;
   onModeChange?: (mode: PluginPanelMode) => void;
   maibotService?: ServiceDescriptor;
   maibotVersion?: string;
+  onStartPluginBuilder?: () => void;
+  pluginBuilderEnabled?: boolean;
   retro?: boolean;
   requestedConfigPluginId?: string | null;
+  requestedDetailPluginId?: string | null;
   onRequestedConfigHandled?: () => void;
+  onRequestedDetailHandled?: () => void;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [preferCompatible, setPreferCompatible] = useState(true);
@@ -434,6 +444,35 @@ export function PluginMarketPanel({
     }
     onRequestedConfigHandled?.();
   }, [installedPlugins, loadState, mode, onRequestedConfigHandled, openPluginConfig, requestedConfigPluginId]);
+
+  useEffect(() => {
+    if (!requestedDetailPluginId || loadState === "idle" || loadState === "loading") {
+      return;
+    }
+
+    const installedViews = installedPlugins.map((plugin) => {
+      const marketPlugin = marketPlugins.find((item) => item.id === plugin.id || item.manifest.id === plugin.manifest.id);
+      return {
+        ...plugin,
+        marketPlugin,
+        updateAvailable: marketPlugin
+          ? isNewerPluginVersion(pluginVersion(marketPlugin.manifest), pluginVersion(plugin.manifest))
+          : false,
+      } satisfies InstalledPluginView;
+    });
+    const plugin = [
+      ...marketPlugins,
+      ...installedViews,
+    ].find((item) => item.id === requestedDetailPluginId || item.manifest.id === requestedDetailPluginId);
+
+    if (plugin) {
+      setDetailRatingPanelOpen(false);
+      setDetailPlugin(plugin);
+    } else if (loadState === "ready") {
+      toast.error(`未找到插件：${requestedDetailPluginId}`);
+    }
+    onRequestedDetailHandled?.();
+  }, [installedPlugins, loadState, marketPlugins, onRequestedDetailHandled, requestedDetailPluginId]);
 
   const saveOpenPluginConfig = useCallback(async () => {
     if (!configPlugin || !configDraft) {
@@ -711,6 +750,7 @@ export function PluginMarketPanel({
   const maibotRunning = maibotService?.status === "running";
   const title = isMarket ? "插件商店" : "插件管理";
   const description = "";
+  const showPluginBuilderEntry = !isMarket && pluginBuilderEnabled && Boolean(onStartPluginBuilder);
 
   return (
     <>
@@ -722,6 +762,19 @@ export function PluginMarketPanel({
               {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
             </div>
             <div className="flex items-center gap-2">
+              {showPluginBuilderEntry ? (
+                <Button
+                  className="h-8 gap-1.5 px-2.5 text-[11px]"
+                  disabled={isStartingPluginBuilder}
+                  onClick={onStartPluginBuilder}
+                  size="sm"
+                  title="在终端中启动 OpenCode 插件编写器"
+                  variant="default"
+                >
+                  {isStartingPluginBuilder ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}
+                  启动编写器
+                </Button>
+              ) : null}
               {onModeChange ? (
                 <Tabs
                   className="shrink-0"

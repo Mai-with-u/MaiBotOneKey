@@ -1,10 +1,15 @@
 import {
   ArrowRight,
   ChevronDown,
+  CheckCircle2,
+  CircleAlert,
   Cpu,
   Download,
   ExternalLink,
+  FolderOpen,
   GripVertical,
+  HeartPulse,
+  ListTree,
   Loader2,
   Maximize2,
   PackageCheck,
@@ -17,6 +22,7 @@ import {
   Send,
   Sparkles,
   Square,
+  WandSparkles,
   Wrench,
   X,
 } from "lucide-react";
@@ -57,6 +63,8 @@ import { Input } from "@/components/ui/input";
 import {
   HOME_CONTENT_CARD_OPTIONS,
   HOME_CONTENT_LAYOUT_CHANGE_EVENT,
+  DEFAULT_PLUGIN_SURPRISE_COUNT,
+  DEFAULT_SYSTEM_PERFORMANCE_METRICS,
   createHomeContentEntry,
   homeContentCardLabel,
   readHomeContentLayout,
@@ -66,6 +74,9 @@ import {
   type HomeContentCardType,
   type HomeContentEntry,
   type HomeContentWidth,
+  type PluginSurpriseCardSettings,
+  type SystemPerformanceCardSettings,
+  type SystemPerformanceMetricKey,
 } from "@/lib/home-content-layout";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
 import {
@@ -1127,7 +1138,231 @@ function QuickActionsCard({ onOpenQuickActions, retro }: { onOpenQuickActions: (
   );
 }
 
-function SystemPerformanceCard({ retro }: { retro: boolean }): React.JSX.Element {
+function EnvironmentHealthCard({ snapshot, retro }: { snapshot: DesktopSnapshot; retro: boolean }): React.JSX.Element {
+  const checks = snapshot.initState.checks ?? [];
+  const warningCount = checks.filter((check) => check.status === "warning").length;
+  const errorCount = checks.filter((check) => check.status === "error").length;
+  const issueChecks = checks.filter((check) => check.status !== "ok").slice(0, 4);
+  const healthy = errorCount === 0 && warningCount === 0 && snapshot.initState.isReady;
+
+  return (
+    <section className={cn(retro ? "retro-panel grid gap-3 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>环境检查</p>
+          <p className="text-[11px] text-muted-foreground">
+            {healthy ? "基础运行环境已就绪" : `${errorCount} 个错误 / ${warningCount} 个提醒`}
+          </p>
+        </div>
+        <span
+          className={cn(
+            "grid size-8 shrink-0 place-items-center rounded-md",
+            healthy ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600",
+          )}
+        >
+          {healthy ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}
+        </span>
+      </div>
+      <div className="grid gap-2 text-xs">
+        <DetailRow label="检查项" value={`${checks.length}`} retro={retro} />
+        <DetailRow label="错误" value={`${errorCount}`} retro={retro} />
+        <DetailRow label="提醒" value={`${warningCount}`} retro={retro} />
+      </div>
+      <div className={cn("grid gap-2 pt-3", retro ? "retro-rule" : "border-t border-border")}>
+        {issueChecks.length > 0 ? issueChecks.map((check) => (
+          <div className="min-w-0" key={check.id}>
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <span className={cn("size-1.5 rounded-full", check.status === "error" ? "bg-destructive" : "bg-amber-500")} />
+              <span className="truncate">{check.label}</span>
+            </div>
+            <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{check.detail}</p>
+          </div>
+        )) : (
+          <p className="text-xs text-muted-foreground">暂无需要处理的环境问题。</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function formatLogTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return "--:--";
+  }
+  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(timestamp);
+}
+
+function RecentLogsCard({ snapshot, retro }: { snapshot: DesktopSnapshot; retro: boolean }): React.JSX.Element {
+  const logs = [...(snapshot.recentLogs ?? [])].slice(-5).reverse();
+
+  return (
+    <section className={cn(retro ? "retro-panel grid gap-3 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>最近日志</p>
+          <p className="text-[11px] text-muted-foreground">桌面与服务最新输出</p>
+        </div>
+        <ListTree className="size-4 text-primary" />
+      </div>
+      {logs.length > 0 ? (
+        <div className="grid gap-2">
+          {logs.map((log) => (
+            <div className={cn("min-w-0 border-l-2 pl-2", log.stream === "stderr" ? "border-destructive/70" : "border-primary/60")} key={log.id}>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                <span className="truncate">{log.source} · {log.stream}</span>
+                <span className="shrink-0 font-mono">{formatLogTime(log.timestamp)}</span>
+              </div>
+              <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed">{log.message}</p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className={cn("border px-3 py-6 text-center text-xs text-muted-foreground", retro ? "rounded-sm" : "rounded-md")}>
+          暂无日志输出
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PathOverviewCard({ snapshot, retro }: { snapshot: DesktopSnapshot; retro: boolean }): React.JSX.Element {
+  const paths = [
+    { label: "MaiBot", value: snapshot.paths.maibotRoot },
+    { label: "NapCat", value: snapshot.paths.napcatRoot },
+    { label: "日志", value: snapshot.paths.logsRoot },
+    { label: "用户数据", value: snapshot.paths.userDataRoot },
+  ].filter((item) => item.value);
+
+  return (
+    <section className={cn(retro ? "retro-panel grid gap-3 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>路径概览</p>
+          <p className="text-[11px] text-muted-foreground">常用目录快速打开</p>
+        </div>
+        <FolderOpen className="size-4 text-primary" />
+      </div>
+      <div className="grid gap-2">
+        {paths.map((item) => (
+          <button
+            className={cn(
+              "flex min-w-0 items-center justify-between gap-2 border px-2.5 py-2 text-left text-xs transition-colors hover:border-primary/45 hover:bg-muted/40",
+              retro ? "rounded-sm" : "rounded-md",
+            )}
+            key={item.label}
+            onClick={() => void window.maibotDesktop?.openPath(item.value)}
+            title={item.value}
+            type="button"
+          >
+            <span className="shrink-0 font-medium">{item.label}</span>
+            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{item.value}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const DAILY_FORTUNES = [
+  { title: "适合更新依赖", detail: "今天适合把插件和 WebUI 状态顺手看一眼。", tone: "bg-emerald-500/10 text-emerald-600" },
+  { title: "适合整理配置", detail: "路径、账号、端口都清楚的时候，问题会少一半。", tone: "bg-sky-500/10 text-sky-600" },
+  { title: "适合先启动再观察", detail: "让服务跑起来，看日志说话。", tone: "bg-violet-500/10 text-violet-600" },
+  { title: "适合做个备份", detail: "改配置前留一份副本，心情会稳定很多。", tone: "bg-amber-500/10 text-amber-600" },
+  { title: "适合逛逛插件", detail: "也许今天会遇到一个刚好能省事的小插件。", tone: "bg-rose-500/10 text-rose-600" },
+];
+
+function dailyFortuneIndex(): number {
+  const todayKey = new Intl.DateTimeFormat("zh-CN", { dateStyle: "short" }).format(Date.now());
+  let hash = 0;
+  for (const char of todayKey) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash % DAILY_FORTUNES.length;
+}
+
+function DailyFortuneCard({ retro }: { retro: boolean }): React.JSX.Element {
+  const fortune = DAILY_FORTUNES[dailyFortuneIndex()];
+
+  return (
+    <section className={cn(retro ? "retro-panel grid gap-3 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>今日小签</p>
+          <p className="text-[11px] text-muted-foreground">每天固定一条轻量提示</p>
+        </div>
+        <span className={cn("grid size-8 shrink-0 place-items-center rounded-md", fortune.tone)}>
+          <WandSparkles className="size-4" />
+        </span>
+      </div>
+      <div className={cn("border px-3 py-3", retro ? "rounded-sm" : "rounded-md bg-muted/25")}>
+        <p className="text-sm font-semibold">{fortune.title}</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{fortune.detail}</p>
+      </div>
+    </section>
+  );
+}
+
+function ServiceHeartbeatCard({ snapshot, retro }: { snapshot: DesktopSnapshot; retro: boolean }): React.JSX.Element {
+  const services = snapshot.services;
+  const runningCount = services.filter((service) => service.status === "running").length;
+
+  return (
+    <section className={cn(retro ? "retro-panel grid gap-3 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>服务心跳</p>
+          <p className="text-[11px] text-muted-foreground">{runningCount} / {services.length} 正在运行</p>
+        </div>
+        <HeartPulse className="size-4 text-primary" />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {services.map((service) => (
+          <div
+            className={cn("flex min-w-0 items-center gap-2 border px-2.5 py-2 text-xs", retro ? "rounded-sm" : "rounded-md")}
+            key={service.id}
+            title={`${service.name}: ${statusText[service.status]}`}
+          >
+            <span
+              className={cn(
+                "size-2.5 shrink-0 rounded-full",
+                service.status === "running" && "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]",
+                service.status === "starting" && "animate-pulse bg-amber-500",
+                service.status === "stopping" && "animate-pulse bg-amber-500",
+                service.status === "error" && "bg-destructive",
+                service.status === "stopped" && "bg-muted-foreground/35",
+              )}
+            />
+            <span className="min-w-0 truncate font-medium">{service.name}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const SYSTEM_PERFORMANCE_METRIC_OPTIONS: Array<{ key: SystemPerformanceMetricKey; label: string }> = [
+  { key: "rings", label: "环形占用" },
+  { key: "cpu", label: "CPU" },
+  { key: "cores", label: "核心" },
+  { key: "memory", label: "内存" },
+  { key: "memory-percent", label: "内存占用" },
+  { key: "uptime", label: "运行时间" },
+  { key: "load", label: "负载" },
+  { key: "memory-bar", label: "内存进度条" },
+];
+
+function systemPerformanceMetrics(settings: SystemPerformanceCardSettings | undefined): Set<SystemPerformanceMetricKey> {
+  const metrics = settings?.visibleMetrics?.length ? settings.visibleMetrics : DEFAULT_SYSTEM_PERFORMANCE_METRICS;
+  return new Set(metrics);
+}
+
+function SystemPerformanceCard({
+  retro,
+  settings,
+}: {
+  retro: boolean;
+  settings?: SystemPerformanceCardSettings;
+}): React.JSX.Element {
   const [performanceInfo, setPerformanceInfo] = useState<SystemPerformanceSnapshot | null>(null);
 
   useEffect(() => {
@@ -1160,6 +1395,7 @@ function SystemPerformanceCard({ retro }: { retro: boolean }): React.JSX.Element
   const loadText = performanceInfo?.loadAverage.some((value) => value > 0)
     ? performanceInfo.loadAverage.map((value) => value.toFixed(2)).join(" / ")
     : "当前系统不可用";
+  const visibleMetrics = systemPerformanceMetrics(settings);
   const metricRing = (label: string, value: string, percent: number): React.JSX.Element => {
     const radius = 34;
     const circumference = 2 * Math.PI * radius;
@@ -1201,57 +1437,71 @@ function SystemPerformanceCard({ retro }: { retro: boolean }): React.JSX.Element
         </div>
         <Cpu className="size-4 text-primary" />
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        {metricRing("CPU", cpuValue, cpuPercent)}
-        {metricRing("内存", performanceInfo ? `${memoryPercent.toFixed(0)}%` : "--", memoryPercent)}
-      </div>
-      <div className="grid gap-2 text-xs">
-        <DetailRow label="CPU" value={cpuValue} retro={retro} />
-        <DetailRow label="核心" value={performanceInfo ? `${performanceInfo.cpuCores}` : undefined} retro={retro} />
-        <DetailRow label="内存" value={memoryText} retro={retro} />
-        <DetailRow label="内存占用" value={performanceInfo ? `${performanceInfo.memoryUsedPercent.toFixed(0)}%` : undefined} retro={retro} />
-        <DetailRow label="运行时间" value={formatUptime(performanceInfo?.uptimeSeconds)} retro={retro} />
-        <DetailRow label="负载" value={loadText} retro={retro} />
-      </div>
-      <div className="h-2 overflow-hidden rounded-sm bg-muted">
-        <div
-          className="h-full rounded-sm bg-primary transition-[width]"
-          style={{ width: `${Math.max(0, Math.min(100, performanceInfo?.memoryUsedPercent ?? 0))}%` }}
-        />
-      </div>
+      {visibleMetrics.has("rings") ? (
+        <div className="grid grid-cols-2 gap-3">
+          {metricRing("CPU", cpuValue, cpuPercent)}
+          {metricRing("内存", performanceInfo ? `${memoryPercent.toFixed(0)}%` : "--", memoryPercent)}
+        </div>
+      ) : null}
+      {SYSTEM_PERFORMANCE_METRIC_OPTIONS.some((option) => option.key !== "rings" && option.key !== "memory-bar" && visibleMetrics.has(option.key)) ? (
+        <div className="grid gap-2 text-xs">
+          {visibleMetrics.has("cpu") ? <DetailRow label="CPU" value={cpuValue} retro={retro} /> : null}
+          {visibleMetrics.has("cores") ? <DetailRow label="核心" value={performanceInfo ? `${performanceInfo.cpuCores}` : undefined} retro={retro} /> : null}
+          {visibleMetrics.has("memory") ? <DetailRow label="内存" value={memoryText} retro={retro} /> : null}
+          {visibleMetrics.has("memory-percent") ? <DetailRow label="内存占用" value={performanceInfo ? `${performanceInfo.memoryUsedPercent.toFixed(0)}%` : undefined} retro={retro} /> : null}
+          {visibleMetrics.has("uptime") ? <DetailRow label="运行时间" value={formatUptime(performanceInfo?.uptimeSeconds)} retro={retro} /> : null}
+          {visibleMetrics.has("load") ? <DetailRow label="负载" value={loadText} retro={retro} /> : null}
+        </div>
+      ) : null}
+      {visibleMetrics.has("memory-bar") ? (
+        <div className="h-2 overflow-hidden rounded-sm bg-muted">
+          <div
+            className="h-full rounded-sm bg-primary transition-[width]"
+            style={{ width: `${Math.max(0, Math.min(100, performanceInfo?.memoryUsedPercent ?? 0))}%` }}
+          />
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function PluginSurpriseHomeCard({
   active,
+  onOpenPluginDetail,
   onOpenPlugins,
   retro,
+  settings,
 }: {
   active: boolean;
+  onOpenPluginDetail: (pluginId: string) => void;
   onOpenPlugins: () => void;
   retro: boolean;
+  settings?: PluginSurpriseCardSettings;
 }): React.JSX.Element {
   const [plugins, setPlugins] = useState<MarketPlugin[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadedCount, setLoadedCount] = useState(0);
+  const count = Math.max(1, Math.min(6, settings?.count ?? DEFAULT_PLUGIN_SURPRISE_COUNT));
 
   const loadPlugins = useCallback(async () => {
     setLoading(true);
     try {
       const result = await fetchMarketPlugins(undefined, { marketSource: "auto" });
-      setPlugins(pickRandomPlugins(result.market, 3));
+      setPlugins(pickRandomPlugins(result.market, count));
+      setLoadedCount(count);
     } catch {
       setPlugins([]);
+      setLoadedCount(count);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [count]);
 
   useEffect(() => {
-    if (active && plugins.length === 0 && !loading) {
+    if (active && !loading && (plugins.length === 0 || loadedCount !== count)) {
       void loadPlugins();
     }
-  }, [active, loadPlugins, loading, plugins.length]);
+  }, [active, count, loadPlugins, loadedCount, loading, plugins.length]);
 
   return (
     <div className={cn(retro ? "retro-panel p-4" : "rounded-xl border border-border bg-card p-4 shadow-sm")}>
@@ -1268,27 +1518,37 @@ function PluginSurpriseHomeCard({
         </Button>
       </div>
 
-      <div className="mt-3 grid gap-2">
+      <div className="mt-3">
         {plugins.length > 0 ? (
-          plugins.map((plugin) => (
-            <button
-              className={cn(
-                "min-w-0 border p-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/40",
-                retro ? "rounded-sm border-border/80" : "rounded-md border-border",
-              )}
-              key={plugin.id}
-              onClick={onOpenPlugins}
-              type="button"
-            >
-              <div className="flex min-w-0 items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium">{pluginName(plugin)}</span>
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">v{pluginVersion(plugin.manifest)}</span>
-              </div>
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                {pluginDescription(plugin.manifest)}
-              </p>
-            </button>
-          ))
+          <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]">
+            {plugins.map((plugin) => (
+              <button
+                className={cn(
+                  "grid min-h-28 w-52 shrink-0 content-between border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/40",
+                  retro ? "rounded-sm border-border/80" : "rounded-md border-border",
+                )}
+                key={plugin.id}
+                onClick={() => onOpenPluginDetail(plugin.id)}
+                type="button"
+              >
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-start justify-between gap-2">
+                    <span className="line-clamp-2 text-sm font-medium leading-snug">{pluginName(plugin)}</span>
+                    <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                      v{pluginVersion(plugin.manifest)}
+                    </span>
+                  </div>
+                  <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
+                    {pluginDescription(plugin.manifest)}
+                  </p>
+                </div>
+                <span className="mt-3 inline-flex items-center gap-1 text-[11px] font-medium text-primary">
+                  查看详情
+                  <ArrowRight className="size-3" />
+                </span>
+              </button>
+            ))}
+          </div>
         ) : (
           <div className={cn("border px-3 py-6 text-center text-xs text-muted-foreground", retro ? "rounded-sm" : "rounded-md")}>
             {loading ? "正在抽取插件..." : "暂时没有拿到插件推荐"}
@@ -1812,6 +2072,7 @@ export function HomePanel({
   onSnapshot,
   onOpenTab,
   onOpenPluginConfig,
+  onOpenPluginDetail,
   onEnterFloatingMode,
   onRestartService,
   onStartService,
@@ -1823,6 +2084,7 @@ export function HomePanel({
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenTab: (tab: string) => void;
   onOpenPluginConfig: (pluginId: string) => void;
+  onOpenPluginDetail: (pluginId: string) => void;
   onEnterFloatingMode: () => void;
   onRestartService: (id: ServiceId) => void;
   onStartService: (id: ServiceId) => void;
@@ -2217,8 +2479,8 @@ export function HomePanel({
     }
   }, [dashboardTarget, refreshSnapshot]);
 
-  const renderHomeContentCard = useCallback((type: HomeContentCardType): React.ReactNode => {
-    switch (type) {
+  const renderHomeContentCard = useCallback((entry: HomeContentEntry): React.ReactNode => {
+    switch (entry.type) {
       case "maibot-overview":
         return (
           <MaiBotOverviewCard
@@ -2287,15 +2549,27 @@ export function HomePanel({
       case "quick-actions":
         return <QuickActionsCard onOpenQuickActions={() => setQuickActionsOpen(true)} retro={useRetroHome} />;
       case "system-performance":
-        return <SystemPerformanceCard retro={useRetroHome} />;
+        return <SystemPerformanceCard retro={useRetroHome} settings={entry.settings as SystemPerformanceCardSettings | undefined} />;
       case "plugin-surprise":
         return (
           <PluginSurpriseHomeCard
             active={active}
-            onOpenPlugins={() => onOpenTab("plugins")}
+            onOpenPluginDetail={onOpenPluginDetail}
+            onOpenPlugins={() => onOpenTab("pluginmarket")}
             retro={useRetroHome}
+            settings={entry.settings as PluginSurpriseCardSettings | undefined}
           />
         );
+      case "environment-health":
+        return <EnvironmentHealthCard retro={useRetroHome} snapshot={snapshot} />;
+      case "recent-logs":
+        return <RecentLogsCard retro={useRetroHome} snapshot={snapshot} />;
+      case "path-overview":
+        return <PathOverviewCard retro={useRetroHome} snapshot={snapshot} />;
+      case "daily-fortune":
+        return <DailyFortuneCard retro={useRetroHome} />;
+      case "service-heartbeat":
+        return <ServiceHeartbeatCard retro={useRetroHome} snapshot={snapshot} />;
       default:
         return null;
     }
@@ -2309,6 +2583,7 @@ export function HomePanel({
     messagePlatformConfigured,
     napcat,
     onOpenPluginConfig,
+    onOpenPluginDetail,
     onOpenTab,
     onRestartService,
     onStartService,
@@ -2325,7 +2600,7 @@ export function HomePanel({
   const homeContentCards = useMemo(
     () => homeContentLayout.map((entry) => ({
       ...entry,
-      content: renderHomeContentCard(entry.type),
+      content: renderHomeContentCard(entry),
     })).filter((entry) => entry.content !== null),
     [homeContentLayout, renderHomeContentCard],
   );
@@ -2387,6 +2662,24 @@ export function HomePanel({
     persistHomeContentLayout(homeContentLayout.map((entry) => entry.id === entryId ? { ...entry, width } : entry));
   }, [homeContentLayout, persistHomeContentLayout]);
 
+  const updateHomeContentSettings = useCallback((entryId: string, settings: HomeContentEntry["settings"]) => {
+    persistHomeContentLayout(homeContentLayout.map((entry) => entry.id === entryId ? { ...entry, settings } : entry));
+  }, [homeContentLayout, persistHomeContentLayout]);
+
+  const toggleSystemPerformanceMetric = useCallback((entry: HomeContentEntry, metric: SystemPerformanceMetricKey, checked: boolean) => {
+    const current = systemPerformanceMetrics(entry.settings as SystemPerformanceCardSettings | undefined);
+    if (checked) {
+      current.add(metric);
+    } else if (current.size > 1) {
+      current.delete(metric);
+    }
+    updateHomeContentSettings(entry.id, { visibleMetrics: DEFAULT_SYSTEM_PERFORMANCE_METRICS.filter((item) => current.has(item)) });
+  }, [updateHomeContentSettings]);
+
+  const updatePluginSurpriseCount = useCallback((entryId: string, count: number) => {
+    updateHomeContentSettings(entryId, { count: Math.max(1, Math.min(6, Math.round(count))) });
+  }, [updateHomeContentSettings]);
+
   const isHomeInsertNoop = useCallback((entryId: string, targetArea: HomeContentArea, targetIndex: number) => {
     const sourceIndex = homeContentLayout.findIndex((entry) => entry.id === entryId);
     const source = homeContentLayout[sourceIndex];
@@ -2396,6 +2689,63 @@ export function HomePanel({
     const sourceAreaIndex = homeContentLayout.slice(0, sourceIndex).filter((entry) => entry.area === targetArea).length;
     return targetIndex === sourceAreaIndex || targetIndex === sourceAreaIndex + 1;
   }, [homeContentLayout]);
+
+  const renderHomeCardSettings = useCallback((entry: HomeContentEntry): React.ReactNode => {
+    if (entry.type === "system-performance") {
+      const visibleMetrics = systemPerformanceMetrics(entry.settings as SystemPerformanceCardSettings | undefined);
+      return (
+        <div className="grid gap-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+            <Settings className="size-3" />
+            系统性能
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {SYSTEM_PERFORMANCE_METRIC_OPTIONS.map((option) => (
+              <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" key={option.key}>
+                <input
+                  checked={visibleMetrics.has(option.key)}
+                  className="size-3 accent-primary"
+                  disabled={visibleMetrics.size <= 1 && visibleMetrics.has(option.key)}
+                  onChange={(event) => toggleSystemPerformanceMetric(entry, option.key, event.target.checked)}
+                  type="checkbox"
+                />
+                <span className="truncate">{option.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (entry.type === "plugin-surprise") {
+      const settings = entry.settings as PluginSurpriseCardSettings | undefined;
+      const count = settings?.count ?? DEFAULT_PLUGIN_SURPRISE_COUNT;
+      return (
+        <div className="grid gap-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
+            <Settings className="size-3" />
+            插件推荐
+          </div>
+          <label className="grid gap-1 text-[11px] text-muted-foreground">
+            显示数量
+            <select
+              className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+              onChange={(event) => updatePluginSurpriseCount(entry.id, Number(event.target.value))}
+              value={count}
+            >
+              {[1, 2, 3, 4, 5, 6].map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      );
+    }
+
+    return null;
+  }, [toggleSystemPerformanceMetric, updatePluginSurpriseCount]);
 
   const renderHomeEditableCard = useCallback((
     entry: HomeContentEntry & { content: React.ReactNode },
@@ -2407,6 +2757,7 @@ export function HomePanel({
     const dragStyle = draggingHomeEntryId === entry.id && homeDragOffset
       ? { transform: `translate3d(${homeDragOffset.x}px, ${homeDragOffset.y}px, 0)` }
       : undefined;
+    const cardSettings = renderHomeCardSettings(entry);
 
     return (
     <div
@@ -2511,6 +2862,14 @@ export function HomePanel({
           </button>
         </div>
       ) : null}
+      {homeLayoutEditing && cardSettings ? (
+        <div
+          className="absolute left-2 top-2 z-30 max-w-[min(260px,calc(100%-5rem))] rounded-md border border-border bg-card/95 p-2 shadow-sm backdrop-blur"
+          data-home-card-control="true"
+        >
+          {cardSettings}
+        </div>
+      ) : null}
       {homeLayoutEditing && area === "main" ? (
         <button
           aria-label={`切换 ${homeContentCardLabel(entry.type)} 宽度`}
@@ -2560,8 +2919,10 @@ export function HomePanel({
     mainHomeContentCards.length,
     moveHomeContentEntry,
     removeHomeContentEntry,
+    renderHomeCardSettings,
     sideHomeContentCards.length,
     updateHomeContentWidth,
+    useRetroHome,
   ]);
 
   return (
@@ -2652,28 +3013,35 @@ export function HomePanel({
           ) : null}
           {!useRetroHome ? (
             <>
-              <Button
-                aria-label={homeLayoutEditing ? "完成首页调整" : "调整首页"}
-                className="fixed bottom-4 right-36 z-30 size-16 !border-0 !bg-transparent text-primary !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-10"
-                onClick={() => setHomeLayoutEditing((current) => !current)}
-                size="icon"
-                title={homeLayoutEditing ? "完成首页调整" : "调整首页"}
-                variant="ghost"
-              >
-                {homeLayoutEditing ? <SharpSaveIcon className="size-10" /> : <SolidEditLayoutIcon />}
-              </Button>
-              {homeLayoutEditing ? (
+              <div className="group/home-layout-actions pointer-events-auto fixed bottom-0 right-16 z-30 h-36 w-56 overflow-visible">
                 <Button
-                  aria-label="恢复默认首页布局"
-                  className="fixed bottom-4 right-16 z-30 size-16 !border-0 !bg-transparent text-muted-foreground !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-10"
-                  onClick={resetHomeContentLayoutToDefault}
+                  aria-label={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                  className={cn(
+                    "absolute bottom-4 right-20 size-16 !border-0 !bg-transparent text-primary !shadow-none outline-none ring-0 transition-opacity hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-10",
+                    homeLayoutEditing
+                      ? "opacity-100"
+                      : "pointer-events-none opacity-0 group-hover/home-layout-actions:pointer-events-auto group-hover/home-layout-actions:opacity-100 group-focus-within/home-layout-actions:pointer-events-auto group-focus-within/home-layout-actions:opacity-100",
+                  )}
+                  onClick={() => setHomeLayoutEditing((current) => !current)}
                   size="icon"
-                  title="恢复默认首页布局"
+                  title={homeLayoutEditing ? "完成首页调整" : "调整首页"}
                   variant="ghost"
                 >
-                  <RefreshCw className="!size-10" />
+                  {homeLayoutEditing ? <SharpSaveIcon className="size-10" /> : <SolidEditLayoutIcon />}
                 </Button>
-              ) : null}
+                {homeLayoutEditing ? (
+                  <Button
+                    aria-label="恢复默认首页布局"
+                    className="absolute bottom-4 right-36 size-16 !border-0 !bg-transparent text-muted-foreground !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-10"
+                    onClick={resetHomeContentLayoutToDefault}
+                    size="icon"
+                    title="恢复默认首页布局"
+                    variant="ghost"
+                  >
+                    <RefreshCw className="!size-10" />
+                  </Button>
+                ) : null}
+              </div>
               <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} />
             </>
           ) : null}
