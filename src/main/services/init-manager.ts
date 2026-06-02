@@ -26,6 +26,7 @@ import type {
   QqComponentUpgradeResult,
   QqBackend,
   RuntimePaths,
+  RuntimePathKey,
   PythonRuntimeCandidate,
   ServiceId,
   SnowLumaResetResult,
@@ -46,6 +47,7 @@ const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
 const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
 const QQ_BACKEND_FILE = "qq-backend.json";
 const MESSAGE_PLATFORM_FILE = "message-platform.json";
+const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const PYTHON_OVERRIDES_IGNORED_ENTRIES = new Set([".keep", "resource.lock"]);
 const NAPCAT_COMPONENT_PROTECTED_PATHS = [
   "config",
@@ -55,6 +57,11 @@ const NAPCAT_COMPONENT_PROTECTED_PATHS = [
   "napcat/data",
   "napcat/logs",
 ];
+
+interface StoredRuntimePathFile {
+  version: 1;
+  paths?: Partial<Record<RuntimePathKey, string>>;
+}
 const SNOWLUMA_COMPONENT_PROTECTED_PATHS = ["config", "data", "logs"];
 const NAPCAT_VERSION_CONFIG_PATTERN = /^versions\/[^/]+\/resources\/app\/napcat\/config(?:\/|$)/iu;
 const COMPONENT_DATA_FILE_PATTERN = /(?:\.db|\.sqlite|\.sqlite3)(?:-(?:shm|wal))?$/iu;
@@ -74,6 +81,16 @@ function uniqueExistingPaths(paths: string[]): string[] {
   }
 
   return existing;
+}
+
+function readRuntimePathOverride(paths: RuntimePaths, key: RuntimePathKey): string | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE), "utf8")) as StoredRuntimePathFile;
+    const value = raw.paths?.[key]?.trim();
+    return value ? resolve(value) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function uniquePythonCandidates(candidates: PythonRuntimeCandidate[]): PythonRuntimeCandidate[] {
@@ -2078,6 +2095,15 @@ export class InitManager {
   }
 
   getGitPath(): string {
+    const customGit = readRuntimePathOverride(this.paths, "git");
+    if (customGit) {
+      return customGit;
+    }
+
+    return this.getDefaultGitPath();
+  }
+
+  getDefaultGitPath(): string {
     const bundledGit = this.getBundledGitPath();
     if (bundledGit) {
       return bundledGit;

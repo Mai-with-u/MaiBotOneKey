@@ -69,7 +69,6 @@ import type {
   ModuleUpdateTarget,
   PythonOverridesState,
   PythonPackageSourcePreset,
-  PythonRuntimeCandidate,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
   PythonPackageVersionList,
@@ -2468,30 +2467,46 @@ export function registerAppIpc({
 
   ipcMain.handle("services:saveRuntimePathConfig", async (_event, config: RuntimePathUpdate): Promise<RuntimePathConfig[]> => {
     const configs = await serviceManager.saveRuntimePathConfig(config);
+    if (config.key === "git") {
+      initManager.clearDependencyCache();
+      maibotPluginClient = createMaibotPluginClient();
+    }
     await broadcastSnapshot();
     return configs;
   });
 
   ipcMain.handle("services:resetRuntimePathConfig", async (_event, key: RuntimePathKey): Promise<RuntimePathConfig[]> => {
     const configs = await serviceManager.resetRuntimePathConfig(key);
+    if (key === "git") {
+      initManager.clearDependencyCache();
+      maibotPluginClient = createMaibotPluginClient();
+    }
     await broadcastSnapshot();
     return configs;
   });
 
-  ipcMain.handle("services:listPythonRuntimeCandidates", async (): Promise<PythonRuntimeCandidate[]> => {
-    return initManager.listSystemPythonRuntimeCandidates();
-  });
+  ipcMain.handle("services:selectRuntimePathConfig", async (_event, key: RuntimePathKey): Promise<string | null> => {
+    const config = serviceManager.getRuntimePathConfigs().find((item) => item.key === key);
+    if (!config) {
+      throw new Error(`Unknown path config: ${key}`);
+    }
 
-  ipcMain.handle("services:selectPythonRuntimePath", async (): Promise<string | null> => {
     const mainWindow = getMainWindow();
-    const dialogOptions: Electron.OpenDialogOptions = {
-      title: "Select Python executable",
-      properties: ["openFile"],
-      filters: [
-        { name: "Python", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
-        { name: "全部文件", extensions: ["*"] },
-      ],
-    };
+    const dialogOptions: Electron.OpenDialogOptions = config.kind === "file"
+      ? {
+          title: `Select ${config.label}`,
+          properties: ["openFile"],
+          filters: key === "git"
+            ? [
+                { name: "Git", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
+                { name: "全部文件", extensions: ["*"] },
+              ]
+            : [{ name: "全部文件", extensions: ["*"] }],
+        }
+      : {
+          title: `Select ${config.label}`,
+          properties: ["openDirectory"],
+        };
     const result = mainWindow
       ? await dialog.showOpenDialog(mainWindow, dialogOptions)
       : await dialog.showOpenDialog(dialogOptions);

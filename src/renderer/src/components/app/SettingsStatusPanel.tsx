@@ -40,7 +40,6 @@ import type {
   NetworkProxySettings,
   OpenCodeSettings,
   PluginBuilderMode,
-  PythonRuntimeCandidate,
   QqBackend,
   RuntimePathConfig,
   RuntimePathKey,
@@ -669,36 +668,23 @@ function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }):
 function RuntimePathEditor({
   config,
   busy,
-  candidates = [],
-  candidatesLoading = false,
-  onOpenPath,
-  onRefreshCandidates,
   onReset,
   onSave,
-  onSelectPython,
+  onSelect,
 }: {
   config: RuntimePathConfig;
   busy: boolean;
-  candidates?: PythonRuntimeCandidate[];
-  candidatesLoading?: boolean;
-  onOpenPath: (path: string) => void;
-  onRefreshCandidates: () => void;
   onReset: (key: RuntimePathKey) => void;
   onSave: (config: RuntimePathUpdate) => void;
-  onSelectPython: () => Promise<string | null>;
+  onSelect: (key: RuntimePathKey) => Promise<string | null>;
 }): React.JSX.Element {
   const [value, setValue] = useState(config.value);
-  const [customEnabled, setCustomEnabled] = useState(config.customized);
 
   useEffect(() => {
     setValue(config.value);
-    setCustomEnabled(config.customized);
-  }, [config.customized, config.value]);
+  }, [config.value]);
 
   const dirty = value.trim() !== config.value;
-  const isPython = config.key === "python";
-  const customPythonEnabled = isPython ? customEnabled : true;
-  const pythonCandidateListId = useId();
 
   return (
     <div className="settings-section bg-card p-3">
@@ -715,79 +701,37 @@ function RuntimePathEditor({
           </p>
         </div>
         <Badge variant={config.customized ? "warning" : "secondary"}>
-          {isPython ? (config.customized ? "自定义 Python" : "基础 Python + 覆盖层") : config.customized ? "自定义" : "默认"}
+          {config.customized ? "自定义" : "默认"}
         </Badge>
       </div>
-      {isPython ? (
-        <label className="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-sm">
-          <Checkbox
-            checked={customPythonEnabled}
-            disabled={busy}
-            onCheckedChange={(checked) => {
-              if (checked === true) {
-                setCustomEnabled(true);
-                setValue(config.value || config.defaultValue);
-                return;
-              }
-              setCustomEnabled(false);
-              onReset(config.key);
-            }}
-          />
-          使用自定义 Python 路径
-        </label>
-      ) : null}
       <div className="flex min-w-0 gap-2">
         <Input
           aria-label={`${config.label} 路径`}
-          list={isPython && customPythonEnabled ? pythonCandidateListId : undefined}
-          disabled={isPython && !customPythonEnabled}
           monospace
           onChange={(event) => setValue(event.target.value)}
           placeholder={config.defaultValue}
           value={value}
         />
-        {isPython && customPythonEnabled ? (
-          <datalist id={pythonCandidateListId}>
-            {candidates.map((candidate) => (
-              <option key={candidate.path} label={candidate.source} value={candidate.path} />
-            ))}
-          </datalist>
-        ) : null}
-        <Button aria-label={`打开 ${config.label}`} onClick={() => onOpenPath(value)} size="icon" variant="ghost">
-          <FolderOpen />
-        </Button>
-        {isPython ? (
-          <Button
-            disabled={busy || !customPythonEnabled}
-            onClick={async () => {
-              const selected = await onSelectPython();
+        <Button
+          aria-label={`选择 ${config.label}`}
+          disabled={busy}
+          onClick={async () => {
+            try {
+              const selected = await onSelect(config.key);
               if (selected) {
                 setValue(selected);
               }
-            }}
-            size="sm"
-            variant="outline"
-          >
-            <FolderOpen />
-            浏览
-          </Button>
-        ) : null}
+            } catch (error) {
+              toast.error(messageFromError(error));
+            }
+          }}
+          size="sm"
+          variant="outline"
+        >
+          <FolderOpen />
+          选择
+        </Button>
       </div>
-      {isPython && customPythonEnabled ? (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-          <p className="text-[11px] text-muted-foreground">
-            {candidatesLoading
-              ? "正在扫描系统 Python"
-              : candidates.length > 0
-                ? `已扫描到 ${candidates.length} 个 Python，可在输入框右侧下拉选择。`
-                : "可手动输入 python.exe 路径，或点击扫描读取系统 Python。"}
-          </p>
-          <Button disabled={busy || candidatesLoading} onClick={onRefreshCandidates} size="sm" variant="ghost">
-            {candidatesLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            扫描
-          </Button>
-        </div>
-      ) : null}
       <div className="mt-2 flex justify-end gap-2">
         <Button
           disabled={busy || (!config.customized && !dirty)}
@@ -799,7 +743,7 @@ function RuntimePathEditor({
           恢复默认
         </Button>
         <Button
-          disabled={busy || (isPython && !customPythonEnabled) || !dirty || value.trim().length === 0}
+          disabled={busy || !dirty || value.trim().length === 0}
           onClick={() => onSave({ key: config.key, value: value.trim() })}
           size="sm"
         >
@@ -1078,8 +1022,6 @@ export function SettingsStatusPanel({
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
   const [storageStats, setStorageStats] = useState<MaiBotStorageStats | null>(null);
   const [storageStatsLoading, setStorageStatsLoading] = useState(false);
-  const [pythonRuntimeCandidates, setPythonRuntimeCandidates] = useState<PythonRuntimeCandidate[]>([]);
-  const [pythonRuntimeCandidatesLoading, setPythonRuntimeCandidatesLoading] = useState(false);
   const initState = snapshot.initState ?? {
     isReady: false,
     qqBackend: "napcat",
@@ -1092,6 +1034,7 @@ export function SettingsStatusPanel({
   const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
+  const editableRuntimePathConfigs = runtimePathConfigs.filter((config) => config.key !== "python");
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };
   const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
@@ -1172,22 +1115,6 @@ export function SettingsStatusPanel({
     };
   }, []);
 
-  const refreshPythonRuntimeCandidates = useCallback(async () => {
-    setPythonRuntimeCandidatesLoading(true);
-    try {
-      const candidates = await window.maibotDesktop?.services.listPythonRuntimeCandidates();
-      setPythonRuntimeCandidates(candidates ?? []);
-    } catch {
-      setPythonRuntimeCandidates([]);
-    } finally {
-      setPythonRuntimeCandidatesLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshPythonRuntimeCandidates();
-  }, [refreshPythonRuntimeCandidates]);
-
   const attentionChecks = useMemo(
     () => initState.checks.filter((check) => check.status !== "ok"),
     [initState.checks],
@@ -1243,7 +1170,7 @@ export function SettingsStatusPanel({
       }
 
       onPluginBuilderModeChange("disabled");
-      toast.success("插件编写器入口已关闭");
+      toast.success("插件管理页的编写器入口已隐藏");
     },
     [onPluginBuilderModeChange, pluginBuilderMode],
   );
@@ -1251,7 +1178,7 @@ export function SettingsStatusPanel({
   const confirmPluginBuilderEnable = useCallback(() => {
     onPluginBuilderModeChange("agent");
     setConfirmPluginBuilderEnableOpen(false);
-    toast.success("插件编写器入口已打开");
+    toast.success("插件管理页的编写器入口已显示");
   }, [onPluginBuilderModeChange]);
 
   const repair = useCallback(async () => {
@@ -1517,8 +1444,13 @@ export function SettingsStatusPanel({
     [onSnapshot, refreshSnapshot, snapshot],
   );
 
-  const selectPythonRuntimePath = useCallback(async () => {
-    return window.maibotDesktop?.services.selectPythonRuntimePath() ?? null;
+  const selectRuntimePathConfig = useCallback(async (key: RuntimePathKey) => {
+    const selectPath = window.maibotDesktop?.services.selectRuntimePathConfig;
+    if (typeof selectPath !== "function") {
+      setError("当前桌面桥接尚未加载运行路径选择功能，请重启 MaiBot OneKey 后再试。");
+      return null;
+    }
+    return selectPath(key);
   }, []);
 
   const saveTerminalSettings = useCallback(
@@ -1896,6 +1828,10 @@ export function SettingsStatusPanel({
                   <ShieldCheck className="size-3" />
                   实例路径
                 </TabsTrigger>
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="debug">
+                  <Wrench className="size-3" />
+                  调试
+                </TabsTrigger>
                 <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="data">
                   <Database className="size-3" />
                   数据
@@ -1998,8 +1934,8 @@ export function SettingsStatusPanel({
                         <p className="text-sm font-medium">插件编写器</p>
                         <p className="text-xs text-muted-foreground">
                           {pluginBuilderEnabled
-                            ? "顶部显示编写器入口，并使用内置 Coding Agent。"
-                            : "顶部不显示编写器入口。"}
+                            ? "插件管理页会显示“启动编写器”按钮。"
+                            : "插件管理页不显示“启动编写器”按钮。"}
                         </p>
                       </div>
                     </div>
@@ -2028,9 +1964,9 @@ export function SettingsStatusPanel({
                         onCheckedChange={(checked) => requestPluginBuilderEnabledChange(checked === true)}
                       />
                       <span className="min-w-0">
-                        <span className="block text-sm font-medium">打开插件编写器</span>
+                        <span className="block text-sm font-medium">显示插件管理页入口</span>
                         <span className="mt-1 block text-xs leading-relaxed">
-                          在顶部显示“编写器”入口，进入内置 Coding Agent 工作区。
+                          开启后可在插件管理页点击“启动编写器”，进入内置 Coding Agent 工作区。
                         </span>
                       </span>
                     </label>
@@ -2275,54 +2211,6 @@ export function SettingsStatusPanel({
 
                 {environmentServicesPanel}
 
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Code2 className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">MaiBot WebUI 本地构建</p>
-                        <p className="text-xs text-muted-foreground">
-                          {serviceStartupSettings.useLocalDashboard
-                            ? "MaiBot Core 启动时使用 dashboard/dist。"
-                            : "MaiBot Core 启动时使用已安装的 maibot-dashboard 包。"}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge variant={serviceStartupSettings.useLocalDashboard ? "success" : "outline"}>
-                      {serviceStartupSettings.useLocalDashboard ? "本地构建" : "安装包"}
-                    </Badge>
-                  </div>
-                  <label
-                    className={cn(
-                      "settings-choice flex min-w-0 cursor-pointer items-start gap-3 p-3 transition-colors",
-                      serviceStartupSettings.useLocalDashboard
-                        ? "settings-choice-selected bg-primary/10 text-foreground"
-                        : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                    )}
-                  >
-                    <Checkbox
-                      checked={serviceStartupSettings.useLocalDashboard}
-                      disabled={busy !== null}
-                      onCheckedChange={(checked) =>
-                        void saveServiceStartupSettings({
-                          ...serviceStartupSettings,
-                          useLocalDashboard: checked === true,
-                        })
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium">启动时使用本地 Dashboard 构建</span>
-                      <span className="mt-1 block text-xs leading-relaxed">
-                        开启后会向 MaiBot Core 注入 MAIBOT_WEBUI_USE_LOCAL_DASHBOARD=1，下次启动生效。
-                      </span>
-                    </span>
-                    {busy === "service-startup-settings" ? (
-                      <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />
-                    ) : null}
-                  </label>
-                </div>
               </TabsContent>
 
               <TabsContent className="settings-content" value="appearance">
@@ -2617,27 +2505,79 @@ export function SettingsStatusPanel({
                     </div>
                   ) : null}
                 </div>
-                <div className="grid gap-2 pt-2">
-                  {runtimePathConfigs.map((config) => (
-                    <RuntimePathEditor
-                      busy={busy === `path:${config.key}`}
-                      candidates={config.key === "python" ? pythonRuntimeCandidates : undefined}
-                      candidatesLoading={config.key === "python" ? pythonRuntimeCandidatesLoading : false}
-                      config={config}
-                      key={config.key}
-                      onOpenPath={openPath}
-                      onRefreshCandidates={refreshPythonRuntimeCandidates}
-                      onReset={resetRuntimePathConfig}
-                      onSave={saveRuntimePathConfig}
-                      onSelectPython={selectPythonRuntimePath}
-                    />
-                  ))}
-                </div>
                 <PathField label="日志目录" onOpen={openPath} value={snapshot.paths.logsRoot} />
                 <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
                 <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
                 <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
                 <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
+              </TabsContent>
+
+              <TabsContent className="settings-content" value="debug">
+                <p className="text-xs text-muted-foreground">
+                  调试配置用于本地开发和排查更新链路；修改后会影响之后启动的服务或 Git 操作。
+                </p>
+
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Code2 className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">MaiBot WebUI 本地构建</p>
+                        <p className="text-xs text-muted-foreground">
+                          {serviceStartupSettings.useLocalDashboard
+                            ? "MaiBot Core 启动时使用 dashboard/dist。"
+                            : "MaiBot Core 启动时使用已安装的 maibot-dashboard 包。"}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={serviceStartupSettings.useLocalDashboard ? "success" : "outline"}>
+                      {serviceStartupSettings.useLocalDashboard ? "本地构建" : "安装包"}
+                    </Badge>
+                  </div>
+                  <label
+                    className={cn(
+                      "settings-choice flex min-w-0 cursor-pointer items-start gap-3 p-3 transition-colors",
+                      serviceStartupSettings.useLocalDashboard
+                        ? "settings-choice-selected bg-primary/10 text-foreground"
+                        : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                    )}
+                  >
+                    <Checkbox
+                      checked={serviceStartupSettings.useLocalDashboard}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) =>
+                        void saveServiceStartupSettings({
+                          ...serviceStartupSettings,
+                          useLocalDashboard: checked === true,
+                        })
+                      }
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">启动时使用本地 Dashboard 构建</span>
+                      <span className="mt-1 block text-xs leading-relaxed">
+                        开启后会向 MaiBot Core 注入 MAIBOT_WEBUI_USE_LOCAL_DASHBOARD=1，下次启动生效。
+                      </span>
+                    </span>
+                    {busy === "service-startup-settings" ? (
+                      <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : null}
+                  </label>
+                </div>
+
+                <div className="grid gap-2">
+                  {editableRuntimePathConfigs.map((config) => (
+                    <RuntimePathEditor
+                      busy={busy === `path:${config.key}`}
+                      config={config}
+                      key={config.key}
+                      onReset={resetRuntimePathConfig}
+                      onSave={saveRuntimePathConfig}
+                      onSelect={selectRuntimePathConfig}
+                    />
+                  ))}
+                </div>
               </TabsContent>
 
               <TabsContent className="settings-content" value="data">
@@ -2759,7 +2699,7 @@ export function SettingsStatusPanel({
         <DialogHeader
           description="OpenCode 这类 AI Agent CLI 会在 MaiBot 工作目录中运行，并可能读取、创建、修改文件或执行命令。"
           icon={<AlertTriangle className="size-4" />}
-          title="确认打开插件编写器？"
+          title="确认显示插件编写器入口？"
           tone="warning"
         />
         <DialogBody className="space-y-3 text-sm">
@@ -2767,7 +2707,7 @@ export function SettingsStatusPanel({
             只在你信任当前工作区、理解操作影响，并准备好查看 AI Agent 执行内容时打开。建议避免输入敏感密钥、账号密码或私人文件路径。
           </div>
           <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-            该设置只会显示编写器入口；真正启动 OpenCode 后，终端会切到对应会话，你仍需要关注它的命令输出和文件改动。
+            该设置只会在插件管理页显示“启动编写器”按钮；真正启动 OpenCode 后，终端会切到对应会话，你仍需要关注它的命令输出和文件改动。
           </div>
         </DialogBody>
         <DialogFooter>
@@ -2775,7 +2715,7 @@ export function SettingsStatusPanel({
             取消
           </Button>
           <Button onClick={confirmPluginBuilderEnable} size="sm" variant="default">
-            我已了解，打开
+            我已了解，显示入口
           </Button>
         </DialogFooter>
       </DialogContent>

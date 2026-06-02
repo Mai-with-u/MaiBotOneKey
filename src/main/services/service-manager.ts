@@ -1029,6 +1029,12 @@ export class ServiceManager extends EventEmitter {
 
   async saveRuntimePathConfig(update: RuntimePathUpdate): Promise<RuntimePathConfig[]> {
     this.getRuntimePathDefinition(update.key);
+    if (update.key === "python") {
+      await this.runtimePathStore.reset(update.key);
+      this.definitions = this.createDefinitions();
+      this.emit("snapshot", this.snapshot());
+      return this.getRuntimePathConfigs();
+    }
     await this.runtimePathStore.set(update.key, update.value);
     this.definitions = this.createDefinitions();
     this.emit("snapshot", this.snapshot());
@@ -1080,7 +1086,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   private createDefinitions(): ServiceDefinition[] {
-    const python = this.getRuntimePath("python");
+    const python = this.initManager.getPythonPath();
     const maibotRoot = this.paths.maibotRoot;
     const maibotWebUi = this.initManager.readMaiBotWebUiEndpointSync();
     const napcatRoot = this.paths.napcatRoot;
@@ -1407,7 +1413,7 @@ export class ServiceManager extends EventEmitter {
         key: "git",
         label: "Git",
         kind: "file",
-        defaultValue: this.initManager.getGitPath(),
+        defaultValue: this.initManager.getDefaultGitPath(),
       },
     ];
   }
@@ -1422,10 +1428,23 @@ export class ServiceManager extends EventEmitter {
 
   private getRuntimePath(key: RuntimePathKey): string {
     const definition = this.getRuntimePathDefinition(key);
+    if (key === "python") {
+      return definition.defaultValue;
+    }
     return this.runtimePathStore.get(key) ?? definition.defaultValue;
   }
 
   private toRuntimePathConfig(definition: RuntimePathDefinition): RuntimePathConfig {
+    if (definition.key === "python") {
+      return {
+        key: definition.key,
+        label: definition.label,
+        kind: definition.kind,
+        value: definition.defaultValue,
+        defaultValue: definition.defaultValue,
+        customized: false,
+      };
+    }
     const customValue = this.runtimePathStore.get(definition.key);
     return {
       key: definition.key,

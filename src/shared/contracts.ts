@@ -1372,8 +1372,7 @@ export interface DesktopBridge {
     resetCommandConfig: (serviceId: ServiceId) => Promise<ServiceCommandConfig[]>;
     saveRuntimePathConfig: (config: RuntimePathUpdate) => Promise<RuntimePathConfig[]>;
     resetRuntimePathConfig: (key: RuntimePathKey) => Promise<RuntimePathConfig[]>;
-    listPythonRuntimeCandidates: () => Promise<PythonRuntimeCandidate[]>;
-    selectPythonRuntimePath: () => Promise<string | null>;
+    selectRuntimePathConfig: (key: RuntimePathKey) => Promise<string | null>;
     saveTerminalSettings: (settings: TerminalSettings) => Promise<TerminalSettings>;
     saveStartupSettings: (settings: ServiceStartupSettings) => Promise<ServiceStartupSettings>;
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;

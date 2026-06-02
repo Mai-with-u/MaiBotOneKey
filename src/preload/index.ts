@@ -62,7 +62,6 @@ import type {
   ModuleSourceUpdate,
   ModuleTagOption,
   PythonOverridesState,
-  PythonRuntimeCandidate,
   PythonPackageSourcePreset,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
@@ -296,10 +295,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("services:saveRuntimePathConfig", config) as Promise<RuntimePathConfig[]>,
     resetRuntimePathConfig: (key: RuntimePathKey) =>
       ipcRenderer.invoke("services:resetRuntimePathConfig", key) as Promise<RuntimePathConfig[]>,
-    listPythonRuntimeCandidates: () =>
-      ipcRenderer.invoke("services:listPythonRuntimeCandidates") as Promise<PythonRuntimeCandidate[]>,
-    selectPythonRuntimePath: () =>
-      ipcRenderer.invoke("services:selectPythonRuntimePath") as Promise<string | null>,
+    selectRuntimePathConfig: (key: RuntimePathKey) =>
+      ipcRenderer.invoke("services:selectRuntimePathConfig", key) as Promise<string | null>,
     saveTerminalSettings: (settings: TerminalSettings) =>
       ipcRenderer.invoke("services:saveTerminalSettings", settings) as Promise<TerminalSettings>,
     saveStartupSettings: (settings: ServiceStartupSettings) =>
