@@ -721,7 +721,7 @@ export class ServiceManager extends EventEmitter {
     try {
       const useCommandLine = !resolved.command;
       const agreementEnv = await this.initManager.getAgreementEnvVars();
-      const usePythonOverlay = definition.id === "maibot" && !this.isCustomPythonRuntimeEnabled();
+      const usePythonOverlay = definition.id === "maibot" && Boolean(this.pythonDependencyManager);
       const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
       const serviceEnv = createServiceSpecificEnv(definition.id, this.startupSettingsStore.get());
       const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv, ...serviceEnv };
@@ -1423,10 +1423,6 @@ export class ServiceManager extends EventEmitter {
   private getRuntimePath(key: RuntimePathKey): string {
     const definition = this.getRuntimePathDefinition(key);
     return this.runtimePathStore.get(key) ?? definition.defaultValue;
-  }
-
-  private isCustomPythonRuntimeEnabled(): boolean {
-    return Boolean(this.runtimePathStore.get("python"));
   }
 
   private toRuntimePathConfig(definition: RuntimePathDefinition): RuntimePathConfig {
