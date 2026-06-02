@@ -14,6 +14,7 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   fetchInstalledPlugins,
@@ -78,6 +79,7 @@ type QuickStatsBusy = { pluginId: string; action: QuickStatsAction } | null;
 
 type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive" | "loading";
 type AdapterConfigPage = "connection" | "chat";
+const CONFIG_SAVE_PROGRESS_MS = 3_000;
 const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
   "enable_chat_list_filter",
   "show_dropped_chat_list_messages",
@@ -258,6 +260,7 @@ export function PluginMarketPanel({
   requestedDetailPluginId,
   onRequestedConfigHandled,
   onRequestedDetailHandled,
+  onOpenTerminalSession,
 }: {
   isStartingPluginBuilder?: boolean;
   mode: PluginPanelMode;
@@ -271,6 +274,7 @@ export function PluginMarketPanel({
   requestedDetailPluginId?: string | null;
   onRequestedConfigHandled?: () => void;
   onRequestedDetailHandled?: () => void;
+  onOpenTerminalSession?: (sessionId: string) => void;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [preferCompatible, setPreferCompatible] = useState(true);
@@ -293,10 +297,36 @@ export function PluginMarketPanel({
   const [configDraft, setConfigDraft] = useState<Record<string, PluginConfigValue> | null>(null);
   const [configBusy, setConfigBusy] = useState<ConfigBusyState>(null);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [configSaveProgressOpen, setConfigSaveProgressOpen] = useState(false);
+  const [configSaveProgress, setConfigSaveProgress] = useState(0);
   const [detailPlugin, setDetailPlugin] = useState<DetailPlugin | null>(null);
   const [detailRatingPanelOpen, setDetailRatingPanelOpen] = useState(false);
   const [toggleBusyPluginId, setToggleBusyPluginId] = useState<string | null>(null);
   const mountedRef = useRef(true);
+
+  useEffect(() => {
+    if (!configSaveProgressOpen) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    setConfigSaveProgress(8);
+    const timer = window.setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      setConfigSaveProgress(Math.min(96, 8 + (elapsed / CONFIG_SAVE_PROGRESS_MS) * 88));
+    }, 100);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [configSaveProgressOpen]);
+
+  const closeConfigDialog = useCallback(() => {
+    setConfigPlugin(null);
+    setConfigState(null);
+    setConfigDraft(null);
+    setConfigError(null);
+  }, []);
 
   const loadPlugins = useCallback(async (forceRefresh = false) => {
     setLoadState("loading");
@@ -936,25 +966,31 @@ export function PluginMarketPanel({
         onChange={updateConfigDraft}
         onOpenChange={(open) => {
           if (!open && configBusy === null) {
-            setConfigPlugin(null);
-            setConfigState(null);
-            setConfigDraft(null);
-            setConfigError(null);
+            closeConfigDialog();
           }
         }}
         onSave={() => {
-          void saveOpenPluginConfig().then((saved) => {
+          const savingPlugin = configPlugin;
+          const terminalSessionId = terminalSessionIdForSavedConfig(savingPlugin);
+          setConfigSaveProgressOpen(true);
+          void Promise.all([
+            saveOpenPluginConfig(),
+            new Promise((resolve) => window.setTimeout(resolve, CONFIG_SAVE_PROGRESS_MS)),
+          ]).then(([saved]) => {
+            setConfigSaveProgress(100);
+            setConfigSaveProgressOpen(false);
             if (saved) {
-              setConfigPlugin(null);
-              setConfigState(null);
-              setConfigDraft(null);
-              setConfigError(null);
+              closeConfigDialog();
+              if (terminalSessionId) {
+                onOpenTerminalSession?.(terminalSessionId);
+              }
             }
           });
         }}
         plugin={configPlugin}
         state={configState}
       />
+      <ConfigSaveProgressDialog open={configSaveProgressOpen} progress={configSaveProgress} />
       <PluginDetailDialog
         initialRatingPanelOpen={detailRatingPanelOpen}
         maibotVersion={maibotVersion}
@@ -2419,6 +2455,43 @@ function PluginDetailRow({
   );
 }
 
+function terminalSessionIdForSavedConfig(plugin: InstalledPlugin | null): string | undefined {
+  const pluginIds = new Set([
+    plugin?.id,
+    plugin?.manifest.id,
+  ].filter((id): id is string => Boolean(id)));
+  return pluginIds.has("maibot-team.napcat-adapter") || pluginIds.has("maibot-team.snowluma-adapter")
+    ? "service:napcat"
+    : undefined;
+}
+
+function ConfigSaveProgressDialog({
+  open,
+  progress,
+}: {
+  open: boolean;
+  progress: number;
+}): React.JSX.Element {
+  return (
+    <Dialog open={open}>
+      <DialogContent size="sm">
+        <DialogHeader
+          description="正在保存配置并同步插件状态，稍后会自动切到终端窗口。"
+          icon={<Save className="size-4" />}
+          title="保存配置"
+          tone="primary"
+        />
+        <DialogBody className="space-y-3">
+          <Progress value={progress} />
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            配置写入、备份、快照刷新和插件列表更新会在后台完成。
+          </p>
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PluginConfigDialog({
   plugin,
   state,
@@ -2499,6 +2572,7 @@ function PluginConfigDialog({
                 {visibleSections.map((section) => (
                   <PluginConfigSection
                     draft={draft}
+                    hideHeader={adapterView !== null}
                     key={section.name}
                     onChange={onChange}
                     section={section}
@@ -2601,23 +2675,27 @@ function PluginConfigSection({
   section,
   draft,
   onChange,
+  hideHeader = false,
 }: {
   section: NonNullable<PluginConfigState["schema"]["sections"]>[number];
   draft: Record<string, PluginConfigValue>;
   onChange: (path: string[], value: PluginConfigValue) => void;
+  hideHeader?: boolean;
 }): React.JSX.Element {
   const title = resolveLocalizedText(section.title, section.name);
   const description = resolveLocalizedText(section.description, "");
   return (
     <div className="rounded-lg border border-border bg-card p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{title}</p>
-          {description ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground">{section.name}</p>
+      {hideHeader ? null : (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{title}</p>
+            {description ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground">{section.name}</p>
+          </div>
+          <Badge variant="secondary">{section.fields.length}</Badge>
         </div>
-        <Badge variant="secondary">{section.fields.length}</Badge>
-      </div>
+      )}
       <div className="grid gap-3 md:grid-cols-2">
         {section.fields.map((field) => (
           <PluginConfigField

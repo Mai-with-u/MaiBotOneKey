@@ -1316,8 +1316,9 @@ export function DesktopShell(): React.JSX.Element {
   }, []);
 
   const openTerminalSession = useCallback((sessionId: string) => {
-    setTerminalFocusSessionId(sessionId);
     setActiveTab("terminal");
+    setTerminalFocusSessionId(null);
+    window.setTimeout(() => setTerminalFocusSessionId(sessionId), 0);
   }, []);
 
   const startOpenCode = useCallback(async () => {
@@ -1823,6 +1824,7 @@ export function DesktopShell(): React.JSX.Element {
                 maibotVersion={snapshot?.moduleVersions.maibotLocal}
                 mode={pluginMode}
                 onModeChange={setPluginMode}
+                onOpenTerminalSession={openTerminalSession}
                 onRequestedDetailHandled={() => setRequestedDetailPluginId(null)}
                 onStartPluginBuilder={startOpenCode}
                 onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
