@@ -601,13 +601,16 @@ export interface MaiBotPluginManifest {
 
 export type MaiBotPluginType =
   | "adapter"
-  | "tool"
+  | "chat"
+  | "creative"
   | "provider"
   | "management"
-  | "data"
+  | "search"
+  | "knowledge"
   | "media"
   | "game"
-  | "integration"
+  | "security"
+  | "automation"
   | "extension"
   | "other";
 

@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, TerminalSquare, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, TerminalSquare, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
 import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor, SourceSettings } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -116,26 +116,32 @@ function marketSourceOptionsFromSettings(settings?: SourceSettings | null): Arra
 
 const PLUGIN_TYPE_LABELS: Record<MaiBotPluginType, string> = {
   adapter: "适配器",
-  tool: "工具",
+  chat: "聊天",
+  creative: "创作",
   provider: "服务提供方",
   management: "管理",
-  data: "数据",
+  search: "检索搜索",
+  knowledge: "知识",
   media: "媒体",
   game: "游戏娱乐",
-  integration: "外部集成",
+  security: "安全防护",
+  automation: "自动化",
   extension: "通用扩展",
   other: "其他",
 };
 
 const PLUGIN_TYPE_OPTIONS: Array<{ value: MaiBotPluginType; label: string }> = [
   { value: "adapter", label: PLUGIN_TYPE_LABELS.adapter },
-  { value: "tool", label: PLUGIN_TYPE_LABELS.tool },
+  { value: "chat", label: PLUGIN_TYPE_LABELS.chat },
+  { value: "creative", label: PLUGIN_TYPE_LABELS.creative },
   { value: "provider", label: PLUGIN_TYPE_LABELS.provider },
   { value: "management", label: PLUGIN_TYPE_LABELS.management },
-  { value: "data", label: PLUGIN_TYPE_LABELS.data },
+  { value: "search", label: PLUGIN_TYPE_LABELS.search },
+  { value: "knowledge", label: PLUGIN_TYPE_LABELS.knowledge },
   { value: "media", label: PLUGIN_TYPE_LABELS.media },
   { value: "game", label: PLUGIN_TYPE_LABELS.game },
-  { value: "integration", label: PLUGIN_TYPE_LABELS.integration },
+  { value: "security", label: PLUGIN_TYPE_LABELS.security },
+  { value: "automation", label: PLUGIN_TYPE_LABELS.automation },
   { value: "extension", label: PLUGIN_TYPE_LABELS.extension },
   { value: "other", label: PLUGIN_TYPE_LABELS.other },
 ];
@@ -163,13 +169,16 @@ const LUCIDE_PLUGIN_ICONS: Record<string, LucideIcon> = {
 
 const DEFAULT_PLUGIN_TYPE_ICONS: Record<MaiBotPluginType, LucideIcon> = {
   adapter: Plug,
-  tool: Wrench,
+  chat: Bot,
+  creative: ImageIcon,
   provider: Cloud,
   management: Shield,
-  data: BarChart3,
+  search: Search,
+  knowledge: BookOpen,
   media: ImageIcon,
   game: Gamepad2,
-  integration: Link,
+  security: Shield,
+  automation: Settings,
   extension: Puzzle,
   other: Package,
 };
@@ -1000,7 +1009,10 @@ function filterPlugins<T extends { id: string; manifest: MarketPlugin["manifest"
 
 function pluginType(plugin: { manifest?: { plugin_type?: MaiBotPluginType } }): MaiBotPluginType {
   const value = plugin.manifest?.plugin_type;
-  return value && PLUGIN_TYPE_VALUES.has(value) ? value : "extension";
+  if (!value?.trim()) {
+    return "extension";
+  }
+  return PLUGIN_TYPE_VALUES.has(value) ? value : "other";
 }
 
 function pluginTypeLabel(plugin: { manifest?: { plugin_type?: MaiBotPluginType } }): string {

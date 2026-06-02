@@ -57,13 +57,16 @@ const PLUGIN_UPDATE_BACKUP_DIR = ".update_backups";
 const PLUGIN_UPDATE_TMP_DIR = ".update_tmp";
 const PLUGIN_TYPES = new Set<MaiBotPluginType>([
   "adapter",
-  "tool",
+  "chat",
+  "creative",
   "provider",
   "management",
-  "data",
+  "search",
+  "knowledge",
   "media",
   "game",
-  "integration",
+  "security",
+  "automation",
   "extension",
   "other",
 ]);
@@ -1562,9 +1565,14 @@ function normalizePluginManifestDisplay(manifest: MaiBotPluginManifest): MaiBotP
 }
 
 function normalizePluginType(value: unknown): MaiBotPluginType {
-  return typeof value === "string" && PLUGIN_TYPES.has(value as MaiBotPluginType)
-    ? value as MaiBotPluginType
-    : "extension";
+  if (typeof value !== "string" || !value.trim()) {
+    return "extension";
+  }
+
+  const normalizedValue = value.trim();
+  return PLUGIN_TYPES.has(normalizedValue as MaiBotPluginType)
+    ? normalizedValue as MaiBotPluginType
+    : "other";
 }
 
 function normalizePluginDisplayIcon(icon: unknown): MaiBotPluginDisplayIcon | undefined {
