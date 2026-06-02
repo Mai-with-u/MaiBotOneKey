@@ -8,11 +8,13 @@
   Database,
   Download,
   FolderOpen,
+  GripVertical,
   HardDrive,
   ImageIcon,
   Loader2,
   Network,
   Palette,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -50,11 +52,14 @@ import type {
   ServiceDescriptor,
   ServiceHealth,
   ServiceStatus,
+  ManagedSourceEntry,
+  SourceSettings,
+  SourceSettingsGroup,
   TerminalSettings,
 } from "@shared/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -125,6 +130,188 @@ const healthText: Record<ServiceHealth, string> = {
   unreachable: "不可达",
   conflict: "端口冲突",
 };
+
+const sourceGroupMeta: Record<SourceSettingsGroup, { title: string; description: string; urlLabel: string }> = {
+  github: {
+    title: "GitHub / Git 仓库源",
+    description: "用于 MaiBot 模块更新、插件仓库和插件市场。选择“自动”时会按这里的顺序失败重试；手动选择某个源时只使用该源。",
+    urlLabel: "GitHub 基础地址",
+  },
+  launcher: {
+    title: "启动器更新源",
+    description: "当前启动器更新仍使用官方 GitHub Releases；这里先统一维护候选源。",
+    urlLabel: "Release API 地址",
+  },
+  python: {
+    title: "Python / PyPI 依赖源",
+    description: "用于依赖版本查询和 pip 安装；列表顺序也是失败后的重试顺序。",
+    urlLabel: "Simple 索引地址",
+  },
+};
+
+function cloneSourceSettings(settings: SourceSettings): SourceSettings {
+  return {
+    github: settings.github.map((entry) => ({ ...entry })),
+    launcher: settings.launcher.map((entry) => ({ ...entry })),
+    python: settings.python.map((entry) => ({ ...entry })),
+  };
+}
+
+function createSourceEntry(group: SourceSettingsGroup): ManagedSourceEntry {
+  const timestamp = Date.now().toString(36);
+  return {
+    id: `${group}-${timestamp}`,
+    label: "自定义源",
+    url: "",
+  };
+}
+
+function normalizeSourceEntryId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 64);
+}
+
+function SourceGroupEditor({
+  disabled,
+  entries,
+  group,
+  onChange,
+}: {
+  disabled: boolean;
+  entries: ManagedSourceEntry[];
+  group: SourceSettingsGroup;
+  onChange: (entries: ManagedSourceEntry[]) => void;
+}): React.JSX.Element {
+  const meta = sourceGroupMeta[group];
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const updateEntry = (index: number, patch: Partial<ManagedSourceEntry>): void => {
+    onChange(entries.map((entry, entryIndex) => entryIndex === index ? { ...entry, ...patch } : entry));
+  };
+  const reorderEntry = (fromIndex: number, toIndex: number): void => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= entries.length || toIndex >= entries.length) {
+      return;
+    }
+    const nextEntries = [...entries];
+    const [entry] = nextEntries.splice(fromIndex, 1);
+    nextEntries.splice(toIndex, 0, entry);
+    onChange(nextEntries);
+  };
+
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{meta.title}</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{meta.description}</p>
+        </div>
+        <Button disabled={disabled} onClick={() => onChange([...entries, createSourceEntry(group)])} size="sm" variant="outline">
+          <Plus className="size-4" />
+          新增
+        </Button>
+      </div>
+
+      <div className="grid gap-2">
+        {entries.map((entry, index) => (
+          <div
+            className={cn(
+              "grid gap-2 rounded-md border border-border bg-background p-2 transition-colors md:items-end",
+              group === "python"
+                ? "md:grid-cols-[auto_minmax(120px,0.8fr)_minmax(220px,1.4fr)_minmax(120px,0.7fr)_minmax(130px,0.7fr)_auto]"
+                : "md:grid-cols-[auto_minmax(140px,0.8fr)_minmax(260px,1.5fr)_minmax(130px,0.7fr)_auto]",
+              draggingIndex === index && "border-primary/60 bg-primary/5",
+            )}
+            key={`${entry.id}-${index}`}
+            onDragOver={(event) => {
+              if (disabled || draggingIndex === null || draggingIndex === index) {
+                return;
+              }
+              event.preventDefault();
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (!disabled && draggingIndex !== null) {
+                reorderEntry(draggingIndex, index);
+              }
+              setDraggingIndex(null);
+            }}
+          >
+            <button
+              aria-label={`拖动排序 ${entry.label || entry.id || index + 1}`}
+              className="flex h-8 w-7 cursor-grab items-center justify-center self-end rounded-md text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={disabled || entries.length <= 1}
+              draggable={!disabled && entries.length > 1}
+              onDragEnd={() => setDraggingIndex(null)}
+              onDragStart={(event) => {
+                setDraggingIndex(index);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", String(index));
+              }}
+              title="拖动排序"
+              type="button"
+            >
+              <GripVertical className="size-4" />
+            </button>
+            <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+              源名称
+              <Input
+                className="h-8 text-sm text-foreground"
+                disabled={disabled}
+                onChange={(event) => updateEntry(index, { label: event.target.value })}
+                placeholder="源名称"
+                value={entry.label}
+              />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+              {meta.urlLabel}
+              <Input
+                className="h-8 font-mono text-xs text-foreground"
+                disabled={disabled}
+                onChange={(event) => updateEntry(index, { url: event.target.value })}
+                placeholder="https://..."
+                value={entry.url}
+              />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+              ID
+              <Input
+                className="h-8 font-mono text-xs text-foreground"
+                disabled={disabled}
+                onChange={(event) => updateEntry(index, { id: normalizeSourceEntryId(event.target.value) })}
+                placeholder="source-id"
+                value={entry.id}
+              />
+            </label>
+            {group === "python" ? (
+              <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+                trusted-host
+                <Input
+                  className="h-8 font-mono text-xs text-foreground"
+                  disabled={disabled}
+                  onChange={(event) => updateEntry(index, { trustedHost: event.target.value })}
+                  placeholder="可选"
+                  value={entry.trustedHost ?? ""}
+                />
+              </label>
+            ) : null}
+            <Button
+              className="size-8 self-end"
+              disabled={disabled || entries.length <= 1}
+              onClick={() => onChange(entries.filter((_, entryIndex) => entryIndex !== index))}
+              size="icon"
+              variant="ghost"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const initVariant: Record<InitCheckStatus, ComponentProps<typeof Badge>["variant"]> = {
   ok: "success",
@@ -874,7 +1061,6 @@ export function SettingsStatusPanel({
   const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmSnowLumaResetOpen, setConfirmSnowLumaResetOpen] = useState(false);
   const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
   const [confirmLauncherSettingsResetOpen, setConfirmLauncherSettingsResetOpen] = useState(false);
   const [confirmLauncherFullResetOpen, setConfirmLauncherFullResetOpen] = useState(false);
@@ -907,6 +1093,8 @@ export function SettingsStatusPanel({
   const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
   const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
   const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
+  const [sourceSettings, setSourceSettings] = useState<SourceSettings | null>(null);
+  const [sourceSettingsDraft, setSourceSettingsDraft] = useState<SourceSettings | null>(null);
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
   const environmentServicesContentId = useId();
   const recentLogEntries = snapshot.recentLogs ?? [];
@@ -932,12 +1120,29 @@ export function SettingsStatusPanel({
   const networkProxyDirty =
     networkProxyDraft.enabled !== networkProxySettings.enabled ||
     networkProxyDraft.port !== networkProxySettings.port;
+  const sourceSettingsDirty = Boolean(
+    sourceSettings &&
+    sourceSettingsDraft &&
+    JSON.stringify(sourceSettingsDraft) !== JSON.stringify(sourceSettings),
+  );
   const selectedQqBackendOption =
     qqBackendOptions.find((option) => option.value === qqBackend) ?? qqBackendOptions[0];
 
   useEffect(() => {
     setNetworkProxyDraft(networkProxySettings);
   }, [networkProxySettings.enabled, networkProxySettings.port]);
+
+  const loadSourceSettings = useCallback(async () => {
+    const settings = await window.maibotDesktop?.launcher.getSourceSettings();
+    if (settings) {
+      setSourceSettings(settings);
+      setSourceSettingsDraft(cloneSourceSettings(settings));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSourceSettings().catch((nextError: unknown) => setError(messageFromError(nextError)));
+  }, [loadSourceSettings]);
 
   useEffect(() => {
     setQqBackend(initState.qqBackend ?? "napcat");
@@ -1082,29 +1287,9 @@ export function SettingsStatusPanel({
     }
   }, [initState.qqBackend, onOpenPluginConfig, qqBackend, qqBackendSwitchBlocked, refreshSnapshot]);
 
-  const resetSnowLumaComponent = useCallback(async () => {
-    if (qqBackendSwitchBlocked) {
-      setError("请先停止 MaiBot Core 和 QQ 后端，再重置 SnowLuma 组件。");
-      return;
-    }
-
-    setBusy("snowluma:reset");
-    setError(null);
-    try {
-      await window.maibotDesktop?.init.resetSnowLuma();
-      setConfirmSnowLumaResetOpen(false);
-      toast.success("SnowLuma 组件已重置");
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [qqBackendSwitchBlocked, refreshSnapshot]);
-
   const upgradeQqComponents = useCallback(async () => {
     if (qqBackendSwitchBlocked) {
-      setError("请先停止 MaiBot Core 和 QQ 后端，再升级 NapCat / SnowLuma。");
+      setError("请先停止 MaiBot Core 和 QQ 后端，再重新安装 NapCat / SnowLuma。");
       return;
     }
 
@@ -1114,7 +1299,7 @@ export function SettingsStatusPanel({
       const result = await window.maibotDesktop?.init.upgradeQqComponents();
       setConfirmQqComponentsUpgradeOpen(false);
       const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
-      toast.success(`NapCat / SnowLuma 已升级，保留 ${preservedCount} 项配置与数据`);
+      toast.success(`NapCat / SnowLuma 已重新安装，保留 ${preservedCount} 项配置与数据`);
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
@@ -1387,6 +1572,53 @@ export function SettingsStatusPanel({
     }
   }, [networkProxyDraft, onSnapshot, refreshSnapshot, snapshot]);
 
+  const saveSourceSettings = useCallback(async () => {
+    if (!sourceSettingsDraft) {
+      return;
+    }
+    setBusy("source-settings");
+    setError(null);
+    try {
+      const result = await window.maibotDesktop?.launcher.saveSourceSettings(sourceSettingsDraft);
+      if (result) {
+        setSourceSettings(result);
+        setSourceSettingsDraft(cloneSourceSettings(result));
+        toast.success("源列表已保存");
+      }
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, [sourceSettingsDraft]);
+
+  const resetSourceSettingsDraft = useCallback(() => {
+    if (sourceSettings) {
+      setSourceSettingsDraft(cloneSourceSettings(sourceSettings));
+    }
+  }, [sourceSettings]);
+
+  const restoreDefaultSourceSettings = useCallback(async () => {
+    setBusy("source-settings");
+    setError(null);
+    try {
+      const result = await window.maibotDesktop?.launcher.resetSourceSettings();
+      if (result) {
+        setSourceSettings(result);
+        setSourceSettingsDraft(cloneSourceSettings(result));
+        toast.success("源列表已恢复默认");
+      }
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const updateSourceGroup = useCallback((group: SourceSettingsGroup, entries: ManagedSourceEntry[]) => {
+    setSourceSettingsDraft((current) => current ? { ...current, [group]: entries } : current);
+  }, []);
+
   const saveOpenCodeSettings = useCallback(
     async (settings: OpenCodeSettings) => {
       setBusy("opencode-settings");
@@ -1632,35 +1864,14 @@ export function SettingsStatusPanel({
       )}
     >
       <div className="mx-auto w-full max-w-[1180px]">
-        <Card className="border-border bg-card ">
-          <CardHeader className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <span className="grid size-7 place-items-center rounded-md bg-primary/10 text-primary">
-                    <ClipboardCheck className="size-4" />
-                  </span>
-                  设置中心
-                </CardTitle>
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <Badge dot variant={initState.isReady ? "success" : "danger"}>
-                  {initState.isReady ? "环境可启动" : "环境不完整"}
-                </Badge>
-                <Badge variant={attentionChecks.length > 0 ? "warning" : "secondary"}>
-                  {attentionChecks.length} 项待处理
-                </Badge>
-                <Badge variant="secondary">服务 {services.length} 个</Badge>
-              </div>
-            </div>
+        <Card className="border-0 bg-transparent">
+          <CardContent className="space-y-4 p-0">
             {error ? (
               <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
                 {error}
               </div>
             ) : null}
-          </CardHeader>
 
-          <CardContent>
             <Tabs className="space-y-4" defaultValue="general">
               <TabsList className="flex h-auto flex-wrap rounded-md border border-border bg-muted/40 p-1">
                 <TabsTrigger className="h-6 px-2.5 text-[11px]" value="general">
@@ -1924,6 +2135,58 @@ export function SettingsStatusPanel({
                       保存代理设置
                     </Button>
                   </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <Network className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">统一源管理</p>
+                        <p className="text-xs text-muted-foreground">
+                          管理 GitHub / Git、启动器更新和 Python 依赖的候选源；GitHub 源顺序用于“自动”模式。
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <Badge variant={sourceSettingsDirty ? "warning" : "outline"}>
+                        {sourceSettingsDirty ? "未保存" : "已同步"}
+                      </Badge>
+                      <Button disabled={busy !== null || !sourceSettingsDirty} onClick={resetSourceSettingsDraft} size="sm" variant="ghost">
+                        <RotateCcw className="size-4" />
+                        撤销
+                      </Button>
+                      <Button disabled={busy !== null || !sourceSettingsDraft} onClick={() => void restoreDefaultSourceSettings()} size="sm" variant="outline">
+                        {busy === "source-settings" ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                        恢复默认
+                      </Button>
+                      <Button disabled={busy !== null || !sourceSettingsDirty} onClick={() => void saveSourceSettings()} size="sm">
+                        {busy === "source-settings" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                        保存源列表
+                      </Button>
+                    </div>
+                  </div>
+
+                  {sourceSettingsDraft ? (
+                    <div className="grid gap-3">
+                      {(["github", "launcher", "python"] as const).map((group) => (
+                        <SourceGroupEditor
+                          disabled={busy !== null}
+                          entries={sourceSettingsDraft[group]}
+                          group={group}
+                          key={group}
+                          onChange={(entries) => updateSourceGroup(group, entries)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      正在读取源列表
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
@@ -2300,7 +2563,7 @@ export function SettingsStatusPanel({
                 ) : null}
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">升级 NapCat / SnowLuma</p>
+                    <p className="text-sm font-medium">重新安装 NapCat / SnowLuma</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       使用当前一键包内置组件覆盖程序文件，保留配置、数据和日志。
                     </p>
@@ -2311,23 +2574,7 @@ export function SettingsStatusPanel({
                     variant="secondary"
                   >
                     {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
-                    升级组件
-                  </Button>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">重置 SnowLuma 组件</p>
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      清空已安装的 SnowLuma 目录和配置，再从一键包内置模板复制一份新的。
-                    </p>
-                  </div>
-                  <Button
-                    disabled={busy !== null || qqBackendSwitchBlocked}
-                    onClick={() => setConfirmSnowLumaResetOpen(true)}
-                    variant="destructive"
-                  >
-                    {busy === "snowluma:reset" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-                    重置 SnowLuma
+                    重新安装
                   </Button>
                 </div>
               </TabsContent>
@@ -2744,7 +2991,7 @@ export function SettingsStatusPanel({
       <DialogHeader
         description="这会用一键包内置的 NapCat 与 SnowLuma 程序文件覆盖现有组件。"
         icon={<Download className="size-4" />}
-        title="确认升级组件？"
+        title="确认重新安装？"
         tone="warning"
       />
       <DialogBody className="space-y-3 text-sm">
@@ -2768,46 +3015,7 @@ export function SettingsStatusPanel({
           variant="secondary"
         >
           {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
-          升级组件
-        </Button>
-      </DialogFooter>
-      </DialogContent>
-    </Dialog>
-    <Dialog
-      open={confirmSnowLumaResetOpen}
-      onOpenChange={(next) => {
-        if (!next && busy !== "snowluma:reset") setConfirmSnowLumaResetOpen(false);
-      }}
-    >
-      <DialogContent size="md">
-      <DialogHeader
-        description="这会删除当前 SnowLuma 目录，包括配置、数据与日志，并从一键包内置模板重新复制。"
-        icon={<RotateCcw className="size-4" />}
-        title="确认重置 SnowLuma？"
-        tone="warning"
-      />
-      <DialogBody className="space-y-3 text-sm">
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
-          该操作不会保留 SnowLuma 的登录、连接和适配器运行配置。执行前请确认 MaiBot Core 与 QQ 后端都已停止。
-        </div>
-        {qqBackendSwitchBlocked ? (
-          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
-            MaiBot Core 或 QQ 后端仍在运行，请先停止全部服务。
-          </div>
-        ) : null}
-      </DialogBody>
-      <DialogFooter>
-        <Button disabled={busy === "snowluma:reset"} onClick={() => setConfirmSnowLumaResetOpen(false)} size="sm" variant="ghost">
-          取消
-        </Button>
-        <Button
-          disabled={busy === "snowluma:reset" || qqBackendSwitchBlocked}
-          onClick={resetSnowLumaComponent}
-          size="sm"
-          variant="destructive"
-        >
-          {busy === "snowluma:reset" ? <Loader2 className="animate-spin" /> : <Trash2 />}
-          清空并重置
+          重新安装
         </Button>
       </DialogFooter>
       </DialogContent>

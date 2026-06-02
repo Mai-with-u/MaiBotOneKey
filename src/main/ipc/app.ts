@@ -2,7 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain, screen, session, shell } from "ele
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
-import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cpus, freemem, loadavg, totalmem, uptime } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   CloseAction,
@@ -16,7 +17,6 @@ import type {
   LauncherUpdateInfo,
   LauncherResetResult,
   LogEntry,
-  Live2dModelImportResult,
   LocalChatConnectionState,
   LocalChatConnectRequest,
   LocalChatMessageEvent,
@@ -47,6 +47,7 @@ import type {
   MaiBotPluginListOptions,
   MaiBotPluginListResult,
   MaiBotPluginDownloadResult,
+  MaiBotPluginMarketSource,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
   MaiBotPluginRatingResult,
@@ -86,6 +87,9 @@ import type {
   ServiceId,
   ServiceStartupSettings,
   SnowLumaResetResult,
+  SourceSettings,
+  SourceSettingsUpdate,
+  SystemPerformanceSnapshot,
   StartupAgreementConfirmResult,
   StartupAgreementState,
   TerminalSettings,
@@ -111,7 +115,10 @@ import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { RemoteSourceManager } from "../services/remote-source-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
+import { SourceSettingsManager } from "../services/source-settings-manager";
 import { getWindowWorkAreaBounds, isWindowVisuallyMaximized } from "../window-state";
+
+let previousCpuSample: { idle: number; total: number } | null = null;
 
 const LAUNCHER_SETTING_FILES = [
   "resource-paths.json",
@@ -124,12 +131,13 @@ const LAUNCHER_SETTING_FILES = [
   "message-platform.json",
   "module-sources.json",
   "python-dependency-source.json",
+  "source-settings.json",
   "network-proxy.json",
   "opencode-settings.json",
   "app-icon-settings.json",
   "qq-component-upgrade-state.json",
 ];
-const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "live2d", "logs"];
+const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
 const REMOVE_RETRY_OPTIONS = { recursive: true, force: true, maxRetries: 8, retryDelay: 250 } as const;
 const NORMAL_MINIMUM_SIZE = { width: 1080, height: 720 };
@@ -192,6 +200,7 @@ interface RegisterAppIpcOptions {
   networkProxyManager: NetworkProxyManager;
   openCodeSettingsManager: OpenCodeSettingsManager;
   pythonDependencyManager: PythonDependencyManager;
+  sourceSettingsManager: SourceSettingsManager;
   resourceLocationManager: ResourceLocationManager;
   serviceManager: ServiceManager;
   logStore: LogStore;
@@ -295,6 +304,37 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function readSystemPerformance(): SystemPerformanceSnapshot {
+  const cpuList = cpus();
+  let idle = 0;
+  let total = 0;
+  for (const cpu of cpuList) {
+    idle += cpu.times.idle;
+    total += Object.values(cpu.times).reduce((sum, value) => sum + value, 0);
+  }
+
+  let cpuUsagePercent: number | undefined;
+  if (previousCpuSample && total > previousCpuSample.total) {
+    const idleDelta = idle - previousCpuSample.idle;
+    const totalDelta = total - previousCpuSample.total;
+    cpuUsagePercent = Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+  }
+  previousCpuSample = { idle, total };
+
+  const memoryTotalBytes = totalmem();
+  const memoryFreeBytes = freemem();
+  return {
+    cpuCores: cpuList.length,
+    cpuModel: cpuList[0]?.model ?? "Unknown CPU",
+    cpuUsagePercent,
+    loadAverage: loadavg(),
+    memoryFreeBytes,
+    memoryTotalBytes,
+    memoryUsedPercent: memoryTotalBytes > 0 ? ((memoryTotalBytes - memoryFreeBytes) / memoryTotalBytes) * 100 : 0,
+    uptimeSeconds: uptime(),
+  };
+}
+
 function isBusyFsError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
@@ -368,80 +408,6 @@ async function clearDirectoryContents(root: string, entryNames?: string[]): Prom
   await Promise.all(removedEntries.map((entryPath) => retireAndRemovePath(entryPath, root)));
   await mkdir(root, { recursive: true });
   return removedEntries;
-}
-
-function isLive2dModelPath(path: string): boolean {
-  const cleanPath = path.toLowerCase().split(/[?#]/u)[0];
-  return cleanPath.endsWith(".model3.json") || cleanPath.endsWith(".model.json");
-}
-
-function sanitizeLive2dFolderName(value: string): string {
-  const sanitized = value
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/gu, "-")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/[. ]+$/u, "");
-  return sanitized || "live2d-model";
-}
-
-async function nextAvailableLive2dDirectory(root: string, preferredName: string): Promise<string> {
-  const safeName = sanitizeLive2dFolderName(preferredName);
-  for (let index = 0; index < 100; index += 1) {
-    const candidate = join(root, index === 0 ? safeName : `${safeName}-${index + 1}`);
-    if (!existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return join(root, `${safeName}-${Date.now()}`);
-}
-
-function live2dAssetUrlFromPath(paths: RuntimePaths, modelPath: string): string {
-  const root = resolve(paths.live2dRoot);
-  const target = resolve(modelPath);
-  if (!isPathInside(root, target)) {
-    throw new Error("Live2D model must be inside the launcher Live2D library.");
-  }
-
-  const relativePath = relative(root, target);
-  const encodedPath = relativePath.split(/[\\/]+/u).map(encodeURIComponent).join("/");
-  return `maibot-live2d://assets/${encodedPath}`;
-}
-
-async function importLive2dModel(paths: RuntimePaths, sourcePath: string): Promise<Live2dModelImportResult> {
-  const sourceModelPath = resolve(sourcePath);
-  const sourceStat = await stat(sourceModelPath);
-  if (!sourceStat.isFile()) {
-    throw new Error("Please choose a Live2D model JSON file.");
-  }
-  if (!isLive2dModelPath(sourceModelPath)) {
-    throw new Error("Please choose a .model3.json or .model.json model file.");
-  }
-
-  const libraryRoot = resolve(paths.live2dRoot);
-  const sourceDir = dirname(sourceModelPath);
-  await mkdir(libraryRoot, { recursive: true });
-
-  let modelPath = sourceModelPath;
-  let copied = false;
-  if (!samePath(libraryRoot, sourceDir) && !isPathInside(libraryRoot, sourceModelPath)) {
-    const targetDir = await nextAvailableLive2dDirectory(libraryRoot, basename(sourceDir) || basename(sourceModelPath));
-    await cp(sourceDir, targetDir, {
-      recursive: true,
-      dereference: true,
-      errorOnExist: false,
-      force: true,
-    });
-    modelPath = resolve(targetDir, relative(sourceDir, sourceModelPath));
-    copied = true;
-  }
-
-  return {
-    sourcePath: sourceModelPath,
-    modelPath,
-    modelUrl: live2dAssetUrlFromPath(paths, modelPath),
-    libraryRoot,
-    copied,
-  };
 }
 
 interface ParsedVersionTag {
@@ -524,7 +490,7 @@ function parseVersionTag(tag: string): ParsedVersionTag | undefined {
   return {
     tag,
     parts: match[1].split(".").map((part) => Number(part)),
-    prerelease: Boolean(match[2]),
+    prerelease: Boolean(match[2]) && !/^rc$/iu.test(match[2]),
   };
 }
 
@@ -1002,6 +968,7 @@ export function registerAppIpc({
   networkProxyManager,
   openCodeSettingsManager,
   pythonDependencyManager,
+  sourceSettingsManager,
   resourceLocationManager,
   serviceManager,
   logStore,
@@ -1436,24 +1403,11 @@ export function registerAppIpc({
 
   const readRemoteModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
-    const gitPath = initManager.getGitPath();
-    const sourceConfig = await moduleUpdater.getSourceConfig().catch(() => undefined);
-    const tagRemoteUrls = [sourceConfig?.maibotUrl, "https://github.com/Mai-with-u/MaiBot.git"].filter(
-      (url, index, urls): url is string => Boolean(url && urls.indexOf(url) === index),
-    );
-    if (existsSync(gitPath)) {
-      for (const remoteUrl of tagRemoteUrls) {
-        const tagsOutput = await runProcess(gitPath, ["ls-remote", "--tags", remoteUrl], paths.installRoot);
-        if (!tagsOutput) {
-          continue;
-        }
-        const tags = tagsOutput
-          .split(/\r?\n/u)
-          .map((line) => line.match(/refs\/tags\/(.+?)(?:\^\{\})?$/u)?.[1])
-          .filter((tag): tag is string => Boolean(tag));
-        Object.assign(versions, pickLatestTags(Array.from(new Set(tags))));
-        versions.maibotRemoteSource = remoteUrl;
-        break;
+    if (existsSync(initManager.getGitPath())) {
+      const tagsResult = await moduleUpdater.listMaiBotRemoteTagNames().catch(() => undefined);
+      if (tagsResult) {
+        Object.assign(versions, pickLatestTags(Array.from(new Set(tagsResult.tags))));
+        versions.maibotRemoteSource = tagsResult.remoteUrl;
       }
     }
 
@@ -1735,6 +1689,10 @@ export function registerAppIpc({
     return snapshot;
   });
 
+  ipcMain.handle("desktop:getSystemPerformance", (): SystemPerformanceSnapshot => {
+    return readSystemPerformance();
+  });
+
   ipcMain.handle("desktop:openExternal", async (_event, url: string): Promise<void> => {
     await shell.openExternal(url);
   });
@@ -1750,49 +1708,6 @@ export function registerAppIpc({
       storages: ["cachestorage", "serviceworkers"],
     });
   });
-
-  ipcMain.handle("live2d:getLibraryRoot", async (): Promise<string> => {
-    await mkdir(paths.live2dRoot, { recursive: true });
-    return paths.live2dRoot;
-  });
-
-  ipcMain.handle("live2d:openLibrary", async (): Promise<void> => {
-    await mkdir(paths.live2dRoot, { recursive: true });
-    await shell.openPath(paths.live2dRoot);
-  });
-
-  ipcMain.handle(
-    "live2d:importModel",
-    async (_event, sourcePath?: string): Promise<Live2dModelImportResult | null> => {
-      let nextSourcePath = sourcePath?.trim().replace(/^["']|["']$/gu, "");
-      if (!nextSourcePath) {
-        const mainWindow = getMainWindow();
-        const dialogOptions: Electron.OpenDialogOptions = {
-          title: "Select Live2D model",
-          properties: ["openFile"],
-          filters: [
-            { name: "Live2D 模型 JSON", extensions: ["json"] },
-            { name: "全部文件", extensions: ["*"] },
-          ],
-        };
-        const result = mainWindow
-          ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-          : await dialog.showOpenDialog(dialogOptions);
-        if (result.canceled || result.filePaths.length === 0) {
-          return null;
-        }
-        nextSourcePath = result.filePaths[0];
-      }
-
-      const result = await importLive2dModel(paths, nextSourcePath);
-      logStore.append(
-        "desktop",
-        "system",
-        `Live2D 模型已导入: ${result.sourcePath} -> ${result.modelPath}`,
-      );
-      return result;
-    },
-  );
 
   ipcMain.handle("init:getState", async (): Promise<InitState> => {
     return initManager.getState({ refreshDependencies: true });
@@ -2081,6 +1996,32 @@ export function registerAppIpc({
     },
   );
 
+  ipcMain.handle("launcher:getSourceSettings", (): SourceSettings => {
+    return sourceSettingsManager.getSettings();
+  });
+
+  ipcMain.handle("launcher:saveSourceSettings", async (_event, settings: SourceSettingsUpdate): Promise<SourceSettings> => {
+    const result = await sourceSettingsManager.saveSettings(settings);
+    logStore.append(
+      "desktop",
+      "system",
+      `Source settings saved: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
+    );
+    await broadcastSnapshot();
+    return result;
+  });
+
+  ipcMain.handle("launcher:resetSourceSettings", async (): Promise<SourceSettings> => {
+    const result = await sourceSettingsManager.resetSettings();
+    logStore.append(
+      "desktop",
+      "system",
+      `Source settings reset to defaults: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
+    );
+    await broadcastSnapshot();
+    return result;
+  });
+
   ipcMain.handle("launcher:selectAppIcon", async (_event, iconId: AppIconId): Promise<AppIconSettings> => {
     const result = await appIconManager.select(iconId);
     applyAppIcon();
@@ -2150,7 +2091,12 @@ export function registerAppIpc({
       if (!request.pluginId || !request.repositoryUrl) {
         throw new Error("Plugin id and repository url are required.");
       }
-      const result = await maibotPluginClient.install(request.pluginId, request.repositoryUrl, request.branch);
+      const result = await maibotPluginClient.install(
+        request.pluginId,
+        request.repositoryUrl,
+        request.branch,
+        request.sourcePreset,
+      );
       logStore.append("desktop", "system", `MaiBot plugin installed: ${request.pluginId}`);
       return result;
     },
@@ -2167,6 +2113,7 @@ export function registerAppIpc({
         request.repositoryUrl,
         request.branch,
         request.latestVersion,
+        request.sourcePreset,
       );
       logStore.append("desktop", "system", `MaiBot plugin updated: ${request.pluginId}`);
       return result;
@@ -2370,9 +2317,17 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle("plugins:getReadme", async (_event, pluginId: string, repositoryUrl?: string): Promise<MaiBotPluginReadmeResult> => {
-    return maibotPluginClient.getReadme(pluginId, repositoryUrl);
-  });
+  ipcMain.handle(
+    "plugins:getReadme",
+    async (
+      _event,
+      pluginId: string,
+      repositoryUrl?: string,
+      sourcePreset?: MaiBotPluginMarketSource,
+    ): Promise<MaiBotPluginReadmeResult> => {
+      return maibotPluginClient.getReadme(pluginId, repositoryUrl, sourcePreset);
+    },
+  );
 
   ipcMain.handle("plugins:getStats", async (_event, pluginId: string): Promise<MaiBotPluginStats | null> => {
     return maibotPluginClient.getStats(pluginId);

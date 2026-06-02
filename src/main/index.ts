@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage, net, protocol, session, shell, Tray } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, net, protocol, shell, Tray } from "electron";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,6 +19,7 @@ import { PythonDependencyManager } from "./services/python-dependency-manager";
 import { RemoteSourceManager } from "./services/remote-source-manager";
 import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
+import { SourceSettingsManager } from "./services/source-settings-manager";
 import { isWindowVisuallyMaximized } from "./window-state";
 
 const runtimePaths = configureRuntimePaths();
@@ -31,11 +32,10 @@ const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
 const networkProxyManager = new NetworkProxyManager(runtimePaths);
 const openCodeSettingsManager = new OpenCodeSettingsManager(runtimePaths);
-const moduleUpdater = new ModuleUpdater(runtimePaths, initManager);
-const remoteSourceManager = new RemoteSourceManager({
-  getModuleSourceConfig: () => moduleUpdater.getSourceConfig(),
-});
-const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager);
+const sourceSettingsManager = new SourceSettingsManager(runtimePaths);
+const moduleUpdater = new ModuleUpdater(runtimePaths, initManager, sourceSettingsManager);
+const remoteSourceManager = new RemoteSourceManager({ sourceSettingsManager });
+const pythonDependencyManager = new PythonDependencyManager(runtimePaths, initManager, sourceSettingsManager);
 const ptySessionManager = new PtySessionManager();
 const QQ_COMPONENT_UPGRADE_STATE_FILE = "qq-component-upgrade-state.json";
 const serviceManager = new ServiceManager(runtimePaths, initManager, logStore, ptySessionManager, pythonDependencyManager);
@@ -47,20 +47,9 @@ let appIpcDisposables: ReturnType<typeof registerAppIpc> | null = null;
 let allowQuit = false;
 let quitRequested = false;
 
-const LIVE2D_ASSET_SCHEME = "maibot-live2d";
-const LIVE2D_WEBVIEW_PARTITION = "maibot-live2d";
 const APP_ICON_ASSET_SCHEME = "maibot-app-icon";
 
 protocol.registerSchemesAsPrivileged([
-  {
-    scheme: LIVE2D_ASSET_SCHEME,
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      corsEnabled: true,
-    },
-  },
   {
     scheme: APP_ICON_ASSET_SCHEME,
     privileges: {
@@ -75,39 +64,6 @@ protocol.registerSchemesAsPrivileged([
 function isPathInside(root: string, target: string): boolean {
   const relativePath = relative(resolve(root), resolve(target));
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
-}
-
-function resolveLive2dAssetPath(paths: RuntimePaths, url: string): string | null {
-  const parsed = new URL(url);
-  if (parsed.protocol !== `${LIVE2D_ASSET_SCHEME}:` || parsed.hostname !== "assets") {
-    return null;
-  }
-
-  const relativePath = decodeURIComponent(parsed.pathname).replace(/^\/+/u, "");
-  const target = resolve(paths.live2dRoot, relativePath);
-  return isPathInside(paths.live2dRoot, target) ? target : null;
-}
-
-function registerLive2dResourceProtocol(paths: RuntimePaths): void {
-  const handler = async (request: Request): Promise<Response> => {
-    const target = resolveLive2dAssetPath(paths, request.url);
-    if (!target) {
-      return new Response("Forbidden", { status: 403 });
-    }
-
-    try {
-      const fileStat = await stat(target);
-      if (!fileStat.isFile()) {
-        return new Response("Not found", { status: 404 });
-      }
-      return net.fetch(pathToFileURL(target).toString());
-    } catch {
-      return new Response("Not found", { status: 404 });
-    }
-  };
-
-  protocol.handle(LIVE2D_ASSET_SCHEME, handler);
-  session.fromPartition(LIVE2D_WEBVIEW_PARTITION).protocol.handle(LIVE2D_ASSET_SCHEME, handler);
 }
 
 function resolveAppIconAssetPath(url: string): string | null {
@@ -384,7 +340,6 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
 } else {
   app.whenReady().then(async () => {
     cleanupLauncherUpdateDownloadsOnStartup();
-    registerLive2dResourceProtocol(runtimePaths);
     registerAppIconResourceProtocol();
     await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
       logStore.append("desktop", "system", `network proxy apply failed: ${String(error)}`);
@@ -403,6 +358,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       networkProxyManager,
       openCodeSettingsManager,
       pythonDependencyManager,
+      sourceSettingsManager,
       resourceLocationManager,
       serviceManager,
       logStore,

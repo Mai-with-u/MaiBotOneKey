@@ -1,5 +1,5 @@
 import { AlertTriangle, BarChart3, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
-import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor } from "@shared/contracts";
+import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor, SourceSettings } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -86,17 +86,33 @@ const SURPRISE_PLUGIN_COUNT = 4;
 const SURPRISE_CANDIDATE_LIMIT = 20;
 const PLUGIN_MARKET_SOURCE_STORAGE_KEY = "maibot_plugin_market_source";
 
-const MARKET_SOURCE_OPTIONS: Array<{ value: MaiBotPluginMarketSource; label: string }> = [
-  { value: "configured", label: "首页更新源" },
-  { value: "github", label: "GitHub" },
-  { value: "gh-proxy-com", label: "gh-proxy.com" },
-  { value: "v6-gh-proxy-org", label: "v6.gh-proxy.org" },
-  { value: "cdn-gh-proxy-com", label: "cdn.gh-proxy.com" },
-  { value: "gitproxy-mrhjx-cn", label: "gitproxy.mrhjx.cn" },
-  { value: "ghproxy-net", label: "ghproxy.net" },
-  { value: "ghproxy-vip", label: "ghproxy.vip" },
+const DEFAULT_MARKET_SOURCE_OPTIONS: Array<{ value: MaiBotPluginMarketSource; label: string }> = [
+  { value: "auto", label: "自动" },
 ];
-const MARKET_SOURCE_VALUES = new Set<MaiBotPluginMarketSource>(MARKET_SOURCE_OPTIONS.map((option) => option.value));
+
+function marketSourceOptionsFromSettings(settings?: SourceSettings | null): Array<{ value: MaiBotPluginMarketSource; label: string }> {
+  const githubSources = settings?.github ?? [];
+  const officialSource = githubSources.find((source) => source.id === "official" || source.id === "github");
+  const options: Array<{ value: MaiBotPluginMarketSource; label: string }> = [
+    { value: "auto", label: "自动" },
+    { value: "github", label: officialSource?.label?.trim() || "GitHub" },
+  ];
+  const seen = new Set(["auto", "github", "official"]);
+
+  for (const source of githubSources) {
+    const id = source.id?.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    options.push({
+      value: id as MaiBotPluginMarketSource,
+      label: source.label?.trim() || id,
+    });
+  }
+
+  return options;
+}
 
 const PLUGIN_TYPE_LABELS: Record<MaiBotPluginType, string> = {
   adapter: "适配器",
@@ -175,6 +191,16 @@ interface CardAction {
   onClick: () => void;
 }
 
+function RetroDownloadIcon(): React.JSX.Element {
+  return (
+    <svg aria-hidden fill="currentColor" viewBox="0 0 24 24">
+      <rect height="11" width="4" x="10" y="3" />
+      <path d="M5 12h4l3 3 3-3h4l-7 7z" />
+      <rect height="3" width="16" x="4" y="20" />
+    </svg>
+  );
+}
+
 const PLUGIN_CARD_CONTROL_SELECTOR = [
   "button",
   "a",
@@ -198,11 +224,15 @@ function isPluginCardControlTarget(target: EventTarget, currentTarget: HTMLEleme
 function readStoredMarketSource(): MaiBotPluginMarketSource {
   try {
     const value = window.localStorage.getItem(PLUGIN_MARKET_SOURCE_STORAGE_KEY);
-    return MARKET_SOURCE_VALUES.has(value as MaiBotPluginMarketSource)
-      ? value as MaiBotPluginMarketSource
-      : "configured";
+    const normalized = value?.trim();
+    if (!normalized || normalized === "configured") {
+      return "auto";
+    }
+    return normalized !== "official"
+      ? normalized as MaiBotPluginMarketSource
+      : "github";
   } catch {
-    return "configured";
+    return "auto";
   }
 }
 
@@ -227,6 +257,7 @@ export function PluginMarketPanel({
   const [preferCompatible, setPreferCompatible] = useState(true);
   const [marketSortBy, setMarketSortBy] = useState<MarketSortKey>("default");
   const [marketSource, setMarketSource] = useState<MaiBotPluginMarketSource>(() => readStoredMarketSource());
+  const [marketSourceOptions, setMarketSourceOptions] = useState(DEFAULT_MARKET_SOURCE_OPTIONS);
   const [pluginTypeFilter, setPluginTypeFilter] = useState<PluginTypeFilter>("all");
   const [marketPlugins, setMarketPlugins] = useState<MarketPlugin[]>([]);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPlugin[]>([]);
@@ -283,6 +314,35 @@ export function PluginMarketPanel({
   useEffect(() => {
     void loadPlugins();
   }, [loadPlugins]);
+
+  useEffect(() => {
+    const launcherApi = window.maibotDesktop?.launcher;
+    if (!launcherApi) {
+      return;
+    }
+
+    let cancelled = false;
+    void launcherApi.getSourceSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+        const options = marketSourceOptionsFromSettings(settings);
+        setMarketSourceOptions(options);
+        setMarketSource((current) => (
+          options.some((option) => option.value === current) ? current : options[0]?.value ?? "github"
+        ));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMarketSourceOptions(DEFAULT_MARKET_SOURCE_OPTIONS);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -441,6 +501,7 @@ export function PluginMarketPanel({
           pendingOperation.plugin.id,
           pendingOperation.repositoryUrl,
           pendingOperation.branch,
+          marketSource,
         );
         toast.success(`插件已安装：${pluginName(pendingOperation.plugin)}`);
         const statsId = pluginStatsPrimaryId(pendingOperation.plugin);
@@ -470,6 +531,7 @@ export function PluginMarketPanel({
           pendingOperation.repositoryUrl,
           pendingOperation.branch,
           pendingOperation.latestVersion,
+          marketSource,
         );
         toast.success(
           result.old_version && result.new_version
@@ -488,7 +550,7 @@ export function PluginMarketPanel({
     } finally {
       setOperationBusy(false);
     }
-  }, [loadPlugins, maibotService, pendingOperation]);
+  }, [loadPlugins, maibotService, marketSource, pendingOperation]);
 
   const updatePluginUserState = useCallback((pluginId: string, partialState: Partial<PluginUserState>) => {
     setPluginUserStates((current) => ({
@@ -720,7 +782,7 @@ export function PluginMarketPanel({
                 title="更新源"
                 value={marketSource}
               >
-                {MARKET_SOURCE_OPTIONS.map((option) => (
+                {marketSourceOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     更新源：{option.label}
                   </option>
@@ -777,6 +839,7 @@ export function PluginMarketPanel({
               plugins={filteredMarket}
               quickRatingPluginId={quickRatingPluginId}
               quickStatsBusy={quickStatsBusy}
+              retro={retro}
               sortBy={marketSortBy}
             />
           ) : (
@@ -843,6 +906,7 @@ export function PluginMarketPanel({
           setPluginStats((current) => mergePluginStatsMap(current, pluginId, partialStats));
         }}
         plugin={detailPlugin}
+        sourcePreset={marketSource}
         stats={detailPlugin ? resolvePluginStats(detailPlugin, pluginStats) : undefined}
       />
     </>
@@ -1046,6 +1110,7 @@ function ErrorPanel({
 function PluginGrid({
   plugins,
   sortBy,
+  retro,
   onOperate,
   onDetail,
   onComment,
@@ -1060,6 +1125,7 @@ function PluginGrid({
 }: {
   plugins: MarketPlugin[];
   sortBy: MarketSortKey;
+  retro: boolean;
   onOperate: (operation: PendingOperation) => void;
   onDetail: (plugin: MarketPlugin) => void;
   onComment: (plugin: MarketPlugin) => void;
@@ -1114,8 +1180,9 @@ function PluginGrid({
           : [
               {
                 label: "安装",
-                icon: <Download />,
+                icon: retro ? <RetroDownloadIcon /> : <Download />,
                 disabled: !repositoryUrl,
+                iconOnly: retro,
                 onClick: () => onOperate({ kind: "install", plugin, repositoryUrl, branch: "main", incompatibleReason }),
               },
             ];
@@ -1150,7 +1217,7 @@ function PluginGrid({
             <Sparkles className="size-4 text-primary" />
             <h3 className="text-base font-semibold">惊喜随意</h3>
           </div>
-          <div className="plugin-card-grid grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-1 xl:auto-cols-auto xl:grid-cols-4">
+          <div className="plugin-card-grid plugin-surprise-card-grid grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-1 xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-4">
             {surprisePlugins.map(renderPluginCard)}
           </div>
         </section>
@@ -1529,19 +1596,6 @@ function PluginCard({
           data-plugin-card-control="true"
           onClick={(event) => event.stopPropagation()}
         >
-          <Button
-            className="plugin-card-action plugin-card-detail-action"
-            onClick={(event) => {
-              event.stopPropagation();
-              onDetail();
-            }}
-            size="sm"
-            title="查看详情"
-            variant="outline"
-          >
-            <Info />
-            详情
-          </Button>
           {bottomActions.map((action) => (
             <Button
               className={cn(
@@ -1604,7 +1658,7 @@ function PluginCardQuickStats({
       onPointerDown={(event) => event.stopPropagation()}
     >
       <Button
-        className="plugin-card-action h-8 px-2 text-xs"
+        className={cn("plugin-card-action h-8 px-2 text-xs", liked && "plugin-card-quick-action-active")}
         disabled={busy !== null}
         onClick={(event) => {
           event.stopPropagation();
@@ -1622,7 +1676,7 @@ function PluginCardQuickStats({
 
       <div className="relative">
         <Button
-          className="plugin-card-action h-8 px-2 text-xs"
+          className={cn("plugin-card-action h-8 px-2 text-xs", (userRating > 0 || ratingOpen) && "plugin-card-quick-action-active")}
           disabled={busy !== null && !ratingOpen}
           onClick={(event) => {
             event.stopPropagation();
@@ -1817,6 +1871,7 @@ function PluginDetailDialog({
   maibotVersion,
   onStatsChange,
   onOpenChange,
+  sourcePreset,
 }: {
   plugin: DetailPlugin | null;
   stats?: PluginStats;
@@ -1824,6 +1879,7 @@ function PluginDetailDialog({
   maibotVersion?: string;
   onStatsChange?: (pluginId: string, stats: Partial<PluginStats>) => void;
   onOpenChange: (open: boolean) => void;
+  sourcePreset: MaiBotPluginMarketSource;
 }): React.JSX.Element {
   const repositoryUrl = plugin ? pluginRepositoryUrl(plugin.manifest) : undefined;
   const homepageUrl = plugin ? pluginHomepageUrl(plugin.manifest) : undefined;
@@ -1882,7 +1938,7 @@ function PluginDetailDialog({
     setRatingPanelOpen(initialRatingPanelOpen === true);
     const statsId = pluginStatsPrimaryId(plugin);
 
-    void fetchPluginReadme(plugin.id, pluginRepositoryUrl(plugin.manifest))
+    void fetchPluginReadme(plugin.id, pluginRepositoryUrl(plugin.manifest), sourcePreset)
       .then((result) => {
         if (!cancelled) {
           setReadme(result.success && result.content ? result.content : result.error ?? "该插件暂无 README 文档");
@@ -1927,7 +1983,7 @@ function PluginDetailDialog({
     return () => {
       cancelled = true;
     };
-  }, [initialRatingPanelOpen, plugin]);
+  }, [initialRatingPanelOpen, plugin, sourcePreset]);
 
   const applyStatsPartial = (pluginId: string, partialStats: Partial<PluginStats>) => {
     setDetailStats((current) => mergePluginStats(pluginId, current ?? resolvedStats, partialStats));

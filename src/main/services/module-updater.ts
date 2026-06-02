@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
+  ManagedSourceEntry,
   ModuleSourceConfig,
   ModuleSourceOption,
   ModuleSourcePreset,
@@ -14,48 +15,13 @@ import type {
   RuntimePaths,
 } from "../../shared/contracts";
 import { InitManager } from "./init-manager";
+import { SourceSettingsManager } from "./source-settings-manager";
 
 const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
 /** 单次 git fetch origin 的最长等待时间。失败/超时后会恢复到更新前状态。 */
 const FETCH_ORIGIN_TIMEOUT_MS = 15 * 60 * 1000;
 const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
-const OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
-const GHPROXY_MAIBOT_REMOTE_URL = "https://gh.llkk.cc/https://github.com/Mai-with-u/MaiBot.git";
-const GHPROXY_NAPCAT_ADAPTER_REMOTE_URL =
-  "https://gh.llkk.cc/https://github.com/Mai-with-u/MaiBot-Napcat-Adapter.git";
 const SOURCE_CONFIG_FILE = "module-sources.json";
-const MODULE_SOURCE_PREFIXES = [
-  { preset: "gh-proxy-com", label: "gh-proxy.com", prefix: "https://gh-proxy.com/" },
-  { preset: "v6-gh-proxy-org", label: "v6.gh-proxy.org", prefix: "https://v6.gh-proxy.org/" },
-  { preset: "cdn-gh-proxy-com", label: "cdn.gh-proxy.com", prefix: "https://cdn.gh-proxy.com/" },
-  { preset: "gitproxy-mrhjx-cn", label: "gitproxy.mrhjx.cn", prefix: "https://gitproxy.mrhjx.cn/" },
-  { preset: "ghproxy-net", label: "ghproxy.net", prefix: "https://ghproxy.net/" },
-  { preset: "ghproxy-vip", label: "ghproxy.vip", prefix: "https://ghproxy.vip/" },
-] as const satisfies ReadonlyArray<{
-  preset: Exclude<ModuleSourcePreset, "ghproxy" | "official" | "custom">;
-  label: string;
-  prefix: string;
-}>;
-const SOURCE_OPTIONS: ModuleSourceOption[] = [
-  {
-    preset: "ghproxy",
-    label: "gh.llkk.cc",
-    maibotUrl: GHPROXY_MAIBOT_REMOTE_URL,
-    napcatAdapterUrl: GHPROXY_NAPCAT_ADAPTER_REMOTE_URL,
-  },
-  ...MODULE_SOURCE_PREFIXES.map((source) => ({
-    preset: source.preset,
-    label: source.label,
-    maibotUrl: `${source.prefix}${OFFICIAL_MAIBOT_REMOTE_URL}`,
-    napcatAdapterUrl: `${source.prefix}${OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL}`,
-  })),
-  {
-    preset: "official",
-    label: "官方 GitHub",
-    maibotUrl: OFFICIAL_MAIBOT_REMOTE_URL,
-    napcatAdapterUrl: OFFICIAL_NAPCAT_ADAPTER_REMOTE_URL,
-  },
-];
 
 interface GitRunResult {
   output: string[];
@@ -76,8 +42,19 @@ interface RepoUpdateSpec {
   targetBranch?: string;
 }
 
+interface MaibotRemoteCandidate {
+  preset: ModuleSourcePreset;
+  label: string;
+  maibotUrl: string;
+}
+
+export interface MaiBotRemoteTagsResult {
+  tags: string[];
+  remoteUrl: string;
+}
+
 function isPrereleaseTag(tag: string): boolean {
-  return /(?:^|[._+-])(?:a|alpha|b|beta|rc|pre|preview|dev)\d*/iu.test(tag);
+  return /(?:^|[._+-])(?:a|alpha|b|beta|pre|preview|dev)\d*/iu.test(tag);
 }
 
 function splitOutput(output: string): string[] {
@@ -93,12 +70,42 @@ function toDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function parseRemoteRefNames(output: string[], refType: "heads" | "tags"): string[] {
+  const refName = refType === "heads" ? "heads" : "tags";
+  return output
+    .map((line) => line.match(new RegExp(`refs/${refName}/(.+)$`, "u"))?.[1])
+    .filter((name): name is string => Boolean(name));
+}
+
+function gitSourceToModuleOption(source: ManagedSourceEntry): ModuleSourceOption {
+  return {
+    preset: source.id,
+    label: source.label,
+    maibotUrl: githubBaseToMaibotUrl(source.url),
+  };
+}
+
+function githubBaseToMaibotUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return OFFICIAL_MAIBOT_REMOTE_URL;
+  }
+  if (trimmed.toLowerCase().includes(OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase())) {
+    return trimmed;
+  }
+  if (/github\.com\/?$/iu.test(trimmed)) {
+    return OFFICIAL_MAIBOT_REMOTE_URL;
+  }
+  return `${trimmed.replace(/\/+$/u, "")}/${OFFICIAL_MAIBOT_REMOTE_URL}`;
+}
+
 export class ModuleUpdater {
   private readonly sourceConfigPath: string;
 
   constructor(
     private readonly paths: RuntimePaths,
     private readonly initManager: InitManager,
+    private readonly sourceSettingsManager?: SourceSettingsManager,
   ) {
     this.sourceConfigPath = join(paths.userDataRoot, SOURCE_CONFIG_FILE);
   }
@@ -116,8 +123,6 @@ export class ModuleUpdater {
         {
           version: 1,
           preset: config.preset,
-          maibotUrl: config.maibotUrl,
-          napcatAdapterUrl: config.napcatAdapterUrl,
         },
         null,
         2,
@@ -129,19 +134,23 @@ export class ModuleUpdater {
 
   async listMaiBotTags(): Promise<ModuleTagOption[]> {
     const result = await this.listMaiBotRemoteRefs("tags");
-    return result.output
-      .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
-      .filter((tag): tag is string => Boolean(tag))
+    return parseRemoteRefNames(result.output, "tags")
       .sort((left, right) => right.localeCompare(left, "en-US", { numeric: true, sensitivity: "base" }))
       .slice(0, 80)
       .map((name) => ({ name, isPrerelease: isPrereleaseTag(name) }));
   }
 
+  async listMaiBotRemoteTagNames(): Promise<MaiBotRemoteTagsResult> {
+    const result = await this.listMaiBotRemoteRefs("tags");
+    return {
+      tags: parseRemoteRefNames(result.output, "tags"),
+      remoteUrl: result.remoteUrl,
+    };
+  }
+
   async listMaiBotBranches(): Promise<ModuleBranchOption[]> {
     const result = await this.listMaiBotRemoteRefs("heads");
-    return result.output
-      .map((line) => line.match(/refs\/heads\/(.+)$/u)?.[1])
-      .filter((branch): branch is string => Boolean(branch))
+    return parseRemoteRefNames(result.output, "heads")
       .sort((left, right) => {
         if (left === "main") return -1;
         if (right === "main") return 1;
@@ -153,29 +162,27 @@ export class ModuleUpdater {
       .map((name) => ({ name }));
   }
 
-  private async listMaiBotRemoteRefs(refType: "heads" | "tags"): Promise<GitRunResult> {
+  private async listMaiBotRemoteRefs(refType: "heads" | "tags"): Promise<GitRunResult & { remoteUrl: string }> {
     const gitPath = this.initManager.getGitPath();
-    const sourceConfig = await this.getSourceConfig();
     const refArg = refType === "heads" ? "--heads" : "--tags";
-
-    try {
-      return await this.runGit(
-        gitPath,
-        this.paths.installRoot,
-        ["ls-remote", refArg, "--refs", sourceConfig.maibotUrl],
-        FETCH_ORIGIN_TIMEOUT_MS,
-      );
-    } catch (error) {
-      if (sourceConfig.maibotUrl === OFFICIAL_MAIBOT_REMOTE_URL) {
-        throw error;
-      }
-      return this.runGit(
-        gitPath,
-        this.paths.installRoot,
-        ["ls-remote", refArg, "--refs", OFFICIAL_MAIBOT_REMOTE_URL],
-        FETCH_ORIGIN_TIMEOUT_MS,
-      );
-    }
+    return this.runWithMaibotRemoteFallback(
+      `ls-remote ${refType}`,
+      async (candidate) => {
+        const result = await this.runGit(
+          gitPath,
+          this.paths.installRoot,
+          ["ls-remote", refArg, "--refs", candidate.maibotUrl],
+          FETCH_ORIGIN_TIMEOUT_MS,
+        );
+        if (result.output.length === 0) {
+          throw new Error(`${candidate.label} 未返回远端 ${refType} 列表`);
+        }
+        return {
+          ...result,
+          remoteUrl: candidate.maibotUrl,
+        };
+      },
+    );
   }
 
   async updateMaiBot(target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> {
@@ -184,22 +191,89 @@ export class ModuleUpdater {
       throw new Error(`未找到可用 Git: ${gitPath}`);
     }
 
-    const sourceConfig = await this.getSourceConfig();
+    return this.runWithMaibotRemoteFallback(
+      "update MaiBot",
+      async (candidate, failedAttempts) => {
+        const mainResult = await this.updateGitRepository(gitPath, {
+          moduleId: "maibot",
+          moduleName: "MaiBot",
+          cwd: this.paths.maibotRoot,
+          bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
+          remoteUrl: candidate.maibotUrl,
+          defaultBranch: "main",
+          throwOnFailure: true,
+          runSubmodule: true,
+          targetTag: target?.type === "tag" ? target.name.trim() || undefined : undefined,
+          targetBranch: target?.type === "branch" ? target.name.trim() || undefined : undefined,
+        });
+        if (failedAttempts.length > 0) {
+          mainResult.output.unshift(
+            ...failedAttempts.map((attempt) => `[MaiBot] 更新源 ${attempt.label} 失败，已尝试下一个源: ${attempt.error}`),
+            `[MaiBot] 使用更新源 ${candidate.label}: ${candidate.maibotUrl}`,
+          );
+          mainResult.warning = [
+            mainResult.warning,
+            `前 ${failedAttempts.length} 个更新源不可用，已自动切换到 ${candidate.label}。`,
+          ].filter(Boolean).join("\n");
+        }
+        return mainResult;
+      },
+    );
+  }
 
-    // 主仓
-    const mainResult = await this.updateGitRepository(gitPath, {
-      moduleId: "maibot",
-      moduleName: "MaiBot",
-      cwd: this.paths.maibotRoot,
-      bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
-      remoteUrl: sourceConfig.maibotUrl,
-      defaultBranch: "main",
-      throwOnFailure: true,
-      runSubmodule: true,
-      targetTag: target?.type === "tag" ? target.name.trim() || undefined : undefined,
-      targetBranch: target?.type === "branch" ? target.name.trim() || undefined : undefined,
-    });
-    return mainResult;
+  private async runWithMaibotRemoteFallback<T>(
+    operation: string,
+    run: (candidate: MaibotRemoteCandidate, failedAttempts: Array<{ label: string; url: string; error: string }>) => Promise<T>,
+  ): Promise<T> {
+    const candidates = await this.getMaibotRemoteCandidates();
+    const failedAttempts: Array<{ label: string; url: string; error: string }> = [];
+    let lastError: unknown;
+
+    for (const candidate of candidates) {
+      try {
+        return await run(candidate, failedAttempts);
+      } catch (error) {
+        lastError = error;
+        failedAttempts.push({
+          label: candidate.label,
+          url: candidate.maibotUrl,
+          error: toDetail(error),
+        });
+      }
+    }
+
+    const details = failedAttempts
+      .map((attempt) => `${attempt.label} (${attempt.url}): ${attempt.error}`)
+      .join("\n");
+    throw new Error(`${operation} 失败，所有更新源均不可用。\n${details || toDetail(lastError)}`);
+  }
+
+  private async getMaibotRemoteCandidates(): Promise<MaibotRemoteCandidate[]> {
+    const sourceConfig = await this.getSourceConfig();
+    const candidates: MaibotRemoteCandidate[] = [];
+    const seen = new Set<string>();
+    const pushCandidate = (candidate: MaibotRemoteCandidate): void => {
+      const key = candidate.maibotUrl.trim().toLowerCase();
+      if (!key || seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      candidates.push(candidate);
+    };
+
+    const options = sourceConfig.options.filter((option) => option.preset !== "auto");
+    const selectedOptions = sourceConfig.preset === "auto"
+      ? options
+      : options.filter((option) => option.preset === sourceConfig.preset);
+    for (const option of selectedOptions) {
+      pushCandidate({
+        preset: option.preset,
+        label: option.label,
+        maibotUrl: option.maibotUrl,
+      });
+    }
+
+    return candidates;
   }
 
   /**
@@ -540,9 +614,7 @@ export class ModuleUpdater {
     try {
       const raw = JSON.parse(await readFile(this.sourceConfigPath, "utf8")) as Partial<ModuleSourceUpdate>;
       return {
-        preset: raw.preset ?? "official",
-        maibotUrl: raw.maibotUrl,
-        napcatAdapterUrl: raw.napcatAdapterUrl,
+        preset: raw.preset ?? "auto",
       };
     } catch {
       return undefined;
@@ -550,27 +622,43 @@ export class ModuleUpdater {
   }
 
   private resolveSourceConfig(update?: ModuleSourceUpdate): ModuleSourceConfig {
+    const sourceOptions = this.getSourceOptions();
     const preset = this.normalizePreset(update?.preset);
-    const option = SOURCE_OPTIONS.find((item) => item.preset === preset);
-    const maibotUrl = preset === "custom" ? update?.maibotUrl?.trim() : option?.maibotUrl;
-    const napcatAdapterUrl = preset === "custom" ? update?.napcatAdapterUrl?.trim() : option?.napcatAdapterUrl;
+    const option = sourceOptions.find((item) => item.preset === preset);
+    const maibotUrl = preset === "auto"
+      ? sourceOptions.find((item) => item.preset !== "auto")?.maibotUrl
+      : option?.maibotUrl;
 
-    if (!maibotUrl || !napcatAdapterUrl) {
-      throw new Error("自定义模块更新源需要同时填写 MaiBot 与 napcat-adapter 仓库地址。");
+    if (!maibotUrl) {
+      throw new Error("模块更新源不可用，请先在设置中配置 GitHub 源。");
     }
 
     return {
       preset,
       maibotUrl,
-      napcatAdapterUrl,
-      options: SOURCE_OPTIONS,
+      options: sourceOptions,
     };
   }
 
   private normalizePreset(preset: ModuleSourcePreset | undefined): ModuleSourcePreset {
-    return preset && (preset === "custom" || SOURCE_OPTIONS.some((option) => option.preset === preset))
+    const sourceOptions = this.getSourceOptions();
+    return preset && sourceOptions.some((option) => option.preset === preset)
       ? preset
-      : "official";
+      : sourceOptions[0]?.preset ?? "official";
+  }
+
+  private getSourceOptions(): ModuleSourceOption[] {
+    const gitSources = this.sourceSettingsManager?.getGitSources().map(gitSourceToModuleOption) ?? [
+      { preset: "official", label: "官方 GitHub", maibotUrl: OFFICIAL_MAIBOT_REMOTE_URL },
+    ];
+    return [
+      {
+        preset: "auto",
+        label: "自动",
+        maibotUrl: gitSources[0]?.maibotUrl ?? OFFICIAL_MAIBOT_REMOTE_URL,
+      },
+      ...gitSources,
+    ];
   }
 
   private async readGitValue(gitPath: string, cwd: string, args: string[]): Promise<string | undefined> {

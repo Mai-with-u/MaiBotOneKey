@@ -16,6 +16,7 @@ import type {
   MaiBotMarketPlugin,
   MaiBotPluginListOptions,
   MaiBotPluginListResult,
+  MaiBotPluginMarketSource,
   MaiBotPluginManifest,
   MaiBotPluginOperationResult,
   MaiBotPluginRatingResult,
@@ -179,11 +180,13 @@ export function installMaiBotPlugin(
   pluginId: string,
   repositoryUrl: string,
   branch: string,
+  sourcePreset?: MaiBotPluginMarketSource,
 ): Promise<PluginOperationResponse> {
   return requirePluginBridge().install({
     pluginId,
     repositoryUrl,
     branch: branch || "main",
+    sourcePreset,
   });
 }
 
@@ -200,12 +203,14 @@ export function updateMaiBotPlugin(
   repositoryUrl: string,
   branch: string,
   latestVersion?: string,
+  sourcePreset?: MaiBotPluginMarketSource,
 ): Promise<PluginOperationResponse> {
   return requirePluginBridge().update({
     pluginId,
     repositoryUrl,
     branch: branch || "main",
     latestVersion,
+    sourcePreset,
   });
 }
 
@@ -265,8 +270,12 @@ export function savePluginConfig(
   return requirePluginBridge().saveConfig(pluginId, config, service?.url);
 }
 
-export function fetchPluginReadme(pluginId: string, repositoryUrl?: string): Promise<PluginReadmeResult> {
-  return requirePluginBridge().getReadme(pluginId, repositoryUrl);
+export function fetchPluginReadme(
+  pluginId: string,
+  repositoryUrl?: string,
+  sourcePreset?: MaiBotPluginMarketSource,
+): Promise<PluginReadmeResult> {
+  return requirePluginBridge().getReadme(pluginId, repositoryUrl, sourcePreset);
 }
 
 export function fetchPluginStats(pluginId: string): Promise<PluginStats | null> {

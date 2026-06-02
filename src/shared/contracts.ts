@@ -175,17 +175,8 @@ export interface RuntimePaths {
   opencodePluginInstructionsPath: string;
   defaultPythonOverridesRoot: string;
   pythonOverridesRoot: string;
-  live2dRoot: string;
   pluginBuilderRoot: string;
   logsRoot: string;
-}
-
-export interface Live2dModelImportResult {
-  sourcePath: string;
-  modelPath: string;
-  modelUrl: string;
-  libraryRoot: string;
-  copied: boolean;
 }
 
 export interface LocalChatSendRequest {
@@ -304,6 +295,17 @@ export interface DesktopSnapshot {
   initState: InitState;
   startupAgreement: StartupAgreementState;
   recentLogs: LogEntry[];
+}
+
+export interface SystemPerformanceSnapshot {
+  cpuCores: number;
+  cpuModel: string;
+  cpuUsagePercent?: number;
+  loadAverage: number[];
+  memoryFreeBytes: number;
+  memoryTotalBytes: number;
+  memoryUsedPercent: number;
+  uptimeSeconds: number;
 }
 
 export interface LauncherUpdateInfo {
@@ -648,14 +650,15 @@ export interface MaiBotPluginListResult {
 }
 
 export type GithubSourcePreset =
-  | "configured"
+  | "auto"
   | "github"
   | "gh-proxy-com"
   | "v6-gh-proxy-org"
   | "cdn-gh-proxy-com"
   | "gitproxy-mrhjx-cn"
   | "ghproxy-net"
-  | "ghproxy-vip";
+  | "ghproxy-vip"
+  | (string & {});
 
 export type MaiBotPluginMarketSource = GithubSourcePreset;
 
@@ -734,6 +737,7 @@ export interface MaiBotPluginOperationRequest {
   repositoryUrl?: string;
   branch?: string;
   latestVersion?: string;
+  sourcePreset?: MaiBotPluginMarketSource;
 }
 
 export interface MaiBotPluginOperationResult {
@@ -1065,6 +1069,7 @@ export interface ModuleUpdateTarget {
 }
 
 export type ModuleSourcePreset =
+  | "auto"
   | "ghproxy"
   | "gh-proxy-com"
   | "v6-gh-proxy-org"
@@ -1073,26 +1078,22 @@ export type ModuleSourcePreset =
   | "ghproxy-net"
   | "ghproxy-vip"
   | "official"
-  | "custom";
+  | (string & {});
 
 export interface ModuleSourceOption {
-  preset: Exclude<ModuleSourcePreset, "custom">;
+  preset: ModuleSourcePreset;
   label: string;
   maibotUrl: string;
-  napcatAdapterUrl: string;
 }
 
 export interface ModuleSourceConfig {
   preset: ModuleSourcePreset;
   maibotUrl: string;
-  napcatAdapterUrl: string;
   options: ModuleSourceOption[];
 }
 
 export interface ModuleSourceUpdate {
   preset: ModuleSourcePreset;
-  maibotUrl?: string;
-  napcatAdapterUrl?: string;
 }
 
 export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message";
@@ -1102,12 +1103,34 @@ export interface ManagedPythonPackage {
   label: string;
 }
 
-export type PythonPackageSourcePreset = "tuna" | "pypi" | "aliyun";
+export type PythonPackageSourcePreset = "tuna" | "pypi" | "aliyun" | (string & {});
 
 export interface PythonPackageSourceOption {
   preset: PythonPackageSourcePreset;
   label: string;
   url: string;
+}
+
+export type SourceSettingsGroup = "github" | "launcher" | "python";
+
+export interface ManagedSourceEntry {
+  id: string;
+  label: string;
+  url: string;
+  trustedHost?: string;
+  builtIn?: boolean;
+}
+
+export interface SourceSettings {
+  github: ManagedSourceEntry[];
+  launcher: ManagedSourceEntry[];
+  python: ManagedSourceEntry[];
+}
+
+export interface SourceSettingsUpdate {
+  github?: ManagedSourceEntry[];
+  launcher?: ManagedSourceEntry[];
+  python?: ManagedSourceEntry[];
 }
 
 export interface PythonPackageVersion {
@@ -1220,6 +1243,7 @@ export interface PtyErrorEvent {
 
 export interface DesktopBridge {
   getSnapshot: () => Promise<DesktopSnapshot>;
+  getSystemPerformance: () => Promise<SystemPerformanceSnapshot>;
   openLogsDirectory: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   openExternal: (url: string) => Promise<void>;
@@ -1271,17 +1295,15 @@ export interface DesktopBridge {
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) => Promise<NetworkProxySettings>;
     saveOpenCodeSettings: (settings: OpenCodeSettings) => Promise<OpenCodeSettings>;
+    getSourceSettings: () => Promise<SourceSettings>;
+    saveSourceSettings: (settings: SourceSettingsUpdate) => Promise<SourceSettings>;
+    resetSourceSettings: () => Promise<SourceSettings>;
     selectAppIcon: (iconId: AppIconId) => Promise<AppIconSettings>;
     checkUpdate: () => Promise<LauncherUpdateInfo>;
     downloadAndInstallUpdate: () => Promise<LauncherUpdateApplyResult>;
     onDownloadProgress: (callback: (progress: LauncherUpdateDownloadProgress) => void) => () => void;
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;
-  };
-  live2d: {
-    getLibraryRoot: () => Promise<string>;
-    openLibrary: () => Promise<void>;
-    importModel: (sourcePath?: string) => Promise<Live2dModelImportResult | null>;
   };
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) => Promise<MaiBotPluginListResult>;
@@ -1308,7 +1330,11 @@ export interface DesktopBridge {
       config: Record<string, MaiBotPluginConfigValue>,
       serviceUrl?: string,
     ) => Promise<MaiBotPluginConfigSaveResult>;
-    getReadme: (pluginId: string, repositoryUrl?: string) => Promise<MaiBotPluginReadmeResult>;
+    getReadme: (
+      pluginId: string,
+      repositoryUrl?: string,
+      sourcePreset?: MaiBotPluginMarketSource,
+    ) => Promise<MaiBotPluginReadmeResult>;
     getStats: (pluginId: string) => Promise<MaiBotPluginStats | null>;
     getUserState: (pluginId: string, userId: string) => Promise<MaiBotPluginUserState | null>;
     getUserStates: (userId: string) => Promise<MaiBotPluginUserStates>;

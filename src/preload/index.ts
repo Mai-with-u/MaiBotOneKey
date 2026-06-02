@@ -10,7 +10,6 @@ import type {
   LauncherUpdateApplyResult,
   LauncherUpdateInfo,
   LogEntry,
-  Live2dModelImportResult,
   LocalChatConnectionState,
   LocalChatConnectRequest,
   LocalChatEvent,
@@ -43,6 +42,7 @@ import type {
   MaiBotPluginDownloadResult,
   MaiBotPluginListOptions,
   MaiBotPluginListResult,
+  MaiBotPluginMarketSource,
   MaiBotPluginOperationRequest,
   MaiBotPluginOperationResult,
   MaiBotPluginRatingResult,
@@ -89,8 +89,11 @@ import type {
   ServiceId,
   ServiceStartupSettings,
   SnowLumaResetResult,
+  SourceSettings,
+  SourceSettingsUpdate,
   StartupAgreementConfirmResult,
   StartupAgreementState,
+  SystemPerformanceSnapshot,
   TerminalSettings,
   WindowResizeEdge,
   WindowState,
@@ -107,6 +110,8 @@ function onIpc<T>(channel: string, callback: (event: T) => void): () => void {
 
 const desktopBridge: DesktopBridge = {
   getSnapshot: () => ipcRenderer.invoke("desktop:getSnapshot") as Promise<DesktopSnapshot>,
+  getSystemPerformance: () =>
+    ipcRenderer.invoke("desktop:getSystemPerformance") as Promise<SystemPerformanceSnapshot>,
   openLogsDirectory: () => ipcRenderer.invoke("desktop:openLogsDirectory") as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke("desktop:openPath", path) as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url) as Promise<void>,
@@ -191,6 +196,12 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
     saveOpenCodeSettings: (settings: OpenCodeSettings) =>
       ipcRenderer.invoke("launcher:saveOpenCodeSettings", settings) as Promise<OpenCodeSettings>,
+    getSourceSettings: () =>
+      ipcRenderer.invoke("launcher:getSourceSettings") as Promise<SourceSettings>,
+    saveSourceSettings: (settings: SourceSettingsUpdate) =>
+      ipcRenderer.invoke("launcher:saveSourceSettings", settings) as Promise<SourceSettings>,
+    resetSourceSettings: () =>
+      ipcRenderer.invoke("launcher:resetSourceSettings") as Promise<SourceSettings>,
     selectAppIcon: (iconId: AppIconId) =>
       ipcRenderer.invoke("launcher:selectAppIcon", iconId) as Promise<AppIconSettings>,
     checkUpdate: () =>
@@ -203,12 +214,6 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
     resetAll: () =>
       ipcRenderer.invoke("launcher:resetAll") as Promise<LauncherResetResult>,
-  },
-  live2d: {
-    getLibraryRoot: () => ipcRenderer.invoke("live2d:getLibraryRoot") as Promise<string>,
-    openLibrary: () => ipcRenderer.invoke("live2d:openLibrary") as Promise<void>,
-    importModel: (sourcePath?: string) =>
-      ipcRenderer.invoke("live2d:importModel", sourcePath) as Promise<Live2dModelImportResult | null>,
   },
   plugins: {
     listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) =>
@@ -243,8 +248,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
     saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>
       ipcRenderer.invoke("plugins:saveConfig", pluginId, config, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
-    getReadme: (pluginId: string, repositoryUrl?: string) =>
-      ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl) as Promise<MaiBotPluginReadmeResult>,
+    getReadme: (pluginId: string, repositoryUrl?: string, sourcePreset?: MaiBotPluginMarketSource) =>
+      ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl, sourcePreset) as Promise<MaiBotPluginReadmeResult>,
     getStats: (pluginId: string) =>
       ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
     getUserState: (pluginId: string, userId: string) =>

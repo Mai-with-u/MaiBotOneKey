@@ -1,12 +1,15 @@
 import {
   ArrowRight,
   ChevronDown,
+  Cpu,
   Download,
   ExternalLink,
+  GripVertical,
   Loader2,
   Maximize2,
   PackageCheck,
   Play,
+  Plus,
   Radar,
   RefreshCw,
   Server,
@@ -15,9 +18,10 @@ import {
   Sparkles,
   Square,
   Wrench,
+  X,
 } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import emojiDropImage from "@/assets/home-drops/emoji2.png";
 import maiDropImage from "@/assets/home-drops/mai.png";
@@ -33,13 +37,13 @@ import type {
   ModuleBranchOption,
   ModuleSourceConfig,
   ModuleSourcePreset,
-  ModuleSourceUpdate,
   ModuleTagOption,
   ModuleUpdateTarget,
   QqBackend,
   ServiceDescriptor,
   ServiceId,
   ServiceStatus,
+  SystemPerformanceSnapshot,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,15 +54,34 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  HOME_CONTENT_CARD_OPTIONS,
+  HOME_CONTENT_LAYOUT_CHANGE_EVENT,
+  createHomeContentEntry,
+  homeContentCardLabel,
+  readHomeContentLayout,
+  resetHomeContentLayout,
+  saveHomeContentLayout,
+  type HomeContentArea,
+  type HomeContentCardType,
+  type HomeContentEntry,
+  type HomeContentWidth,
+} from "@/lib/home-content-layout";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
+import {
+  fetchMarketPlugins,
+  pluginDescription,
+  pluginName,
+  pluginVersion,
+  type MarketPlugin,
+} from "@/lib/maibot-plugin-api";
 import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
 import { QuickActionsPanel } from "./QuickActionsPanel";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
-type MaiBotUpdateChannel = "stable" | "test" | "other";
-type DashboardUpdateChannel = "stable" | "test";
+type MaiBotUpdateChannel = "stable" | "other";
 type CompactChatState = "idle" | "connecting" | "connected" | "error";
 
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
@@ -160,6 +183,25 @@ function formatFileSize(bytes: number | undefined): string | undefined {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatMemorySize(bytes: number | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) {
+    return "0 GB";
+  }
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function formatUptime(seconds: number | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) {
+    return "0 分钟";
+  }
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days} 天 ${hours} 小时`;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分钟`;
+  return `${minutes} 分钟`;
 }
 
 function ServiceStatusText({
@@ -559,7 +601,7 @@ function ServiceSummary({
   retro: boolean;
 }): React.JSX.Element {
   return (
-    <div className={cn(retro ? "retro-panel grid gap-3 p-3.5 pl-5" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+    <div className={cn("grid w-full min-w-0 gap-3", retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {icon ? (
@@ -586,11 +628,11 @@ function ServiceSummary({
         </div>
       </div>
       {(webuiAction || adapterAction) ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))]">
           {webuiAction ? (
             <div className={cn(retro ? "retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2" : "flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2")}>
               <p className={cn("min-w-0 truncate font-bold", retro ? "text-base" : "text-xs")}>{webuiAction.title}</p>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
                 <label aria-label="端口" className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <Input
                     className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
@@ -600,7 +642,7 @@ function ServiceSummary({
                   />
                 </label>
                 <Button
-                  className="h-8 justify-self-start px-3 text-xs"
+                  className="h-8 shrink-0 justify-self-start px-3 text-xs"
                   disabled={!webuiAction.portValid}
                   onClick={webuiAction.onClick}
                   size="sm"
@@ -622,7 +664,7 @@ function ServiceSummary({
                   </p>
                 ) : null}
               </div>
-              <Button className="h-7 px-2.5 text-[11px]" onClick={adapterAction.onClick} size="sm" variant="secondary">
+              <Button className="h-8 shrink-0 px-3 text-xs" onClick={adapterAction.onClick} size="sm" variant="secondary">
                 <Settings />
                 {adapterAction.label}
               </Button>
@@ -645,7 +687,7 @@ function MessagePlatformConnectCard({
     <button
       data-home-guide-target="message-platform"
       className={cn(
-        "grid gap-3 text-left transition-colors hover:border-primary",
+        "grid w-full min-w-0 gap-3 text-left transition-colors hover:border-primary",
         retro
           ? "retro-panel !border-primary p-3.5 pl-5 [&::after]:!border-b-primary [&::before]:!bg-primary"
           : "rounded-lg border border-dashed border-primary/70 bg-card p-3.5 hover:bg-primary/5",
@@ -742,11 +784,29 @@ function SolidUpgradeIcon(): React.JSX.Element {
   );
 }
 
+function SolidEditLayoutIcon(): React.JSX.Element {
+  return (
+    <span aria-hidden className="grid size-18 grid-cols-2 gap-1.5 p-1">
+      <span className="bg-current" />
+      <span className="bg-current" />
+      <span className="bg-current" />
+      <span className="bg-current" />
+    </span>
+  );
+}
+
+function SharpSaveIcon({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg aria-hidden className={cn("size-12", className)} fill="currentColor" viewBox="0 0 24 24">
+      <path d="M3 2h15l3 3v17H3V2Zm3 3v6h11V5h-2v4H8V5H6Zm2 10v4h8v-4H8Z" />
+    </svg>
+  );
+}
+
 function MaiBotOverviewCard({
   service,
   localVersion,
   latestStable,
-  latestPrerelease,
   updateBusy,
   onUpdate,
   retro,
@@ -754,14 +814,11 @@ function MaiBotOverviewCard({
   service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
   latestStable: string | undefined;
-  latestPrerelease: string | undefined;
   updateBusy?: boolean;
   onUpdate: () => void;
   retro: boolean;
 }): React.JSX.Element {
-  const hasNewVersion =
-    compareVersionText(latestStable, localVersion) > 0 ||
-    compareVersionText(latestPrerelease, localVersion) > 0;
+  const hasNewVersion = compareVersionText(latestStable, localVersion) > 0;
 
   return (
     <div className={cn(retro ? "retro-panel grid min-w-0 gap-4 p-4 pl-6" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5")}>
@@ -960,6 +1017,299 @@ function HomeStatsPanel({
       </section>
     </div>
   );
+}
+
+function OfficialDocsCard({ retro }: { retro: boolean }): React.JSX.Element {
+  return (
+    <button
+      className={cn(
+        "flex w-full items-center justify-between gap-3 text-left transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        retro
+          ? "retro-panel retro-panel-bare p-4"
+          : "rounded-lg border border-border bg-card p-3.5 hover:border-primary/45 hover:bg-accent/45",
+      )}
+      onClick={() => void window.maibotDesktop?.openExternal(MAIBOT_OFFICIAL_DOCS_URL)}
+      type="button"
+    >
+      <span className="min-w-0">
+        <span className={cn("block", retro ? "retro-title text-xl" : "text-sm font-semibold")}>官方文档</span>
+        <span className={cn("block truncate", retro ? "font-mono text-xs text-foreground" : "text-[11px] text-muted-foreground")}>docs.mai-mai.org</span>
+      </span>
+      <ArrowRight className={cn("shrink-0", retro ? "size-5 text-primary" : "size-4 text-muted-foreground")} />
+    </button>
+  );
+}
+
+function StatsInfoCard({ snapshot, retro }: { snapshot: DesktopSnapshot; retro: boolean }): React.JSX.Element {
+  const [maibotStats, setMaibotStats] = useState<MaiBotStatisticSummary | null>(null);
+  const topChats = maibotStats?.chatStats.slice(0, 2) ?? [];
+
+  useEffect(() => {
+    let disposed = false;
+    const loadStats = async (): Promise<void> => {
+      try {
+        const stats = await window.maibotDesktop?.statistics.getMaiBot();
+        if (!disposed) setMaibotStats(stats ?? null);
+      } catch {
+        if (!disposed) setMaibotStats(null);
+      }
+    };
+
+    void loadStats();
+    const timer = window.setInterval(() => void loadStats(), 30_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [snapshot.paths.maibotRoot]);
+
+  return (
+    <aside className={cn(retro ? "retro-panel grid gap-4 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-center gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>统计信息</p>
+        </div>
+      </div>
+      <div className="grid gap-2 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold text-muted-foreground">LLM 用量</p>
+          {maibotStats?.periodLabel ? (
+            <span className="rounded-sm border border-border bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+              {maibotStats.periodLabel}
+            </span>
+          ) : null}
+        </div>
+        <DetailRow label="请求数" value={formatStatNumber(maibotStats?.totalRequests)} retro={retro} />
+        <DetailRow label="Token" value={formatStatNumber(maibotStats?.totalTokens)} retro={retro} />
+        <DetailRow label="总花费" value={maibotStats?.totalCost} retro={retro} />
+        <DetailRow label="Token/小时" value={maibotStats?.tokensPerHour} retro={retro} />
+      </div>
+      <div className={cn("grid gap-2 pt-3 text-xs", retro ? "retro-rule" : "border-t border-border")}>
+        <p className="text-[11px] font-semibold text-muted-foreground">消息统计</p>
+        <DetailRow label="消息数" value={formatStatNumber(maibotStats?.totalMessages)} retro={retro} />
+        <DetailRow label="回复数" value={formatStatNumber(maibotStats?.totalReplies)} retro={retro} />
+        <DetailRow label="在线时间" value={maibotStats?.totalOnlineTime} retro={retro} />
+        {topChats.map((chat) => (
+          <DetailRow key={chat.name} label={chat.name} value={formatStatNumber(chat.messageCount)} retro={retro} />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function QuickActionsCard({ onOpenQuickActions, retro }: { onOpenQuickActions: () => void; retro: boolean }): React.JSX.Element {
+  return (
+    <section className={cn(retro ? "retro-panel retro-panel-action min-h-[72px] p-0 pl-[88px] pr-4" : "rounded-lg border border-border bg-card p-3.5")}>
+      <div className={cn("flex items-center justify-between gap-3", retro && "min-h-[72px]")}>
+        <div className="flex min-w-0 items-center gap-3">
+          {!retro ? (
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+              <Wrench className="size-4.5" />
+            </span>
+          ) : null}
+          <div className="min-w-0">
+            <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>快捷操作</p>
+            <p className="text-[11px] text-muted-foreground">路径、数据库和配置导入。</p>
+          </div>
+        </div>
+        <Button
+          aria-label="打开快捷操作"
+          className={cn(retro ? "size-10 border-0 bg-transparent text-primary hover:bg-transparent hover:text-primary active:bg-transparent" : "size-8")}
+          onClick={onOpenQuickActions}
+          size="icon"
+          title="打开快捷操作"
+          variant={retro ? "ghost" : "secondary"}
+        >
+          <ArrowRight className={cn(retro ? "size-7" : "size-3.5")} />
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function SystemPerformanceCard({ retro }: { retro: boolean }): React.JSX.Element {
+  const [performanceInfo, setPerformanceInfo] = useState<SystemPerformanceSnapshot | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadPerformance = async (): Promise<void> => {
+      try {
+        const result = await window.maibotDesktop?.getSystemPerformance();
+        if (!disposed) setPerformanceInfo(result ?? null);
+      } catch {
+        if (!disposed) setPerformanceInfo(null);
+      }
+    };
+
+    void loadPerformance();
+    const timer = window.setInterval(() => void loadPerformance(), 2500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const cpuValue = typeof performanceInfo?.cpuUsagePercent === "number"
+    ? `${performanceInfo.cpuUsagePercent.toFixed(0)}%`
+    : "采样中";
+  const memoryText = performanceInfo
+    ? `${formatMemorySize(performanceInfo.memoryTotalBytes - performanceInfo.memoryFreeBytes)} / ${formatMemorySize(performanceInfo.memoryTotalBytes)}`
+    : "读取中";
+  const cpuPercent = Math.max(0, Math.min(100, performanceInfo?.cpuUsagePercent ?? 0));
+  const memoryPercent = Math.max(0, Math.min(100, performanceInfo?.memoryUsedPercent ?? 0));
+  const loadText = performanceInfo?.loadAverage.some((value) => value > 0)
+    ? performanceInfo.loadAverage.map((value) => value.toFixed(2)).join(" / ")
+    : "当前系统不可用";
+  const metricRing = (label: string, value: string, percent: number): React.JSX.Element => {
+    const radius = 34;
+    const circumference = 2 * Math.PI * radius;
+    const clampedPercent = Math.max(0, Math.min(100, percent));
+    return (
+      <div className="grid place-items-center gap-1">
+        <div className="relative grid size-20 place-items-center">
+          <svg aria-hidden className="absolute inset-0 size-20 -rotate-90" viewBox="0 0 80 80">
+            <circle className="stroke-border/70" cx="40" cy="40" fill="none" r={radius} strokeWidth="7" />
+            <circle
+              className="stroke-primary drop-shadow-[0_0_6px_hsl(var(--primary)/0.55)] transition-[stroke-dashoffset]"
+              cx="40"
+              cy="40"
+              fill="none"
+              r={radius}
+              strokeDasharray={circumference}
+              strokeDashoffset={circumference * (1 - clampedPercent / 100)}
+              strokeLinecap="round"
+              strokeWidth="7"
+            />
+          </svg>
+          <div className={cn("z-10 grid size-12 place-items-center rounded-full text-sm font-semibold", retro ? "bg-background/90" : "bg-card")}>
+            {value}
+          </div>
+        </div>
+        <span className="text-[11px] text-muted-foreground">{label}</span>
+      </div>
+    );
+  };
+
+  return (
+    <section className={cn(retro ? "retro-panel grid gap-3 p-4" : "grid gap-3 rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className={cn(retro ? "retro-title text-xl" : "text-sm font-semibold")}>系统性能</p>
+          <p className="truncate text-[11px] text-muted-foreground" title={performanceInfo?.cpuModel}>
+            {performanceInfo?.cpuModel ?? "正在读取系统状态"}
+          </p>
+        </div>
+        <Cpu className="size-4 text-primary" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {metricRing("CPU", cpuValue, cpuPercent)}
+        {metricRing("内存", performanceInfo ? `${memoryPercent.toFixed(0)}%` : "--", memoryPercent)}
+      </div>
+      <div className="grid gap-2 text-xs">
+        <DetailRow label="CPU" value={cpuValue} retro={retro} />
+        <DetailRow label="核心" value={performanceInfo ? `${performanceInfo.cpuCores}` : undefined} retro={retro} />
+        <DetailRow label="内存" value={memoryText} retro={retro} />
+        <DetailRow label="内存占用" value={performanceInfo ? `${performanceInfo.memoryUsedPercent.toFixed(0)}%` : undefined} retro={retro} />
+        <DetailRow label="运行时间" value={formatUptime(performanceInfo?.uptimeSeconds)} retro={retro} />
+        <DetailRow label="负载" value={loadText} retro={retro} />
+      </div>
+      <div className="h-2 overflow-hidden rounded-sm bg-muted">
+        <div
+          className="h-full rounded-sm bg-primary transition-[width]"
+          style={{ width: `${Math.max(0, Math.min(100, performanceInfo?.memoryUsedPercent ?? 0))}%` }}
+        />
+      </div>
+    </section>
+  );
+}
+
+function PluginSurpriseHomeCard({
+  active,
+  onOpenPlugins,
+  retro,
+}: {
+  active: boolean;
+  onOpenPlugins: () => void;
+  retro: boolean;
+}): React.JSX.Element {
+  const [plugins, setPlugins] = useState<MarketPlugin[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadPlugins = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await fetchMarketPlugins(undefined, { marketSource: "auto" });
+      setPlugins(pickRandomPlugins(result.market, 3));
+    } catch {
+      setPlugins([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (active && plugins.length === 0 && !loading) {
+      void loadPlugins();
+    }
+  }, [active, loadPlugins, loading, plugins.length]);
+
+  return (
+    <div className={cn(retro ? "retro-panel p-4" : "rounded-xl border border-border bg-card p-4 shadow-sm")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Sparkles className="size-4 text-primary" />
+            <h3 className="text-sm font-semibold">插件惊喜随心推荐</h3>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">从插件商店随机挑几个看看。</p>
+        </div>
+        <Button disabled={loading} onClick={() => void loadPlugins()} size="icon-sm" title="换一批" variant="ghost">
+          {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+        </Button>
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        {plugins.length > 0 ? (
+          plugins.map((plugin) => (
+            <button
+              className={cn(
+                "min-w-0 border p-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/40",
+                retro ? "rounded-sm border-border/80" : "rounded-md border-border",
+              )}
+              key={plugin.id}
+              onClick={onOpenPlugins}
+              type="button"
+            >
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="truncate text-sm font-medium">{pluginName(plugin)}</span>
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">v{pluginVersion(plugin.manifest)}</span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                {pluginDescription(plugin.manifest)}
+              </p>
+            </button>
+          ))
+        ) : (
+          <div className={cn("border px-3 py-6 text-center text-xs text-muted-foreground", retro ? "rounded-sm" : "rounded-md")}>
+            {loading ? "正在抽取插件..." : "暂时没有拿到插件推荐"}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <Button onClick={onOpenPlugins} size="sm" variant="secondary">
+          <ArrowRight className="size-3.5" />
+          打开插件商店
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function pickRandomPlugins(plugins: MarketPlugin[], count: number): MarketPlugin[] {
+  return [...plugins]
+    .sort(() => Math.random() - 0.5)
+    .slice(0, count);
 }
 
 interface DroppedMascot {
@@ -1490,20 +1840,23 @@ export function HomePanel({
   const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend>("napcat");
   const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
-  const [dashboardChannel, setDashboardChannel] = useState<DashboardUpdateChannel>("stable");
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
   const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
   const [moduleSourceExpanded, setModuleSourceExpanded] = useState(false);
   const [moduleSourceSaving, setModuleSourceSaving] = useState(false);
-  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("official");
-  const [customMaiBotUrl, setCustomMaiBotUrl] = useState("");
-  const [customNapcatAdapterUrl, setCustomNapcatAdapterUrl] = useState("");
+  const [moduleSourcePreset, setModuleSourcePreset] = useState<ModuleSourcePreset>("auto");
   const [maibotBranches, setMaibotBranches] = useState<ModuleBranchOption[]>([]);
   const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
   const [maibotRefsLoading, setMaibotRefsLoading] = useState(false);
   const [selectedMaiBotBranch, setSelectedMaiBotBranch] = useState("main");
   const [selectedMaiBotTag, setSelectedMaiBotTag] = useState("");
+  const [homeContentLayout, setHomeContentLayout] = useState<HomeContentEntry[]>(() => readHomeContentLayout());
+  const [homeLayoutEditing, setHomeLayoutEditing] = useState(false);
+  const [draggingHomeEntryId, setDraggingHomeEntryId] = useState<string | null>(null);
+  const [homeDragOffset, setHomeDragOffset] = useState<{ x: number; y: number } | null>(null);
+  const [homeInsertIndicator, setHomeInsertIndicator] = useState<{ area: HomeContentArea; index: number } | null>(null);
+  const homeDragStartRef = useRef<{ x: number; y: number } | null>(null);
   const appearance = useAppearance();
   const useRetroHome = appearance.mode === "future-retro";
   const services = snapshot.services ?? [];
@@ -1530,17 +1883,13 @@ export function HomePanel({
 
   const maibotTargets: Record<MaiBotUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.maibotLatestStableTag,
-    test: snapshot.moduleVersions.maibotLatestPrereleaseTag,
     other: selectedMaiBotTag
       ? `Tag ${selectedMaiBotTag}`
       : selectedMaiBotBranch
         ? `分支 ${selectedMaiBotBranch}`
         : undefined,
   };
-  const dashboardTargets: Record<DashboardUpdateChannel, string | undefined> = {
-    stable: snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi,
-    test: snapshot.moduleVersions.dashboardLatestPrereleasePypi,
-  };
+  const dashboardTarget = snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi;
 
   const handleMascotSecretTap = useCallback(() => {
     if (mascotIntroShownThisSession) {
@@ -1570,6 +1919,23 @@ export function HomePanel({
   }, [snapshot.initState.qqBackend]);
 
   useEffect(() => {
+    const syncHomeContentLayout = (event?: Event): void => {
+      if (event instanceof CustomEvent && Array.isArray(event.detail)) {
+        setHomeContentLayout(event.detail as HomeContentEntry[]);
+        return;
+      }
+      setHomeContentLayout(readHomeContentLayout());
+    };
+
+    window.addEventListener(HOME_CONTENT_LAYOUT_CHANGE_EVENT, syncHomeContentLayout);
+    window.addEventListener("storage", syncHomeContentLayout);
+    return () => {
+      window.removeEventListener(HOME_CONTENT_LAYOUT_CHANGE_EVENT, syncHomeContentLayout);
+      window.removeEventListener("storage", syncHomeContentLayout);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!qqWebuiPortValid) {
       return;
     }
@@ -1588,8 +1954,6 @@ export function HomePanel({
     const config = await window.maibotDesktop.modules.getSourceConfig();
     setModuleSourceConfig(config);
     setModuleSourcePreset(config.preset);
-    setCustomMaiBotUrl(config.maibotUrl);
-    setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
   }, []);
 
   const reloadModuleSourceOptions = useCallback(async () => {
@@ -1598,16 +1962,13 @@ export function HomePanel({
     }
 
     const currentPreset = moduleSourcePreset;
-    const currentMaiBotUrl = customMaiBotUrl;
-    const currentNapcatAdapterUrl = customNapcatAdapterUrl;
     const config = await window.maibotDesktop.modules.getSourceConfig();
+    const currentOption = config.options.find((option) => option.preset === currentPreset);
     setModuleSourceConfig(config);
-    setModuleSourcePreset(currentPreset);
-    setCustomMaiBotUrl(currentMaiBotUrl);
-    setCustomNapcatAdapterUrl(currentNapcatAdapterUrl);
-  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
+    setModuleSourcePreset(currentOption ? currentPreset : config.preset);
+  }, [moduleSourcePreset]);
 
-  const saveModuleSourceConfig = useCallback(async (update?: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
+  const saveModuleSourceConfig = useCallback(async (preset = moduleSourcePreset): Promise<ModuleSourceConfig> => {
     if (!window.maibotDesktop?.modules) {
       throw new Error("桌面桥未就绪，无法保存模块更新源");
     }
@@ -1615,20 +1976,16 @@ export function HomePanel({
     setModuleSourceSaving(true);
     try {
       const config = await window.maibotDesktop.modules.saveSourceConfig({
-        preset: update?.preset ?? moduleSourcePreset,
-        maibotUrl: update?.maibotUrl ?? customMaiBotUrl,
-        napcatAdapterUrl: update?.napcatAdapterUrl ?? customNapcatAdapterUrl,
+        preset,
       });
       setModuleSourceConfig(config);
       setModuleSourcePreset(config.preset);
-      setCustomMaiBotUrl(config.maibotUrl);
-      setCustomNapcatAdapterUrl(config.napcatAdapterUrl);
       setError(null);
       return config;
     } finally {
       setModuleSourceSaving(false);
     }
-  }, [customMaiBotUrl, customNapcatAdapterUrl, moduleSourcePreset]);
+  }, [moduleSourcePreset]);
 
   const loadMaiBotRefs = useCallback(async () => {
     if (!window.maibotDesktop?.modules || maibotRefsLoading) {
@@ -1669,11 +2026,7 @@ export function HomePanel({
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
     setModuleSourceExpanded(false);
-    setMaibotChannel(
-      snapshot.moduleVersions.maibotLatestStableTag
-        ? "stable"
-        : "test",
-    );
+    setMaibotChannel(snapshot.moduleVersions.maibotLatestStableTag ? "stable" : "other");
     setUpdateDialog("maibot");
     void loadModuleSourceConfig().catch((nextError: unknown) => {
       setError(messageFromError(nextError));
@@ -1682,7 +2035,6 @@ export function HomePanel({
   }, [
     loadMaiBotRefs,
     loadModuleSourceConfig,
-    snapshot.moduleVersions.maibotLatestPrereleaseTag,
     snapshot.moduleVersions.maibotLatestStableTag,
   ]);
 
@@ -1809,9 +2161,7 @@ export function HomePanel({
     const target: ModuleUpdateTarget | undefined =
       maibotChannel === "stable" && maibotTargets.stable
         ? { type: "tag", name: maibotTargets.stable }
-        : maibotChannel === "test" && maibotTargets.test
-          ? { type: "tag", name: maibotTargets.test }
-          : maibotChannel === "other" && selectedMaiBotTag
+        : maibotChannel === "other" && selectedMaiBotTag
             ? { type: "tag", name: selectedMaiBotTag }
             : maibotChannel === "other" && selectedMaiBotBranch
               ? { type: "branch", name: selectedMaiBotBranch }
@@ -1837,7 +2187,6 @@ export function HomePanel({
   }, [
     maibotChannel,
     maibotTargets.stable,
-    maibotTargets.test,
     refreshSnapshot,
     saveModuleSourceConfig,
     selectedMaiBotBranch,
@@ -1845,7 +2194,7 @@ export function HomePanel({
   ]);
 
   const updateDashboard = useCallback(async () => {
-    const target = dashboardTargets[dashboardChannel];
+    const target = dashboardTarget;
     if (!window.maibotDesktop?.pythonDeps || !target) {
       setError("没有可用的目标版本");
       return;
@@ -1866,7 +2215,354 @@ export function HomePanel({
     } finally {
       setBusy(null);
     }
-  }, [dashboardChannel, dashboardTargets, refreshSnapshot]);
+  }, [dashboardTarget, refreshSnapshot]);
+
+  const renderHomeContentCard = useCallback((type: HomeContentCardType): React.ReactNode => {
+    switch (type) {
+      case "maibot-overview":
+        return (
+          <MaiBotOverviewCard
+            latestStable={snapshot.moduleVersions.maibotLatestStableTag}
+            localVersion={snapshot.moduleVersions.maibotLocal}
+            onUpdate={openMaiBotUpdate}
+            retro={useRetroHome}
+            service={maibot}
+            updateBusy={busy === "maibot:update"}
+          />
+        );
+      case "local-chat":
+        return (
+          <LocalChatQuickCard
+            active={active}
+            maibotService={maibot}
+            onOpenFull={() => onOpenTab("localchat")}
+            retro={useRetroHome}
+          />
+        );
+      case "message-platform":
+        return messagePlatformConfigured ? (
+          <ServiceSummary
+            adapterAction={{
+              title: `${adapterName.replace(/\s+/gu, "")}设置`,
+              label: "打开配置",
+              onClick: () => onOpenPluginConfig(adapterPluginId),
+            }}
+            icon={null}
+            retro={useRetroHome}
+            service={napcat}
+            serviceControls={napcat ? {
+              busy: serviceActionBusy?.startsWith(`${napcat.id}:`) ?? false,
+              onRestart: onRestartService,
+              onStart: onStartService,
+              onStop: onStopService,
+            } : undefined}
+            webuiAction={{
+              title: `${napcat?.name ?? "NapCat"} 设置`,
+              label: "打开 WebUI",
+              port: qqWebuiPort,
+              portValid: qqWebuiPortValid,
+              onPortChange: setQqWebuiPort,
+              onClick: () => setNapcatWebuiOpen(true),
+            }}
+          />
+        ) : (
+          <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroHome} />
+        );
+      case "launcher-update":
+        return (
+          <LauncherUpdateCard
+            appVersion={snapshot.appVersion}
+            latestTag={launcherLatestTag}
+            onUpdate={openLauncherUpdate}
+            retro={useRetroHome}
+            updateBusy={busy === "launcher:check" || busy === "launcher:update"}
+          />
+        );
+      case "official-docs":
+        return <OfficialDocsCard retro={useRetroHome} />;
+      case "stats":
+        return (
+          <StatsInfoCard retro={useRetroHome} snapshot={snapshot} />
+        );
+      case "quick-actions":
+        return <QuickActionsCard onOpenQuickActions={() => setQuickActionsOpen(true)} retro={useRetroHome} />;
+      case "system-performance":
+        return <SystemPerformanceCard retro={useRetroHome} />;
+      case "plugin-surprise":
+        return (
+          <PluginSurpriseHomeCard
+            active={active}
+            onOpenPlugins={() => onOpenTab("plugins")}
+            retro={useRetroHome}
+          />
+        );
+      default:
+        return null;
+    }
+  }, [
+    active,
+    adapterName,
+    adapterPluginId,
+    busy,
+    launcherLatestTag,
+    maibot,
+    messagePlatformConfigured,
+    napcat,
+    onOpenPluginConfig,
+    onOpenTab,
+    onRestartService,
+    onStartService,
+    onStopService,
+    openLauncherUpdate,
+    openMaiBotUpdate,
+    qqWebuiPort,
+    qqWebuiPortValid,
+    serviceActionBusy,
+    snapshot,
+    useRetroHome,
+  ]);
+
+  const homeContentCards = useMemo(
+    () => homeContentLayout.map((entry) => ({
+      ...entry,
+      content: renderHomeContentCard(entry.type),
+    })).filter((entry) => entry.content !== null),
+    [homeContentLayout, renderHomeContentCard],
+  );
+  const mainHomeContentCards = homeContentCards.filter((entry) => entry.area === "main");
+  const sideHomeContentCards = homeContentCards.filter((entry) => entry.area === "side");
+  const enabledHomeContentTypes = new Set(homeContentLayout.map((entry) => entry.type));
+  const addableHomeContentOptions = HOME_CONTENT_CARD_OPTIONS.filter((option) => !enabledHomeContentTypes.has(option.type));
+
+  const persistHomeContentLayout = useCallback((layout: HomeContentEntry[]) => {
+    setHomeContentLayout(saveHomeContentLayout(layout));
+  }, []);
+
+  const moveHomeContentEntry = useCallback((entryId: string, targetArea: HomeContentArea, targetIndex: number) => {
+    const sourceIndex = homeContentLayout.findIndex((entry) => entry.id === entryId);
+    if (sourceIndex < 0) {
+      return;
+    }
+    const sourceEntry = homeContentLayout[sourceIndex];
+    const sourceAreaIndex = homeContentLayout.filter((entry) => entry.area === sourceEntry.area).findIndex((entry) => entry.id === entryId);
+    if (
+      sourceEntry.area === targetArea &&
+      (targetIndex === sourceAreaIndex || targetIndex === sourceAreaIndex + 1)
+    ) {
+      return;
+    }
+    const nextLayout = [...homeContentLayout];
+    const [entry] = nextLayout.splice(sourceIndex, 1);
+    const adjustedTargetIndex = sourceEntry.area === targetArea && targetIndex > sourceAreaIndex
+      ? targetIndex - 1
+      : targetIndex;
+    const targetEntries = nextLayout.filter((item) => item.area === targetArea);
+    const beforeTarget = targetEntries.slice(0, adjustedTargetIndex);
+    const insertIndex = beforeTarget.length === 0
+      ? nextLayout.findIndex((item) => item.area === targetArea)
+      : nextLayout.findIndex((item) => item.id === beforeTarget[beforeTarget.length - 1]?.id) + 1;
+    nextLayout.splice(insertIndex < 0 ? nextLayout.length : insertIndex, 0, { ...entry, area: targetArea });
+    persistHomeContentLayout(nextLayout);
+  }, [homeContentLayout, persistHomeContentLayout]);
+
+  const removeHomeContentEntry = useCallback((entryId: string) => {
+    if (homeContentLayout.length <= 1) {
+      return;
+    }
+    persistHomeContentLayout(homeContentLayout.filter((entry) => entry.id !== entryId));
+  }, [homeContentLayout, persistHomeContentLayout]);
+
+  const addHomeContentEntry = useCallback((type: HomeContentCardType, area: HomeContentArea) => {
+    if (enabledHomeContentTypes.has(type)) {
+      return;
+    }
+    persistHomeContentLayout([...homeContentLayout, createHomeContentEntry(type, area)]);
+  }, [enabledHomeContentTypes, homeContentLayout, persistHomeContentLayout]);
+
+  const resetHomeContentLayoutToDefault = useCallback(() => {
+    setHomeContentLayout(resetHomeContentLayout());
+  }, []);
+
+  const updateHomeContentWidth = useCallback((entryId: string, width: HomeContentWidth) => {
+    persistHomeContentLayout(homeContentLayout.map((entry) => entry.id === entryId ? { ...entry, width } : entry));
+  }, [homeContentLayout, persistHomeContentLayout]);
+
+  const isHomeInsertNoop = useCallback((entryId: string, targetArea: HomeContentArea, targetIndex: number) => {
+    const sourceIndex = homeContentLayout.findIndex((entry) => entry.id === entryId);
+    const source = homeContentLayout[sourceIndex];
+    if (!source || source.area !== targetArea) {
+      return false;
+    }
+    const sourceAreaIndex = homeContentLayout.slice(0, sourceIndex).filter((entry) => entry.area === targetArea).length;
+    return targetIndex === sourceAreaIndex || targetIndex === sourceAreaIndex + 1;
+  }, [homeContentLayout]);
+
+  const renderHomeEditableCard = useCallback((
+    entry: HomeContentEntry & { content: React.ReactNode },
+    areaEntries: Array<HomeContentEntry & { content: React.ReactNode }>,
+    area: HomeContentArea,
+    index: number,
+  ): React.JSX.Element => {
+    const effectiveWidth = entry.width ?? "full";
+    const dragStyle = draggingHomeEntryId === entry.id && homeDragOffset
+      ? { transform: `translate3d(${homeDragOffset.x}px, ${homeDragOffset.y}px, 0)` }
+      : undefined;
+
+    return (
+    <div
+      className={cn(
+        "group/home-card relative min-w-0 transition-[opacity,transform,grid-column,max-width]",
+        area === "main" && (effectiveWidth === "half" ? "md:col-span-1" : "md:col-span-2"),
+        homeLayoutEditing && "rounded-md outline outline-1 outline-dashed outline-primary/35",
+        draggingHomeEntryId === entry.id && "pointer-events-none z-50 opacity-80 shadow-2xl transition-none",
+      )}
+      key={entry.id}
+      style={dragStyle}
+      data-home-card-entry="true"
+      data-home-card-area={area}
+      data-home-card-index={index}
+      onPointerDown={(event) => {
+        if (!homeLayoutEditing || event.button !== 0) return;
+        if ((event.target as HTMLElement).closest("[data-home-resize-handle='true'], [data-home-card-control='true']")) return;
+        homeDragStartRef.current = { x: event.clientX, y: event.clientY };
+        setHomeDragOffset({ x: 0, y: 0 });
+        setDraggingHomeEntryId(entry.id);
+        setHomeInsertIndicator(null);
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!homeLayoutEditing || draggingHomeEntryId !== entry.id) return;
+        if (homeDragStartRef.current) {
+          setHomeDragOffset({
+            x: event.clientX - homeDragStartRef.current.x,
+            y: event.clientY - homeDragStartRef.current.y,
+          });
+        }
+        const hit = document.elementFromPoint(event.clientX, event.clientY);
+        const target = hit?.closest<HTMLElement>("[data-home-card-entry='true']");
+        if (!target) {
+          const dropArea = hit?.closest<HTMLElement>("[data-home-drop-area]");
+          const targetArea = dropArea?.dataset.homeDropArea as HomeContentArea | undefined;
+          if (targetArea === "main" || targetArea === "side") {
+            const nextIndex = targetArea === "main" ? mainHomeContentCards.length : sideHomeContentCards.length;
+            setHomeInsertIndicator(
+              isHomeInsertNoop(entry.id, targetArea, nextIndex)
+                ? null
+                : { area: targetArea, index: nextIndex },
+            );
+          }
+          return;
+        }
+        const targetArea = target.dataset.homeCardArea as HomeContentArea | undefined;
+        const rawIndex = Number(target.dataset.homeCardIndex);
+        if ((targetArea !== "main" && targetArea !== "side") || !Number.isFinite(rawIndex)) return;
+        const rect = target.getBoundingClientRect();
+        const nextIndex = event.clientY > rect.top + rect.height / 2 ? rawIndex + 1 : rawIndex;
+        setHomeInsertIndicator(
+          isHomeInsertNoop(entry.id, targetArea, nextIndex)
+            ? null
+            : { area: targetArea, index: nextIndex },
+        );
+      }}
+      onPointerUp={(event) => {
+        if (draggingHomeEntryId === entry.id && homeInsertIndicator) {
+          moveHomeContentEntry(entry.id, homeInsertIndicator.area, homeInsertIndicator.index);
+        }
+        homeDragStartRef.current = null;
+        setHomeDragOffset(null);
+        setDraggingHomeEntryId(null);
+        setHomeInsertIndicator(null);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      }}
+      onPointerCancel={(event) => {
+        homeDragStartRef.current = null;
+        setHomeDragOffset(null);
+        setDraggingHomeEntryId(null);
+        setHomeInsertIndicator(null);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      }}
+    >
+      {homeLayoutEditing && homeInsertIndicator?.area === area && homeInsertIndicator.index === index ? (
+        <div className="pointer-events-none absolute -top-2 left-0 right-0 z-50 h-1.5 rounded-full bg-orange-500 shadow-[0_0_0_2px_rgb(255_255_255/0.8)]" />
+      ) : null}
+      {homeLayoutEditing ? (
+        <div className="absolute right-2 top-2 z-30 flex items-center gap-1">
+          <span
+            className="grid size-7 cursor-grab place-items-center rounded-md border border-border bg-card/95 text-muted-foreground shadow-sm active:cursor-grabbing"
+            title={`拖动 ${homeContentCardLabel(entry.type)}`}
+          >
+            <GripVertical className="size-4" />
+          </span>
+          <button
+            aria-label={`移除 ${homeContentCardLabel(entry.type)}`}
+            className="grid size-7 place-items-center rounded-md border border-destructive/40 bg-card/95 text-destructive shadow-sm hover:bg-destructive hover:text-destructive-foreground"
+            data-home-card-control="true"
+            disabled={homeContentLayout.length <= 1}
+            onClick={() => removeHomeContentEntry(entry.id)}
+            onDragStart={(event) => event.preventDefault()}
+            title="从首页移除"
+            type="button"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      ) : null}
+      {homeLayoutEditing && area === "main" ? (
+        <button
+          aria-label={`切换 ${homeContentCardLabel(entry.type)} 宽度`}
+          className="absolute bottom-0 right-0 z-30 h-9 w-9 cursor-pointer overflow-hidden rounded-br-md text-primary transition-transform hover:scale-110"
+          data-home-resize-handle="true"
+          onClick={(event) => {
+            event.stopPropagation();
+            updateHomeContentWidth(entry.id, effectiveWidth === "half" ? "full" : "half");
+          }}
+          onDragStart={(event) => event.preventDefault()}
+          title={effectiveWidth === "half" ? "切换为 100%" : "切换为 50%"}
+          type="button"
+        >
+          <span className="absolute bottom-0 right-0 h-0 w-0 border-b-[28px] border-l-[28px] border-b-primary/80 border-l-transparent" />
+          <span className="absolute bottom-1 right-1 font-mono text-[9px] font-bold text-primary-foreground">
+            {effectiveWidth === "half" ? "50" : "100"}
+          </span>
+        </button>
+      ) : null}
+      <div className={cn(homeLayoutEditing && "pointer-events-none select-none blur-[1.5px] opacity-70 transition-[filter,opacity]")}>
+        {entry.content}
+      </div>
+      {homeLayoutEditing ? (
+        <div className="pointer-events-none absolute inset-0 z-10 rounded-md bg-background/20 backdrop-blur-[1px]" />
+      ) : null}
+      {homeLayoutEditing && index === areaEntries.length - 1 ? (
+        <div
+          className={cn(
+            "mt-2 rounded-md border border-dashed py-2 text-center text-[11px] text-muted-foreground",
+            homeInsertIndicator?.area === area && homeInsertIndicator.index === areaEntries.length
+              ? "border-orange-500 bg-orange-500/10"
+              : "border-primary/30",
+          )}
+        >
+          拖到这里放在末尾
+        </div>
+      ) : null}
+    </div>
+    );
+  }, [
+    draggingHomeEntryId,
+    homeDragOffset,
+    homeContentLayout.length,
+    homeInsertIndicator,
+    homeLayoutEditing,
+    isHomeInsertNoop,
+    mainHomeContentCards.length,
+    moveHomeContentEntry,
+    removeHomeContentEntry,
+    sideHomeContentCards.length,
+    updateHomeContentWidth,
+  ]);
 
   return (
     <>
@@ -1880,80 +2576,107 @@ export function HomePanel({
                 : "grid-cols-[minmax(0,1fr)_minmax(280px,320px)] items-start gap-3",
             )}
           >
-            <div className={cn("grid min-w-0", useRetroHome ? "gap-4" : "gap-3")}>
-              <MaiBotOverviewCard
-                latestPrerelease={snapshot.moduleVersions.maibotLatestPrereleaseTag}
-                latestStable={snapshot.moduleVersions.maibotLatestStableTag}
-                localVersion={snapshot.moduleVersions.maibotLocal}
-                onUpdate={openMaiBotUpdate}
-                retro={useRetroHome}
-                service={maibot}
-                updateBusy={busy === "maibot:update"}
-              />
-              <LocalChatQuickCard
-                active={active}
-                maibotService={maibot}
-                onOpenFull={() => onOpenTab("localchat")}
-                retro={useRetroHome}
-              />
-              {messagePlatformConfigured ? (
-                <ServiceSummary
-                  adapterAction={{
-                    title: `${adapterName.replace(/\s+/gu, "")}设置`,
-                    label: "打开配置",
-                    onClick: () => onOpenPluginConfig(adapterPluginId),
-                  }}
-                  icon={null}
-                  retro={useRetroHome}
-                  service={napcat}
-                  serviceControls={napcat ? {
-                    busy: serviceActionBusy?.startsWith(`${napcat.id}:`) ?? false,
-                    onRestart: onRestartService,
-                    onStart: onStartService,
-                    onStop: onStopService,
-                  } : undefined}
-                  webuiAction={{
-                    title: `${napcat?.name ?? "NapCat"} 设置`,
-                    label: "打开 WebUI",
-                    port: qqWebuiPort,
-                    portValid: qqWebuiPortValid,
-                    onPortChange: setQqWebuiPort,
-                    onClick: () => setNapcatWebuiOpen(true),
-                  }}
-                />
-              ) : (
-                <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroHome} />
-              )}
-              <LauncherUpdateCard
-                appVersion={snapshot.appVersion}
-                latestTag={launcherLatestTag}
-                onUpdate={openLauncherUpdate}
-                retro={useRetroHome}
-                updateBusy={busy === "launcher:check" || busy === "launcher:update"}
-              />
+            <div
+            className={cn("grid min-w-0 content-start md:grid-cols-2", useRetroHome ? "gap-4" : "gap-3")}
+              data-home-drop-area="main"
+            >
+              {mainHomeContentCards.map((entry, index) => renderHomeEditableCard(entry, mainHomeContentCards, "main", index))}
             </div>
-            {useRetroHome ? (
-              <div className="flex min-h-full flex-col gap-4">
-                <HomeStatsPanel
-                  onOpenQuickActions={() => setQuickActionsOpen(true)}
-                  retro={useRetroHome}
-                  snapshot={snapshot}
-                />
-                <ElasticMascot
-                  onLongPress={onEnterFloatingMode}
-                  onSecretTap={handleMascotSecretTap}
-                  placement="retro-column"
-                />
-              </div>
-            ) : (
-              <HomeStatsPanel
-                onOpenQuickActions={() => setQuickActionsOpen(true)}
-                retro={useRetroHome}
-                snapshot={snapshot}
-              />
-            )}
+            <div
+              className={cn("grid min-w-0 content-start", useRetroHome ? "gap-4" : "gap-3")}
+              data-home-drop-area="side"
+            >
+              {sideHomeContentCards.map((entry, index) => renderHomeEditableCard(entry, sideHomeContentCards, "side", index))}
+              {useRetroHome ? (
+                <div className="group/home-edit relative w-fit overflow-visible pr-30">
+                  <ElasticMascot
+                    onLongPress={onEnterFloatingMode}
+                    onSecretTap={handleMascotSecretTap}
+                    placement="retro-column"
+                  />
+                  <div className="absolute left-full top-0 h-full w-40" />
+                  <div
+                    className={cn(
+                      "absolute right-0 top-1/2 z-30 flex -translate-y-1/2 translate-x-full items-center gap-1 opacity-0 transition-[opacity,transform] duration-150",
+                      homeLayoutEditing
+                        ? "pointer-events-auto translate-x-[calc(100%-4rem)] opacity-100"
+                        : "pointer-events-none group-hover/home-edit:pointer-events-auto group-hover/home-edit:translate-x-[calc(100%+0.75rem)] group-hover/home-edit:opacity-100",
+                    )}
+                  >
+                    <Button
+                      aria-label={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                      className="size-20 shrink-0 !border-0 !bg-transparent text-primary !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-12"
+                      onClick={() => setHomeLayoutEditing((current) => !current)}
+                      size="icon"
+                      title={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                      variant="ghost"
+                    >
+                      {homeLayoutEditing ? <SharpSaveIcon /> : <SolidEditLayoutIcon />}
+                    </Button>
+                    {homeLayoutEditing ? (
+                      <Button
+                        aria-label="恢复默认首页布局"
+                        className="size-20 shrink-0 !border-0 !bg-transparent text-muted-foreground !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-12"
+                        onClick={resetHomeContentLayoutToDefault}
+                        size="icon"
+                        title="恢复默认首页布局"
+                        variant="ghost"
+                      >
+                        <RefreshCw className="!size-12" />
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
-          {!useRetroHome ? <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} /> : null}
+          {homeLayoutEditing ? (
+            <div className={cn("rounded-lg border border-border bg-card p-3", useRetroHome && "retro-control rounded-sm")}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">可添加到首页</p>
+                  <p className="text-xs text-muted-foreground">点击添加后会放到左侧主内容，再拖到想要的位置。</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {addableHomeContentOptions.length > 0 ? addableHomeContentOptions.map((option) => (
+                    <Button key={option.type} onClick={() => addHomeContentEntry(option.type, "main")} size="sm" variant="outline">
+                      <Plus className="size-3.5" />
+                      {option.label}
+                    </Button>
+                  )) : (
+                    <span className="text-xs text-muted-foreground">所有卡片都已显示</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {!useRetroHome ? (
+            <>
+              <Button
+                aria-label={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                className="fixed bottom-4 right-36 z-30 size-16 !border-0 !bg-transparent text-primary !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-10"
+                onClick={() => setHomeLayoutEditing((current) => !current)}
+                size="icon"
+                title={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                variant="ghost"
+              >
+                {homeLayoutEditing ? <SharpSaveIcon className="size-10" /> : <SolidEditLayoutIcon />}
+              </Button>
+              {homeLayoutEditing ? (
+                <Button
+                  aria-label="恢复默认首页布局"
+                  className="fixed bottom-4 right-16 z-30 size-16 !border-0 !bg-transparent text-muted-foreground !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-10"
+                  onClick={resetHomeContentLayoutToDefault}
+                  size="icon"
+                  title="恢复默认首页布局"
+                  variant="ghost"
+                >
+                  <RefreshCw className="!size-10" />
+                </Button>
+              ) : null}
+              <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} />
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -2171,7 +2894,6 @@ export function HomePanel({
       >
         <DialogContent size="lg">
           <DialogHeader
-            icon={<Server className="size-4" />}
             title="更新 MaiBot"
             tone="primary"
           />
@@ -2185,7 +2907,6 @@ export function HomePanel({
               <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} retro={useRetroHome} />
-              <DetailRow label="测试版" value={snapshot.moduleVersions.maibotLatestPrereleaseTag} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
@@ -2203,7 +2924,6 @@ export function HomePanel({
                 }}
                 options={[
                   { value: "stable", label: "正式版", version: maibotTargets.stable },
-                  { value: "test", label: "测试版", version: maibotTargets.test },
                   { value: "other", label: "其他版本", version: maibotRefsLoading ? undefined : maibotTargets.other },
                 ]}
                 retro={useRetroHome}
@@ -2275,19 +2995,8 @@ export function HomePanel({
                         disabled={busy !== null || moduleSourceSaving || !moduleSourceConfig}
                         onChange={(event) => {
                           const preset = event.target.value as ModuleSourcePreset;
-                          const option = moduleSourceConfig?.options.find((item) => item.preset === preset);
-                          const nextMaiBotUrl = option?.maibotUrl ?? customMaiBotUrl;
-                          const nextNapcatAdapterUrl = option?.napcatAdapterUrl ?? customNapcatAdapterUrl;
                           setModuleSourcePreset(preset);
-                          if (option) {
-                            setCustomMaiBotUrl(nextMaiBotUrl);
-                            setCustomNapcatAdapterUrl(nextNapcatAdapterUrl);
-                          }
-                          void saveModuleSourceConfig({
-                            preset,
-                            maibotUrl: nextMaiBotUrl,
-                            napcatAdapterUrl: nextNapcatAdapterUrl,
-                          }).catch((nextError: unknown) => setError(messageFromError(nextError)));
+                          void saveModuleSourceConfig(preset).catch((nextError: unknown) => setError(messageFromError(nextError)));
                         }}
                         value={moduleSourcePreset}
                       >
@@ -2296,24 +3005,13 @@ export function HomePanel({
                             {option.label}
                           </option>
                         ))}
-                        <option value="custom">自定义</option>
                       </select>
                     </label>
                     <label className="grid gap-1.5 text-xs font-medium">
-                      MaiBot 仓库
+                      当前解析地址
                       <Input
-                        disabled={busy !== null || moduleSourceSaving || moduleSourcePreset !== "custom"}
-                        onBlur={(event) => {
-                          if (moduleSourcePreset === "custom") {
-                            void saveModuleSourceConfig({
-                              preset: "custom",
-                              maibotUrl: event.currentTarget.value,
-                              napcatAdapterUrl: customNapcatAdapterUrl,
-                            }).catch((nextError: unknown) => setError(messageFromError(nextError)));
-                          }
-                        }}
-                        onChange={(event) => setCustomMaiBotUrl(event.target.value)}
-                        value={customMaiBotUrl}
+                        disabled
+                        value={moduleSourceConfig?.maibotUrl ?? ""}
                       />
                     </label>
                     <Button
@@ -2378,33 +3076,20 @@ export function HomePanel({
             <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
               <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="最新正式版" value={dashboardTargets.stable} retro={useRetroHome} />
-              <DetailRow label="最新测试版" value={dashboardTargets.test} retro={useRetroHome} />
+              <DetailRow label="最新正式版" value={dashboardTarget} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再更新 WebUI 覆盖依赖。
               </div>
             ) : null}
-            <div className="grid gap-1.5">
-              <p className="text-xs font-medium">目标版本</p>
-              <ChoiceSwitch
-                value={dashboardChannel}
-                onChange={setDashboardChannel}
-                options={[
-                  { value: "stable", label: "最新正式版", version: dashboardTargets.stable },
-                  { value: "test", label: "最新测试版", version: dashboardTargets.test },
-                ]}
-                retro={useRetroHome}
-              />
-            </div>
           </DialogBody>
           <DialogFooter>
             <Button disabled={busy === "dashboard:update"} onClick={() => setUpdateDialog(null)} size="sm" variant="ghost">
               取消
             </Button>
             <Button
-              disabled={busy !== null || maibotUpdateBlocked || !dashboardTargets[dashboardChannel]}
+              disabled={busy !== null || maibotUpdateBlocked || !dashboardTarget}
               onClick={() => void updateDashboard()}
               size="sm"
             >

@@ -40,7 +40,7 @@ import type {
   MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
 } from "../../shared/contracts";
-import { RemoteSourceManager } from "./remote-source-manager";
+import { RemoteSourceManager, type ResolvedGitHubUrlCandidate } from "./remote-source-manager";
 
 const MARKET_URL =
   "https://raw.githubusercontent.com/Mai-with-u/plugin-repo/main/plugin_details.json";
@@ -87,6 +87,12 @@ interface CacheFile<T> {
 interface MarketRequest {
   cacheKey: string;
   promise: Promise<MaiBotMarketPlugin[]>;
+}
+
+interface SourceFailure {
+  label: string;
+  url: string;
+  error: string;
 }
 
 interface LocalPythonConfigInspection {
@@ -223,13 +229,18 @@ export class MaiBotPluginClient {
     return { installed, market, stats };
   }
 
-  async install(pluginId: string, repositoryUrl: string, branch = "main"): Promise<MaiBotPluginOperationResult> {
+  async install(
+    pluginId: string,
+    repositoryUrl: string,
+    branch = "main",
+    sourcePreset: MaiBotPluginMarketSource = "auto",
+  ): Promise<MaiBotPluginOperationResult> {
     const targetPath = this.installTargetPath(pluginId);
     if (await pathExists(targetPath)) {
       throw new Error("插件已安装，请先卸载");
     }
 
-    await this.cloneRepository(await this.resolveSourceUrl(repositoryUrl), targetPath, branch);
+    await this.cloneRepositoryWithFallback(repositoryUrl, targetPath, branch, sourcePreset);
     const manifest = await this.validateInstalledManifest(targetPath, pluginId);
     return {
       success: true,
@@ -245,6 +256,7 @@ export class MaiBotPluginClient {
     repositoryUrl: string,
     branch = "main",
     latestVersion?: string,
+    sourcePreset: MaiBotPluginMarketSource = "auto",
   ): Promise<MaiBotPluginOperationResult> {
     const pluginPath = await this.resolveInstalledPluginPath(pluginId);
     if (!pluginPath) {
@@ -256,9 +268,9 @@ export class MaiBotPluginClient {
     if (latestVersion && !isNewerVersion(latestVersion, oldVersion)) {
       throw new Error("Already on the latest version; no update needed");
     }
-    const resolvedRepositoryUrl = await this.resolveSourceUrl(repositoryUrl);
+    const repositoryCandidates = await this.resolveSourceUrlCandidates(repositoryUrl, sourcePreset);
     if (!(await isDirectory(join(pluginPath, ".git")))) {
-      return this.replaceNonGitPlugin(pluginId, pluginPath, resolvedRepositoryUrl, branch, oldVersion);
+      return this.replaceNonGitPlugin(pluginId, pluginPath, repositoryCandidates, branch, oldVersion);
     }
 
     const beforeCommit = await this.currentGitCommit(pluginPath);
@@ -266,21 +278,27 @@ export class MaiBotPluginClient {
       throw new Error("Plugin Git repository cannot be read; update cannot continue");
     }
 
-    try {
-      await this.forcePullRepository(pluginPath, resolvedRepositoryUrl, branch);
-      const newManifest = await this.validateInstalledManifest(pluginPath, pluginId, false);
-      return {
-        success: true,
-        message: "插件更新成功",
-        plugin_id: pluginId,
-        plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
-        old_version: oldVersion,
-        new_version: pluginVersion(newManifest),
-      };
-    } catch (error) {
-      await this.rollbackRepository(pluginPath, beforeCommit);
-      throw error;
+    const failures: SourceFailure[] = [];
+    for (const candidate of repositoryCandidates) {
+      try {
+        await this.forcePullRepository(pluginPath, candidate.url, branch);
+        const newManifest = await this.validateInstalledManifest(pluginPath, pluginId, false);
+        return {
+          success: true,
+          message: failures.length > 0
+            ? `插件更新成功，已自动切换到 ${candidate.label}`
+            : "插件更新成功",
+          plugin_id: pluginId,
+          plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
+          old_version: oldVersion,
+          new_version: pluginVersion(newManifest),
+        };
+      } catch (error) {
+        failures.push({ label: candidate.label, url: candidate.url, error: toErrorMessage(error) });
+        await this.rollbackRepository(pluginPath, beforeCommit);
+      }
     }
+    throw new Error(formatSourceFailures("插件更新失败，所有插件源均不可用", failures));
   }
 
   async uninstall(pluginId: string): Promise<MaiBotPluginOperationResult> {
@@ -476,7 +494,11 @@ export class MaiBotPluginClient {
     };
   }
 
-  async getReadme(pluginId: string, repositoryUrl?: string): Promise<MaiBotPluginReadmeResult> {
+  async getReadme(
+    pluginId: string,
+    repositoryUrl?: string,
+    sourcePreset: MaiBotPluginMarketSource = "auto",
+  ): Promise<MaiBotPluginReadmeResult> {
     const pluginPath = await this.resolveInstalledPluginPath(pluginId);
     if (pluginPath) {
       for (const readmeName of ["README.md", "readme.md", "Readme.md", "README.MD"]) {
@@ -496,17 +518,23 @@ export class MaiBotPluginClient {
       return { success: false, error: "Plugin README not found" };
     }
 
+    const failures: SourceFailure[] = [];
     for (const branch of ["main", "master"]) {
-      const remoteUrl = await this.remoteSourceManager.resolveGitHubReadmeUrl(repositoryUrl, branch);
-      if (!remoteUrl) {
-        continue;
-      }
-      const response = await fetchWithTimeout(remoteUrl).catch(() => null);
-      if (response?.ok) {
-        return { success: true, content: await response.text() };
+      const candidates = await this.remoteSourceManager.resolveGitHubReadmeUrlCandidates(repositoryUrl, branch, sourcePreset);
+      for (const candidate of candidates) {
+        const response = await fetchWithTimeout(candidate.url).catch((error: unknown) => {
+          failures.push({ label: candidate.label, url: candidate.url, error: toErrorMessage(error) });
+          return null;
+        });
+        if (response?.ok) {
+          return { success: true, content: await response.text() };
+        }
+        if (response) {
+          failures.push({ label: candidate.label, url: candidate.url, error: `HTTP ${response.status}` });
+        }
       }
     }
-    return { success: false, error: "Plugin README not found" };
+    return { success: false, error: failures.length > 0 ? formatSourceFailures("Plugin README not found", failures) : "Plugin README not found" };
   }
 
   async getStats(pluginId: string): Promise<MaiBotPluginStats | null> {
@@ -652,8 +680,7 @@ export class MaiBotPluginClient {
     }
 
     if (!this.marketRequest || this.marketRequest.cacheKey !== cacheKey || options.forceRefresh) {
-      const promise = this.resolveMarketUrl(marketSource)
-        .then((marketUrl) => fetchMarketPluginsUncached(marketUrl))
+      const promise = this.fetchMarketPluginsWithFallback(marketSource)
         .then(async (plugins) => {
           const nextCache = { timestamp: Date.now(), data: plugins };
           this.marketCache.set(cacheKey, nextCache);
@@ -740,14 +767,24 @@ export class MaiBotPluginClient {
     };
   }
 
-  private async resolveSourceUrl(url: string): Promise<string> {
-    return this.remoteSourceManager.resolveGitHubUrl(url, "plugin-git");
+  private async resolveSourceUrlCandidates(
+    url: string,
+    source: MaiBotPluginMarketSource,
+  ): Promise<ResolvedGitHubUrlCandidate[]> {
+    return this.remoteSourceManager.resolveGitHubUrlCandidates(url, source);
   }
 
-  private async resolveMarketUrl(source: MaiBotPluginMarketSource): Promise<string> {
-    return source === "github"
-      ? this.remoteSourceManager.resolveOfficialGitHubUrl(MARKET_URL)
-      : this.remoteSourceManager.resolveGitHubUrl(MARKET_URL, "plugin-market", source);
+  private async fetchMarketPluginsWithFallback(source: MaiBotPluginMarketSource): Promise<MaiBotMarketPlugin[]> {
+    const candidates = await this.remoteSourceManager.resolveGitHubUrlCandidates(MARKET_URL, source);
+    const failures: SourceFailure[] = [];
+    for (const candidate of candidates) {
+      try {
+        return await fetchMarketPluginsUncached(candidate.url);
+      } catch (error) {
+        failures.push({ label: candidate.label, url: candidate.url, error: toErrorMessage(error) });
+      }
+    }
+    throw new Error(formatSourceFailures("插件市场列表获取失败，所有插件市场源均不可用", failures));
   }
 
   private async readCache<T>(
@@ -795,6 +832,25 @@ export class MaiBotPluginClient {
     }
   }
 
+  private async cloneRepositoryWithFallback(
+    repositoryUrl: string,
+    targetPath: string,
+    branch: string,
+    sourcePreset: MaiBotPluginMarketSource,
+  ): Promise<void> {
+    const candidates = await this.resolveSourceUrlCandidates(repositoryUrl, sourcePreset);
+    const failures: SourceFailure[] = [];
+    for (const candidate of candidates) {
+      try {
+        await this.cloneRepository(candidate.url, targetPath, branch);
+        return;
+      } catch (error) {
+        failures.push({ label: candidate.label, url: candidate.url, error: toErrorMessage(error) });
+      }
+    }
+    throw new Error(formatSourceFailures("插件仓库克隆失败，所有插件源均不可用", failures));
+  }
+
   private async currentGitCommit(pluginPath: string): Promise<string | null> {
     if (!(await isDirectory(join(pluginPath, ".git")))) {
       return null;
@@ -806,7 +862,7 @@ export class MaiBotPluginClient {
   private async replaceNonGitPlugin(
     pluginId: string,
     pluginPath: string,
-    repositoryUrl: string,
+    repositoryCandidates: ResolvedGitHubUrlCandidate[],
     branch: string,
     oldVersion: string,
   ): Promise<MaiBotPluginOperationResult> {
@@ -816,25 +872,31 @@ export class MaiBotPluginClient {
     await mkdir(dirname(tempPath), { recursive: true });
     await rename(pluginPath, backupPath);
 
-    try {
-      await this.cloneRepository(repositoryUrl, tempPath, branch);
-      const newManifest = await this.validateReplacementManifest(tempPath, pluginId);
-      await this.restoreOfficialPluginConfig(backupPath, tempPath);
-      await rename(tempPath, pluginPath);
+    const failures: SourceFailure[] = [];
+    for (const candidate of repositoryCandidates) {
+      try {
+        await this.cloneRepository(candidate.url, tempPath, branch);
+        const newManifest = await this.validateReplacementManifest(tempPath, pluginId);
+        await this.restoreOfficialPluginConfig(backupPath, tempPath);
+        await rename(tempPath, pluginPath);
 
-      return {
-        success: true,
-        message: "Plugin updated successfully",
-        plugin_id: pluginId,
-        plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
-        old_version: oldVersion,
-        new_version: pluginVersion(newManifest),
-      };
-    } catch (error) {
-      await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
-      await this.restoreUpdateBackup(backupPath, pluginPath);
-      throw error;
+        return {
+          success: true,
+          message: failures.length > 0
+            ? `Plugin updated successfully via ${candidate.label}`
+            : "Plugin updated successfully",
+          plugin_id: pluginId,
+          plugin_name: pluginName({ id: pluginId, manifest: newManifest }),
+          old_version: oldVersion,
+          new_version: pluginVersion(newManifest),
+        };
+      } catch (error) {
+        failures.push({ label: candidate.label, url: candidate.url, error: toErrorMessage(error) });
+        await rm(tempPath, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
+    await this.restoreUpdateBackup(backupPath, pluginPath);
+    throw new Error(formatSourceFailures("插件更新失败，所有插件源均不可用", failures));
   }
 
   private createPluginUpdateWorkspace(pluginId: string): { backupPath: string; tempPath: string } {
@@ -1589,18 +1651,11 @@ function normalizeDateString(value: unknown): string | undefined {
 }
 
 function normalizeMarketSource(source: MaiBotPluginListOptions["marketSource"]): MaiBotPluginMarketSource {
-  switch (source) {
-    case "github":
-    case "gh-proxy-com":
-    case "v6-gh-proxy-org":
-    case "cdn-gh-proxy-com":
-    case "gitproxy-mrhjx-cn":
-    case "ghproxy-net":
-    case "ghproxy-vip":
-      return source;
-    default:
-      return "configured";
+  const normalized = typeof source === "string" ? source.trim() : "";
+  if (!normalized || normalized === "configured") {
+    return "auto";
   }
+  return normalized === "official" ? "github" : normalized;
 }
 
 function marketSourceCacheKey(source: MaiBotPluginMarketSource): string {
@@ -3058,6 +3113,17 @@ async function fetchWithTimeout(url: string, timeoutMs = MARKET_TIMEOUT_MS, init
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatSourceFailures(title: string, failures: SourceFailure[]): string {
+  if (failures.length === 0) {
+    return title;
+  }
+  return `${title}\n${failures.map((failure) => `${failure.label} (${failure.url}): ${failure.error}`).join("\n")}`;
 }
 
 function runGit(gitPath: string, args: string[], cwd: string): Promise<GitRunResult> {

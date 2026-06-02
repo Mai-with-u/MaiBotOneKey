@@ -354,7 +354,7 @@
 
 :root.dark[data-appearance-mode="future-retro"],
 :root.dark[data-appearance-mode="future-retro"][data-accent] {
-  --background: hsl(20, 35%, 7%);
+  --background: hsl(16, 33%, 6%);
   --foreground: hsl(34.3 31.8% 74.3%);
   --card: hsl(20 21.3% 13.9%);
   --card-foreground: hsl(34.3 31.8% 74.3%);
@@ -365,7 +365,7 @@
   --secondary: hsl(24 16% 18%);
   --secondary-foreground: hsl(34 28% 76%);
   --muted: hsl(24 14% 17%);
-  --muted-foreground: hsl(34 19% 58%);
+  --muted-foreground: hsl(34, 22%, 68%);
   --accent: hsl(40 24% 28%);
   --accent-foreground: hsl(34 30% 78%);
   --destructive: hsl(8 55% 48%);
@@ -979,8 +979,7 @@ select,
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-meta,
-:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-tags,
-:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-quick-stats {
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-tags {
   display: none;
 }
 
@@ -1025,6 +1024,30 @@ select,
   display: none;
 }
 
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-quick-stats {
+  display: flex;
+  gap: 0.35rem;
+}
+
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-quick-stats .plugin-card-action {
+  height: 40px;
+  min-width: 56px;
+  border-radius: 1px !important;
+  border-width: 2px !important;
+  border-color: var(--plugin-market-line) !important;
+  background: transparent !important;
+  color: var(--plugin-market-ink) !important;
+  box-shadow: none !important;
+}
+
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-quick-stats .plugin-card-action:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--plugin-market-ink) 8%, transparent) !important;
+}
+
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-quick-stats .plugin-card-quick-action-active {
+  background: color-mix(in oklab, var(--plugin-market-gold) 22%, transparent) !important;
+}
+
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-status-badge,
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-runtime-light {
   border: 0 !important;
@@ -1035,7 +1058,7 @@ select,
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-detail-action,
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action {
   min-width: 82px;
-  height: 34px;
+  height: 40px;
   border-radius: 1px !important;
   border-width: 2px !important;
   font-weight: 800;
@@ -1043,8 +1066,8 @@ select,
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-icon-action {
-  width: 34px;
-  min-width: 34px;
+  width: 40px;
+  min-width: 40px;
   padding-inline: 0 !important;
 }
 
@@ -1059,9 +1082,21 @@ select,
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action {
+  min-width: 123px;
+  height: 40px;
   border-color: var(--plugin-market-rust-dark) !important;
   background: var(--plugin-market-rust) !important;
   color: #fff1d6 !important;
+}
+
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action.plugin-card-icon-action {
+  width: 40px;
+  min-width: 40px;
+}
+
+:root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action.plugin-card-icon-action svg {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 :root.dark[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action {
@@ -1091,6 +1126,11 @@ select,
     column-gap: 1rem !important;
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     justify-content: initial;
+  }
+
+  :root[data-appearance-mode="future-retro"] .plugin-surprise-card-grid {
+    grid-auto-flow: row !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
   }
 }
 

@@ -118,7 +118,6 @@ export function configureRuntimePaths(): RuntimePaths {
       : join(installRoot, "resources", "opencode", "plugin_code.md"),
     defaultPythonOverridesRoot: defaults.pythonOverrides,
     pythonOverridesRoot: defaults.pythonOverrides,
-    live2dRoot: join(userDataRoot, "live2d"),
     pluginBuilderRoot: join(userDataRoot, "plugin-builder", "plugins"),
     logsRoot: join(userDataRoot, "logs"),
   };

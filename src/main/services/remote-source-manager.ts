@@ -1,10 +1,5 @@
-import type { GithubSourcePreset, ModuleSourceConfig } from "../../shared/contracts";
-
-export type RemoteSourcePurpose =
-  | "module-git"
-  | "plugin-market"
-  | "plugin-git"
-  | "plugin-readme";
+import type { GithubSourcePreset } from "../../shared/contracts";
+import { SourceSettingsManager } from "./source-settings-manager";
 
 const OFFICIAL_GITHUB_BASE_URL = "https://github.com/";
 const OFFICIAL_RAW_GITHUB_BASE_URL = "https://raw.githubusercontent.com/";
@@ -19,59 +14,87 @@ const GITHUB_SOURCE_PREFIXES: Partial<Record<GithubSourcePreset, string>> = {
 };
 
 export interface RemoteSourceManagerOptions {
-  getModuleSourceConfig?: () => Promise<ModuleSourceConfig>;
+  sourceSettingsManager?: SourceSettingsManager;
+}
+
+export interface ResolvedGitHubUrlCandidate {
+  preset: GithubSourcePreset;
+  label: string;
+  url: string;
 }
 
 export class RemoteSourceManager {
-  private readonly getModuleSourceConfig?: () => Promise<ModuleSourceConfig>;
+  private readonly sourceSettingsManager?: SourceSettingsManager;
 
   constructor(options: RemoteSourceManagerOptions = {}) {
-    this.getModuleSourceConfig = options.getModuleSourceConfig;
+    this.sourceSettingsManager = options.sourceSettingsManager;
   }
 
-  async resolveGitHubUrl(
+  async resolveGitHubUrlCandidates(
     url: string,
-    purpose: RemoteSourcePurpose,
-    sourcePreset: GithubSourcePreset = "configured",
-  ): Promise<string> {
-    if (purpose === "module-git" || !this.getModuleSourceConfig) {
-      return sourcePreset === "github" ? normalizeGithubUrl(url) ?? url : this.resolvePresetGitHubUrl(url, sourcePreset);
+    sourcePreset: GithubSourcePreset = "auto",
+  ): Promise<ResolvedGitHubUrlCandidate[]> {
+    const candidates: ResolvedGitHubUrlCandidate[] = [];
+    const seen = new Set<string>();
+    const pushCandidate = (preset: GithubSourcePreset, label: string): void => {
+      const resolvedUrl = preset === "github"
+        ? normalizeGithubUrl(url) ?? url
+        : this.resolvePresetGitHubUrl(url, preset);
+      const key = resolvedUrl.trim().toLowerCase();
+      if (!key || seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      candidates.push({ preset, label, url: resolvedUrl });
+    };
+
+    const settingsSources = this.sourceSettingsManager?.getGitSources() ?? [];
+    if (sourcePreset === "auto") {
+      for (const source of settingsSources) {
+        const preset = source.id === "official" ? "github" : source.id;
+        pushCandidate(preset, source.label);
+      }
+      if (candidates.length === 0) {
+        pushCandidate("github", "GitHub");
+      }
+      return candidates;
     }
 
-    if (sourcePreset !== "configured") {
-      return this.resolvePresetGitHubUrl(url, sourcePreset);
-    }
-
-    try {
-      const config = await this.getModuleSourceConfig();
-      return rewriteGithubUrl(url, config.maibotUrl);
-    } catch {
-      return url;
-    }
+    const normalizedPreset = sourcePreset === "official" ? "github" : sourcePreset;
+    const selectedSource = settingsSources.find((source) => source.id === sourcePreset || source.id === normalizedPreset);
+    pushCandidate(normalizedPreset, selectedSource?.label ?? (normalizedPreset === "github" ? "GitHub" : normalizedPreset));
+    return candidates;
   }
 
-  async resolveOfficialGitHubUrl(url: string): Promise<string> {
-    return normalizeGithubUrl(url) ?? url;
-  }
-
-  async resolveGitHubReadmeUrl(
+  async resolveGitHubReadmeUrlCandidates(
     repositoryUrl: string,
     branch: string,
-    purpose: RemoteSourcePurpose = "plugin-readme",
-    sourcePreset: GithubSourcePreset = "configured",
-  ): Promise<string | undefined> {
+    sourcePreset: GithubSourcePreset = "auto",
+  ): Promise<ResolvedGitHubUrlCandidate[]> {
     const rawUrl = githubRawReadmeUrl(repositoryUrl, branch);
-    return rawUrl ? this.resolveGitHubUrl(rawUrl, purpose, sourcePreset) : undefined;
+    return rawUrl ? this.resolveGitHubUrlCandidates(rawUrl, sourcePreset) : [];
   }
 
   private resolvePresetGitHubUrl(url: string, sourcePreset: GithubSourcePreset): string {
-    if (sourcePreset === "github" || sourcePreset === "configured") {
+    if (sourcePreset === "github") {
       return normalizeGithubUrl(url) ?? url;
     }
 
     const normalized = normalizeGithubUrl(url);
-    const prefix = GITHUB_SOURCE_PREFIXES[sourcePreset];
-    return normalized && prefix ? `${prefix}${normalized}` : url;
+    if (!normalized) {
+      return url;
+    }
+
+    const sourceBaseUrl = GITHUB_SOURCE_PREFIXES[sourcePreset] ?? this.sourceSettingsManager
+      ?.getGitSources()
+      .find((source) => source.id === sourcePreset)
+      ?.url;
+    if (isOfficialGithubBase(sourceBaseUrl)) {
+      return normalized;
+    }
+
+    const prefix = githubSourceBasePrefix(sourceBaseUrl);
+    return prefix ? `${prefix}${normalized}` : url;
   }
 }
 
@@ -84,23 +107,20 @@ function githubRawReadmeUrl(repositoryUrl: string, branch: string): string | und
   return `${OFFICIAL_RAW_GITHUB_BASE_URL}${owner}/${repo.replace(/\.git$/iu, "")}/${branch}/README.md`;
 }
 
-function rewriteGithubUrl(url: string, sourceMaibotUrl: string): string {
-  const sourcePrefix = githubSourcePrefix(sourceMaibotUrl);
-  if (!sourcePrefix) {
-    return url;
+function githubSourceBasePrefix(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
   }
-
-  const normalized = normalizeGithubUrl(url);
-  return normalized ? `${sourcePrefix}${normalized}` : url;
+  const officialSourceIndex = trimmed.toLowerCase().indexOf(OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase());
+  if (officialSourceIndex > 0) {
+    return trimmed.slice(0, officialSourceIndex);
+  }
+  return `${trimmed.replace(/\/+$/u, "")}/`;
 }
 
-function githubSourcePrefix(sourceMaibotUrl: string): string | undefined {
-  const normalizedSource = sourceMaibotUrl.trim();
-  const officialSourceIndex = normalizedSource.toLowerCase().indexOf(OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase());
-  if (officialSourceIndex > 0) {
-    return normalizedSource.slice(0, officialSourceIndex);
-  }
-  return undefined;
+function isOfficialGithubBase(baseUrl: string | undefined): boolean {
+  return baseUrl?.trim().replace(/\/+$/u, "").toLowerCase() === "https://github.com";
 }
 
 function normalizeGithubUrl(url: string): string | undefined {
