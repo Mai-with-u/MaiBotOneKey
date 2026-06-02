@@ -202,27 +202,33 @@ function SourceGroupEditor({
   };
 
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+    <div className="settings-section grid gap-2 bg-card p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-sm font-medium">{meta.title}</p>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{meta.description}</p>
         </div>
-        <Button disabled={disabled} onClick={() => onChange([...entries, createSourceEntry(group)])} size="sm" variant="outline">
-          <Plus className="size-4" />
-          新增
+        <Button
+          aria-label="新增源"
+          disabled={disabled}
+          onClick={() => onChange([...entries, createSourceEntry(group)])}
+          size="icon-sm"
+          title="新增源"
+          variant="outline"
+        >
+          <Plus className="add-action-icon" />
         </Button>
       </div>
 
-      <div className="grid gap-2">
+      <div className="settings-option-list grid gap-0">
         {entries.map((entry, index) => (
           <div
             className={cn(
-              "grid gap-2 rounded-md border border-border bg-background p-2 transition-colors md:items-end",
+              "settings-choice grid gap-2 bg-background p-2 transition-colors md:items-end",
               group === "python"
                 ? "md:grid-cols-[auto_minmax(120px,0.8fr)_minmax(220px,1.4fr)_minmax(120px,0.7fr)_minmax(130px,0.7fr)_auto]"
                 : "md:grid-cols-[auto_minmax(140px,0.8fr)_minmax(260px,1.5fr)_minmax(130px,0.7fr)_auto]",
-              draggingIndex === index && "border-primary/60 bg-primary/5",
+              draggingIndex === index && "settings-choice-selected bg-primary/5",
             )}
             key={`${entry.id}-${index}`}
             onDragOver={(event) => {
@@ -331,10 +337,10 @@ const closePreferenceOptions: Array<{ value: ClosePreference; label: string }> =
   { value: "quit", label: "关闭应用" },
 ];
 
-const themeOptions: Array<{ value: ThemePreference; label: string; description: string }> = [
-  { value: "system", label: "跟随系统", description: "根据系统浅色/深色模式自动切换。" },
-  { value: "light", label: "浅色", description: "保持明亮、低干扰的工作界面。" },
-  { value: "dark", label: "深色", description: "使用暗色背景，适合夜间或低光环境。" },
+const themeOptions: Array<{ value: ThemePreference; label: string }> = [
+  { value: "system", label: "跟随系统" },
+  { value: "light", label: "浅色" },
+  { value: "dark", label: "深色" },
 ];
 
 const accentOptions: Array<{ value: AccentColor; label: string; color: string }> = [
@@ -357,9 +363,9 @@ const scaleOptions: Array<{ value: InterfaceScale; label: string; description: s
   { value: "comfortable", label: "宽松", description: "字号更大，留白更多。" },
 ];
 
-const appearanceModeOptions: Array<{ value: AppearanceMode; label: string; description: string }> = [
-  { value: "future-retro", label: "未来复古", description: "纸面颗粒、硬朗描边和控制台式切角。" },
-  { value: "modern", label: "现代", description: "干净卡片、主题色和更通用的桌面应用质感。" },
+const appearanceModeOptions: Array<{ value: AppearanceMode; label: string }> = [
+  { value: "future-retro", label: "未来复古" },
+  { value: "modern", label: "现代" },
 ];
 
 const qqBackendOptions: Array<{ value: QqBackend; label: string; description: string }> = [
@@ -488,7 +494,7 @@ function StorageCategoryItem({
     category.sizeBytes <= 0;
 
   return (
-    <div className="grid gap-3 rounded-lg border border-border bg-card p-3">
+    <div className="settings-section grid gap-3 bg-card p-3">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -528,20 +534,20 @@ function StorageCategoryItem({
 
 function AppearanceAccentControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+    <div className="settings-section grid gap-2 bg-card p-3">
       <div className="min-w-0">
         <p className="text-sm font-medium">主题色</p>
         <p className="mt-1 text-xs text-muted-foreground">用于按钮、重点数字和选中状态。</p>
       </div>
-      <div className="grid gap-2 sm:grid-cols-5">
+      <div className="settings-option-list settings-option-cols-5 grid gap-0 sm:grid-cols-5">
         {accentOptions.map((option) => (
           <button
             aria-pressed={appearance.accent === option.value}
             className={cn(
-              "flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors",
+              "settings-choice flex min-w-0 items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors",
               appearance.accent === option.value
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                ? "settings-choice-selected bg-primary/10 text-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
             key={option.value}
             onClick={() => appearance.setAccent(option.value)}
@@ -562,23 +568,23 @@ function AppearanceAccentControl({ appearance }: { appearance: AppearanceApi }):
 
 function AppearanceFontControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+    <div className="settings-section grid gap-2 bg-card p-3">
       <div className="min-w-0">
         <p className="text-sm font-medium">字体</p>
         <p className="mt-1 text-xs text-muted-foreground">调整界面文字的整体气质。</p>
       </div>
       <RadioGroup
-        className="grid gap-2"
+        className="settings-option-list grid gap-0"
         onValueChange={(value) => appearance.setFont(value as FontFamily)}
         value={appearance.font}
       >
         {fontOptions.map((option) => (
           <label
             className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+              "settings-choice flex cursor-pointer items-start gap-2 px-2.5 py-2 transition-colors",
               appearance.font === option.value
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                ? "settings-choice-selected bg-primary/10 text-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
             key={option.value}
           >
@@ -596,23 +602,23 @@ function AppearanceFontControl({ appearance }: { appearance: AppearanceApi }): R
 
 function AppearanceScaleControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+    <div className="settings-section grid gap-2 bg-card p-3">
       <div className="min-w-0">
         <p className="text-sm font-medium">界面密度</p>
         <p className="mt-1 text-xs text-muted-foreground">控制字号和控件间距。</p>
       </div>
       <RadioGroup
-        className="grid gap-2"
+        className="settings-option-list grid gap-0"
         onValueChange={(value) => appearance.setScale(value as InterfaceScale)}
         value={appearance.scale}
       >
         {scaleOptions.map((option) => (
           <label
             className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors",
+              "settings-choice flex cursor-pointer items-start gap-2 px-2.5 py-2 transition-colors",
               appearance.scale === option.value
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                ? "settings-choice-selected bg-primary/10 text-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
             key={option.value}
           >
@@ -634,7 +640,7 @@ function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }):
     : WINDOW_CORNER_RADIUS_MIN;
 
   return (
-    <label className="grid gap-2 rounded-md border border-border bg-card p-3">
+    <label className="settings-section grid gap-2 bg-card p-3">
       <span className="flex items-center justify-between gap-3">
         <span className="min-w-0">
           <span className="block text-sm font-medium">窗口圆角</span>
@@ -695,7 +701,7 @@ function RuntimePathEditor({
   const pythonCandidateListId = useId();
 
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
+    <div className="settings-section bg-card p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -834,7 +840,7 @@ function RuntimeResourcePathEditor({
   const dirty = trimmedValue !== config.value;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
+    <div className="settings-section bg-card p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -914,7 +920,7 @@ function ServiceDetail({
   );
 
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
+    <div className="settings-section bg-card p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -952,7 +958,7 @@ function ServiceDetail({
         </code>
       ) : null}
       {commandConfig ? (
-        <div className="mt-3 grid gap-2 rounded-md border border-border bg-muted/40 p-2.5">
+        <div className="settings-section mt-3 grid gap-2 bg-muted/40 p-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <p className="text-xs font-medium text-foreground">启动命令</p>
@@ -1775,7 +1781,7 @@ export function SettingsStatusPanel({
 
       {environmentServicesExpanded ? (
         <div className="space-y-4" id={environmentServicesContentId}>
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+          <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">环境检查</p>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -1826,7 +1832,7 @@ export function SettingsStatusPanel({
             ))}
           </div>
 
-          <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+          <div className="settings-section grid gap-3 bg-muted/40 p-3">
             <div className="flex min-w-0 items-center gap-2">
               <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                 <Network className="size-4" />
@@ -1873,48 +1879,45 @@ export function SettingsStatusPanel({
             ) : null}
 
             <Tabs className="space-y-4" defaultValue="general">
-              <TabsList className="flex h-auto flex-wrap rounded-md border border-border bg-muted/40 p-1">
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="general">
+              <TabsList className="settings-negative-tabs flex h-auto flex-wrap">
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="general">
                   <Settings className="size-3" />
                   通用
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="appearance">
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="appearance">
                   <Palette className="size-3" />
                   外观
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="account">
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="account">
                   <UserRound className="size-3" />
                   协议端选择
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="paths">
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="paths">
                   <ShieldCheck className="size-3" />
                   实例路径
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="data">
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="data">
                   <Database className="size-3" />
                   数据
                 </TabsTrigger>
-                <TabsTrigger className="h-6 px-2.5 text-[11px]" value="logs">
+                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="logs">
                   <HardDrive className="size-3" />
                   运行日志
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent className="space-y-4" value="general">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+              <TabsContent className="settings-content" value="general">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <Settings className="size-4" />
                     </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">窗口关闭行为</p>
-                      <p className="text-xs text-muted-foreground">关闭主窗口时如何处理。</p>
-                    </div>
+                    <p className="min-w-0 text-sm font-medium">窗口关闭</p>
                   </div>
 
                   <RadioGroup
                     aria-label="窗口关闭行为"
-                    className="grid w-full grid-cols-3 gap-1 rounded-md border border-border bg-background/70 p-1 text-xs sm:w-auto"
+                    className="settings-option-list settings-option-inline grid w-full grid-cols-3 gap-0 bg-background/70 text-xs sm:w-auto"
                     onValueChange={(value) => {
                       if (isClosePreference(value)) {
                         saveClosePreference(value);
@@ -1925,7 +1928,7 @@ export function SettingsStatusPanel({
                     {closePreferenceOptions.map((option) => (
                       <label
                         className={cn(
-                          "flex h-7 min-w-0 cursor-pointer items-center justify-center rounded-sm px-2.5 font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/40",
+                          "flex h-8 min-w-0 cursor-pointer items-center justify-center px-2.5 font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/40",
                           closePreference === option.value
                             ? "bg-primary text-primary-foreground"
                             : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -1939,7 +1942,7 @@ export function SettingsStatusPanel({
                   </RadioGroup>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <TerminalSquare className="size-4" />
@@ -1985,7 +1988,7 @@ export function SettingsStatusPanel({
                   </div>
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2010,13 +2013,13 @@ export function SettingsStatusPanel({
                     </div>
                   </div>
 
-                  <div className="grid gap-2">
+                  <div className="settings-option-list grid gap-0">
                     <label
                       className={cn(
-                        "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                        "settings-choice flex min-w-0 cursor-pointer items-start gap-3 p-3 transition-colors",
                         pluginBuilderEnabled
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                          ? "settings-choice-selected bg-primary/10 text-foreground"
+                          : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                       )}
                     >
                       <Checkbox
@@ -2032,7 +2035,7 @@ export function SettingsStatusPanel({
                       </span>
                     </label>
 
-                    <div className="grid gap-2 rounded-md border border-border bg-card p-3">
+                    <div className="grid gap-2 bg-card p-3">
                       <label className="flex min-w-0 cursor-pointer items-start gap-3">
                         <Checkbox
                           checked={openCodeSettings.useBundledPluginInstructions}
@@ -2068,7 +2071,7 @@ export function SettingsStatusPanel({
                   </div>
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2137,7 +2140,7 @@ export function SettingsStatusPanel({
                   </div>
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2189,7 +2192,7 @@ export function SettingsStatusPanel({
                   )}
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                <div className="settings-section grid gap-3 bg-destructive/5 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
@@ -2236,7 +2239,7 @@ export function SettingsStatusPanel({
                   ) : null}
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-destructive/5 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
                       <RotateCcw className="size-4" />
@@ -2272,7 +2275,7 @@ export function SettingsStatusPanel({
 
                 {environmentServicesPanel}
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2293,10 +2296,10 @@ export function SettingsStatusPanel({
                   </div>
                   <label
                     className={cn(
-                      "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                      "settings-choice flex min-w-0 cursor-pointer items-start gap-3 p-3 transition-colors",
                       serviceStartupSettings.useLocalDashboard
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                        ? "settings-choice-selected bg-primary/10 text-foreground"
+                        : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                     )}
                   >
                     <Checkbox
@@ -2322,17 +2325,14 @@ export function SettingsStatusPanel({
                 </div>
               </TabsContent>
 
-              <TabsContent className="space-y-4" value="appearance">
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+              <TabsContent className="settings-content" value="appearance">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <ImageIcon className="size-4" />
                       </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">应用图标</p>
-                        <p className="text-xs text-muted-foreground">切换主窗口和托盘使用的图标。</p>
-                      </div>
+                      <p className="min-w-0 text-sm font-medium">应用图标</p>
                     </div>
                     <Badge variant="secondary">
                       {appIconSettings.options.find((option) => option.id === appIconSettings.selectedIconId)?.label ?? "默认"}
@@ -2340,7 +2340,7 @@ export function SettingsStatusPanel({
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
+                    className="settings-option-list settings-option-cols-3 grid gap-0 md:grid-cols-3"
                     disabled={busy !== null}
                     onValueChange={(value) => {
                       if (busy === null) {
@@ -2352,10 +2352,10 @@ export function SettingsStatusPanel({
                     {appIconSettings.options.map((option) => (
                       <label
                         className={cn(
-                          "flex min-w-0 cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors",
+                          "settings-choice flex min-w-0 cursor-pointer items-center gap-3 p-3 transition-colors",
                           appIconSettings.selectedIconId === option.id
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                            ? "settings-choice-selected bg-primary/10 text-foreground"
+                            : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                           busy !== null && "cursor-not-allowed opacity-70",
                         )}
                         key={option.id}
@@ -2377,83 +2377,71 @@ export function SettingsStatusPanel({
                   </RadioGroup>
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <Palette className="size-4" />
                     </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">外观风格</p>
-                      <p className="text-xs text-muted-foreground">选择整体视觉方向；每种风格有独立的配置项。</p>
-                    </div>
+                    <p className="min-w-0 text-sm font-medium">外观风格</p>
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
+                    className="settings-option-list settings-option-cols-3 grid gap-0 md:grid-cols-3"
                     onValueChange={(value) => appearance.setMode(value as AppearanceMode)}
                     value={appearance.mode}
                   >
                     {appearanceModeOptions.map((option) => (
                       <label
                         className={cn(
-                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          "settings-choice flex min-w-0 cursor-pointer items-start gap-2 p-3 transition-colors",
                           appearance.mode === option.value
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                            ? "settings-choice-selected bg-primary/10 text-foreground"
+                            : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                         )}
                         key={option.value}
                       >
                         <RadioGroupItem className="mt-0.5" value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
+                        <span className="min-w-0 text-sm font-medium">{option.label}</span>
                       </label>
                     ))}
                   </RadioGroup>
                 </div>
 
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Palette className="size-4" />
                       </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">配色</p>
-                        <p className="text-xs text-muted-foreground">选择浅色、深色，或跟随系统外观。</p>
-                      </div>
+                      <p className="min-w-0 text-sm font-medium">配色</p>
                     </div>
                     <Badge variant="secondary">{theme.resolved === "dark" ? "深色" : "浅色"}</Badge>
                   </div>
 
                   <RadioGroup
-                    className="grid gap-2 md:grid-cols-3"
+                    className="settings-option-list settings-option-cols-3 grid gap-0 md:grid-cols-3"
                     onValueChange={(value) => theme.setPreference(value as ThemePreference)}
                     value={theme.preference}
                   >
                     {themeOptions.map((option) => (
                       <label
                         className={cn(
-                          "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors",
+                          "settings-choice flex min-w-0 cursor-pointer items-start gap-2 p-3 transition-colors",
                           theme.preference === option.value
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                            ? "settings-choice-selected bg-primary/10 text-foreground"
+                            : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                         )}
                         key={option.value}
                       >
                         <RadioGroupItem className="mt-0.5" value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
+                        <span className="min-w-0 text-sm font-medium">{option.label}</span>
                       </label>
                     ))}
                   </RadioGroup>
                 </div>
 
                 {appearance.mode === "future-retro" ? (
-                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="settings-section grid gap-3 bg-muted/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2464,7 +2452,14 @@ export function SettingsStatusPanel({
                           <p className="text-xs text-muted-foreground">控制纸张纹理、仪表盘边角和界面密度。</p>
                         </div>
                       </div>
-                      <label className="flex shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                      <label
+                        className={cn(
+                          "settings-choice flex shrink-0 cursor-pointer items-center gap-2 bg-card px-3 py-2 text-sm transition-colors",
+                          appearance.retroPaperTexture
+                            ? "settings-choice-selected bg-primary/10 text-foreground"
+                            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                        )}
+                      >
                         <Checkbox
                           checked={appearance.retroPaperTexture}
                           onCheckedChange={(checked) => appearance.setRetroPaperTexture(checked === true)}
@@ -2480,7 +2475,7 @@ export function SettingsStatusPanel({
                 ) : null}
 
                 {appearance.mode === "modern" ? (
-                  <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                  <div className="settings-section grid gap-3 bg-muted/40 p-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Palette className="size-4" />
@@ -2499,7 +2494,7 @@ export function SettingsStatusPanel({
                   </div>
                 ) : null}
 
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-card p-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">外观设置</p>
                     <p className="mt-1 text-xs text-muted-foreground">调整会立即生效，并自动保存在本机浏览器存储中。</p>
@@ -2513,11 +2508,11 @@ export function SettingsStatusPanel({
                 </div>
               </TabsContent>
 
-              <TabsContent className="space-y-4" value="account">
+              <TabsContent className="settings-content" value="account">
                 <p className="text-xs text-muted-foreground">
                   选择当前使用的 QQ 后端。MaiBot Core 或 QQ 后端运行中不能切换。
                 </p>
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">QQ 后端</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -2526,7 +2521,7 @@ export function SettingsStatusPanel({
                   </div>
                   <RadioGroup
                     aria-label="QQ 后端"
-                    className="grid w-full shrink-0 grid-cols-2 gap-1 rounded-md border border-border bg-card p-1 sm:w-[320px]"
+                    className="settings-option-list settings-option-inline grid w-full shrink-0 grid-cols-2 gap-0 bg-card sm:w-[320px]"
                     onValueChange={(value) => setQqBackend(value as QqBackend)}
                     value={qqBackend}
                   >
@@ -2537,7 +2532,7 @@ export function SettingsStatusPanel({
                       return (
                         <label
                           className={cn(
-                            "flex h-8 min-w-0 cursor-pointer items-center justify-center rounded-sm px-3 text-xs font-semibold transition-colors",
+                            "flex h-8 min-w-0 cursor-pointer items-center justify-center px-3 text-xs font-semibold transition-colors",
                             selected
                               ? "bg-primary text-primary-foreground shadow-sm"
                               : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -2561,7 +2556,7 @@ export function SettingsStatusPanel({
                     MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
                   </div>
                 ) : null}
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">重新安装 NapCat / SnowLuma</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -2579,11 +2574,11 @@ export function SettingsStatusPanel({
                 </div>
               </TabsContent>
 
-              <TabsContent className="space-y-3" value="paths">
+              <TabsContent className="settings-content" value="paths">
                 <p className="text-xs text-muted-foreground">
                   用户数据目录保存一键包设置；一套数据只绑定一套覆盖路径，MaiBot、NapCat 与 python可写环境可以分别放在独立目录。
                 </p>
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2645,8 +2640,8 @@ export function SettingsStatusPanel({
                 <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
               </TabsContent>
 
-              <TabsContent className="space-y-3" value="data">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3">
+              <TabsContent className="settings-content" value="data">
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <Database className="size-4" />
@@ -2701,7 +2696,7 @@ export function SettingsStatusPanel({
                   </div>
                 ) : null}
 
-                <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                <div className="settings-section grid gap-3 bg-destructive/5 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
@@ -2733,7 +2728,7 @@ export function SettingsStatusPanel({
                 </div>
               </TabsContent>
 
-              <TabsContent className="space-y-3" value="logs">
+              <TabsContent className="settings-content" value="logs">
                 <p className="text-xs text-muted-foreground">
                   服务 stdout、stderr 和桌面壳系统事件会写入日志目录。
                 </p>

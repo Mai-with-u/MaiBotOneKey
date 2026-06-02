@@ -1223,6 +1223,145 @@ samp {
   border-radius: 0 !important;
 }
 
+.settings-section {
+  border: 0 !important;
+  border-top: 2px solid var(--retro-line, var(--border)) !important;
+  border-radius: 0 !important;
+}
+
+.settings-section + .settings-section {
+  margin-top: 0 !important;
+}
+
+.settings-content {
+  display: grid;
+  gap: 0 !important;
+}
+
+.settings-content > * + * {
+  margin-top: 0 !important;
+}
+
+.settings-content > .settings-section {
+  padding-block: 1rem !important;
+}
+
+.settings-content > p {
+  padding: 0.25rem 0.75rem 0.75rem;
+}
+
+.settings-option-list {
+  gap: 0 !important;
+}
+
+.settings-option-list > * {
+  border-width: 0 !important;
+  border-radius: 0 !important;
+}
+
+.settings-option-list > * + * {
+  border-top: 2px solid var(--retro-line, var(--border)) !important;
+}
+
+.settings-option-inline > * + * {
+  border-top: 0 !important;
+  border-left: 2px solid var(--retro-line, var(--border)) !important;
+}
+
+.settings-choice {
+  border-left: 4px solid transparent !important;
+}
+
+.settings-choice-selected {
+  border-left-color: var(--primary) !important;
+}
+
+@media (min-width: 768px) {
+  .settings-option-cols-2 > * + *,
+  .settings-option-cols-3 > * + * {
+    border-top: 0 !important;
+  }
+
+  .settings-option-cols-2 > :nth-child(n + 3),
+  .settings-option-cols-3 > :nth-child(n + 4) {
+    border-top: 2px solid var(--retro-line, var(--border)) !important;
+  }
+
+  .settings-option-cols-2 > :nth-child(2n),
+  .settings-option-cols-3 > :nth-child(3n + 2),
+  .settings-option-cols-3 > :nth-child(3n) {
+    border-left: 2px solid var(--retro-line, var(--border)) !important;
+  }
+}
+
+@media (min-width: 640px) {
+  .settings-option-cols-5 > * + * {
+    border-top: 0 !important;
+  }
+
+  .settings-option-cols-5 > :nth-child(n + 6) {
+    border-top: 2px solid var(--retro-line, var(--border)) !important;
+  }
+
+  .settings-option-cols-5 > :not(:nth-child(5n + 1)) {
+    border-left: 2px solid var(--retro-line, var(--border)) !important;
+  }
+}
+
+.settings-choice-selected {
+  border-left-color: var(--primary) !important;
+  border-left-width: 4px !important;
+}
+
+.add-action-icon {
+  width: 1.25rem !important;
+  height: 1.25rem !important;
+  stroke-width: 3 !important;
+}
+
+.settings-negative-tabs {
+  gap: 0 !important;
+  border: 0 !important;
+  border-bottom: 3px solid var(--retro-tabbar-line, var(--primary)) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.settings-negative-tabs [role="tab"] {
+  height: 2.25rem;
+  flex: 0 0 auto;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--muted-foreground);
+}
+
+.settings-negative-tabs [role="tab"] + [role="tab"] {
+  border-left: 2px solid var(--retro-line, var(--border)) !important;
+}
+
+.settings-negative-tabs [role="tab"]:hover,
+.settings-negative-tabs [role="tab"][data-state="active"] {
+  background: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+}
+
+:root.dark[data-appearance-mode="future-retro"] .settings-negative-tabs [role="tab"]:hover,
+:root.dark[data-appearance-mode="future-retro"] .settings-negative-tabs [role="tab"][data-state="active"] {
+  color: var(--retro-paper) !important;
+}
+
+.settings-negative-tabs [role="tab"] svg {
+  stroke-width: 2.55;
+}
+
+.settings-negative-tabs [role="tab"]:hover svg,
+.settings-negative-tabs [role="tab"][data-state="active"] svg {
+  stroke-width: 2.85;
+}
+
 /* Future retro keeps scrollbars as square chrome instead of OS-native controls. */
 :root[data-appearance-mode="future-retro"] .retro-shell,
 :root[data-appearance-mode="future-retro"] .retro-shell * {
