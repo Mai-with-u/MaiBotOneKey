@@ -4,6 +4,7 @@
   ChevronDown,
   FileText,
   ImageIcon,
+  Info,
   Loader2,
   MessageSquare,
   Mic,
@@ -338,12 +339,18 @@ function LocalChatDisconnectedState({
   actionLabel,
   busy,
   disabled,
+  description,
   onStart,
+  showAction,
+  title,
 }: {
   actionLabel: string;
   busy: boolean;
   disabled: boolean;
+  description: string;
   onStart: () => void | Promise<void>;
+  showAction: boolean;
+  title: string;
 }): React.JSX.Element {
   return (
     <section className="relative grid min-h-0 flex-1 place-items-center overflow-hidden px-6 py-10 text-center text-[var(--retro-ink,var(--foreground))]">
@@ -352,30 +359,51 @@ function LocalChatDisconnectedState({
       <span className="pointer-events-none absolute bottom-4 left-4 h-5 w-5 border-b border-l border-[var(--retro-line,var(--border))] opacity-70" />
       <span className="pointer-events-none absolute bottom-4 right-4 h-5 w-5 border-b border-r border-[var(--retro-line,var(--border))] opacity-70" />
 
-      <div className="relative z-10 flex w-full max-w-[420px] flex-col items-center">
+      <div className="relative z-10 flex w-full max-w-[530px] flex-col items-center">
         <LocalChatDisconnectedIllustration />
         <h3 className="mt-5 text-[34px] font-black leading-tight text-[var(--retro-ink,var(--foreground))]">
-          MaiBot 聊天服务未连接
+          {title}
         </h3>
+        <p className="mt-3 text-[15px] font-semibold text-[var(--retro-ink-soft,var(--muted-foreground))]">
+          {description}
+        </p>
+
         <div className="my-7 flex w-full items-center gap-3 text-[var(--retro-ink-soft,var(--muted-foreground))]">
           <span className="size-2.5 rounded-full bg-current opacity-70" />
           <span className="h-px flex-1 bg-current opacity-45" />
           <span className="size-2.5 rounded-full bg-current opacity-70" />
         </div>
-        <p className="text-[15px] font-semibold leading-relaxed text-[var(--retro-ink-soft,var(--muted-foreground))]">
-          请先启动 MaiBot Core
-          <br />
-          连接建立后即可在此发送消息
-        </p>
-        <Button
-          className="mt-7 h-10 min-w-40 border-[var(--retro-line,var(--border))] bg-[var(--retro-recessed,transparent)] px-5 text-sm font-bold text-[var(--retro-ink,var(--foreground))] hover:border-[var(--retro-rust,var(--primary))] hover:bg-[var(--retro-rust,var(--primary))] hover:text-[var(--primary-foreground)]"
-          disabled={disabled}
-          onClick={() => void onStart()}
-          variant="outline"
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <Play />}
-          {actionLabel}
-        </Button>
+
+        <div className="w-[min(500px,100%)] border-2 border-[var(--retro-line,var(--border))] bg-[var(--retro-recessed,transparent)] px-4 py-3 text-left">
+          <div className="flex items-start gap-3">
+            <span className="grid size-8 shrink-0 place-items-center text-[var(--retro-ink,var(--foreground))]">
+              <Info className="size-6" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-black text-[var(--retro-ink,var(--foreground))]">提示</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm font-semibold text-[var(--retro-ink-soft,var(--muted-foreground))]">
+                {showAction ? (
+                  <>
+                    <span>点击</span>
+                    <Button
+                      className="h-7 border-[var(--retro-rust,var(--primary))] px-2 text-xs"
+                      disabled={disabled}
+                      onClick={() => void onStart()}
+                      size="sm"
+                      variant="outline"
+                    >
+                      {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                      {actionLabel}
+                    </Button>
+                    <span>建立连接并开始使用。</span>
+                  </>
+                ) : (
+                  <span>请先在服务状态中确认 Maibot 配置。</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -798,6 +826,29 @@ export function LocalChatPanel({
       : coreServiceBusy
         ? "正在启动 MaiBot Core"
         : "启动 MaiBot Core";
+  const disconnectedTitle = !maibotService
+    ? "MAIBOT 未发现"
+    : maibotService.status === "running"
+      ? "MAIBOT 聊天服务未连接"
+      : maibotService.status === "starting"
+        ? "MAIBOT 正在启动"
+        : maibotService.status === "stopping"
+          ? "MAIBOT 正在停止"
+          : maibotService.status === "error"
+            ? "MAIBOT 启动异常"
+            : "MAIBOT 尚未启动";
+  const disconnectedDescription = !maibotService || maibotService.status === "stopped"
+    ? "当前没有运行中的 Maibot 实例，聊天连接未建立。"
+    : maibotService.status === "running"
+      ? "MaiBot Core 已运行，但本地聊天通道暂未连接。"
+      : maibotService.status === "starting"
+        ? "正在启动 Maibot Core，请稍等片刻。"
+        : maibotService.status === "stopping"
+          ? "正在停止 Maibot Core。"
+          : "启动过程中发生异常，请查看终端日志。";
+  const disconnectedShowAction = Boolean(
+    maibotService && maibotService.status !== "stopping" && maibotService.status !== "error",
+  );
   const toolbar = (
     <LocalChatToolbar
       connected={connected}
@@ -828,8 +879,11 @@ export function LocalChatPanel({
         <LocalChatDisconnectedState
           actionLabel={disconnectedActionLabel}
           busy={disconnectedActionBusy}
+          description={disconnectedDescription}
           disabled={disconnectedActionDisabled}
           onStart={startMaiBotCore}
+          showAction={disconnectedShowAction}
+          title={disconnectedTitle}
         />
       ) : (
       <div className="grid min-h-0 flex-1 grid-cols-1">
