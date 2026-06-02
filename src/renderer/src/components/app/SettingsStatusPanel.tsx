@@ -79,6 +79,11 @@ import {
   type ClosePreference,
 } from "@/lib/close-preference";
 import {
+  isValidPortText,
+  readQqWebuiPort,
+  saveQqWebuiPort,
+} from "@/lib/qq-webui-port";
+import {
   RETRO_WINDOW_CORNER_RADIUS_MIN,
   WINDOW_CORNER_RADIUS_MAX,
   WINDOW_CORNER_RADIUS_MIN,
@@ -1009,6 +1014,10 @@ export function SettingsStatusPanel({
   const theme = useTheme();
   const appearance = useAppearance();
   const [qqBackend, setQqBackend] = useState<QqBackend>(snapshot.initState.qqBackend ?? "napcat");
+  const [qqWebuiPorts, setQqWebuiPorts] = useState<Record<QqBackend, string>>(() => ({
+    napcat: readQqWebuiPort("napcat"),
+    snowluma: readQqWebuiPort("snowluma"),
+  }));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
@@ -1069,6 +1078,12 @@ export function SettingsStatusPanel({
   const networkProxyDirty =
     networkProxyDraft.enabled !== networkProxySettings.enabled ||
     networkProxyDraft.port !== networkProxySettings.port;
+  const qqWebuiPortsDirty =
+    qqWebuiPorts.napcat !== readQqWebuiPort("napcat") ||
+    qqWebuiPorts.snowluma !== readQqWebuiPort("snowluma");
+  const qqWebuiPortsValid =
+    isValidPortText(qqWebuiPorts.napcat) &&
+    isValidPortText(qqWebuiPorts.snowluma);
   const sourceSettingsDirty = Boolean(
     sourceSettings &&
     sourceSettingsDraft &&
@@ -1509,6 +1524,19 @@ export function SettingsStatusPanel({
       setBusy(null);
     }
   }, [networkProxyDraft, onSnapshot, refreshSnapshot, snapshot]);
+
+  const saveQqWebuiPorts = useCallback(() => {
+    if (!qqWebuiPortsValid) {
+      setError("请填写 1-65535 之间的 NapCat / SnowLuma WebUI 端口。");
+      return;
+    }
+
+    setError(null);
+    const napcat = saveQqWebuiPort("napcat", qqWebuiPorts.napcat);
+    const snowluma = saveQqWebuiPort("snowluma", qqWebuiPorts.snowluma);
+    setQqWebuiPorts({ napcat, snowluma });
+    toast.success("消息平台 WebUI 端口已保存");
+  }, [qqWebuiPorts.napcat, qqWebuiPorts.snowluma, qqWebuiPortsValid]);
 
   const saveSourceSettings = useCallback(async () => {
     if (!sourceSettingsDraft) {
@@ -2438,6 +2466,52 @@ export function SettingsStatusPanel({
                     {busy === "qq" ? <Loader2 className="animate-spin" /> : <Save />}
                     保存后端
                   </Button>
+                </div>
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">消息平台 WebUI 端口</p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        首页只会按这里保存的端口打开 NapCat / SnowLuma WebUI。
+                      </p>
+                    </div>
+                    <Button
+                      disabled={busy !== null || !qqWebuiPortsDirty || !qqWebuiPortsValid}
+                      onClick={saveQqWebuiPorts}
+                      size="sm"
+                    >
+                      <Save className="size-4" />
+                      保存端口
+                    </Button>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {qqBackendOptions.map((option) => {
+                      const port = qqWebuiPorts[option.value];
+                      const valid = isValidPortText(port);
+
+                      return (
+                        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground" key={option.value}>
+                          {option.label} WebUI
+                          <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
+                            <span className="font-mono text-xs text-muted-foreground">127.0.0.1:</span>
+                            <Input
+                              className={cn("h-8 w-24 font-mono text-sm", !valid && "border-destructive")}
+                              disabled={busy !== null}
+                              inputMode="numeric"
+                              max={65535}
+                              min={1}
+                              onChange={(event) => {
+                                const value = event.target.value.replace(/\D/gu, "").slice(0, 5);
+                                setQqWebuiPorts((current) => ({ ...current, [option.value]: value }));
+                              }}
+                              type="number"
+                              value={port}
+                            />
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
                 {qqBackendSwitchBlocked ? (
                   <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">

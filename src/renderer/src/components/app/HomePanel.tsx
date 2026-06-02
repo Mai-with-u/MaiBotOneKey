@@ -86,6 +86,11 @@ import {
   pluginVersion,
   type MarketPlugin,
 } from "@/lib/maibot-plugin-api";
+import {
+  QQ_WEBUI_PORT_CHANGE_EVENT,
+  isValidPortText,
+  readQqWebuiPort,
+} from "@/lib/qq-webui-port";
 import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
@@ -96,7 +101,6 @@ type MaiBotUpdateChannel = "stable" | "other";
 type CompactChatState = "idle" | "connecting" | "connected" | "error";
 
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
-const QQ_WEBUI_PORT_STORAGE_PREFIX = "maibot.qqWebuiPort";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
 const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
 const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
@@ -122,27 +126,6 @@ export function shouldPromptAdapterConfig(backend: QqBackend): boolean {
   } catch {
     return true;
   }
-}
-
-function qqWebuiPortStorageKey(backend: QqBackend): string {
-  return `${QQ_WEBUI_PORT_STORAGE_PREFIX}.${backend}`;
-}
-
-function defaultQqWebuiPort(backend: QqBackend): string {
-  return backend === "snowluma" ? "5099" : "6099";
-}
-
-function readQqWebuiPort(backend: QqBackend): string {
-  try {
-    return localStorage.getItem(qqWebuiPortStorageKey(backend)) ?? defaultQqWebuiPort(backend);
-  } catch {
-    return defaultQqWebuiPort(backend);
-  }
-}
-
-function isValidPortText(value: string): boolean {
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 function qqWebuiUrl(serviceUrl: string | undefined, backend: QqBackend, portText: string): string {
@@ -598,9 +581,6 @@ function ServiceSummary({
   webuiAction?: {
     title: string;
     label: string;
-    port: string;
-    portValid: boolean;
-    onPortChange: (value: string) => void;
     onClick: () => void;
   };
   adapterAction?: {
@@ -644,17 +624,8 @@ function ServiceSummary({
             <div className={cn(retro ? "retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2" : "flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2")}>
               <p className={cn("min-w-0 truncate font-bold", retro ? "text-base" : "text-xs")}>{webuiAction.title}</p>
               <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
-                <label aria-label="端口" className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <Input
-                    className={cn("h-8 w-20 font-mono text-xs", !webuiAction.portValid && "border-destructive")}
-                    inputMode="numeric"
-                    onChange={(event) => webuiAction.onPortChange(event.target.value.replace(/\D/gu, "").slice(0, 5))}
-                    value={webuiAction.port}
-                  />
-                </label>
                 <Button
                   className="h-8 shrink-0 justify-self-start px-3 text-xs"
-                  disabled={!webuiAction.portValid}
                   onClick={webuiAction.onClick}
                   size="sm"
                   variant="secondary"
@@ -2126,7 +2097,6 @@ export function HomePanel({
   const napcat = services.find((service) => service.id === "napcat");
   const adapterPluginId = adapterPluginIdForBackend(snapshot.initState.qqBackend ?? "napcat");
   const adapterName = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma 适配器" : "NapCat 适配器";
-  const qqWebuiPortValid = isValidPortText(qqWebuiPort);
   const qqBackend = snapshot.initState.qqBackend ?? "napcat";
   const currentQqWebuiUrl = qqWebuiUrl(napcat?.url, qqBackend, qqWebuiPort);
   const messagePlatformConfigured =
@@ -2177,7 +2147,17 @@ export function HomePanel({
   }, [onSnapshot]);
 
   useEffect(() => {
-    setQqWebuiPort(readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
+    const syncQqWebuiPort = (): void => {
+      setQqWebuiPort(readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
+    };
+
+    syncQqWebuiPort();
+    window.addEventListener(QQ_WEBUI_PORT_CHANGE_EVENT, syncQqWebuiPort);
+    window.addEventListener("storage", syncQqWebuiPort);
+    return () => {
+      window.removeEventListener(QQ_WEBUI_PORT_CHANGE_EVENT, syncQqWebuiPort);
+      window.removeEventListener("storage", syncQqWebuiPort);
+    };
   }, [snapshot.initState.qqBackend]);
 
   useEffect(() => {
@@ -2196,17 +2176,6 @@ export function HomePanel({
       window.removeEventListener("storage", syncHomeContentLayout);
     };
   }, []);
-
-  useEffect(() => {
-    if (!qqWebuiPortValid) {
-      return;
-    }
-    try {
-      localStorage.setItem(qqWebuiPortStorageKey(snapshot.initState.qqBackend ?? "napcat"), String(Number(qqWebuiPort)));
-    } catch {
-      // Local storage may be unavailable in isolated previews.
-    }
-  }, [qqWebuiPort, qqWebuiPortValid, snapshot.initState.qqBackend]);
 
   const loadModuleSourceConfig = useCallback(async () => {
     if (!window.maibotDesktop?.modules) {
@@ -2521,9 +2490,6 @@ export function HomePanel({
             webuiAction={{
               title: `${napcat?.name ?? "NapCat"} 设置`,
               label: "打开 WebUI",
-              port: qqWebuiPort,
-              portValid: qqWebuiPortValid,
-              onPortChange: setQqWebuiPort,
               onClick: () => setNapcatWebuiOpen(true),
             }}
           />
@@ -2591,7 +2557,6 @@ export function HomePanel({
     openLauncherUpdate,
     openMaiBotUpdate,
     qqWebuiPort,
-    qqWebuiPortValid,
     serviceActionBusy,
     snapshot,
     useRetroHome,
