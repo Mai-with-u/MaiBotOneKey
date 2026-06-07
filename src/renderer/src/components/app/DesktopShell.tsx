@@ -1,10 +1,10 @@
 ﻿import {
   CheckCircle2,
   ChevronDown,
+  FolderOpen,
   GripHorizontal,
   Home,
   Info,
-  ListTree,
   Loader2,
   MessageSquare,
   Play,
@@ -1157,9 +1157,14 @@ export function DesktopShell(): React.JSX.Element {
     readStorageFlag(STARTUP_WIZARD_KEY) &&
     !homeEntryGuideSeen;
 
-  const openLogs = useCallback(() => {
-    void window.maibotDesktop?.openLogsDirectory();
-  }, []);
+  const openMaiBotRoot = useCallback(() => {
+    const maibotRoot = snapshot?.paths.maibotRoot;
+    if (!maibotRoot) {
+      toast.error("MaiBot 根目录还没有就绪");
+      return;
+    }
+    void window.maibotDesktop?.openPath(maibotRoot);
+  }, [snapshot?.paths.maibotRoot]);
 
   const runServiceAction = useCallback(
     async (
@@ -1465,7 +1470,7 @@ export function DesktopShell(): React.JSX.Element {
   }, [useRetroChrome]);
 
   // Global shortcuts
-  useShortcut("Mod+L", openLogs);
+  useShortcut("Mod+L", openMaiBotRoot);
   useShortcut("Mod+Shift+S", startAll);
   useShortcut("Mod+Shift+X", stopAll);
   useShortcut("Mod+Shift+L", theme.toggle);
@@ -1764,18 +1769,19 @@ export function DesktopShell(): React.JSX.Element {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      aria-label="打开日志目录"
+                      aria-label="打开 MaiBot 根目录"
+                      disabled={!snapshot?.paths.maibotRoot}
                       size="icon-sm"
                       variant="ghost"
-                      onClick={openLogs}
+                      onClick={openMaiBotRoot}
                       className={cn(useRetroChrome ? cn("retro-top-action border-border bg-card", retroTopActionIconClassName) : "size-7")}
                     >
-                      <ListTree />
+                      <FolderOpen />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
                     <span className="flex items-center gap-1">
-                      打开日志目录 <Kbd keys="Mod+L" size="xs" tone="inverse" />
+                      打开 MaiBot 根目录 <Kbd keys="Mod+L" size="xs" tone="inverse" />
                     </span>
                   </TooltipContent>
                 </Tooltip>
