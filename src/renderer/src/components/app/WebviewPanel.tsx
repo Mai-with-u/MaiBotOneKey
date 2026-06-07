@@ -23,6 +23,8 @@ interface WebviewPanelProps {
   active?: boolean;
   /** Changing to a truthy value forces the webview to remount. */
   reloadTrigger?: string | number | boolean | null;
+  /** After an auth entry URL lands on the WebUI root, navigate to this route. */
+  postAuthTargetUrl?: string;
   toolbarPlacement?: "internal" | "external";
   toolbarTarget?: HTMLElement | null;
 }
@@ -75,6 +77,25 @@ function withCacheBust(value: string, token: number): string {
   }
 }
 
+function rootPathname(value: URL): string {
+  return value.pathname.replace(/\/+$/u, "") || "/";
+}
+
+function shouldNavigateToPostAuthTarget(current: string, target: string): boolean {
+  try {
+    const currentUrl = new URL(current);
+    const targetUrl = new URL(target);
+    if (currentUrl.origin !== targetUrl.origin) {
+      return false;
+    }
+    const currentPath = rootPathname(currentUrl);
+    const targetPath = rootPathname(targetUrl);
+    return currentPath === "/" && targetPath !== "/";
+  } catch {
+    return false;
+  }
+}
+
 function describeError(message: string | null): string {
   if (!message) {
     return "WebUI 暂时不可访问";
@@ -100,6 +121,7 @@ export function WebviewPanel({
   emptyText,
   active = true,
   reloadTrigger = null,
+  postAuthTargetUrl,
   toolbarPlacement = "internal",
   toolbarTarget = null,
 }: WebviewPanelProps): React.JSX.Element {
@@ -107,6 +129,7 @@ export function WebviewPanel({
   const domReadyRef = useRef(false);
   const failedRef = useRef(false);
   const hasRenderedPageRef = useRef(false);
+  const postAuthNavigationRef = useRef<string | null>(null);
   const reloadTriggerRef = useRef<WebviewPanelProps["reloadTrigger"]>(reloadTrigger);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [hasRenderedPage, setHasRenderedPage] = useState(false);
@@ -159,9 +182,37 @@ export function WebviewPanel({
     setErrorMessage(error instanceof Error ? error.message : String(error));
   }, []);
 
+  const navigateAfterAuth = useCallback((eventUrl?: string) => {
+    if (!postAuthTargetUrl || postAuthNavigationRef.current === postAuthTargetUrl) {
+      return;
+    }
+
+    const liveUrl = readLiveWebviewUrl();
+    const current = isDisplayableUrl(liveUrl) ? liveUrl : isDisplayableUrl(eventUrl) ? eventUrl : undefined;
+    if (!current || !shouldNavigateToPostAuthTarget(current, postAuthTargetUrl)) {
+      return;
+    }
+
+    const webview = webviewRef.current;
+    if (!webview?.loadURL) {
+      return;
+    }
+
+    postAuthNavigationRef.current = postAuthTargetUrl;
+    try {
+      const navigation = webview.loadURL(withCacheBust(postAuthTargetUrl, Date.now()));
+      if (navigation && typeof navigation.catch === "function") {
+        void navigation.catch(handleLoadUrlFailure);
+      }
+    } catch (error) {
+      handleLoadUrlFailure(error);
+    }
+  }, [handleLoadUrlFailure, postAuthTargetUrl, readLiveWebviewUrl]);
+
   const refresh = useCallback(async () => {
     setLoadState("loading");
     setErrorMessage(null);
+    postAuthNavigationRef.current = null;
     await clearWebviewCache().catch(() => undefined);
 
     const webview = webviewRef.current;
@@ -214,12 +265,13 @@ export function WebviewPanel({
     domReadyRef.current = false;
     failedRef.current = false;
     hasRenderedPageRef.current = false;
+    postAuthNavigationRef.current = null;
     setHasRenderedPage(false);
     setLoadState("loading");
     setErrorMessage(null);
     setCurrentUrl(url);
     setRetryIn(null);
-  }, [url, reloadKey, webviewUrl]);
+  }, [postAuthTargetUrl, url, reloadKey, webviewUrl]);
 
   // Wire webview events.
   useEffect(() => {
@@ -251,6 +303,7 @@ export function WebviewPanel({
       setLoadState("ready");
       setErrorMessage(null);
       setRetryIn(null);
+      navigateAfterAuth();
     };
     const handleFail = (event: Event): void => {
       const failEvent = event as DidFailLoadEvent;
@@ -275,6 +328,7 @@ export function WebviewPanel({
         return;
       }
       syncCurrentUrl(navigationEvent.url);
+      navigateAfterAuth(navigationEvent.url);
     };
 
     webview.addEventListener("did-start-loading", handleStart);
@@ -298,7 +352,7 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [reloadKey, syncCurrentUrl, url]);
+  }, [navigateAfterAuth, reloadKey, syncCurrentUrl, url]);
 
   // Loading watchdog: if it stays in "loading" too long without ready/fail,
   // flip to error so the user gets the default panel instead of a white screen.
