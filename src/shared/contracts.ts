@@ -270,6 +270,9 @@ export type LocalChatEvent = LocalChatMessageEvent | LocalChatStateEvent;
 export interface ModuleRuntimeVersions {
   maibotLocal?: string;
   maibotLocalSource?: "pyproject" | "unknown";
+  maibotSelectedChannel?: "stable" | "dev" | "custom";
+  maibotSelectedTarget?: ModuleUpdateTarget;
+  maibotSelectedAt?: number;
   maibotLatestStableTag?: string;
   maibotLatestPrereleaseTag?: string;
   maibotRemoteSource?: string;

@@ -12,6 +12,7 @@ import type {
   DesktopSnapshot,
   InitRepairResult,
   InitState,
+  LauncherUiSettings,
   LauncherUpdateApplyResult,
   LauncherUpdateDownloadProgress,
   LauncherUpdateInfo,
@@ -104,6 +105,7 @@ import { InitManager } from "../services/init-manager";
 import type { AppIconManager } from "../services/app-icon-manager";
 import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
+import { LauncherUiSettingsManager } from "../services/launcher-ui-settings-manager";
 import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-cleanup";
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
@@ -129,9 +131,11 @@ const LAUNCHER_SETTING_FILES = [
   "qq-backend.json",
   "message-platform.json",
   "module-sources.json",
+  "maibot-update-selection.json",
   "python-dependency-source.json",
   "source-settings.json",
   "network-proxy.json",
+  "launcher-ui-settings.json",
   "opencode-settings.json",
   "app-icon-settings.json",
   "qq-component-upgrade-state.json",
@@ -162,6 +166,7 @@ const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKe
 const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
 const ONEKEY_RELEASES_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases?per_page=100";
 const ONEKEY_RELEASE_SOURCE = "Mai-with-u/MaiBotOneKey";
+const MAIBOT_UPDATE_SELECTION_FILE = "maibot-update-selection.json";
 
 interface GitHubReleaseAsset {
   name?: unknown;
@@ -189,6 +194,13 @@ interface LauncherUpdateDownloadResult {
   totalBytes?: number;
 }
 
+interface StoredMaiBotUpdateSelection {
+  version: 1;
+  channel: NonNullable<ModuleRuntimeVersions["maibotSelectedChannel"]>;
+  target: ModuleUpdateTarget;
+  selectedAt: number;
+}
+
 type LauncherUpdateDownloadProgressCallback = (progress: LauncherUpdateDownloadProgress) => void;
 
 interface RegisterAppIpcOptions {
@@ -197,6 +209,7 @@ interface RegisterAppIpcOptions {
   moduleUpdater: ModuleUpdater;
   remoteSourceManager: RemoteSourceManager;
   networkProxyManager: NetworkProxyManager;
+  launcherUiSettingsManager: LauncherUiSettingsManager;
   openCodeSettingsManager: OpenCodeSettingsManager;
   pythonDependencyManager: PythonDependencyManager;
   sourceSettingsManager: SourceSettingsManager;
@@ -965,6 +978,7 @@ export function registerAppIpc({
   moduleUpdater,
   remoteSourceManager,
   networkProxyManager,
+  launcherUiSettingsManager,
   openCodeSettingsManager,
   pythonDependencyManager,
   sourceSettingsManager,
@@ -988,9 +1002,64 @@ export function registerAppIpc({
   let shellMaximized = false;
   let shellRestoreBounds: Electron.Rectangle | null = null;
   let resizeState: WindowResizeState | null = null;
+  const maibotUpdateSelectionPath = join(paths.userDataRoot, MAIBOT_UPDATE_SELECTION_FILE);
 
   const readManagedWindowState = (window: BrowserWindow | null): WindowState =>
     readWindowState(window, floatingMode, floatingEdgeSide, shellMaximized);
+
+  const readMaiBotUpdateSelection = async (): Promise<Pick<
+    ModuleRuntimeVersions,
+    "maibotSelectedAt" | "maibotSelectedChannel" | "maibotSelectedTarget"
+  >> => {
+    try {
+      const raw = JSON.parse(await readFile(maibotUpdateSelectionPath, "utf8")) as Partial<StoredMaiBotUpdateSelection>;
+      const target = raw.target;
+      if (
+        raw.version !== 1
+        || !raw.channel
+        || !target
+        || (target.type !== "tag" && target.type !== "branch")
+        || typeof target.name !== "string"
+        || target.name.trim().length === 0
+      ) {
+        return {};
+      }
+      return {
+        maibotSelectedChannel: raw.channel,
+        maibotSelectedTarget: {
+          type: target.type,
+          name: target.name.trim(),
+        },
+        maibotSelectedAt: typeof raw.selectedAt === "number" ? raw.selectedAt : undefined,
+      };
+    } catch {
+      return {};
+    }
+  };
+
+  const writeMaiBotUpdateSelection = async (
+    channel: NonNullable<ModuleRuntimeVersions["maibotSelectedChannel"]>,
+    target: ModuleUpdateTarget,
+  ): Promise<void> => {
+    await mkdir(dirname(maibotUpdateSelectionPath), { recursive: true });
+    await writeFile(
+      maibotUpdateSelectionPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          channel,
+          target: {
+            type: target.type,
+            name: target.name.trim(),
+          },
+          selectedAt: Date.now(),
+        } satisfies StoredMaiBotUpdateSelection,
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  };
 
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
     const state = readManagedWindowState(window);
@@ -1471,6 +1540,7 @@ export function registerAppIpc({
   const readModuleVersions = async (): Promise<ModuleRuntimeVersions> => ({
     ...remoteModuleVersionsCache,
     ...(await readLocalModuleVersions()),
+    ...(await readMaiBotUpdateSelection()),
   });
 
   const checkLauncherUpdate = async (): Promise<LauncherUpdateInternalInfo> => {
@@ -1494,6 +1564,7 @@ export function registerAppIpc({
     terminalSettings: serviceManager.getTerminalSettings(),
     serviceStartupSettings: serviceManager.getStartupSettings(),
     openCodeSettings: openCodeSettingsManager.getSettings(),
+    launcherUiSettings: launcherUiSettingsManager.getSettings(),
     appIconSettings: appIconManager.getSettings(),
     networkProxySettings: networkProxyManager.getSettings(),
     appVersion: app.getVersion(),
@@ -1600,6 +1671,7 @@ export function registerAppIpc({
     await serviceManager.saveTerminalSettings({ ...serviceManager.getTerminalSettings(), useEmbeddedTerminal: true });
     await serviceManager.saveStartupSettings({ useLocalDashboard: false });
     await networkProxyManager.resetSettings();
+    await launcherUiSettingsManager.resetSettings();
     await openCodeSettingsManager.resetSettings();
     appIconManager.reset();
     applyAppIcon();
@@ -1807,6 +1879,16 @@ export function registerAppIpc({
 
     logStore.append("desktop", "system", "Updating MaiBot module from Git.");
     const result = await moduleUpdater.updateMaiBot(target);
+    if (target) {
+      await writeMaiBotUpdateSelection(
+        target.type === "tag" && target.name === remoteModuleVersionsCache.maibotLatestStableTag
+          ? "stable"
+          : target.type === "branch" && /^dev(?:elop(?:ment)?)?$/iu.test(target.name)
+            ? "dev"
+            : "custom",
+        target,
+      );
+    }
     logStore.append(
       "desktop",
       "system",
@@ -1989,6 +2071,22 @@ export function registerAppIpc({
         result.useBundledPluginInstructions
           ? "OpenCode 已启用内置插件编写说明"
           : "OpenCode 已恢复项目默认说明",
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "launcher:saveUiSettings",
+    async (_event, settings: LauncherUiSettings): Promise<LauncherUiSettings> => {
+      const result = await launcherUiSettingsManager.saveSettings(settings);
+      logStore.append(
+        "desktop",
+        "system",
+        result.chatPageMode === "native"
+          ? "聊聊页面已切换为启动器原生界面"
+          : "聊聊页面已切换为 MaiBot WebUI",
       );
       await broadcastSnapshot();
       return result;

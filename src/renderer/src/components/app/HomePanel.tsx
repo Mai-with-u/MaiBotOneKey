@@ -161,6 +161,17 @@ function valueOrFallback(value: string | undefined): string {
   return value && value.trim().length > 0 ? value : "未读取";
 }
 
+function formatMaiBotSelectedTarget(snapshot: DesktopSnapshot): string | undefined {
+  const target = snapshot.moduleVersions.maibotSelectedTarget;
+  if (!target) {
+    return undefined;
+  }
+  const channel = snapshot.moduleVersions.maibotSelectedChannel;
+  const channelLabel = channel === "stable" ? "正式版" : channel === "dev" ? "Dev 版" : "自定义版本";
+  const targetLabel = target.type === "tag" ? `Tag ${target.name}` : `分支 ${target.name}`;
+  return `${channelLabel} / ${targetLabel}`;
+}
+
 function versionAsTag(version: string | undefined): string | undefined {
   const trimmed = version?.trim();
   if (!trimmed) {
@@ -2114,6 +2125,7 @@ export function HomePanel({
     ?? snapshot.appLatestTag;
   const launcherUpdateAvailable =
     launcherUpdateInfo?.available ?? (compareVersionText(launcherLatestTag, launcherCurrentTag) > 0);
+  const maibotSelectedTarget = formatMaiBotSelectedTarget(snapshot);
 
   const maibotTargets: Record<MaiBotUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.maibotLatestStableTag,
@@ -2259,7 +2271,23 @@ export function HomePanel({
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
     setModuleSourceExpanded(false);
-    setMaibotChannel(snapshot.moduleVersions.maibotLatestStableTag ? "stable" : "other");
+    setMaibotChannel(
+      snapshot.moduleVersions.maibotSelectedChannel === "stable" && snapshot.moduleVersions.maibotLatestStableTag
+        ? "stable"
+        : snapshot.moduleVersions.maibotSelectedChannel
+          ? "other"
+          : snapshot.moduleVersions.maibotLatestStableTag
+          ? "stable"
+          : "other",
+    );
+    const storedTarget = snapshot.moduleVersions.maibotSelectedTarget;
+    if (storedTarget?.type === "branch") {
+      setSelectedMaiBotBranch(storedTarget.name);
+      setSelectedMaiBotTag("");
+    } else if (storedTarget?.type === "tag" && storedTarget.name !== snapshot.moduleVersions.maibotLatestStableTag) {
+      setSelectedMaiBotTag(storedTarget.name);
+      setSelectedMaiBotBranch("");
+    }
     setUpdateDialog("maibot");
     void loadModuleSourceConfig().catch((nextError: unknown) => {
       setError(messageFromError(nextError));
@@ -2581,6 +2609,7 @@ export function HomePanel({
     qqWebuiPort,
     serviceActionBusy,
     snapshot,
+    useNativeLocalChat,
     useRetroHome,
   ]);
 
@@ -2606,7 +2635,6 @@ export function HomePanel({
       return;
     }
     const sourceEntry = homeContentLayout[sourceIndex];
-    useNativeLocalChat,
     const sourceAreaIndex = homeContentLayout.filter((entry) => entry.area === sourceEntry.area).findIndex((entry) => entry.id === entryId);
     if (
       sourceEntry.area === targetArea &&
@@ -3261,6 +3289,7 @@ export function HomePanel({
             ) : null}
             <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
               <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} />
+              <DetailRow label="当前记录" value={maibotSelectedTarget} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} retro={useRetroHome} />
             </div>
