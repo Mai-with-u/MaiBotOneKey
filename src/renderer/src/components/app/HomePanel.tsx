@@ -2095,6 +2095,8 @@ export function HomePanel({
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
+  const useNativeLocalChat = snapshot.launcherUiSettings?.chatPageMode === "native";
+  const maibotWebuiReady = maibot?.status === "running" && maibot.health === "ready";
   const adapterPluginId = adapterPluginIdForBackend(snapshot.initState.qqBackend ?? "napcat");
   const adapterName = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma 适配器" : "NapCat 适配器";
   const qqBackend = snapshot.initState.qqBackend ?? "napcat";
@@ -2267,6 +2269,8 @@ export function HomePanel({
     loadMaiBotRefs,
     loadModuleSourceConfig,
     snapshot.moduleVersions.maibotLatestStableTag,
+    snapshot.moduleVersions.maibotSelectedChannel,
+    snapshot.moduleVersions.maibotSelectedTarget,
   ]);
 
   const openLauncherUpdate = useCallback(() => {
@@ -2462,12 +2466,29 @@ export function HomePanel({
           />
         );
       case "local-chat":
-        return (
+        return useNativeLocalChat || !maibotWebuiReady ? (
           <LocalChatQuickCard
             active={active}
             maibotService={maibot}
             onOpenFull={() => onOpenTab("localchat")}
             retro={useRetroHome}
+          />
+        ) : (
+          <ServiceSummary
+            icon={<Sparkles className="size-4" />}
+            retro={useRetroHome}
+            service={maibot}
+            serviceControls={maibot ? {
+              busy: serviceActionBusy?.startsWith(`${maibot.id}:`) ?? false,
+              onRestart: onRestartService,
+              onStart: onStartService,
+              onStop: onStopService,
+            } : undefined}
+            webuiAction={{
+              title: "MaiBot WebUI 聊聊",
+              label: "打开聊聊",
+              onClick: () => onOpenTab("localchat"),
+            }}
           />
         );
       case "message-platform":
@@ -2546,6 +2567,7 @@ export function HomePanel({
     busy,
     launcherLatestTag,
     maibot,
+    maibotWebuiReady,
     messagePlatformConfigured,
     napcat,
     onOpenPluginConfig,
@@ -2584,6 +2606,7 @@ export function HomePanel({
       return;
     }
     const sourceEntry = homeContentLayout[sourceIndex];
+    useNativeLocalChat,
     const sourceAreaIndex = homeContentLayout.filter((entry) => entry.area === sourceEntry.area).findIndex((entry) => entry.id === entryId);
     if (
       sourceEntry.area === targetArea &&

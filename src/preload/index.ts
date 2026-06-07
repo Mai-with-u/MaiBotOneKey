@@ -7,6 +7,7 @@ import type {
   DesktopSnapshot,
   InitRepairResult,
   InitState,
+  LauncherUiSettings,
   LauncherUpdateApplyResult,
   LauncherUpdateInfo,
   LogEntry,
@@ -195,6 +196,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
     saveOpenCodeSettings: (settings: OpenCodeSettings) =>
       ipcRenderer.invoke("launcher:saveOpenCodeSettings", settings) as Promise<OpenCodeSettings>,
+    saveUiSettings: (settings: LauncherUiSettings) =>
+      ipcRenderer.invoke("launcher:saveUiSettings", settings) as Promise<LauncherUiSettings>,
     getSourceSettings: () =>
       ipcRenderer.invoke("launcher:getSourceSettings") as Promise<SourceSettings>,
     saveSourceSettings: (settings: SourceSettingsUpdate) =>

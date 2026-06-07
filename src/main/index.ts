@@ -11,6 +11,7 @@ import { acquireInstallInstanceLock } from "./services/instance-lock";
 import { AppIconManager } from "./services/app-icon-manager";
 import { cleanupLauncherUpdateDownloads, type LauncherUpdateCleanupResult } from "./services/launcher-update-cleanup";
 import { LogStore } from "./services/log-store";
+import { LauncherUiSettingsManager } from "./services/launcher-ui-settings-manager";
 import { ModuleUpdater } from "./services/module-updater";
 import { NetworkProxyManager } from "./services/network-proxy-manager";
 import { OpenCodeSettingsManager } from "./services/opencode-settings-manager";
@@ -31,6 +32,7 @@ const resourceLock = instanceLock.acquired
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
 const networkProxyManager = new NetworkProxyManager(runtimePaths);
+const launcherUiSettingsManager = new LauncherUiSettingsManager(runtimePaths);
 const openCodeSettingsManager = new OpenCodeSettingsManager(runtimePaths);
 const sourceSettingsManager = new SourceSettingsManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(runtimePaths, initManager, sourceSettingsManager);
@@ -356,6 +358,7 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       moduleUpdater,
       remoteSourceManager,
       networkProxyManager,
+      launcherUiSettingsManager,
       openCodeSettingsManager,
       pythonDependencyManager,
       sourceSettingsManager,

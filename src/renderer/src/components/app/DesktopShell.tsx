@@ -68,6 +68,7 @@ const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 const HOME_ENTRY_GUIDE_KEY = "maibot-onekey.home-entry-guide-seen.v2";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
+const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
 const toolbarMenuItemClassName =
   "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const retroTopActionIconClassName =
@@ -104,6 +105,31 @@ function opencodeLaunchEnv(snapshot: DesktopSnapshot): Record<string, string> {
 
   env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
   return env;
+}
+
+interface WebviewEntryTarget {
+  entryUrl: string;
+  postAuthTargetUrl?: string;
+}
+
+function createMaibotChatWebviewTarget(url: string): WebviewEntryTarget {
+  try {
+    const entryUrl = new URL(url);
+    const chatUrl = new URL(url);
+    chatUrl.pathname = MAIBOT_CHAT_WEBUI_PATH;
+    chatUrl.search = "";
+    chatUrl.hash = "";
+
+    const entryPath = entryUrl.pathname.replace(/\/+$/u, "") || "/";
+    const isAuthEntry = entryPath === "/auth" && entryUrl.searchParams.has("token");
+
+    return {
+      entryUrl: isAuthEntry ? entryUrl.toString() : chatUrl.toString(),
+      postAuthTargetUrl: isAuthEntry ? chatUrl.toString() : undefined,
+    };
+  } catch {
+    return { entryUrl: url };
+  }
 }
 
 function readPluginBuilderMode(): PluginBuilderMode {
@@ -515,19 +541,25 @@ function MaiBotWebuiStatusPanel({
 function FloatingShell({
   expanded,
   edge,
+  chatWebviewTarget,
+  maibotWebviewReady,
   maibotService,
   onExpand,
   onCollapse,
   onRestore,
   onWindowState,
+  useNativeLocalChat,
 }: {
   expanded: boolean;
   edge: "left" | "right" | null;
+  chatWebviewTarget: WebviewEntryTarget;
+  maibotWebviewReady: boolean;
   maibotService: ServiceDescriptor | undefined;
   onExpand: () => void;
   onCollapse: () => void;
   onRestore: () => void;
   onWindowState: (state: WindowState) => void;
+  useNativeLocalChat: boolean;
 }): React.JSX.Element {
   const dragRef = useRef<{
     offsetX: number;
@@ -762,7 +794,17 @@ function FloatingShell({
         </div>
       </div>
       <div className="min-h-0 flex-1">
-        <LocalChatPanel active maibotService={maibotService} />
+        {useNativeLocalChat || !maibotWebviewReady ? (
+          <LocalChatPanel active maibotService={maibotService} />
+        ) : (
+          <WebviewPanel
+            active
+            emptyText="MaiBot Core 启动后会在这里打开 WebUI 聊聊。"
+            postAuthTargetUrl={chatWebviewTarget.postAuthTargetUrl}
+            title="MaiBot WebUI 聊聊"
+            url={chatWebviewTarget.entryUrl}
+          />
+        )}
       </div>
     </div>
   );
@@ -1086,6 +1128,11 @@ export function DesktopShell(): React.JSX.Element {
   );
   const maibotService = serviceById.get("maibot");
   const maibotWebviewReady = maibotService?.status === "running" && maibotService.health === "ready";
+  const useNativeLocalChat = snapshot?.launcherUiSettings?.chatPageMode === "native";
+  const maibotChatWebviewTarget = useMemo(
+    () => createMaibotChatWebviewTarget(maibotService?.url ?? "http://127.0.0.1:8001"),
+    [maibotService?.url],
+  );
   const maibotWebviewReloadTrigger =
     maibotWebviewReady
       ? maibotService.url
@@ -1427,13 +1474,16 @@ export function DesktopShell(): React.JSX.Element {
     return (
       <TooltipProvider delayDuration={250}>
         <FloatingShell
+          chatWebviewTarget={maibotChatWebviewTarget}
           edge={floatingEdge}
           expanded={floatingExpanded}
+          maibotWebviewReady={maibotWebviewReady}
           maibotService={maibotService}
           onCollapse={() => setFloatingPanel(false)}
           onExpand={() => setFloatingPanel(true)}
           onRestore={restoreMainWindow}
           onWindowState={syncWindowState}
+          useNativeLocalChat={useNativeLocalChat}
         />
         <Toaster />
       </TooltipProvider>
@@ -1787,13 +1837,26 @@ export function DesktopShell(): React.JSX.Element {
               value="localchat"
               className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
             >
-              <LocalChatPanel
-                active={activeTab === "localchat"}
-                maibotService={maibotService}
-                retro={useRetroChrome}
-                toolbarPlacement="external"
-                toolbarTarget={webviewToolbarHost}
-              />
+              {useNativeLocalChat || !maibotWebviewReady ? (
+                <LocalChatPanel
+                  active={activeTab === "localchat"}
+                  maibotService={maibotService}
+                  retro={useRetroChrome}
+                  toolbarPlacement="external"
+                  toolbarTarget={webviewToolbarHost}
+                />
+              ) : (
+                <WebviewPanel
+                  active={activeTab === "localchat"}
+                  emptyText="MaiBot Core 启动后会在这里载入 WebUI 聊聊页面。"
+                  postAuthTargetUrl={maibotChatWebviewTarget.postAuthTargetUrl}
+                  title="MaiBot WebUI 聊聊"
+                  toolbarPlacement="external"
+                  toolbarTarget={webviewToolbarHost}
+                  reloadTrigger={maibotWebviewReloadTrigger}
+                  url={maibotChatWebviewTarget.entryUrl}
+                />
+              )}
             </TabsContent>
 
             {showTerminalTab ? (

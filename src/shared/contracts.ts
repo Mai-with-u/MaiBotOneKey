@@ -137,6 +137,12 @@ export interface OpenCodeSettings {
   useBundledPluginInstructions: boolean;
 }
 
+export type LauncherChatPageMode = "webui" | "native";
+
+export interface LauncherUiSettings {
+  chatPageMode: LauncherChatPageMode;
+}
+
 export type AppIconId = "soft" | "sprout" | "bean";
 
 export interface AppIconOption {
@@ -284,6 +290,7 @@ export interface DesktopSnapshot {
   terminalSettings: TerminalSettings;
   serviceStartupSettings: ServiceStartupSettings;
   openCodeSettings: OpenCodeSettings;
+  launcherUiSettings: LauncherUiSettings;
   appIconSettings: AppIconSettings;
   networkProxySettings: NetworkProxySettings;
   appVersion: string;
@@ -1298,6 +1305,7 @@ export interface DesktopBridge {
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) => Promise<NetworkProxySettings>;
     saveOpenCodeSettings: (settings: OpenCodeSettings) => Promise<OpenCodeSettings>;
+    saveUiSettings: (settings: LauncherUiSettings) => Promise<LauncherUiSettings>;
     getSourceSettings: () => Promise<SourceSettings>;
     saveSourceSettings: (settings: SourceSettingsUpdate) => Promise<SourceSettings>;
     resetSourceSettings: () => Promise<SourceSettings>;

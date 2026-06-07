@@ -129,6 +129,9 @@ const fallbackSnapshot: DesktopSnapshot = {
   openCodeSettings: {
     useBundledPluginInstructions: true,
   },
+  launcherUiSettings: {
+    chatPageMode: "webui",
+  },
   appIconSettings: {
     selectedIconId: "sprout",
     options: [
@@ -198,6 +201,7 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
     serviceStartupSettings: snapshot.serviceStartupSettings ?? fallbackSnapshot.serviceStartupSettings,
     openCodeSettings: snapshot.openCodeSettings ?? fallbackSnapshot.openCodeSettings,
+    launcherUiSettings: snapshot.launcherUiSettings ?? fallbackSnapshot.launcherUiSettings,
     appIconSettings: snapshot.appIconSettings ?? fallbackSnapshot.appIconSettings,
     networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,
     moduleVersions: {

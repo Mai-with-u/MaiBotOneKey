@@ -37,6 +37,7 @@ import type {
   MaiBotStorageCategory,
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
+  LauncherUiSettings,
   NetworkProxySettings,
   OpenCodeSettings,
   PluginBuilderMode,
@@ -384,6 +385,10 @@ const defaultNetworkProxySettings: NetworkProxySettings = {
 
 const defaultOpenCodeSettings: OpenCodeSettings = {
   useBundledPluginInstructions: true,
+};
+
+const defaultLauncherUiSettings: LauncherUiSettings = {
+  chatPageMode: "webui",
 };
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
@@ -1047,6 +1052,7 @@ export function SettingsStatusPanel({
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };
   const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
+  const launcherUiSettings = snapshot.launcherUiSettings ?? defaultLauncherUiSettings;
   const pluginBuilderEnabled = pluginBuilderMode !== "disabled";
   const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
   const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
@@ -1593,6 +1599,26 @@ export function SettingsStatusPanel({
         const nextOpenCodeSettings = await window.maibotDesktop?.launcher.saveOpenCodeSettings(settings);
         if (nextOpenCodeSettings) {
           onSnapshot({ ...snapshot, openCodeSettings: nextOpenCodeSettings });
+        }
+        await refreshSnapshot();
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onSnapshot, refreshSnapshot, snapshot],
+  );
+
+  const saveLauncherUiSettings = useCallback(
+    async (settings: LauncherUiSettings) => {
+      setBusy("launcher-ui-settings");
+      setError(null);
+      try {
+        const nextLauncherUiSettings = await window.maibotDesktop?.launcher.saveUiSettings(settings);
+        if (nextLauncherUiSettings) {
+          onSnapshot({ ...snapshot, launcherUiSettings: nextLauncherUiSettings });
+          toast.success("聊聊页面模式已保存");
         }
         await refreshSnapshot();
       } catch (nextError) {
@@ -2635,6 +2661,55 @@ export function SettingsStatusPanel({
                       </span>
                     </span>
                     {busy === "service-startup-settings" ? (
+                      <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : null}
+                  </label>
+                </div>
+
+                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                        <TerminalSquare className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">聊聊页面</p>
+                        <p className="text-xs text-muted-foreground">
+                          {launcherUiSettings.chatPageMode === "native"
+                            ? "聊聊页使用启动器原生聊天界面。"
+                            : "聊聊页直接打开 MaiBot WebUI 的嵌入聊天页面。"}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={launcherUiSettings.chatPageMode === "native" ? "warning" : "success"}>
+                      {launcherUiSettings.chatPageMode === "native" ? "原生界面" : "WebUI"}
+                    </Badge>
+                  </div>
+                  <label
+                    className={cn(
+                      "settings-choice flex min-w-0 cursor-pointer items-start gap-3 p-3 transition-colors",
+                      launcherUiSettings.chatPageMode === "native"
+                        ? "settings-choice-selected bg-primary/10 text-foreground"
+                        : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                    )}
+                  >
+                    <Checkbox
+                      checked={launcherUiSettings.chatPageMode === "native"}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) =>
+                        void saveLauncherUiSettings({
+                          ...launcherUiSettings,
+                          chatPageMode: checked === true ? "native" : "webui",
+                        })
+                      }
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">使用启动器原生聊聊界面</span>
+                      <span className="mt-1 block text-xs leading-relaxed">
+                        关闭时，聊聊页和悬浮球展开页会使用 MaiBot WebUI 聊聊。
+                      </span>
+                    </span>
+                    {busy === "launcher-ui-settings" ? (
                       <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />
                     ) : null}
                   </label>
