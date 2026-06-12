@@ -60,6 +60,7 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import {
   HOME_CONTENT_CARD_OPTIONS,
   HOME_CONTENT_LAYOUT_CHANGE_EVENT,
@@ -99,6 +100,12 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 
 type MaiBotUpdateChannel = "stable" | "other";
 type CompactChatState = "idle" | "connecting" | "connected" | "error";
+type MaiBotVersionFetchProgress = {
+  value: number;
+  label: string;
+  detail?: string;
+  tone: "loading" | "success" | "error";
+};
 
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
@@ -231,21 +238,78 @@ function formatStatNumber(value: number | undefined): string | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : undefined;
 }
 
-function parseVersionParts(version: string | undefined): number[] {
-  const normalized = version?.trim().replace(/^v/iu, "").split(/[+-]/u, 1)[0] ?? "";
-  return normalized
-    .split(/[._-]/u)
-    .map((part) => Number(part.match(/^\d+/u)?.[0] ?? 0));
+interface ParsedVersionText {
+  raw: string;
+  parts: number[];
+  prerelease: boolean;
+  prereleaseLabel?: string;
+  prereleaseNumber?: number;
+}
+
+function parseVersionText(version: string | undefined): ParsedVersionText | undefined {
+  const raw = version?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.replace(/^v/iu, "");
+  const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:[-._]?([a-z]+)\.?(\d*)?)?$/iu);
+  if (!match) {
+    return undefined;
+  }
+  const prereleaseLabel = match[2]?.toLowerCase();
+  return {
+    raw,
+    parts: match[1].split(".").map((part) => Number(part)),
+    prerelease: Boolean(prereleaseLabel),
+    prereleaseLabel,
+    prereleaseNumber: match[3] ? Number(match[3]) : undefined,
+  };
+}
+
+function prereleaseRank(label: string | undefined): number {
+  switch (label) {
+    case "dev":
+      return 0;
+    case "a":
+    case "alpha":
+      return 1;
+    case "b":
+    case "beta":
+      return 2;
+    case "pre":
+    case "preview":
+      return 3;
+    case "rc":
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 function compareVersionText(left: string | undefined, right: string | undefined): number {
-  const leftParts = parseVersionParts(left);
-  const rightParts = parseVersionParts(right);
-  const length = Math.max(leftParts.length, rightParts.length);
+  const parsedLeft = parseVersionText(left);
+  const parsedRight = parseVersionText(right);
+  if (!parsedLeft || !parsedRight) {
+    return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
+  }
+  const length = Math.max(parsedLeft.parts.length, parsedRight.parts.length);
   for (let index = 0; index < length; index++) {
-    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    const diff = (parsedLeft.parts[index] ?? 0) - (parsedRight.parts[index] ?? 0);
     if (diff !== 0) {
       return diff;
+    }
+  }
+  if (parsedLeft.prerelease !== parsedRight.prerelease) {
+    return parsedLeft.prerelease ? -1 : 1;
+  }
+  if (parsedLeft.prerelease && parsedRight.prerelease) {
+    const rankDiff = prereleaseRank(parsedLeft.prereleaseLabel) - prereleaseRank(parsedRight.prereleaseLabel);
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+    const numberDiff = (parsedLeft.prereleaseNumber ?? 0) - (parsedRight.prereleaseNumber ?? 0);
+    if (numberDiff !== 0) {
+      return numberDiff;
     }
   }
   return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
@@ -2095,6 +2159,7 @@ export function HomePanel({
   const [maibotBranches, setMaibotBranches] = useState<ModuleBranchOption[]>([]);
   const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
   const [maibotRefsLoading, setMaibotRefsLoading] = useState(false);
+  const [maibotVersionFetchProgress, setMaibotVersionFetchProgress] = useState<MaiBotVersionFetchProgress | null>(null);
   const [selectedMaiBotBranch, setSelectedMaiBotBranch] = useState("main");
   const [selectedMaiBotTag, setSelectedMaiBotTag] = useState("");
   const [homeContentLayout, setHomeContentLayout] = useState<HomeContentEntry[]>(() => readHomeContentLayout());
@@ -2138,6 +2203,26 @@ export function HomePanel({
         : undefined,
   };
   const dashboardTarget = snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi;
+
+  useEffect(() => {
+    if (!maibotRefsLoading) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setMaibotVersionFetchProgress((current) => {
+        if (!current || current.tone !== "loading" || current.value >= 88) {
+          return current;
+        }
+        return {
+          ...current,
+          value: Math.min(88, current.value + (current.value < 45 ? 3 : 1)),
+        };
+      });
+    }, 500);
+
+    return () => window.clearInterval(timer);
+  }, [maibotRefsLoading]);
 
   const handleMascotSecretTap = useCallback(() => {
     if (mascotIntroShownThisSession) {
@@ -2240,10 +2325,51 @@ export function HomePanel({
     }
 
     setMaibotRefsLoading(true);
+    setMaibotVersionFetchProgress({
+      value: 8,
+      label: "准备获取 MaiBot 更新",
+      detail: "正在检查桌面桥和更新源配置。",
+      tone: "loading",
+    });
     try {
       if (moduleSourceConfig) {
+        setMaibotVersionFetchProgress({
+          value: 18,
+          label: "保存更新源",
+          detail: "正在应用当前选择的 MaiBot 更新源。",
+          tone: "loading",
+        });
         await saveModuleSourceConfig();
       }
+
+      setMaibotVersionFetchProgress({
+        value: 38,
+        label: "获取远端版本",
+        detail: "正在读取 MaiBot 远端 Tag 和 Dashboard 版本。",
+        tone: "loading",
+      });
+      const refreshedSnapshot = await window.maibotDesktop.modules.refreshVersions();
+      onSnapshot(refreshedSnapshot);
+
+      const maibotRemoteError = refreshedSnapshot.moduleVersions.maibotRemoteError;
+      setMaibotVersionFetchProgress({
+        value: maibotRemoteError ? 52 : 62,
+        label: maibotRemoteError ? "MaiBot 版本获取异常" : "远端版本已返回",
+        detail: maibotRemoteError
+          ? maibotRemoteError
+          : `来源: ${refreshedSnapshot.moduleVersions.maibotRemoteSource ?? "默认更新源"}`,
+        tone: maibotRemoteError ? "error" : "loading",
+      });
+      if (maibotRemoteError && !refreshedSnapshot.moduleVersions.maibotLatestStableTag) {
+        throw new Error(`获取 MaiBot 远端版本失败：${maibotRemoteError}`);
+      }
+
+      setMaibotVersionFetchProgress({
+        value: 74,
+        label: "读取可选版本",
+        detail: "正在刷新分支和 Tag 下拉列表。",
+        tone: "loading",
+      });
       const [branches, tags] = await Promise.all([
         window.maibotDesktop.modules.listMaiBotBranches(),
         window.maibotDesktop.modules.listMaiBotTags(),
@@ -2259,8 +2385,24 @@ export function HomePanel({
       setSelectedMaiBotTag((current) => (
         current && tags.some((tag) => tag.name === current) ? current : ""
       ));
+      setMaibotVersionFetchProgress({
+        value: 100,
+        label: "获取完成",
+        detail: tags.length > 0 ? `已读取 ${branches.length} 个分支、${tags.length} 个 Tag。` : "已完成远端版本刷新。",
+        tone: "success",
+      });
+      window.setTimeout(() => {
+        setMaibotVersionFetchProgress((current) => current?.tone === "success" ? null : current);
+      }, 1200);
     } catch (nextError) {
-      setError(messageFromError(nextError));
+      const message = messageFromError(nextError);
+      setError(message);
+      setMaibotVersionFetchProgress({
+        value: 100,
+        label: "获取失败",
+        detail: message,
+        tone: "error",
+      });
       setMaibotBranches([]);
       setMaibotTags([]);
       setSelectedMaiBotBranch("");
@@ -2268,10 +2410,11 @@ export function HomePanel({
     } finally {
       setMaibotRefsLoading(false);
     }
-  }, [maibotRefsLoading, moduleSourceConfig, saveModuleSourceConfig]);
+  }, [maibotRefsLoading, moduleSourceConfig, onSnapshot, saveModuleSourceConfig]);
 
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
+    setMaibotVersionFetchProgress(null);
     setModuleSourceExpanded(false);
     setMaibotChannel(
       snapshot.moduleVersions.maibotSelectedChannel === "stable" && snapshot.moduleVersions.maibotLatestStableTag
@@ -3290,11 +3433,45 @@ export function HomePanel({
                 {error}
               </div>
             ) : null}
+            {maibotVersionFetchProgress ? (
+              <div
+                className={cn(
+                  "grid gap-2 border px-3 py-2 text-xs",
+                  useRetroHome ? "retro-control rounded-sm" : "rounded-lg",
+                  maibotVersionFetchProgress.tone === "error"
+                    ? "border-destructive/30 bg-destructive/10 text-destructive"
+                    : maibotVersionFetchProgress.tone === "success"
+                      ? "border-success/30 bg-success/10 text-success-foreground"
+                      : "border-border bg-muted/40",
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{maibotVersionFetchProgress.label}</span>
+                  <span className="font-mono tabular-nums">{Math.round(maibotVersionFetchProgress.value)}%</span>
+                </div>
+                <Progress
+                  className={cn(
+                    "h-1.5",
+                    maibotVersionFetchProgress.tone === "error" && "[&_[data-slot=progress-indicator]]:bg-destructive",
+                  )}
+                  value={maibotVersionFetchProgress.value}
+                />
+                {maibotVersionFetchProgress.detail ? (
+                  <p className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
+                    {maibotVersionFetchProgress.detail}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
               <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} />
               <DetailRow label="当前记录" value={maibotSelectedTarget} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} retro={useRetroHome} />
+              <DetailRow label="更新源" value={snapshot.moduleVersions.maibotRemoteSource} retro={useRetroHome} />
+              {snapshot.moduleVersions.maibotRemoteError ? (
+                <DetailRow label="远端错误" value={snapshot.moduleVersions.maibotRemoteError} retro={useRetroHome} />
+              ) : null}
             </div>
             {maibotUpdateBlocked ? (
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>

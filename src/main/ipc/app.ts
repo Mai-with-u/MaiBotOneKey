@@ -426,6 +426,8 @@ interface ParsedVersionTag {
   tag: string;
   parts: number[];
   prerelease: boolean;
+  prereleaseLabel?: string;
+  prereleaseNumber?: number;
 }
 
 async function readPyprojectVersion(path: string): Promise<string | undefined> {
@@ -498,12 +500,36 @@ function parseVersionTag(tag: string): ParsedVersionTag | undefined {
   if (!match) {
     return undefined;
   }
+  const prereleaseLabel = match[2]?.toLowerCase();
+  const prereleaseNumber = match[3] ? Number(match[3]) : undefined;
 
   return {
     tag,
     parts: match[1].split(".").map((part) => Number(part)),
-    prerelease: Boolean(match[2]) && !/^rc$/iu.test(match[2]),
+    prerelease: Boolean(prereleaseLabel),
+    prereleaseLabel,
+    prereleaseNumber,
   };
+}
+
+function prereleaseRank(label: string | undefined): number {
+  switch (label) {
+    case "dev":
+      return 0;
+    case "a":
+    case "alpha":
+      return 1;
+    case "b":
+    case "beta":
+      return 2;
+    case "pre":
+    case "preview":
+      return 3;
+    case "rc":
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): number {
@@ -512,6 +538,19 @@ function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): num
     const diff = (left.parts[index] ?? 0) - (right.parts[index] ?? 0);
     if (diff !== 0) {
       return diff;
+    }
+  }
+  if (left.prerelease !== right.prerelease) {
+    return left.prerelease ? -1 : 1;
+  }
+  if (left.prerelease && right.prerelease) {
+    const rankDiff = prereleaseRank(left.prereleaseLabel) - prereleaseRank(right.prereleaseLabel);
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+    const numberDiff = (left.prereleaseNumber ?? 0) - (right.prereleaseNumber ?? 0);
+    if (numberDiff !== 0) {
+      return numberDiff;
     }
   }
   return left.tag.localeCompare(right.tag, "en-US", { numeric: true, sensitivity: "base" });
@@ -1472,11 +1511,15 @@ export function registerAppIpc({
   const readRemoteModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
     if (existsSync(initManager.getGitPath())) {
-      const tagsResult = await moduleUpdater.listMaiBotRemoteTagNames().catch(() => undefined);
-      if (tagsResult) {
+      try {
+        const tagsResult = await moduleUpdater.listMaiBotRemoteTagNames();
         Object.assign(versions, pickLatestTags(Array.from(new Set(tagsResult.tags))));
         versions.maibotRemoteSource = tagsResult.remoteUrl;
+      } catch (error) {
+        versions.maibotRemoteError = error instanceof Error ? error.message : String(error);
       }
+    } else {
+      versions.maibotRemoteError = `未找到可用 Git: ${initManager.getGitPath()}`;
     }
 
     const dashboardVersions = await fetchPypiVersionSummary("maibot-dashboard");
@@ -1603,6 +1646,20 @@ export function registerAppIpc({
       .finally(() => {
         remoteModuleVersionsRefreshPromise = null;
       });
+  };
+
+  const refreshRemoteVersionsNow = async (): Promise<DesktopSnapshot> => {
+    if (remoteModuleVersionsRefreshPromise) {
+      await remoteModuleVersionsRefreshPromise;
+    } else {
+      const [versions, appVersion] = await Promise.all([readRemoteModuleVersions(), readRemoteAppVersion()]);
+      remoteModuleVersionsCache = versions;
+      remoteAppVersionCache = appVersion;
+    }
+    const snapshot = await buildSnapshot();
+    const window = getMainWindow();
+    window?.webContents.send("desktop:snapshot", snapshot);
+    return snapshot;
   };
 
   const scheduleInitDependencyRefresh = (): void => {
@@ -1896,6 +1953,10 @@ export function registerAppIpc({
     );
     await broadcastSnapshot();
     return result;
+  });
+
+  ipcMain.handle("modules:refreshVersions", async (): Promise<DesktopSnapshot> => {
+    return refreshRemoteVersionsNow();
   });
 
   ipcMain.handle("modules:listMaibotBranches", async (): Promise<ModuleBranchOption[]> => {

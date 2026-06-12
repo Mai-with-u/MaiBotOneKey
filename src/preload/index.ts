@@ -168,6 +168,8 @@ const desktopBridge: DesktopBridge = {
     confirm: () => ipcRenderer.invoke("agreements:confirm") as Promise<StartupAgreementConfirmResult>,
   },
   modules: {
+    refreshVersions: () =>
+      ipcRenderer.invoke("modules:refreshVersions") as Promise<DesktopSnapshot>,
     updateMaiBot: (target?: ModuleUpdateTarget) =>
       ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
     listMaiBotBranches: () => ipcRenderer.invoke("modules:listMaibotBranches") as Promise<ModuleBranchOption[]>,

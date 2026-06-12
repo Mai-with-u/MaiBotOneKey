@@ -276,6 +276,7 @@ export interface ModuleRuntimeVersions {
   maibotLatestStableTag?: string;
   maibotLatestPrereleaseTag?: string;
   maibotRemoteSource?: string;
+  maibotRemoteError?: string;
   dashboardOverride?: string;
   dashboardOverrideSource?: "python-overrides" | "unknown";
   dashboardLatestPypi?: string;
@@ -1292,6 +1293,7 @@ export interface DesktopBridge {
     confirm: () => Promise<StartupAgreementConfirmResult>;
   };
   modules: {
+    refreshVersions: () => Promise<DesktopSnapshot>;
     updateMaiBot: (target?: ModuleUpdateTarget) => Promise<ModuleUpdateResult>;
     listMaiBotBranches: () => Promise<ModuleBranchOption[]>;
     listMaiBotTags: () => Promise<ModuleTagOption[]>;

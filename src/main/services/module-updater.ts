@@ -54,7 +54,7 @@ export interface MaiBotRemoteTagsResult {
 }
 
 function isPrereleaseTag(tag: string): boolean {
-  return /(?:^|[._+-])(?:a|alpha|b|beta|pre|preview|dev)\d*/iu.test(tag);
+  return /(?:^|[._+-])(?:a|alpha|b|beta|rc|pre|preview|dev)\d*/iu.test(tag);
 }
 
 function splitOutput(output: string): string[] {
