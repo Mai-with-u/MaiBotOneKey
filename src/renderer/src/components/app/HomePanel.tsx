@@ -575,6 +575,7 @@ function ServiceCardControls({
 
 function ServiceSummary({
   icon,
+  title,
   service,
   serviceControls,
   webuiAction,
@@ -582,6 +583,7 @@ function ServiceSummary({
   retro,
 }: {
   icon: React.ReactNode;
+  title?: string;
   service: ServiceDescriptor | undefined;
   serviceControls?: {
     busy: boolean;
@@ -612,7 +614,7 @@ function ServiceSummary({
             </span>
           ) : null}
           <div className="min-w-0">
-            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>{service?.name ?? "未知服务"}</p>
+            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>{title ?? service?.name ?? "未知服务"}</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -2503,7 +2505,7 @@ export function HomePanel({
           />
         ) : (
           <ServiceSummary
-            icon={<Sparkles className="size-4" />}
+            icon={null}
             retro={useRetroHome}
             service={maibot}
             serviceControls={maibot ? {
@@ -2512,6 +2514,7 @@ export function HomePanel({
               onStart: onStartService,
               onStop: onStopService,
             } : undefined}
+            title="聊聊"
             webuiAction={{
               title: "MaiBot WebUI 聊聊",
               label: "打开聊聊",
