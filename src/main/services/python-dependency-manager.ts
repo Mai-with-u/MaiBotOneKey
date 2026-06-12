@@ -1,7 +1,7 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import type {
   ManagedPythonPackage,
   ManagedSourceEntry,
@@ -29,6 +29,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const PIP_TIMEOUT_MS = 10 * 60 * 1000;
 const STARTUP_UPGRADE_IDLE_TIMEOUT_MS = 10_000;
 const SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json, application/json;q=0.9, text/html;q=0.8";
+const DASHBOARD_PACKAGE_NAME = "maibot-dashboard";
 
 interface SimpleProjectFile {
   filename?: unknown;
@@ -152,6 +153,40 @@ function packageImportName(name: string): string {
 
 function packageNameFromRequirement(requirement: string): string | undefined {
   return requirement.trim().match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/u)?.[1];
+}
+
+async function resolveGitDir(root: string): Promise<string | undefined> {
+  const dotGitPath = join(root, ".git");
+  if (!existsSync(dotGitPath)) {
+    return undefined;
+  }
+
+  try {
+    const dotGitFile = await readFile(dotGitPath, "utf8");
+    const match = /^gitdir:\s*(.+)$/imu.exec(dotGitFile.trim());
+    if (match?.[1]) {
+      const gitDir = match[1].trim();
+      return isAbsolute(gitDir) ? gitDir : join(root, gitDir);
+    }
+  } catch {
+    return dotGitPath;
+  }
+
+  return dotGitPath;
+}
+
+async function readGitBranch(root: string): Promise<string | undefined> {
+  const gitDir = await resolveGitDir(root);
+  if (!gitDir) {
+    return undefined;
+  }
+
+  try {
+    const head = (await readFile(join(gitDir, "HEAD"), "utf8")).trim();
+    return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readRequirementsFile(path: string): Promise<string[]> {
@@ -586,6 +621,16 @@ export class PythonDependencyManager {
     const sourceDependencies = pyprojectDependencies.length > 0
       ? pyprojectDependencies
       : await readRequirementsFile(requirementsPath);
+    const declaresDashboard = sourceDependencies.some(
+      (requirement) => normalizeProjectName(packageNameFromRequirement(requirement) ?? "") === DASHBOARD_PACKAGE_NAME,
+    );
+    const maibotBranch = await readGitBranch(maibotRoot);
+    const resetDashboardOverlay = maibotBranch === "main" && declaresDashboard;
+    if (resetDashboardOverlay) {
+      await this.removeOverlayPackage(DASHBOARD_PACKAGE_NAME);
+      onOutput?.("MaiBot main branch: reset maibot-dashboard overlay before dependency check");
+    }
+
     let unsatisfied: UnsatisfiedDependency[];
     try {
       unsatisfied = pyprojectDependencies.length > 0
@@ -598,6 +643,18 @@ export class PythonDependencyManager {
         reason: "probe failed; install declared dependency",
       }));
     }
+
+    const forceLatestDashboard = maibotBranch !== undefined && maibotBranch !== "main" && declaresDashboard;
+    if (forceLatestDashboard) {
+      unsatisfied = [
+        ...unsatisfied.filter((item) => normalizeProjectName(packageNameFromRequirement(item.requirement) ?? "") !== DASHBOARD_PACKAGE_NAME),
+        {
+          requirement: DASHBOARD_PACKAGE_NAME,
+          reason: `MaiBot ${maibotBranch} branch: upgrade maibot-dashboard to latest including prereleases`,
+        },
+      ];
+    }
+
     if (unsatisfied.length === 0) {
       const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
       for (const line of output) {
@@ -624,6 +681,7 @@ export class PythonDependencyManager {
       "-m",
       "pip",
       "install",
+      ...(forceLatestDashboard ? ["--pre"] : []),
       "--upgrade",
       "--upgrade-strategy",
       "only-if-needed",
