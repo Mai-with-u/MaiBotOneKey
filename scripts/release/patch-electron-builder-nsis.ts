@@ -263,3 +263,164 @@ await patchFile(
   "IfErrors HandleExtract7zaError DoneExtract7za",
   { optional: true },
 );
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "record staged extraction failures",
+  /RMDir \/r "\$R2"\r?\n  RMDir \/r "\$R3"\r?\n  CreateDirectory "\$R2"\r?\n  ClearErrors\r?\n  SetOutPath "\$R2"\r?\n  Nsis7z::Extract "\$\{FILE\}"\r?\n  Pop \$R0\r?\n  SetOutPath \$R0/u,
+  `RMDir /r "$R2"
+  RMDir /r "$R3"
+  ClearErrors
+  CreateDirectory "$R2"
+  IfErrors 0 PrepareExtract7za
+    StrCpy $R4 "Cannot create staging directory: $R2"
+    Goto AbortLoggedExtract7za
+
+  PrepareExtract7za:
+  ClearErrors
+  SetOutPath "$R2"
+  IfErrors 0 RunExtract7za
+    StrCpy $R4 "Cannot enter staging directory: $R2"
+    Goto AbortLoggedExtract7za
+
+  RunExtract7za:
+  ClearErrors
+  Nsis7z::Extract "\${FILE}"
+  IfErrors 0 Extract7zaSucceeded
+    Pop $R0
+    StrCpy $R4 "Nsis7z failed while extracting \${FILE} to $R2. The installer package may be damaged, disk space may be insufficient, or security software may have blocked files."
+    Goto AbortLoggedExtract7za
+
+  Extract7zaSucceeded:
+  Pop $R0
+  SetOutPath $R0
+  IfFileExists "$R2\\\${APP_EXECUTABLE_FILENAME}" 0 MissingStagedExe7za
+  IfFileExists "$R2\\resources\\*.*" 0 MissingStagedResources7za
+  Goto StagedExtractReady7za
+
+  MissingStagedExe7za:
+    StrCpy $R4 "Extracted package is missing \${APP_EXECUTABLE_FILENAME} in staging directory: $R2"
+    Goto AbortLoggedExtract7za
+
+  MissingStagedResources7za:
+    StrCpy $R4 "Extracted package is missing resources directory in staging directory: $R2"
+    Goto AbortLoggedExtract7za
+
+  StagedExtractReady7za:`,
+  "AbortLoggedExtract7za",
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "keep install dir available for early failure logs",
+  /Push \$OUTDIR\r?\n  StrCpy \$R2 "\$OUTDIR\.__installing-\$packageArch"/u,
+  `Push $OUTDIR
+  StrCpy $R0 "$OUTDIR"
+  StrCpy $R2 "$OUTDIR.__installing-$packageArch"`,
+  'StrCpy $R0 "$OUTDIR"',
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "record install directory replacement failures",
+  /ReportExtract7za(?:Error)?:\r?\n    DetailPrint [^\r\n]+/u,
+  `ReportExtract7zaError:
+    StrCpy $R4 "Cannot replace install directory after $R1 attempt(s): $R0. Close running app processes, check directory permissions, or choose another install directory."
+    DetailPrint \`Can't modify "\${PRODUCT_NAME}"'s files.\``,
+  "Cannot replace install directory after $R1 attempt(s)",
+  { optional: true },
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "preserve old install backup until direct fallback succeeds",
+  /    RMDir \/r "\$R2"\r?\n    RMDir \/r "\$R3"\r?\n\r?\n    ClearErrors\r?\n    Nsis7z::Extract "\$\{FILE\}"/u,
+  `    RMDir /r "$R2"
+    # Keep $R3 until final validation succeeds so a failed fallback does not destroy the old install.
+
+    ClearErrors
+    Nsis7z::Extract "\${FILE}"`,
+  "Keep $R3 until final validation succeeds",
+  { optional: true },
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "verify direct extraction fallback",
+  /    Nsis7z::Extract "\$\{FILE\}"\r?\n    Goto DoneExtract7za\r?\n\r?\n  AbortExtract7za:\r?\n    Quit\r?\n\r?\n  RetryExtract7za:/u,
+  `    ClearErrors
+    Nsis7z::Extract "\${FILE}"
+    IfErrors 0 VerifyDirectExtract7za
+      StrCpy $R4 "Direct extraction fallback failed while extracting \${FILE} to $R0. The installer package may be damaged, disk space may be insufficient, or security software may have blocked files."
+      Goto AbortLoggedExtract7za
+
+  VerifyDirectExtract7za:
+    IfFileExists "$R0\\\${APP_EXECUTABLE_FILENAME}" 0 MissingDirectExe7za
+    IfFileExists "$R0\\resources\\*.*" 0 MissingDirectResources7za
+    Goto DoneExtract7za
+
+  MissingDirectExe7za:
+    StrCpy $R4 "Direct extraction fallback finished but \${APP_EXECUTABLE_FILENAME} is missing: $R0\\\${APP_EXECUTABLE_FILENAME}"
+    Goto AbortLoggedExtract7za
+
+  MissingDirectResources7za:
+    StrCpy $R4 "Direct extraction fallback finished but resources directory is missing: $R0\\resources"
+    Goto AbortLoggedExtract7za
+
+  AbortExtract7za:
+    StrCpy $R4 "User canceled after the installer could not replace install directory: $R0"
+    Goto AbortLoggedExtract7za
+
+  RetryExtract7za:`,
+  "VerifyDirectExtract7za",
+  { optional: true },
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "validate final install payload and write failure log",
+  /  DoneExtract7za:\r?\n    RMDir \/r "\$R2"\r?\n    RMDir \/r "\$R3"\r?\n!macroend/u,
+  `  DoneExtract7za:
+    IfFileExists "$R0\\\${APP_EXECUTABLE_FILENAME}" 0 MissingFinalExe7za
+    IfFileExists "$R0\\resources\\*.*" 0 MissingFinalResources7za
+    Goto FinishExtract7za
+
+  MissingFinalExe7za:
+    StrCpy $R4 "Installed package is missing \${APP_EXECUTABLE_FILENAME}: $R0\\\${APP_EXECUTABLE_FILENAME}"
+    Goto AbortLoggedExtract7za
+
+  MissingFinalResources7za:
+    StrCpy $R4 "Installed package is missing resources directory: $R0\\resources"
+    Goto AbortLoggedExtract7za
+
+  AbortLoggedExtract7za:
+    DetailPrint "Installation failed: $R4"
+    CreateDirectory "$R0"
+    SetOutPath "$R0"
+    FileOpen $9 "$R0\\install-failure.log" w
+    IfErrors 0 WriteInstallFailureLog7za
+      DetailPrint "Failed to write install failure log: $R0\\install-failure.log"
+      Goto ShowLoggedAbort7za
+
+  WriteInstallFailureLog7za:
+    FileWrite $9 "MaiBot OneKey installation failed.$\\r$\\n"
+    FileWrite $9 "Reason: $R4$\\r$\\n"
+    FileWrite $9 "Install directory: $R0$\\r$\\n"
+    FileWrite $9 "Staging directory: $R2$\\r$\\n"
+    FileWrite $9 "Old directory backup: $R3$\\r$\\n"
+    FileWrite $9 "Package: \${FILE}$\\r$\\n"
+    FileWrite $9 "Architecture: $packageArch$\\r$\\n"
+    FileWrite $9 "Tip: If files such as \${APP_EXECUTABLE_FILENAME}, node.exe, or .node native modules are missing, check Windows Security or antivirus quarantine.$\\r$\\n"
+    FileClose $9
+
+  ShowLoggedAbort7za:
+    RMDir /r "$R2"
+    MessageBox MB_OK|MB_ICONSTOP "MaiBot OneKey installation failed.$\\r$\\n$\\r$\\nReason: $R4$\\r$\\n$\\r$\\nA diagnostic log was written to:$\\r$\\n$R0\\install-failure.log"
+    Quit
+
+  FinishExtract7za:
+    RMDir /r "$R2"
+    RMDir /r "$R3"
+!macroend`,
+  "install-failure.log",
+);
