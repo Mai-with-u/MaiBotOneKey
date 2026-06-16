@@ -19,12 +19,17 @@ import type {
 import type { InitManager } from "./init-manager";
 
 const DEFAULT_USER_ID = "onekey-local-user";
-const DEFAULT_WEBUI_USER_ID = `webui_user_${DEFAULT_USER_ID}`;
 const DEFAULT_USER_NAME = "本地用户";
 const MESSAGE_HISTORY_LIMIT = 120;
-const SESSION_ID = "desktop-simple-chat";
+const DEFAULT_SESSION_ID = "desktop-simple-chat";
 const WS_REQUEST_TIMEOUT_MS = 8_000;
 const REPLY_MESSAGE_PREFIX = /^\s*\[回复消息\]\s*/u;
+
+interface LocalChatSessionOptions {
+  sessionId: string;
+  userId: string;
+  userName: string;
+}
 
 interface UnifiedWsEvent {
   op?: unknown;
@@ -54,6 +59,22 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeSessionId(value: unknown): string {
+  return asString(value) ?? DEFAULT_SESSION_ID;
+}
+
+function normalizeUserId(value: unknown): string {
+  return asString(value) ?? DEFAULT_USER_ID;
+}
+
+function normalizeUserName(value: unknown): string {
+  return asString(value) ?? DEFAULT_USER_NAME;
+}
+
+function webuiUserId(userId: string): string {
+  return userId.startsWith("webui_user_") ? userId : `webui_user_${userId}`;
 }
 
 function asNumber(value: unknown): number | undefined {
@@ -638,11 +659,16 @@ export class LocalChatAdapter extends EventEmitter {
   private state: LocalChatConnectionState = "idle";
   private currentUrl = "";
   private connectingPromise: Promise<void> | null = null;
-  private messages: LocalChatMessageEvent[] = [];
+  private activeSession: LocalChatSessionOptions = {
+    sessionId: DEFAULT_SESSION_ID,
+    userId: DEFAULT_USER_ID,
+    userName: DEFAULT_USER_NAME,
+  };
+  private messagesBySession = new Map<string, LocalChatMessageEvent[]>();
   private pendingRequests = new Map<string, PendingRequest>();
   private requestCounter = 0;
   private lastUserName = DEFAULT_USER_NAME;
-  private runtimeSessionId: string | null = null;
+  private runtimeSessionIds = new Map<string, string>();
   private monitorSessionId: string | null = null;
 
   constructor(
@@ -656,16 +682,23 @@ export class LocalChatAdapter extends EventEmitter {
     return this.state;
   }
 
-  listMessages(): LocalChatMessageEvent[] {
-    return [...this.messages];
+  listMessages(request?: LocalChatConnectRequest): LocalChatMessageEvent[] {
+    const sessionId = normalizeSessionId(request?.sessionId);
+    return [...(this.messagesBySession.get(sessionId) ?? [])];
   }
 
-  async connect(_request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> {
-    if (this.socket?.readyState === WebSocket.OPEN) {
+  async connect(request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> {
+    const session = this.resolveSessionOptions(request);
+    this.activeSession = session;
+    if (this.isSocketOpen()) {
+      await this.initializeSession(session);
       return this.state;
     }
     if (this.connectingPromise) {
       await this.connectingPromise;
+      if (this.isSocketOpen()) {
+        await this.initializeSession(session);
+      }
       return this.state;
     }
 
@@ -679,7 +712,7 @@ export class LocalChatAdapter extends EventEmitter {
   disconnect(): void {
     const socket = this.socket;
     this.socket = null;
-    this.runtimeSessionId = null;
+    this.runtimeSessionIds.clear();
     this.monitorSessionId = null;
     this.rejectPendingRequests(new Error("简单聊聊连接已关闭"));
     if (socket) {
@@ -693,7 +726,8 @@ export class LocalChatAdapter extends EventEmitter {
   }
 
   async send(request: LocalChatSendRequest): Promise<LocalChatMessageEvent> {
-    await this.connect();
+    const session = this.resolveSessionOptions(request);
+    await this.connect(session);
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       throw new Error("简单聊聊未连接");
@@ -711,9 +745,10 @@ export class LocalChatAdapter extends EventEmitter {
     const displayContent = [content, imagePlaceholder(images), emojiPlaceholder(emojis), voicePlaceholder(voices), filePlaceholder(files)]
       .filter(Boolean)
       .join("\n");
-    this.lastUserName = request.userName?.trim() || DEFAULT_USER_NAME;
+    this.lastUserName = session.userName;
     const message: LocalChatMessageEvent = {
       id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      sessionId: session.sessionId,
       role: "user",
       content: displayContent,
       timestamp: Date.now(),
@@ -728,17 +763,17 @@ export class LocalChatAdapter extends EventEmitter {
       op: "call",
       domain: "chat",
       method: "message.send",
-      session: SESSION_ID,
+      session: session.sessionId,
       data: {
         content,
         images: imagePayload(images),
         emojis: imagePayload(emojis),
         files: filePayload(files),
         voices: voicePayload(voices),
-        user_name: this.lastUserName,
+        user_name: session.userName,
       },
     });
-    this.emitMessage(message);
+    this.emitMessage(message, session.sessionId);
     return message;
   }
 
@@ -750,6 +785,18 @@ export class LocalChatAdapter extends EventEmitter {
   onEvent(callback: (event: LocalChatEvent) => void): () => void {
     this.on("event", callback);
     return () => this.off("event", callback);
+  }
+
+  private resolveSessionOptions(request?: Partial<LocalChatConnectRequest & LocalChatSendRequest>): LocalChatSessionOptions {
+    return {
+      sessionId: normalizeSessionId(request?.sessionId),
+      userId: normalizeUserId(request?.userId),
+      userName: normalizeUserName(request?.userName ?? this.lastUserName),
+    };
+  }
+
+  private isSocketOpen(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN;
   }
 
   private async openSocket(): Promise<void> {
@@ -785,7 +832,7 @@ export class LocalChatAdapter extends EventEmitter {
       socket.on("open", () => {
         this.socket = socket;
         this.setState("connected");
-        void this.initializeSession().then(() => finish()).catch(finish);
+        void this.initializeSession(this.activeSession).then(() => finish()).catch(finish);
       });
       socket.on("message", (data) => this.handleSocketMessage(data));
       socket.on("error", () => {
@@ -802,21 +849,25 @@ export class LocalChatAdapter extends EventEmitter {
     });
   }
 
-  private async initializeSession(): Promise<void> {
+  private async initializeSession(session: LocalChatSessionOptions = this.activeSession): Promise<void> {
+    this.activeSession = session;
     this.monitorSessionId = null;
     const response = asRecord(await this.sendRequest({
       op: "call",
       domain: "chat",
       method: "session.open",
-      session: SESSION_ID,
+      session: session.sessionId,
       data: {
-        user_id: DEFAULT_USER_ID,
-        user_name: this.lastUserName,
+        user_id: session.userId,
+        user_name: session.userName,
         platform: "webui",
         restore: true,
       },
     }));
-    this.runtimeSessionId = asString(response?.session_id) ?? null;
+    const runtimeSessionId = asString(response?.session_id);
+    if (runtimeSessionId) {
+      this.runtimeSessionIds.set(session.sessionId, runtimeSessionId);
+    }
     await this.sendRequest({
       op: "subscribe",
       domain: "maisaka_monitor",
@@ -918,8 +969,9 @@ export class LocalChatAdapter extends EventEmitter {
       return;
     }
 
-    if (domain === "chat" && event.session === SESSION_ID) {
-      this.handleChatEvent(eventName, data);
+    const eventSessionId = asString(event.session);
+    if (domain === "chat" && eventSessionId) {
+      this.handleChatEvent(eventName, data, eventSessionId);
       return;
     }
     if (domain === "maisaka_monitor" && this.isLocalPlannerEvent(data)) {
@@ -932,7 +984,7 @@ export class LocalChatAdapter extends EventEmitter {
     if (!sessionId) {
       return false;
     }
-    if (this.runtimeSessionId === sessionId || this.monitorSessionId === sessionId) {
+    if ([...this.runtimeSessionIds.values()].includes(sessionId) || this.monitorSessionId === sessionId) {
       return true;
     }
 
@@ -940,7 +992,7 @@ export class LocalChatAdapter extends EventEmitter {
     const userId = asString(data.user_id);
     const groupId = asString(data.group_id);
     const isGroupChat = data.is_group_chat === true;
-    if (platform === "webui" && userId === DEFAULT_WEBUI_USER_ID && !isGroupChat && !groupId) {
+    if (platform === "webui" && userId === webuiUserId(this.activeSession.userId) && !isGroupChat && !groupId) {
       this.monitorSessionId = sessionId;
       return true;
     }
@@ -948,7 +1000,7 @@ export class LocalChatAdapter extends EventEmitter {
     return false;
   }
 
-  private handleChatEvent(eventName: string, data: Record<string, unknown>): void {
+  private handleChatEvent(eventName: string, data: Record<string, unknown>, sessionId: string): void {
     if (eventName === "typing" || eventName === "pong" || eventName === "virtual_identity_set") {
       return;
     }
@@ -958,7 +1010,7 @@ export class LocalChatAdapter extends EventEmitter {
       for (const item of history) {
         const message = historyMessageToLocal(asRecord(item) ?? {});
         if (message) {
-          this.emitMessage(message);
+          this.emitMessage({ ...message, sessionId }, sessionId);
         }
       }
       return;
@@ -985,7 +1037,7 @@ export class LocalChatAdapter extends EventEmitter {
     const content = parsed.content;
     if (
       role === "user"
-      && this.messages.some((message) =>
+      && (this.messagesBySession.get(sessionId) ?? []).some((message) =>
         message.role === "user"
         && message.content === content
         && Date.now() - message.timestamp < 10_000
@@ -995,6 +1047,7 @@ export class LocalChatAdapter extends EventEmitter {
     }
     this.emitMessage({
       id: asString(data.message_id) ?? `${eventName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      sessionId,
       role,
       content,
       timestamp: normalizeTimestamp(data.timestamp),
@@ -1003,11 +1056,11 @@ export class LocalChatAdapter extends EventEmitter {
       emojis,
       files,
       voices,
-      quote: this.localQuoteForMessage(data, parsed.hasReplyPrefix),
-    });
+      quote: this.localQuoteForMessage(data, parsed.hasReplyPrefix, sessionId),
+    }, sessionId);
   }
 
-  private localQuoteForMessage(data: Record<string, unknown>, hasReplyPrefix: boolean): LocalChatMessageQuote | undefined {
+  private localQuoteForMessage(data: Record<string, unknown>, hasReplyPrefix: boolean, sessionId: string): LocalChatMessageQuote | undefined {
     const explicitQuote = quoteFromRecord(data);
     if (explicitQuote) {
       return explicitQuote;
@@ -1015,7 +1068,8 @@ export class LocalChatAdapter extends EventEmitter {
     if (!hasReplyPrefix) {
       return undefined;
     }
-    const latestUserMessage = [...this.messages].reverse().find((message) => message.role === "user" && message.content.trim());
+    const latestUserMessage = [...(this.messagesBySession.get(sessionId) ?? [])].reverse()
+      .find((message) => message.role === "user" && message.content.trim());
     if (!latestUserMessage) {
       return undefined;
     }
@@ -1038,6 +1092,7 @@ export class LocalChatAdapter extends EventEmitter {
 
     this.emitMessage({
       id: `planner-${asString(data.session_id) ?? "session"}-${asString(data.cycle_id) ?? Date.now().toString()}`,
+      sessionId: this.activeSession.sessionId,
       role: "system",
       content,
       timestamp: normalizeTimestamp(data.timestamp),
@@ -1045,22 +1100,26 @@ export class LocalChatAdapter extends EventEmitter {
       kind: "planner",
       final: eventName === "planner.finalized",
       plannerTools: plannerTools(data),
-    });
+    }, this.activeSession.sessionId);
   }
 
-  private emitMessage(message: LocalChatMessageEvent): void {
-    const existingIndex = this.messages.findIndex((item) => item.id === message.id);
+  private emitMessage(message: LocalChatMessageEvent, sessionId = message.sessionId ?? this.activeSession.sessionId): void {
+    const sessionMessages = this.messagesBySession.get(sessionId) ?? [];
+    const eventMessage = { ...message, sessionId };
+    const existingIndex = sessionMessages.findIndex((item) => item.id === eventMessage.id);
+    let nextMessages: LocalChatMessageEvent[];
     if (existingIndex >= 0) {
-      this.messages = this.messages.map((item, index) => index === existingIndex ? { ...item, ...message } : item);
+      nextMessages = sessionMessages.map((item, index) => index === existingIndex ? { ...item, ...eventMessage } : item);
     } else {
-      this.messages = [...this.messages, message].slice(-MESSAGE_HISTORY_LIMIT);
+      nextMessages = [...sessionMessages, eventMessage].slice(-MESSAGE_HISTORY_LIMIT);
     }
-    this.emitEvent(message);
+    this.messagesBySession.set(sessionId, nextMessages);
+    this.emitEvent(eventMessage);
   }
 
   private setState(state: LocalChatConnectionState): void {
     this.state = state;
-    this.emitEvent({ type: "state", state, url: this.currentUrl });
+    this.emitEvent({ type: "state", state, sessionId: this.activeSession.sessionId, url: this.currentUrl });
   }
 
   private emitEvent(event: LocalChatEvent): void {

@@ -58,6 +58,7 @@ import type {
   MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
+  MaiBotUpdateInfo,
   ManagedPythonPackageName,
   ModuleBranchOption,
   ModuleRuntimeVersions,
@@ -143,8 +144,8 @@ const LAUNCHER_SETTING_FILES = [
 const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
 const REMOVE_RETRY_OPTIONS = { recursive: true, force: true, maxRetries: 8, retryDelay: 250 } as const;
-const NORMAL_MINIMUM_SIZE = { width: 1080, height: 720 };
-const NORMAL_DEFAULT_SIZE = { width: 1280, height: 820 };
+const NORMAL_MINIMUM_SIZE = { width: 1000, height: 680 };
+const NORMAL_DEFAULT_SIZE = { width: 1180, height: 760 };
 const NORMAL_RESTORE_MARGIN = 48;
 const FLOATING_BALL_SIZE = { width: 96, height: 96 };
 const FLOATING_PANEL_SIZE = { width: 380, height: 520 };
@@ -166,6 +167,9 @@ const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKe
 const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
 const ONEKEY_RELEASES_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases?per_page=100";
 const ONEKEY_RELEASE_SOURCE = "Mai-with-u/MaiBotOneKey";
+const MAIBOT_RELEASES_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBot/releases?per_page=100";
+const MAIBOT_COMMITS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBot/commits";
+const MAIBOT_RELEASE_SOURCE = "Mai-with-u/MaiBot";
 const MAIBOT_UPDATE_SELECTION_FILE = "maibot-update-selection.json";
 
 interface GitHubReleaseAsset {
@@ -182,6 +186,21 @@ interface GitHubReleasePayload {
   prerelease?: unknown;
   draft?: unknown;
   assets?: unknown;
+}
+
+interface GitHubCommitPayload {
+  sha?: unknown;
+  html_url?: unknown;
+  commit?: {
+    message?: unknown;
+    author?: {
+      name?: unknown;
+      date?: unknown;
+    };
+  };
+  author?: {
+    login?: unknown;
+  };
 }
 
 interface LauncherUpdateInternalInfo extends LauncherUpdateInfo {
@@ -589,6 +608,14 @@ function releaseTagToVersion(tag: string | undefined): string | undefined {
   return tag?.trim().replace(/^v/iu, "") || undefined;
 }
 
+function versionAsTag(version: string | undefined): string | undefined {
+  const trimmed = version?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return /^v/iu.test(trimmed) ? trimmed : `v${trimmed}`;
+}
+
 function sanitizeDownloadFileName(value: string): string {
   const sanitized = basename(value)
     .replace(/[<>:"/\\|?*\u0000-\u001F]/gu, "-")
@@ -655,6 +682,181 @@ async function fetchLauncherReleaseNotesInRange(currentTag: string, latestTag: s
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function releaseBody(release: GitHubReleasePayload): string | undefined {
+  return typeof release.body === "string" && release.body.trim()
+    ? release.body.trim()
+    : undefined;
+}
+
+function releaseTitle(release: GitHubReleasePayload, fallbackTag: string): string {
+  return typeof release.name === "string" && release.name.trim() ? release.name.trim() : fallbackTag;
+}
+
+async function fetchMaiBotReleases(): Promise<GitHubReleasePayload[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(MAIBOT_RELEASES_API_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+    }
+
+    const releases = (await response.json()) as unknown;
+    if (!Array.isArray(releases)) {
+      return [];
+    }
+
+    return releases.filter((release): release is GitHubReleasePayload => (
+      Boolean(release && typeof release === "object")
+      && release.draft !== true
+      && typeof release.tag_name === "string"
+    ));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function releaseNotesInRange(
+  releases: GitHubReleasePayload[],
+  currentTag: string | undefined,
+  targetTag: string,
+): string | undefined {
+  const notes = releases
+    .filter((release) => {
+      const tag = String(release.tag_name);
+      return (
+        (!currentTag || compareVersionTags(tag, currentTag) > 0)
+        && compareVersionTags(tag, targetTag) <= 0
+      );
+    })
+    .sort((left, right) => compareVersionTags(String(right.tag_name), String(left.tag_name)))
+    .map((release) => {
+      const tag = String(release.tag_name);
+      return `## ${releaseTitle(release, tag)}\n\n${releaseBody(release) ?? "此版本没有填写更新说明。"}`;
+    });
+
+  return notes.length > 1 ? notes.join("\n\n---\n\n") : undefined;
+}
+
+function formatCommitDate(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    return "未知时间";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.trim();
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function commitSubject(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    return "无提交说明";
+  }
+  return value.trim().split(/\r?\n/u)[0]?.trim() || "无提交说明";
+}
+
+function formatBranchCommitNotes(branch: string, commits: GitHubCommitPayload[]): string | undefined {
+  const items = commits
+    .filter((commit) => typeof commit.sha === "string" && commit.sha.trim())
+    .slice(0, 10)
+    .map((commit) => {
+      const sha = String(commit.sha);
+      const shortSha = sha.slice(0, 7);
+      const url = typeof commit.html_url === "string" && commit.html_url.trim()
+        ? commit.html_url.trim()
+        : `https://github.com/Mai-with-u/MaiBot/commit/${encodeURIComponent(sha)}`;
+      const author = typeof commit.author?.login === "string" && commit.author.login.trim()
+        ? commit.author.login.trim()
+        : typeof commit.commit?.author?.name === "string" && commit.commit.author.name.trim()
+          ? commit.commit.author.name.trim()
+          : "未知作者";
+      const date = formatCommitDate(commit.commit?.author?.date);
+      return `- [\`${shortSha}\`](${url}) ${commitSubject(commit.commit?.message)}\n  ${author} / ${date}`;
+    });
+
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  return `## dev 最新提交\n\n分支：\`${branch}\`\n\n${items.join("\n\n")}`;
+}
+
+async function fetchMaiBotBranchCommitNotes(branch: string): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const url = new URL(MAIBOT_COMMITS_API_URL);
+  url.searchParams.set("sha", branch);
+  url.searchParams.set("per_page", "10");
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub Commits returned HTTP ${response.status}`);
+    }
+
+    const commits = (await response.json()) as unknown;
+    if (!Array.isArray(commits)) {
+      return undefined;
+    }
+
+    return formatBranchCommitNotes(branch, commits.filter((commit): commit is GitHubCommitPayload => (
+      Boolean(commit && typeof commit === "object")
+    )));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchMaiBotUpdateInfo(
+  currentVersion: string | undefined,
+  target: ModuleUpdateTarget,
+): Promise<MaiBotUpdateInfo> {
+  const currentTag = versionAsTag(currentVersion);
+  const targetName = target.name.trim();
+  const releaseUrlBase = "https://github.com/Mai-with-u/MaiBot";
+
+  if (target.type === "branch") {
+    return {
+      currentVersion,
+      currentTag,
+      target,
+      releaseName: `分支 ${targetName}`,
+      releaseUrl: `${releaseUrlBase}/tree/${encodeURIComponent(targetName)}`,
+      releaseNotes: /^dev$/iu.test(targetName) ? await fetchMaiBotBranchCommitNotes(targetName) : undefined,
+      available: true,
+      checkedAt: Date.now(),
+      source: MAIBOT_RELEASE_SOURCE,
+    };
+  }
+
+  const targetTag = targetName;
+  const releases = await fetchMaiBotReleases();
+  const targetRelease = releases.find((release) => String(release.tag_name) === targetTag);
+  const releaseNotes = releaseNotesInRange(releases, currentTag, targetTag)
+    ?? (targetRelease ? releaseBody(targetRelease) : undefined);
+
+  return {
+    currentVersion,
+    currentTag,
+    target,
+    targetTag,
+    releaseName: targetRelease ? releaseTitle(targetRelease, targetTag) : targetTag,
+    releaseUrl: typeof targetRelease?.html_url === "string"
+      ? targetRelease.html_url
+      : `${releaseUrlBase}/releases/tag/${encodeURIComponent(targetTag)}`,
+    releaseNotes,
+    available: currentTag ? compareVersionTags(targetTag, currentTag) > 0 : true,
+    checkedAt: Date.now(),
+    source: MAIBOT_RELEASE_SOURCE,
+  };
 }
 
 async function fetchLauncherUpdateInfo(currentVersion: string): Promise<LauncherUpdateInternalInfo> {
@@ -1330,7 +1532,7 @@ export function registerAppIpc({
       window.setAlwaysOnTop(false);
       restoreNormalWindowChrome(window);
       if (shouldRestoreBounds) {
-        window.setBounds(normalBounds ?? { x: 80, y: 80, width: 1280, height: 820 }, true);
+        window.setBounds(normalBounds ?? { x: 80, y: 80, width: 1180, height: 760 }, true);
       }
       normalBounds = null;
       window.show();
@@ -1926,6 +2128,21 @@ export function registerAppIpc({
     logStore.append("desktop", "system", `Startup agreements confirmed, changed ${result.changedFiles.length} files.`);
     await broadcastSnapshot();
     return result;
+  });
+
+  ipcMain.handle("modules:checkMaibotUpdate", async (_event, target: ModuleUpdateTarget): Promise<MaiBotUpdateInfo> => {
+    if (!target || typeof target.name !== "string" || !target.name.trim()) {
+      throw new Error("没有可用的 MaiBot 目标版本");
+    }
+    if (target.type !== "tag" && target.type !== "branch") {
+      throw new Error("MaiBot 目标版本类型不正确");
+    }
+
+    const localVersions = await readLocalModuleVersions();
+    return fetchMaiBotUpdateInfo(localVersions.maibotLocal, {
+      type: target.type,
+      name: target.name.trim(),
+    });
   });
 
   ipcMain.handle("modules:updateMaibot", async (_event, target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> => {
@@ -2768,8 +2985,8 @@ export function registerAppIpc({
     return localChatAdapter.send(request);
   });
 
-  ipcMain.handle("localChat:listMessages", async (): Promise<LocalChatMessageEvent[]> => {
-    return localChatAdapter.listMessages();
+  ipcMain.handle("localChat:listMessages", async (_event, request?: LocalChatConnectRequest): Promise<LocalChatMessageEvent[]> => {
+    return localChatAdapter.listMessages(request);
   });
 
   ipcMain.handle("desktop:openLogsDirectory", async (): Promise<void> => {

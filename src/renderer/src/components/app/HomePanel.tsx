@@ -1,4 +1,5 @@
 import {
+  ArrowUp,
   ArrowRight,
   ChevronDown,
   CheckCircle2,
@@ -40,6 +41,7 @@ import type {
   LocalChatEvent,
   LocalChatMessageEvent,
   MaiBotStatisticSummary,
+  MaiBotUpdateInfo,
   ModuleBranchOption,
   ModuleSourceConfig,
   ModuleSourcePreset,
@@ -99,6 +101,7 @@ import { QuickActionsPanel } from "./QuickActionsPanel";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 type MaiBotUpdateChannel = "stable" | "other";
+type MaiBotOtherTargetMode = "tag" | "dev";
 type CompactChatState = "idle" | "connecting" | "connected" | "error";
 type MaiBotVersionFetchProgress = {
   value: number;
@@ -108,6 +111,9 @@ type MaiBotVersionFetchProgress = {
 };
 
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
+const WEBUI_CHAT_SESSION_ID = "webui-default";
+const WEBUI_CHAT_USER_ID_STORAGE_KEY = "maibot-onekey.webui-chat-user-id";
+const WEBUI_CHAT_USER_NAME_STORAGE_KEY = "maibot-onekey.webui-chat-user-name";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
 const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
 const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
@@ -312,7 +318,7 @@ function compareVersionText(left: string | undefined, right: string | undefined)
       return numberDiff;
     }
   }
-  return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
+  return 0;
 }
 
 function messageFromError(error: unknown): string {
@@ -340,11 +346,13 @@ function DetailRow({
   label,
   value,
   className,
+  valueClassName,
   retro = false,
 }: {
   label: string;
   value: string | undefined;
   className?: string;
+  valueClassName?: string;
   retro?: boolean;
 }): React.JSX.Element {
   return (
@@ -354,6 +362,7 @@ function DetailRow({
         className={cn(
           "min-w-0 truncate",
           retro ? "retro-value text-right" : "font-mono font-semibold",
+          valueClassName,
         )}
         title={value}
       >
@@ -367,18 +376,20 @@ function ChoiceSwitch<T extends string>({
   value,
   options,
   onChange,
+  columnsClassName,
   retro = false,
 }: {
   value: T;
   options: Array<{ value: T; label: string; version: string | undefined }>;
   onChange: (value: T) => void;
+  columnsClassName?: string;
   retro?: boolean;
 }): React.JSX.Element {
   return (
     <div
       className={cn(
         retro ? "retro-control grid gap-2 p-1" : "grid gap-2 rounded-lg border border-border bg-muted/30 p-1",
-        options.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
+        columnsClassName ?? (options.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3"),
       )}
     >
       {options.map((option) => {
@@ -387,7 +398,7 @@ function ChoiceSwitch<T extends string>({
         return (
           <button
             className={cn(
-              "grid min-h-14 min-w-0 gap-1 px-3 py-2 text-left text-xs transition-colors",
+              "grid min-h-8 min-w-0 gap-0.5 px-3 py-1 text-left text-xs transition-colors",
               retro ? "rounded-sm border border-transparent" : "rounded-md",
               selected ? cn("bg-primary text-primary-foreground", !retro && "shadow-sm") : "text-foreground hover:bg-muted",
               disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
@@ -398,7 +409,7 @@ function ChoiceSwitch<T extends string>({
             type="button"
           >
             <span className="font-medium">{option.label}</span>
-            <span className={cn("truncate font-mono text-[11px]", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
+            <span className={cn("truncate font-mono text-xs font-semibold", selected ? "text-primary-foreground/80" : "text-primary")}>
               {valueOrFallback(option.version)}
             </span>
           </button>
@@ -410,14 +421,22 @@ function ChoiceSwitch<T extends string>({
 
 function LocalChatQuickCard({
   active,
+  disabledReason,
   maibotService,
   onOpenFull,
   retro,
+  sessionId,
+  userId,
+  userName,
 }: {
   active: boolean;
+  disabledReason?: string;
   maibotService: ServiceDescriptor | undefined;
   onOpenFull: () => void;
   retro: boolean;
+  sessionId?: string;
+  userId?: string;
+  userName?: string;
 }): React.JSX.Element {
   const [state, setState] = useState<CompactChatState>("idle");
   const [messages, setMessages] = useState<LocalChatMessageEvent[]>([]);
@@ -432,6 +451,12 @@ function LocalChatQuickCard({
       setError("桌面桥未就绪");
       return;
     }
+    if (disabledReason) {
+      setState("idle");
+      setMessages([]);
+      setError(disabledReason);
+      return;
+    }
     if (maibotService?.status !== "running") {
       setState("idle");
       setError(null);
@@ -441,9 +466,10 @@ function LocalChatQuickCard({
     setState("connecting");
     setError(null);
     try {
-      const nextState = await window.maibotDesktop.localChat.connect();
+      const request = { sessionId, userId, userName };
+      const nextState = await window.maibotDesktop.localChat.connect(request);
       setState(nextState);
-      const history = await window.maibotDesktop.localChat.listMessages();
+      const history = await window.maibotDesktop.localChat.listMessages(request);
       setMessages(history.filter((message) => message.kind !== "planner").slice(-12));
       if (nextState !== "connected") {
         setError("MaiBot Core 正在启动或 WebUI 聊天服务还在加载，请稍等片刻后重试。");
@@ -452,7 +478,7 @@ function LocalChatQuickCard({
       setState("error");
       setError(messageFromError(nextError));
     }
-  }, [maibotService?.status]);
+  }, [disabledReason, maibotService?.status, sessionId, userId, userName]);
 
   useEffect(() => {
     if (!active) {
@@ -461,10 +487,16 @@ function LocalChatQuickCard({
 
     const unsubscribe = window.maibotDesktop?.localChat.onEvent((event: LocalChatEvent) => {
       if ("type" in event) {
+        if (sessionId && event.sessionId && event.sessionId !== sessionId) {
+          return;
+        }
         setState(event.state);
         if (event.state === "connected") {
           setError(null);
         }
+        return;
+      }
+      if (sessionId && event.sessionId && event.sessionId !== sessionId) {
         return;
       }
       if (event.kind !== "planner") {
@@ -488,8 +520,8 @@ function LocalChatQuickCard({
     setSending(true);
     setError(null);
     try {
-      const userName = localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? "本地用户";
-      const sent = await window.maibotDesktop.localChat.send({ content, userName });
+      const resolvedUserName = userName ?? localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? "本地用户";
+      const sent = await window.maibotDesktop.localChat.send({ content, sessionId, userId, userName: resolvedUserName });
       setMessages((current) => mergeLocalChatMessage(current, sent));
     } catch (nextError) {
       setDraft(content);
@@ -498,7 +530,7 @@ function LocalChatQuickCard({
     } finally {
       setSending(false);
     }
-  }, [connected, draft, sending]);
+  }, [connected, draft, sending, sessionId, userId, userName]);
 
   const visibleMessages = messages
     .map((message) => ({ ...message, text: localChatText(message) }))
@@ -507,8 +539,8 @@ function LocalChatQuickCard({
 
   return (
     <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
-      <div className={cn("mb-3 flex items-center gap-2", retro ? "justify-between" : "justify-end")}>
-        {retro ? <p className="retro-title text-2xl text-foreground">聊聊</p> : null}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className={cn("text-foreground", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>聊聊</p>
         <div className="flex shrink-0 items-center gap-2">
           <Button className="size-7" onClick={onOpenFull} size="icon" title="展开随便聊聊" variant="secondary">
             <Maximize2 className="size-3.5" />
@@ -644,6 +676,7 @@ function ServiceSummary({
   serviceControls,
   webuiAction,
   adapterAction,
+  stoppedStatusAfterTitle = false,
   retro,
 }: {
   icon: React.ReactNode;
@@ -666,8 +699,11 @@ function ServiceSummary({
     label: string;
     onClick: () => void;
   };
+  stoppedStatusAfterTitle?: boolean;
   retro: boolean;
 }): React.JSX.Element {
+  const showStoppedStatusAfterTitle = retro && stoppedStatusAfterTitle && service?.status === "stopped";
+
   return (
     <div className={cn("grid w-full min-w-0 gap-3", retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -678,7 +714,14 @@ function ServiceSummary({
             </span>
           ) : null}
           <div className="min-w-0">
-            <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>{title ?? service?.name ?? "未知服务"}</p>
+            <p className={cn("flex min-w-0 items-baseline gap-2", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>
+              <span className="min-w-0 truncate">{title ?? service?.name ?? "未知服务"}</span>
+              {showStoppedStatusAfterTitle ? (
+                <span className="shrink-0 text-[inherit] font-extrabold italic leading-[inherit] text-destructive">
+                  未启动
+                </span>
+              ) : null}
+            </p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -692,7 +735,7 @@ function ServiceSummary({
               service={service}
             />
           ) : null}
-          {service ? <ServiceStatusText status={service.status} /> : null}
+          {service && !showStoppedStatusAfterTitle ? <ServiceStatusText status={service.status} /> : null}
         </div>
       </div>
       {(webuiAction || adapterAction) ? (
@@ -795,9 +838,7 @@ function LauncherUpdateCard({
 
   return (
     <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
-      {retro ? (
-        <p className="retro-title mb-3 text-2xl text-foreground">一键包信息</p>
-      ) : null}
+      <p className={cn("mb-3 text-foreground", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>一键包信息</p>
       <div
         className={cn(
           "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
@@ -2126,6 +2167,7 @@ export function HomePanel({
   onStartService,
   onStopService,
   serviceActionBusy,
+  webuiChatIdentity,
 }: {
   active: boolean;
   snapshot: DesktopSnapshot;
@@ -2138,11 +2180,18 @@ export function HomePanel({
   onStartService: (id: ServiceId) => void;
   onStopService: (id: ServiceId) => void;
   serviceActionBusy: string | null;
+  webuiChatIdentity?: {
+    userId?: string;
+    userName?: string;
+  };
 }): React.JSX.Element {
   const [updateDialog, setUpdateDialog] = useState<"launcher" | "maibot" | "dashboard" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
+  const [maibotUpdateInfo, setMaibotUpdateInfo] = useState<MaiBotUpdateInfo | null>(null);
+  const [maibotUpdateInfoLoading, setMaibotUpdateInfoLoading] = useState(false);
+  const [maibotUpdateInfoError, setMaibotUpdateInfoError] = useState<string | null>(null);
   const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const [mascotIntroOpen, setMascotIntroOpen] = useState(false);
@@ -2160,7 +2209,7 @@ export function HomePanel({
   const [maibotTags, setMaibotTags] = useState<ModuleTagOption[]>([]);
   const [maibotRefsLoading, setMaibotRefsLoading] = useState(false);
   const [maibotVersionFetchProgress, setMaibotVersionFetchProgress] = useState<MaiBotVersionFetchProgress | null>(null);
-  const [selectedMaiBotBranch, setSelectedMaiBotBranch] = useState("main");
+  const [maibotOtherTargetMode, setMaibotOtherTargetMode] = useState<MaiBotOtherTargetMode>("tag");
   const [selectedMaiBotTag, setSelectedMaiBotTag] = useState("");
   const [homeContentLayout, setHomeContentLayout] = useState<HomeContentEntry[]>(() => readHomeContentLayout());
   const [homeLayoutEditing, setHomeLayoutEditing] = useState(false);
@@ -2168,13 +2217,15 @@ export function HomePanel({
   const [homeDragOffset, setHomeDragOffset] = useState<{ x: number; y: number } | null>(null);
   const [homeInsertIndicator, setHomeInsertIndicator] = useState<{ area: HomeContentArea; index: number } | null>(null);
   const homeDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const maibotUpdateInfoRequestRef = useRef(0);
   const appearance = useAppearance();
   const useRetroHome = appearance.mode === "future-retro";
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
-  const useNativeLocalChat = snapshot.launcherUiSettings?.chatPageMode === "native";
-  const maibotWebuiReady = maibot?.status === "running" && maibot.health === "ready";
+  const useWebuiChatPreview = snapshot.launcherUiSettings?.chatPageMode !== "native";
+  const webuiPreviewUserId = webuiChatIdentity?.userId ?? localStorage.getItem(WEBUI_CHAT_USER_ID_STORAGE_KEY) ?? undefined;
+  const webuiPreviewUserName = webuiChatIdentity?.userName ?? localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined;
   const adapterPluginId = adapterPluginIdForBackend(snapshot.initState.qqBackend ?? "napcat");
   const adapterName = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma 适配器" : "NapCat 适配器";
   const qqBackend = snapshot.initState.qqBackend ?? "napcat";
@@ -2193,15 +2244,40 @@ export function HomePanel({
   const launcherUpdateAvailable =
     launcherUpdateInfo?.available ?? (compareVersionText(launcherLatestTag, launcherCurrentTag) > 0);
   const maibotSelectedTarget = formatMaiBotSelectedTarget(snapshot);
+  const availableMaiBotBranches = useMemo(
+    () => new Set(maibotBranches.map((branch) => branch.name)),
+    [maibotBranches],
+  );
+  const maibotHistoryTags = useMemo(
+    () => maibotTags.filter((tag) => !/^Easy/iu.test(tag.name)),
+    [maibotTags],
+  );
+  const defaultMaiBotHistoryTag = maibotHistoryTags[0]?.name;
+  const selectedMaiBotHistoryTag = selectedMaiBotTag || defaultMaiBotHistoryTag;
+  const selectedMaiBotTarget = useMemo<ModuleUpdateTarget | undefined>(() => (
+    maibotChannel === "stable" && snapshot.moduleVersions.maibotLatestStableTag
+      ? { type: "tag", name: snapshot.moduleVersions.maibotLatestStableTag }
+      : maibotChannel === "other" && maibotOtherTargetMode === "tag" && selectedMaiBotHistoryTag
+        ? { type: "tag", name: selectedMaiBotHistoryTag }
+        : maibotChannel === "other" && maibotOtherTargetMode === "dev"
+          ? { type: "branch", name: "dev" }
+          : undefined
+  ), [
+    maibotChannel,
+    maibotOtherTargetMode,
+    selectedMaiBotHistoryTag,
+    snapshot.moduleVersions.maibotLatestStableTag,
+  ]);
+  const maibotTargetIsCurrent =
+    selectedMaiBotTarget?.type === "tag"
+    && Boolean(snapshot.moduleVersions.maibotLocal)
+    && compareVersionText(selectedMaiBotTarget.name, versionAsTag(snapshot.moduleVersions.maibotLocal)) === 0;
 
   const maibotTargets: Record<MaiBotUpdateChannel, string | undefined> = {
     stable: snapshot.moduleVersions.maibotLatestStableTag,
-    other: selectedMaiBotTag
-      ? `Tag ${selectedMaiBotTag}`
-      : selectedMaiBotBranch
-        ? `分支 ${selectedMaiBotBranch}`
-        : undefined,
+    other: maibotOtherTargetMode === "dev" ? "Dev 最新内容" : selectedMaiBotHistoryTag,
   };
+  const maibotDevBranchAvailable = maibotBranches.length === 0 || availableMaiBotBranches.has("dev");
   const dashboardTarget = snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi;
 
   useEffect(() => {
@@ -2319,6 +2395,44 @@ export function HomePanel({
     }
   }, [moduleSourcePreset]);
 
+  const checkMaiBotUpdateInfo = useCallback(async (target: ModuleUpdateTarget | undefined = selectedMaiBotTarget) => {
+    const requestId = maibotUpdateInfoRequestRef.current + 1;
+    maibotUpdateInfoRequestRef.current = requestId;
+
+    if (!window.maibotDesktop?.modules || !target) {
+      setMaibotUpdateInfo(null);
+      setMaibotUpdateInfoError(null);
+      setMaibotUpdateInfoLoading(false);
+      return;
+    }
+
+    setMaibotUpdateInfoLoading(true);
+    setMaibotUpdateInfoError(null);
+    try {
+      const update = await window.maibotDesktop.modules.checkMaiBotUpdate(target);
+      if (maibotUpdateInfoRequestRef.current === requestId) {
+        setMaibotUpdateInfo(update);
+      }
+    } catch (nextError) {
+      if (maibotUpdateInfoRequestRef.current === requestId) {
+        setMaibotUpdateInfo(null);
+        setMaibotUpdateInfoError(messageFromError(nextError));
+      }
+    } finally {
+      if (maibotUpdateInfoRequestRef.current === requestId) {
+        setMaibotUpdateInfoLoading(false);
+      }
+    }
+  }, [selectedMaiBotTarget]);
+
+  useEffect(() => {
+    if (updateDialog !== "maibot") {
+      return;
+    }
+
+    void checkMaiBotUpdateInfo();
+  }, [checkMaiBotUpdateInfo, updateDialog]);
+
   const loadMaiBotRefs = useCallback(async () => {
     if (!window.maibotDesktop?.modules || maibotRefsLoading) {
       return;
@@ -2344,7 +2458,7 @@ export function HomePanel({
 
       setMaibotVersionFetchProgress({
         value: 38,
-        label: "获取远端版本",
+        label: "获取版本信息",
         detail: "正在读取 MaiBot 远端 Tag 和 Dashboard 版本。",
         tone: "loading",
       });
@@ -2376,14 +2490,9 @@ export function HomePanel({
       ]);
       setMaibotBranches(branches);
       setMaibotTags(tags);
-      setSelectedMaiBotBranch((current) => {
-        if (current && branches.some((branch) => branch.name === current)) {
-          return current;
-        }
-        return branches.find((branch) => branch.name === "main")?.name ?? branches[0]?.name ?? "";
-      });
+      const historyTags = tags.filter((tag) => !/^Easy/iu.test(tag.name));
       setSelectedMaiBotTag((current) => (
-        current && tags.some((tag) => tag.name === current) ? current : ""
+        current && historyTags.some((tag) => tag.name === current) ? current : historyTags[0]?.name ?? ""
       ));
       setMaibotVersionFetchProgress({
         value: 100,
@@ -2405,7 +2514,6 @@ export function HomePanel({
       });
       setMaibotBranches([]);
       setMaibotTags([]);
-      setSelectedMaiBotBranch("");
       setSelectedMaiBotTag("");
     } finally {
       setMaibotRefsLoading(false);
@@ -2414,24 +2522,21 @@ export function HomePanel({
 
   const openMaiBotUpdate = useCallback(() => {
     setError(null);
+    setMaibotUpdateInfo(null);
+    setMaibotUpdateInfoError(null);
+    setMaibotUpdateInfoLoading(false);
     setMaibotVersionFetchProgress(null);
     setModuleSourceExpanded(false);
-    setMaibotChannel(
-      snapshot.moduleVersions.maibotSelectedChannel === "stable" && snapshot.moduleVersions.maibotLatestStableTag
-        ? "stable"
-        : snapshot.moduleVersions.maibotSelectedChannel
-          ? "other"
-          : snapshot.moduleVersions.maibotLatestStableTag
-          ? "stable"
-          : "other",
-    );
+    setMaibotChannel(snapshot.moduleVersions.maibotLatestStableTag ? "stable" : "other");
+    setMaibotOtherTargetMode("tag");
+    setSelectedMaiBotTag("");
     const storedTarget = snapshot.moduleVersions.maibotSelectedTarget;
-    if (storedTarget?.type === "branch") {
-      setSelectedMaiBotBranch(storedTarget.name);
+    if (storedTarget?.type === "branch" && storedTarget.name === "dev") {
+      setMaibotOtherTargetMode("dev");
       setSelectedMaiBotTag("");
     } else if (storedTarget?.type === "tag" && storedTarget.name !== snapshot.moduleVersions.maibotLatestStableTag) {
+      setMaibotOtherTargetMode("tag");
       setSelectedMaiBotTag(storedTarget.name);
-      setSelectedMaiBotBranch("");
     }
     setUpdateDialog("maibot");
     void loadModuleSourceConfig().catch((nextError: unknown) => {
@@ -2442,7 +2547,6 @@ export function HomePanel({
     loadMaiBotRefs,
     loadModuleSourceConfig,
     snapshot.moduleVersions.maibotLatestStableTag,
-    snapshot.moduleVersions.maibotSelectedChannel,
     snapshot.moduleVersions.maibotSelectedTarget,
   ]);
 
@@ -2464,6 +2568,22 @@ export function HomePanel({
       : "https://github.com/Mai-with-u/MaiBotOneKey/releases";
     void window.maibotDesktop?.openExternal(url);
   }, [launcherLatestTag, launcherUpdateInfo?.releaseUrl]);
+
+  const openMaiBotRelease = useCallback(() => {
+    const releaseUrl = maibotUpdateInfo?.releaseUrl?.trim();
+    if (releaseUrl) {
+      void window.maibotDesktop?.openExternal(releaseUrl);
+      return;
+    }
+
+    const target = selectedMaiBotTarget;
+    const url = target?.type === "tag"
+      ? `https://github.com/Mai-with-u/MaiBot/releases/tag/${encodeURIComponent(target.name)}`
+      : target?.type === "branch"
+        ? `https://github.com/Mai-with-u/MaiBot/tree/${encodeURIComponent(target.name)}`
+        : "https://github.com/Mai-with-u/MaiBot/releases";
+    void window.maibotDesktop?.openExternal(url);
+  }, [maibotUpdateInfo?.releaseUrl, selectedMaiBotTarget]);
 
   const checkLauncherUpdate = useCallback(async () => {
     if (!window.maibotDesktop?.launcher) {
@@ -2566,16 +2686,13 @@ export function HomePanel({
   }, [messagePlatformAccount, messagePlatformBackend, onOpenPluginConfig, refreshSnapshot]);
 
   const updateMaiBot = useCallback(async () => {
-    const target: ModuleUpdateTarget | undefined =
-      maibotChannel === "stable" && maibotTargets.stable
-        ? { type: "tag", name: maibotTargets.stable }
-        : maibotChannel === "other" && selectedMaiBotTag
-            ? { type: "tag", name: selectedMaiBotTag }
-            : maibotChannel === "other" && selectedMaiBotBranch
-              ? { type: "branch", name: selectedMaiBotBranch }
-              : undefined;
+    const target = selectedMaiBotTarget;
     if (!window.maibotDesktop?.modules || !target) {
       setError("没有可用的目标版本");
+      return;
+    }
+    if (maibotTargetIsCurrent) {
+      setError("当前已经是这个 MaiBot 版本，无需重复更新");
       return;
     }
 
@@ -2593,12 +2710,10 @@ export function HomePanel({
       setBusy(null);
     }
   }, [
-    maibotChannel,
-    maibotTargets.stable,
     refreshSnapshot,
     saveModuleSourceConfig,
-    selectedMaiBotBranch,
-    selectedMaiBotTag,
+    maibotTargetIsCurrent,
+    selectedMaiBotTarget,
   ]);
 
   const updateDashboard = useCallback(async () => {
@@ -2639,30 +2754,16 @@ export function HomePanel({
           />
         );
       case "local-chat":
-        return useNativeLocalChat || !maibotWebuiReady ? (
+        return (
           <LocalChatQuickCard
             active={active}
             maibotService={maibot}
             onOpenFull={() => onOpenTab("localchat")}
             retro={useRetroHome}
-          />
-        ) : (
-          <ServiceSummary
-            icon={null}
-            retro={useRetroHome}
-            service={maibot}
-            serviceControls={maibot ? {
-              busy: serviceActionBusy?.startsWith(`${maibot.id}:`) ?? false,
-              onRestart: onRestartService,
-              onStart: onStartService,
-              onStop: onStopService,
-            } : undefined}
-            title="聊聊"
-            webuiAction={{
-              title: "MaiBot WebUI 聊聊",
-              label: "打开聊聊",
-              onClick: () => onOpenTab("localchat"),
-            }}
+            disabledReason={useWebuiChatPreview && !webuiPreviewUserId ? "打开一次 WebUI 聊聊后会同步最近对话" : undefined}
+            sessionId={useWebuiChatPreview ? WEBUI_CHAT_SESSION_ID : undefined}
+            userId={useWebuiChatPreview ? webuiPreviewUserId : undefined}
+            userName={useWebuiChatPreview ? webuiPreviewUserName : undefined}
           />
         );
       case "message-platform":
@@ -2687,6 +2788,7 @@ export function HomePanel({
               label: "打开 WebUI",
               onClick: () => setNapcatWebuiOpen(true),
             }}
+            stoppedStatusAfterTitle
           />
         ) : (
           <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroHome} />
@@ -2741,7 +2843,6 @@ export function HomePanel({
     busy,
     launcherLatestTag,
     maibot,
-    maibotWebuiReady,
     messagePlatformConfigured,
     napcat,
     onOpenPluginConfig,
@@ -2755,8 +2856,10 @@ export function HomePanel({
     qqWebuiPort,
     serviceActionBusy,
     snapshot,
-    useNativeLocalChat,
     useRetroHome,
+    useWebuiChatPreview,
+    webuiPreviewUserId,
+    webuiPreviewUserName,
   ]);
 
   const homeContentCards = useMemo(
@@ -3087,6 +3190,30 @@ export function HomePanel({
     useRetroHome,
   ]);
 
+  const maibotUpdateNotesPanel = (
+    <div className={cn(useRetroHome ? "retro-control grid min-h-0 content-start gap-2 overflow-auto p-3" : "grid min-h-0 content-start gap-2 overflow-auto rounded-lg border border-border bg-muted/40 p-3")}>
+      {maibotUpdateInfoLoading ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" />
+          正在读取更新说明...
+        </div>
+      ) : maibotUpdateInfoError ? (
+        <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
+          更新说明读取失败：{maibotUpdateInfoError}
+        </div>
+      ) : maibotUpdateInfo?.releaseNotes ? (
+        <MarkdownRenderer
+          className="break-words pr-1 text-xs"
+          content={maibotUpdateInfo.releaseNotes}
+        />
+      ) : maibotUpdateInfo ? (
+        <p className="text-xs text-muted-foreground">这个目标版本没有可展示的 Release 更新说明。</p>
+      ) : (
+        <p className="text-xs text-muted-foreground">选择目标版本后会在这里显示 Release 更新说明。</p>
+      )}
+    </div>
+  );
+
   return (
     <>
       <div className={cn("h-full overflow-auto px-5 py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", useRetroHome && "pb-24", !useRetroHome && "bg-background", active ? "block" : "hidden")}>
@@ -3355,7 +3482,7 @@ export function HomePanel({
           if (!next && busy !== "launcher:check" && busy !== "launcher:update") setUpdateDialog(null);
         }}
       >
-        <DialogContent size="lg">
+        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="lg">
           <DialogHeader
             description="检查 MaiBot OneKey 的最新安装包，并在确认后启动安装器。"
             icon={<PackageCheck className="size-4" />}
@@ -3422,53 +3549,25 @@ export function HomePanel({
           if (!next && busy !== "maibot:update") setUpdateDialog(null);
         }}
       >
-        <DialogContent size="lg">
+        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="xl">
           <DialogHeader
             title="更新 MaiBot"
             tone="primary"
           />
-          <DialogBody className="space-y-4">
+          <DialogBody className="grid h-[min(70vh,640px)] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
+            <div className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-3">
+              <div className="grid min-h-0 gap-4 overflow-auto pr-1">
             {error && updateDialog === "maibot" ? (
               <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
               </div>
             ) : null}
-            {maibotVersionFetchProgress ? (
-              <div
-                className={cn(
-                  "grid gap-2 border px-3 py-2 text-xs",
-                  useRetroHome ? "retro-control rounded-sm" : "rounded-lg",
-                  maibotVersionFetchProgress.tone === "error"
-                    ? "border-destructive/30 bg-destructive/10 text-destructive"
-                    : maibotVersionFetchProgress.tone === "success"
-                      ? "border-success/30 bg-success/10 text-success-foreground"
-                      : "border-border bg-muted/40",
-                )}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium">{maibotVersionFetchProgress.label}</span>
-                  <span className="font-mono tabular-nums">{Math.round(maibotVersionFetchProgress.value)}%</span>
-                </div>
-                <Progress
-                  className={cn(
-                    "h-1.5",
-                    maibotVersionFetchProgress.tone === "error" && "[&_[data-slot=progress-indicator]]:bg-destructive",
-                  )}
-                  value={maibotVersionFetchProgress.value}
-                />
-                {maibotVersionFetchProgress.detail ? (
-                  <p className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-                    {maibotVersionFetchProgress.detail}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
-              <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} />
-              <DetailRow label="当前记录" value={maibotSelectedTarget} retro={useRetroHome} />
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-sm" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm")}>
+              <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroHome} valueClassName={cn("text-base", !useRetroHome && "text-primary")} />
+              <DetailRow label="上次更新版本" value={maibotSelectedTarget} retro={useRetroHome} valueClassName="text-base" />
               <div className="my-1 border-t border-border/70" />
-              <DetailRow label="正式版" value={snapshot.moduleVersions.maibotLatestStableTag} retro={useRetroHome} />
-              <DetailRow label="更新源" value={snapshot.moduleVersions.maibotRemoteSource} retro={useRetroHome} />
+              <DetailRow label="目标版本" value={maibotTargets[maibotChannel]} retro={useRetroHome} valueClassName={cn("text-base", !useRetroHome && "text-primary")} />
+              <DetailRow label="更新源" value={snapshot.moduleVersions.maibotRemoteSource ?? maibotUpdateInfo?.source} retro={useRetroHome} />
               {snapshot.moduleVersions.maibotRemoteError ? (
                 <DetailRow label="远端错误" value={snapshot.moduleVersions.maibotRemoteError} retro={useRetroHome} />
               ) : null}
@@ -3478,12 +3577,17 @@ export function HomePanel({
                 请先停止 MaiBot Core，再执行更新。
               </div>
             ) : null}
+            {maibotTargetIsCurrent ? (
+              <div className="-my-2 px-1 text-sm font-semibold text-destructive">
+                当前已经是这个 MaiBot 版本，无需重复更新。
+              </div>
+            ) : null}
             <div className="grid gap-1.5">
               <ChoiceSwitch
                 value={maibotChannel}
                 onChange={(value) => {
                   setMaibotChannel(value);
-                  if (value === "other") {
+                  if (value === "other" && !maibotRefsLoading && maibotBranches.length === 0 && maibotTags.length === 0) {
                     void loadMaiBotRefs();
                   }
                 }}
@@ -3491,56 +3595,110 @@ export function HomePanel({
                   { value: "stable", label: "正式版", version: maibotTargets.stable },
                   { value: "other", label: "其他版本", version: maibotRefsLoading ? undefined : maibotTargets.other },
                 ]}
+                columnsClassName="sm:grid-cols-[2fr_1fr]"
                 retro={useRetroHome}
               />
             </div>
-            {maibotChannel === "other" ? (
-              <div className={cn(useRetroHome ? "retro-control grid gap-3 p-3 md:grid-cols-2" : "grid gap-3 rounded-lg border border-border bg-muted/40 p-3 md:grid-cols-2")}>
-                <label className="grid gap-1.5 text-xs font-medium">
-                  分支
-                  <select
-                    className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
-                    disabled={busy !== null || maibotRefsLoading}
-                    onChange={(event) => {
-                      setSelectedMaiBotBranch(event.target.value);
-                      if (event.target.value) {
-                        setSelectedMaiBotTag("");
-                      }
-                    }}
-                    value={selectedMaiBotBranch}
+            <div className="h-20">
+              {maibotVersionFetchProgress ? (
+                <div
+                  className={cn(
+                    "grid h-full gap-2 border px-3 py-2 text-xs",
+                    useRetroHome ? "retro-control rounded-sm" : "rounded-lg",
+                    maibotVersionFetchProgress.tone === "error"
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : maibotVersionFetchProgress.tone === "success"
+                        ? "border-success/30 bg-success/10 text-success-foreground"
+                        : "border-border bg-muted/40",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{maibotVersionFetchProgress.label}</span>
+                    <span className="font-mono tabular-nums">{Math.round(maibotVersionFetchProgress.value)}%</span>
+                  </div>
+                  <Progress
+                    className={cn(
+                      "h-1.5",
+                      maibotVersionFetchProgress.tone === "error" && "[&_[data-slot=progress-indicator]]:bg-destructive",
+                    )}
+                    value={maibotVersionFetchProgress.value}
+                  />
+                  {maibotVersionFetchProgress.detail ? (
+                    <p className="min-h-0 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
+                      {maibotVersionFetchProgress.detail}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <div
+                  aria-hidden={maibotChannel !== "other"}
+                  className={cn(
+                    useRetroHome ? "retro-control grid h-full gap-2 p-2 md:grid-cols-[220px_minmax(0,1fr)]" : "grid h-full gap-2 rounded-lg border border-border bg-muted/40 p-2 md:grid-cols-[220px_minmax(0,1fr)]",
+                    maibotChannel !== "other" && "pointer-events-none invisible",
+                  )}
+                >
+                  <label className="grid gap-1.5 text-xs font-medium">
+                    更新方式
+                    <div className={cn("grid h-9 grid-cols-2 gap-1 border border-input bg-background p-0.5", useRetroHome ? "rounded-sm" : "rounded-md")}>
+                      {([
+                        { value: "tag", label: "历史版本", disabled: false },
+                        { value: "dev", label: "Dev版本", disabled: !maibotDevBranchAvailable },
+                      ] satisfies Array<{ value: MaiBotOtherTargetMode; label: string; disabled: boolean }>).map((option) => {
+                        const selected = maibotOtherTargetMode === option.value;
+                        const disabled = maibotChannel !== "other" || busy !== null || maibotRefsLoading || option.disabled;
+                        return (
+                          <button
+                            className={cn(
+                              "h-full px-2 text-[11px] transition-colors",
+                              useRetroHome ? "rounded-sm" : "rounded",
+                              selected ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                              disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
+                            )}
+                            disabled={disabled}
+                            key={option.value}
+                            onClick={() => {
+                              setMaibotOtherTargetMode(option.value);
+                              if (option.value === "dev") {
+                                setSelectedMaiBotTag("");
+                              } else {
+                                setSelectedMaiBotTag((current) => current || (defaultMaiBotHistoryTag ?? ""));
+                              }
+                            }}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </label>
+                  <label
+                    aria-hidden={maibotOtherTargetMode !== "tag"}
+                    className={cn(
+                      "grid gap-1.5 text-xs font-medium",
+                      maibotOtherTargetMode !== "tag" && "pointer-events-none invisible",
+                    )}
                   >
-                    <option value="">不指定分支</option>
-                    {maibotBranches.map((branch) => (
-                      <option key={branch.name} value={branch.name}>
-                        {branch.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="grid gap-1.5 text-xs font-medium">
-                  Tag
-                  <select
-                    className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
-                    disabled={busy !== null || maibotRefsLoading}
-                    onChange={(event) => {
-                      setSelectedMaiBotTag(event.target.value);
-                      if (event.target.value) {
-                        setSelectedMaiBotBranch("");
-                      }
-                    }}
-                    value={selectedMaiBotTag}
-                  >
-                    <option value="">最新内容</option>
-                    {maibotTags.map((tag) => (
-                      <option key={tag.name} value={tag.name}>
-                        {tag.name}{tag.isPrerelease ? " (测试)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            ) : null}
-            <div className={cn(useRetroHome ? "retro-control grid gap-3 p-3" : "grid gap-3 rounded-lg border border-border bg-muted/40 p-3")}>
+                    Tag
+                    <select
+                      className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
+                      disabled={maibotChannel !== "other" || busy !== null || maibotRefsLoading || maibotOtherTargetMode !== "tag"}
+                      onChange={(event) => setSelectedMaiBotTag(event.target.value)}
+                      tabIndex={maibotChannel === "other" && maibotOtherTargetMode === "tag" ? undefined : -1}
+                      value={selectedMaiBotHistoryTag ?? ""}
+                    >
+                      {maibotHistoryTags.length === 0 ? <option value="">暂无历史版本</option> : null}
+                      {maibotHistoryTags.map((tag) => (
+                        <option key={tag.name} value={tag.name}>
+                          {tag.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
+            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-2" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-2")}>
               <button
                 className="flex w-full items-center justify-between gap-3 text-left"
                 onClick={() => setModuleSourceExpanded((expanded) => !expanded)}
@@ -3552,7 +3710,7 @@ export function HomePanel({
                 />
               </button>
               {moduleSourceExpanded ? (
-                <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_auto] md:items-end">
+                <div className="grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_auto] md:items-end">
                     <label className="grid gap-1.5 text-xs font-medium">
                       源预设
                       <select
@@ -3596,26 +3754,44 @@ export function HomePanel({
                   </div>
               ) : null}
             </div>
+              </div>
+            <div className="flex flex-wrap justify-start gap-2">
+              <Button
+                disabled={
+                  busy !== null ||
+                  moduleSourceSaving ||
+                  maibotUpdateBlocked ||
+                  maibotTargetIsCurrent ||
+                  !selectedMaiBotTarget ||
+                  (maibotChannel === "other" && maibotRefsLoading)
+                }
+                onClick={() => void updateMaiBot()}
+                size="sm"
+              >
+                {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+                {maibotTargetIsCurrent ? "已是当前版本" : "开始更新"}
+              </Button>
+            </div>
+            </div>
+            <div className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-3">
+              {maibotUpdateNotesPanel}
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  disabled={busy !== null || maibotUpdateInfoLoading || !selectedMaiBotTarget}
+                  onClick={() => void checkMaiBotUpdateInfo()}
+                  size="sm"
+                  variant="secondary"
+                >
+                  {maibotUpdateInfoLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  刷新说明
+                </Button>
+                <Button disabled={busy !== null || !selectedMaiBotTarget} onClick={openMaiBotRelease} size="sm" variant="secondary">
+                  <ExternalLink />
+                  查看更新
+                </Button>
+              </div>
+            </div>
           </DialogBody>
-          <DialogFooter>
-            <Button disabled={busy === "maibot:update"} onClick={() => setUpdateDialog(null)} size="sm" variant="ghost">
-              取消
-            </Button>
-            <Button
-              disabled={
-                busy !== null ||
-                moduleSourceSaving ||
-                maibotUpdateBlocked ||
-                !maibotTargets[maibotChannel] ||
-                (maibotChannel === "other" && maibotRefsLoading)
-              }
-              onClick={() => void updateMaiBot()}
-              size="sm"
-            >
-              {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              开始更新
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -3625,7 +3801,7 @@ export function HomePanel({
           if (!next && busy !== "dashboard:update") setUpdateDialog(null);
         }}
       >
-        <DialogContent size="lg">
+        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="lg">
           <DialogHeader
             description="选择 WebUI 版本并安装到 Python 覆盖层；MaiBot Core 启动时会优先加载这里的版本。"
             icon={<PackageCheck className="size-4" />}

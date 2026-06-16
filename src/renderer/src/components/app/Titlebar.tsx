@@ -44,7 +44,7 @@ function MacTrafficLights(): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   return (
     <div
-      className="flex items-center gap-2 px-3"
+      className="flex items-center gap-1.5 px-2.5"
       data-app-region="no-drag"
       aria-label="窗口控制"
     >
@@ -79,7 +79,7 @@ function MacTrafficLights(): React.JSX.Element {
 function WinControls({ isMaximized, retro = false }: { isMaximized: boolean; retro?: boolean }): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   const baseBtn =
-    "grid h-full w-12 place-items-center text-foreground/75 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
+    "grid h-full w-11 place-items-center text-foreground/75 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
   return (
     <div
       className="flex h-full items-stretch"
@@ -123,7 +123,7 @@ function WinControls({ isMaximized, retro = false }: { isMaximized: boolean; ret
       </button>
       <button
         aria-label="关闭"
-        className="grid h-full w-12 place-items-center text-primary transition-colors hover:bg-primary hover:text-primary-foreground focus:outline-none"
+        className="grid h-full w-11 place-items-center text-primary transition-colors hover:bg-primary hover:text-primary-foreground focus:outline-none"
         onClick={() => bridge?.close()}
         type="button"
       >
@@ -183,7 +183,7 @@ export function Titlebar({
   return (
     <div
       className={cn(
-        "relative z-40 flex h-12 shrink-0 items-stretch border-b-2",
+        "relative z-40 flex h-11 shrink-0 items-stretch border-b-2",
         retro ? "border-[var(--retro-titlebar-line)]" : "border-border",
         "bg-card",
         !state.isFocused && "opacity-90",
@@ -193,10 +193,10 @@ export function Titlebar({
       {isMac ? <MacTrafficLights /> : null}
 
       {/* Brand */}
-      <div className="flex items-center gap-3 pl-5 pr-2" data-app-region="no-drag">
+      <div className="flex items-center gap-2.5 pl-4 pr-1.5" data-app-region="no-drag">
         <span
           aria-label={`切换主题：当前${themeLabels[theme.preference]}，点击切换到${themeLabels[nextTheme]}`}
-          className="relative block size-5 shrink-0 overflow-hidden rounded-full bg-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="relative block size-[18px] shrink-0 overflow-hidden rounded-full bg-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={switchTheme}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -225,18 +225,18 @@ export function Titlebar({
 
       <div
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2",
+          "flex min-w-0 flex-1 items-center gap-1.5",
           isMac ? "justify-center px-3" : "px-1",
         )}
       >
-        <span className={cn("retro-title translate-y-[2.2px] truncate leading-none", retro ? "text-xl" : "text-lg")}>
-          MaiBot OneKey
+        <span className={cn("retro-title translate-y-[1.8px] truncate leading-none", retro ? "text-lg" : "text-base")}>
+          MaiBot OK
         </span>
       </div>
 
       {/* Right cluster */}
-      <div className="flex items-center gap-2 px-2" data-app-region="no-drag">
-        <span className="retro-value hidden text-[12px] text-foreground md:inline-block">
+      <div className="flex items-center gap-1.5 px-1.5" data-app-region="no-drag">
+        <span className="retro-value hidden text-[11px] text-foreground md:inline-block">
           v{appVersion}
         </span>
       </div>

@@ -53,6 +53,7 @@ import type {
   MaiBotPluginUserStates,
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
+  MaiBotUpdateInfo,
   ManagedPythonPackageName,
   ModuleBranchOption,
   ModuleUpdateTarget,
@@ -170,6 +171,8 @@ const desktopBridge: DesktopBridge = {
   modules: {
     refreshVersions: () =>
       ipcRenderer.invoke("modules:refreshVersions") as Promise<DesktopSnapshot>,
+    checkMaiBotUpdate: (target: ModuleUpdateTarget) =>
+      ipcRenderer.invoke("modules:checkMaibotUpdate", target) as Promise<MaiBotUpdateInfo>,
     updateMaiBot: (target?: ModuleUpdateTarget) =>
       ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
     listMaiBotBranches: () => ipcRenderer.invoke("modules:listMaibotBranches") as Promise<ModuleBranchOption[]>,
@@ -330,8 +333,8 @@ const desktopBridge: DesktopBridge = {
     disconnect: () => ipcRenderer.invoke("localChat:disconnect") as Promise<void>,
     send: (request: LocalChatSendRequest) =>
       ipcRenderer.invoke("localChat:send", request) as Promise<LocalChatMessageEvent>,
-    listMessages: () =>
-      ipcRenderer.invoke("localChat:listMessages") as Promise<LocalChatMessageEvent[]>,
+    listMessages: (request?: LocalChatConnectRequest) =>
+      ipcRenderer.invoke("localChat:listMessages", request) as Promise<LocalChatMessageEvent[]>,
     onEvent: (callback: (event: LocalChatEvent) => void) => onIpc("localChat:event", callback),
   },
   pty: {

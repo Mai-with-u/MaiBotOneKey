@@ -318,7 +318,7 @@
   --secondary: #ead4b7;
   --secondary-foreground: #123f47;
   --muted: #e8d6bd;
-  --muted-foreground: #6f6758;
+  --muted-foreground: #534839;
   --accent: #ddc5a4;
   --accent-foreground: #0d4650;
   --destructive: #a73724;
@@ -339,8 +339,9 @@
   --retro-paper: #f3e3cc;
   --retro-paper-deep: #dec5a5;
   --retro-paper-soft: #f6e8d3;
+  --retro-paper-lift: rgb(255 247 225 / 0.18);
   --retro-ink: #0a4550;
-  --retro-ink-soft: rgb(13 70 80 / 0.68);
+  --retro-ink-soft: rgb(13 70 80 / 0.78);
   --retro-rust: #c24d24;
   --retro-rust-dark: #913a1d;
   --retro-gold: #c99a3e;
@@ -349,7 +350,35 @@
   --retro-recessed: rgb(73 48 22 / 0.055);
   --retro-recessed-strong: rgb(73 48 22 / 0.085);
   --retro-shadow: rgb(73 48 22 / 0.14);
+  --retro-density-space: 1;
+  --retro-plugin-card-min-height: 286px;
+  --retro-plugin-card-gap-x: 1.35rem;
+  --retro-plugin-card-gap-y: 1.65rem;
+  --retro-plugin-card-padding-x: 1.35rem;
+  --retro-plugin-card-padding-y: 1.3rem;
+  --retro-plugin-action-height: 40px;
   --retro-paper-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='4' seed='11'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 .18 0 0 0 0 .11 0 0 0 0 .04 0 0 0 .22 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23noise)'/%3E%3Cg opacity='.12' fill='%23c24d24'%3E%3Ccircle cx='12' cy='21' r='.7'/%3E%3Ccircle cx='67' cy='43' r='.55'/%3E%3Ccircle cx='139' cy='16' r='.65'/%3E%3Ccircle cx='158' cy='107' r='.6'/%3E%3Ccircle cx='41' cy='151' r='.55'/%3E%3C/g%3E%3C/svg%3E");
+  --retro-paper-texture-layer: linear-gradient(var(--retro-paper-lift), var(--retro-paper-lift)), var(--retro-paper-texture);
+}
+
+:root[data-appearance-mode="future-retro"][data-scale="compact"] {
+  --retro-density-space: 0.82;
+  --retro-plugin-card-min-height: 254px;
+  --retro-plugin-card-gap-x: 0.9rem;
+  --retro-plugin-card-gap-y: 1rem;
+  --retro-plugin-card-padding-x: 1rem;
+  --retro-plugin-card-padding-y: 1rem;
+  --retro-plugin-action-height: 36px;
+}
+
+:root[data-appearance-mode="future-retro"][data-scale="comfortable"] {
+  --retro-density-space: 1.18;
+  --retro-plugin-card-min-height: 326px;
+  --retro-plugin-card-gap-x: 1.8rem;
+  --retro-plugin-card-gap-y: 2.1rem;
+  --retro-plugin-card-padding-x: 1.65rem;
+  --retro-plugin-card-padding-y: 1.55rem;
+  --retro-plugin-action-height: 44px;
 }
 
 :root.dark[data-appearance-mode="future-retro"],
@@ -384,6 +413,7 @@
   --retro-paper: #110906;
   --retro-paper-deep: #19110e;
   --retro-paper-soft: #2b211c;
+  --retro-paper-lift: rgb(255 229 190 / 0.035);
   --retro-ink: #d2c0a9;
   --retro-ink-soft: rgb(210 192 169 / 0.6);
   --retro-rust: #c04d27;
@@ -395,13 +425,18 @@
   --retro-recessed-strong: rgb(210 192 169 / 0.065);
   --retro-shadow: rgb(0 0 0 / 0.18);
   --retro-paper-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='4' seed='11'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 .66 0 0 0 0 .52 0 0 0 0 .36 0 0 0 .1 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23noise)'/%3E%3C/svg%3E");
+  --retro-paper-texture-layer: linear-gradient(var(--retro-paper-lift), var(--retro-paper-lift)), var(--retro-paper-texture);
   color-scheme: dark;
 }
 
 .retro-shell {
   background-color: var(--background);
-  background-image: var(--retro-paper-texture);
+  background-image: var(--retro-paper-texture-layer);
   background-size: 180px 180px;
+}
+
+:root[data-retro-paper-texture="false"] {
+  --retro-paper-texture-layer: none;
 }
 
 :root[data-retro-paper-texture="false"] .retro-shell {
@@ -414,7 +449,7 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-image: var(--retro-paper-texture);
+  background-image: var(--retro-paper-texture-layer);
   background-position: 0 0;
   background-size: 160px 160px;
   opacity: 0.36;
@@ -623,7 +658,7 @@
   border-radius: var(--radius);
   border-color: var(--retro-line);
   background-color: var(--retro-paper);
-  background-image: var(--retro-paper-texture);
+  background-image: var(--retro-paper-texture-layer);
   background-size: 165px 165px;
   box-shadow: none;
 }
@@ -777,8 +812,8 @@
 }
 
 .retro-top-action {
-  height: 40px;
-  width: 48px;
+  height: 34px;
+  width: 42px;
   border-radius: 2px;
 }
 
@@ -867,10 +902,12 @@ select,
   --plugin-market-rust-dark: var(--retro-rust-dark, #913a1d);
   --plugin-market-gold: var(--retro-gold, #c99a3e);
   color: var(--plugin-market-ink);
+  padding: calc(1rem * var(--retro-density-space)) calc(1.25rem * var(--retro-density-space)) !important;
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-layout {
   max-width: 1500px;
+  gap: calc(1.25rem * var(--retro-density-space)) !important;
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-heading h2 {
@@ -921,13 +958,13 @@ select,
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-card-grid {
-  gap: 1.65rem 1.35rem !important;
+  gap: var(--retro-plugin-card-gap-y) var(--retro-plugin-card-gap-x) !important;
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card {
   position: relative;
   isolation: isolate;
-  min-height: 286px;
+  min-height: var(--retro-plugin-card-min-height);
   overflow: hidden;
   border: 2px solid var(--plugin-market-line) !important;
   border-radius: 3px !important;
@@ -935,7 +972,7 @@ select,
   color: var(--plugin-market-ink);
   box-shadow: none !important;
   transform: none !important;
-  padding: 1.35rem 1.35rem 1.25rem 1.45rem !important;
+  padding: var(--retro-plugin-card-padding-y) var(--retro-plugin-card-padding-x) calc(var(--retro-plugin-card-padding-y) - 0.1rem) calc(var(--retro-plugin-card-padding-x) + 0.1rem) !important;
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card::before {
@@ -1030,7 +1067,7 @@ select,
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-quick-stats .plugin-card-action {
-  height: 40px;
+  height: var(--retro-plugin-action-height);
   min-width: 56px;
   border-radius: 1px !important;
   border-width: 2px !important;
@@ -1058,7 +1095,7 @@ select,
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-detail-action,
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action {
   min-width: 82px;
-  height: 40px;
+  height: var(--retro-plugin-action-height);
   border-radius: 1px !important;
   border-width: 2px !important;
   font-weight: 800;
@@ -1066,8 +1103,8 @@ select,
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-icon-action {
-  width: 40px;
-  min-width: 40px;
+  width: var(--retro-plugin-action-height);
+  min-width: var(--retro-plugin-action-height);
   padding-inline: 0 !important;
 }
 
@@ -1083,15 +1120,15 @@ select,
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action {
   min-width: 123px;
-  height: 40px;
+  height: var(--retro-plugin-action-height);
   border-color: var(--plugin-market-rust-dark) !important;
   background: var(--plugin-market-rust) !important;
   color: #fff1d6 !important;
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action.plugin-card-icon-action {
-  width: 40px;
-  min-width: 40px;
+  width: var(--retro-plugin-action-height);
+  min-width: var(--retro-plugin-action-height);
 }
 
 :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-primary-action.plugin-card-icon-action svg {
@@ -1123,7 +1160,7 @@ select,
 
 @media (min-width: 1280px) {
   :root[data-appearance-mode="future-retro"] .plugin-card-grid {
-    column-gap: 1rem !important;
+    column-gap: var(--retro-plugin-card-gap-x) !important;
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     justify-content: initial;
   }
@@ -1136,7 +1173,7 @@ select,
 
 @media (max-width: 760px) {
   :root[data-appearance-mode="future-retro"] .plugin-market-card {
-    min-height: 264px;
+    min-height: calc(var(--retro-plugin-card-min-height) - 22px);
   }
 
   :root[data-appearance-mode="future-retro"] .plugin-market-card .plugin-card-detail-action,

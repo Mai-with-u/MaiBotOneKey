@@ -205,10 +205,10 @@ function broadcastWindowState(window: BrowserWindow): void {
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     title: "MaiBot OneKey",
-    width: 1280,
-    height: 820,
-    minWidth: 1080,
-    minHeight: 720,
+    width: 1180,
+    height: 760,
+    minWidth: 1000,
+    minHeight: 680,
     resizable: false,
     show: false,
     backgroundColor: "#00000000",

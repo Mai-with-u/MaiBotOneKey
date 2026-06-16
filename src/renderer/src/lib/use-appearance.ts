@@ -54,10 +54,17 @@ const FONT_TOKENS: Record<FontFamily, string> = {
   serif: '"Noto Serif SC", "Songti SC", "SimSun", Georgia, serif',
 };
 
-const SCALE_TOKENS: Record<InterfaceScale, string> = {
-  compact: "14px",
-  normal: "15px",
-  comfortable: "16px",
+const SCALE_TOKENS: Record<AppearanceMode, Record<InterfaceScale, string>> = {
+  "future-retro": {
+    compact: "13.25px",
+    normal: "15px",
+    comfortable: "17px",
+  },
+  modern: {
+    compact: "14px",
+    normal: "15px",
+    comfortable: "16px",
+  },
 };
 
 const LEGACY_INLINE_COLOR_TOKENS = [
@@ -155,7 +162,7 @@ function applyAppearance(appearance: AppearancePreference): void {
   const windowCornerRadius = clampWindowCornerRadius(appearance.windowCornerRadius, mode);
   LEGACY_INLINE_COLOR_TOKENS.forEach((token) => root.style.removeProperty(token));
   root.style.setProperty("--font-sans", FONT_TOKENS[appearance.font]);
-  root.style.setProperty("font-size", SCALE_TOKENS[appearance.scale]);
+  root.style.setProperty("font-size", SCALE_TOKENS[mode][appearance.scale]);
   root.style.setProperty("--app-window-radius", `${windowCornerRadius}px`);
   root.dataset.appearanceMode = mode;
   root.dataset.accent = appearance.accent;

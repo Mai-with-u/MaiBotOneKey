@@ -27,11 +27,13 @@ interface WebviewPanelProps {
   postAuthTargetUrl?: string;
   toolbarPlacement?: "internal" | "external";
   toolbarTarget?: HTMLElement | null;
+  onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
 }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
 type WebviewElement = HTMLElement & {
+  executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>;
   getURL?: () => string;
   loadURL?: (url: string) => Promise<void> | void;
   reload?: () => void;
@@ -124,6 +126,7 @@ export function WebviewPanel({
   postAuthTargetUrl,
   toolbarPlacement = "internal",
   toolbarTarget = null,
+  onWebuiIdentity,
 }: WebviewPanelProps): React.JSX.Element {
   const webviewRef = useRef<WebviewElement | null>(null);
   const domReadyRef = useRef(false);
@@ -304,6 +307,35 @@ export function WebviewPanel({
       setErrorMessage(null);
       setRetryIn(null);
       navigateAfterAuth();
+      if (onWebuiIdentity && webview.executeJavaScript) {
+        void webview.executeJavaScript(
+          `(() => {
+            const userIdKey = "maibot_webui_user_id";
+            const userNameKey = "maibot_webui_user_name";
+            let userId = localStorage.getItem(userIdKey);
+            if (!userId) {
+              userId = "webui_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now().toString(36);
+              localStorage.setItem(userIdKey, userId);
+            }
+            return JSON.stringify({
+              userId,
+              userName: localStorage.getItem(userNameKey) || "WebUI用户"
+            });
+          })()`,
+          true,
+        ).then((raw) => {
+          if (typeof raw !== "string") {
+            return;
+          }
+          const parsed = JSON.parse(raw) as { userId?: unknown; userName?: unknown };
+          onWebuiIdentity({
+            userId: typeof parsed.userId === "string" && parsed.userId.trim() ? parsed.userId.trim() : undefined,
+            userName: typeof parsed.userName === "string" && parsed.userName.trim() ? parsed.userName.trim() : undefined,
+          });
+        }).catch(() => {
+          // The embedded page may still be on an auth/error route.
+        });
+      }
     };
     const handleFail = (event: Event): void => {
       const failEvent = event as DidFailLoadEvent;
@@ -352,7 +384,7 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [navigateAfterAuth, reloadKey, syncCurrentUrl, url]);
+  }, [navigateAfterAuth, onWebuiIdentity, reloadKey, syncCurrentUrl, url]);
 
   // Loading watchdog: if it stays in "loading" too long without ready/fail,
   // flip to error so the user gets the default panel instead of a white screen.

@@ -187,6 +187,8 @@ export interface RuntimePaths {
 
 export interface LocalChatSendRequest {
   content: string;
+  sessionId?: string;
+  userId?: string;
   userName?: string;
   port?: number;
   images?: LocalChatImageAttachment[];
@@ -197,10 +199,14 @@ export interface LocalChatSendRequest {
 
 export interface LocalChatConnectRequest {
   port?: number;
+  sessionId?: string;
+  userId?: string;
+  userName?: string;
 }
 
 export interface LocalChatMessageEvent {
   id: string;
+  sessionId?: string;
   role: LocalChatMessageRole;
   content: string;
   timestamp: number;
@@ -262,6 +268,7 @@ export interface LocalChatPlannerToolArgument {
 export interface LocalChatStateEvent {
   type: "state";
   state: LocalChatConnectionState;
+  sessionId?: string;
   url?: string;
 }
 
@@ -328,6 +335,19 @@ export interface LauncherUpdateInfo {
   releaseNotes?: string;
   assetName?: string;
   assetSize?: number;
+  available: boolean;
+  checkedAt: number;
+  source: string;
+}
+
+export interface MaiBotUpdateInfo {
+  currentVersion?: string;
+  currentTag?: string;
+  target: ModuleUpdateTarget;
+  targetTag?: string;
+  releaseName?: string;
+  releaseUrl?: string;
+  releaseNotes?: string;
   available: boolean;
   checkedAt: number;
   source: string;
@@ -1294,6 +1314,7 @@ export interface DesktopBridge {
   };
   modules: {
     refreshVersions: () => Promise<DesktopSnapshot>;
+    checkMaiBotUpdate: (target: ModuleUpdateTarget) => Promise<MaiBotUpdateInfo>;
     updateMaiBot: (target?: ModuleUpdateTarget) => Promise<ModuleUpdateResult>;
     listMaiBotBranches: () => Promise<ModuleBranchOption[]>;
     listMaiBotTags: () => Promise<ModuleTagOption[]>;
@@ -1408,7 +1429,7 @@ export interface DesktopBridge {
     connect: (request?: LocalChatConnectRequest) => Promise<LocalChatConnectionState>;
     disconnect: () => Promise<void>;
     send: (request: LocalChatSendRequest) => Promise<LocalChatMessageEvent>;
-    listMessages: () => Promise<LocalChatMessageEvent[]>;
+    listMessages: (request?: LocalChatConnectRequest) => Promise<LocalChatMessageEvent[]>;
     onEvent: (callback: (event: LocalChatEvent) => void) => () => void;
   };
   pty: {

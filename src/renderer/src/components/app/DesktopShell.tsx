@@ -65,10 +65,14 @@ function isServiceProcessActive(service: ServiceDescriptor): boolean {
 }
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
+const PLUGIN_SURFACE_MODE_STORAGE_KEY = "maibot-onekey.plugin-surface-mode";
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 const HOME_ENTRY_GUIDE_KEY = "maibot-onekey.home-entry-guide-seen.v2";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
+const MAIBOT_DEFAULT_WEBUI_URL = "http://127.0.0.1:8001";
 const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
+const WEBUI_CHAT_USER_ID_STORAGE_KEY = "maibot-onekey.webui-chat-user-id";
+const WEBUI_CHAT_USER_NAME_STORAGE_KEY = "maibot-onekey.webui-chat-user-name";
 const toolbarMenuItemClassName =
   "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const retroTopActionIconClassName =
@@ -112,24 +116,48 @@ interface WebviewEntryTarget {
   postAuthTargetUrl?: string;
 }
 
-function createMaibotChatWebviewTarget(url: string): WebviewEntryTarget {
+type PluginPanelMode = "market" | "manage";
+type PluginSurfaceMode = "webui" | "native";
+
+function pluginWebuiPathForMode(mode: PluginPanelMode): string {
+  return mode === "market" ? "/plugins/embed" : "/plugin-config/embed";
+}
+
+function pluginConfigWebuiPath(pluginId: string): string {
+  const params = new URLSearchParams({ plugin: pluginId });
+  return `/plugin-config/embed?${params.toString()}`;
+}
+
+function pluginWebviewTitle(path: string, mode: PluginPanelMode): string {
+  if (path.startsWith("/plugin-config")) {
+    return "MaiBot WebUI 插件管理";
+  }
+  return mode === "market" ? "MaiBot WebUI 插件市场" : "MaiBot WebUI 插件管理";
+}
+
+function createMaibotWebviewTarget(url: string, targetPath: string): WebviewEntryTarget {
   try {
     const entryUrl = new URL(url);
-    const chatUrl = new URL(url);
-    chatUrl.pathname = MAIBOT_CHAT_WEBUI_PATH;
-    chatUrl.search = "";
-    chatUrl.hash = "";
+    const targetUrl = new URL(url);
+    const targetPathUrl = new URL(targetPath, targetUrl.origin);
+    targetUrl.pathname = targetPathUrl.pathname;
+    targetUrl.search = targetPathUrl.search;
+    targetUrl.hash = targetPathUrl.hash;
 
     const entryPath = entryUrl.pathname.replace(/\/+$/u, "") || "/";
     const isAuthEntry = entryPath === "/auth" && entryUrl.searchParams.has("token");
 
     return {
-      entryUrl: isAuthEntry ? entryUrl.toString() : chatUrl.toString(),
-      postAuthTargetUrl: isAuthEntry ? chatUrl.toString() : undefined,
+      entryUrl: isAuthEntry ? entryUrl.toString() : targetUrl.toString(),
+      postAuthTargetUrl: isAuthEntry ? targetUrl.toString() : undefined,
     };
   } catch {
     return { entryUrl: url };
   }
+}
+
+function createMaibotChatWebviewTarget(url: string): WebviewEntryTarget {
+  return createMaibotWebviewTarget(url, MAIBOT_CHAT_WEBUI_PATH);
 }
 
 function readPluginBuilderMode(): PluginBuilderMode {
@@ -138,6 +166,14 @@ function readPluginBuilderMode(): PluginBuilderMode {
   }
   const mode = window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY);
   return mode === "disabled" ? "disabled" : "agent";
+}
+
+function readPluginSurfaceMode(): PluginSurfaceMode {
+  if (typeof window === "undefined") {
+    return "webui";
+  }
+  const mode = window.localStorage.getItem(PLUGIN_SURFACE_MODE_STORAGE_KEY);
+  return mode === "native" ? "native" : "webui";
 }
 
 function readStorageFlag(key: string): boolean {
@@ -433,14 +469,17 @@ function MaiBotWebuiStatusPanel({
   busy,
   onStart,
   retro,
+  context = "webui",
 }: {
   service: ServiceDescriptor | undefined;
   busy: boolean;
   onStart: (id: ServiceId) => void;
   retro: boolean;
+  context?: "webui" | "plugins";
 }): React.JSX.Element {
   const status = service?.status ?? "stopped";
   const health = service?.health ?? "unknown";
+  const pluginContext = context === "plugins";
   const [showWebUiUnavailable, setShowWebUiUnavailable] = useState(false);
   const webUiUnreachable = status === "running" && health === "unreachable";
 
@@ -460,30 +499,56 @@ function MaiBotWebuiStatusPanel({
     || status === "starting"
     || status === "stopping"
     || (status === "running" && (health !== "unreachable" || !showWebUiUnavailable));
-  const title = !service
-    ? "MAIBOT 未发现"
-    : status === "stopped"
-      ? "MAIBOT 尚未启动"
+  const title = pluginContext
+    ? !service
+      ? "插件未连接"
+      : status === "stopped"
+        ? "插件未连接"
+        : status === "starting"
+          ? "插件连接中"
+          : status === "running"
+            ? showWebUiUnavailable
+              ? "插件页面暂不可访问"
+              : "等待插件页面"
+            : status === "stopping"
+              ? "插件连接正在断开"
+              : "插件连接异常"
+    : !service
+      ? "MAIBOT 未发现"
+      : status === "stopped"
+        ? "MAIBOT 尚未启动"
+        : status === "starting"
+          ? "MAIBOT 正在启动"
+          : status === "running"
+            ? showWebUiUnavailable
+              ? "MAIBOT WEBUI 暂不可访问"
+              : "等待 WebUI 启动"
+            : status === "stopping"
+              ? "MAIBOT 正在停止"
+              : "MAIBOT 启动异常";
+  const description = pluginContext
+    ? !service || status === "stopped"
+      ? "插件页面需要连接到正在运行的 MaiBot Core。"
       : status === "starting"
-        ? "MAIBOT 正在启动"
+        ? "正在启动 MaiBot Core，插件连接建立后会自动载入。"
         : status === "running"
           ? showWebUiUnavailable
-            ? "MAIBOT WEBUI 暂不可访问"
-            : "等待 WebUI 启动"
+            ? "MaiBot Core 已运行，但插件 WebUI 入口暂时无法访问。"
+            : "插件页面正在加载，完成后会自动打开。"
           : status === "stopping"
-            ? "MAIBOT 正在停止"
-            : "MAIBOT 启动异常";
-  const description = !service || status === "stopped"
-    ? "当前没有运行中的 Maibot 实例，信号连接未建立。"
-    : status === "starting"
-      ? "正在启动 Maibot Core，请稍等片刻。"
-      : status === "running"
-        ? showWebUiUnavailable
-          ? "服务进程已启动，但 WebUI 端口暂不可访问。"
-          : "WebUI 正在加载，完成后会自动打开。"
-        : status === "stopping"
-          ? "正在停止 Maibot Core。"
-          : "启动过程中发生异常，请查看终端日志。";
+            ? "MaiBot Core 正在停止，插件连接暂不可用。"
+            : "插件连接建立失败，请查看终端日志。"
+    : !service || status === "stopped"
+      ? "当前没有运行中的 Maibot 实例，信号连接未建立。"
+      : status === "starting"
+        ? "正在启动 Maibot Core，请稍等片刻。"
+        : status === "running"
+          ? showWebUiUnavailable
+            ? "服务进程已启动，但 WebUI 端口暂不可访问。"
+            : "WebUI 正在加载，完成后会自动打开。"
+          : status === "stopping"
+            ? "正在停止 Maibot Core。"
+            : "启动过程中发生异常，请查看终端日志。";
 
   return (
     <section className="relative grid h-full min-h-0 place-items-center overflow-hidden bg-transparent p-6 text-[var(--retro-ink,var(--foreground))]">
@@ -524,10 +589,10 @@ function MaiBotWebuiStatusPanel({
                       {busy ? <Loader2 className="animate-spin" /> : <Play />}
                       启动
                     </Button>
-                    <span>建立连接并开始使用。</span>
+                    <span>{pluginContext ? "连接插件页面。" : "建立连接并开始使用。"}</span>
                   </>
                 ) : (
-                  <span>{waiting ? "正在等待 Maibot 建立连接。" : "请先在服务状态中确认 Maibot 配置。"}</span>
+                  <span>{waiting ? (pluginContext ? "正在等待插件页面建立连接。" : "正在等待 Maibot 建立连接。") : "请先在服务状态中确认 Maibot 配置。"}</span>
                 )}
               </div>
             </div>
@@ -549,6 +614,7 @@ function FloatingShell({
   onRestore,
   onWindowState,
   useNativeLocalChat,
+  onWebuiIdentity,
 }: {
   expanded: boolean;
   edge: "left" | "right" | null;
@@ -560,6 +626,7 @@ function FloatingShell({
   onRestore: () => void;
   onWindowState: (state: WindowState) => void;
   useNativeLocalChat: boolean;
+  onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
 }): React.JSX.Element {
   const dragRef = useRef<{
     offsetX: number;
@@ -800,6 +867,7 @@ function FloatingShell({
           <WebviewPanel
             active
             emptyText="MaiBot Core 启动后会在这里打开 WebUI 聊聊。"
+            onWebuiIdentity={onWebuiIdentity}
             postAuthTargetUrl={chatWebviewTarget.postAuthTargetUrl}
             title="MaiBot WebUI 聊聊"
             url={chatWebviewTarget.entryUrl}
@@ -987,7 +1055,7 @@ function HomeEntryGuide({
         className="absolute w-[min(420px,calc(100vw-2rem))] rounded-md border border-border px-4 py-3 text-card-foreground shadow-2xl"
         style={{
           backgroundColor: "var(--retro-paper, var(--card))",
-          backgroundImage: "var(--retro-paper-texture, none)",
+          backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
           backgroundSize: "165px 165px",
           left: localchatRect ? Math.max(16, localchatRect.left - 64) : 188,
           top: localchatRect ? localchatRect.bottom + 20 : 96,
@@ -997,7 +1065,7 @@ function HomeEntryGuide({
           className="absolute -top-3 left-20 size-5 rotate-45 border-l border-t border-border"
           style={{
             backgroundColor: "var(--retro-paper, var(--card))",
-            backgroundImage: "var(--retro-paper-texture, none)",
+            backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
             backgroundSize: "165px 165px",
           }}
         />
@@ -1016,7 +1084,7 @@ function HomeEntryGuide({
         className="absolute rounded-md border border-border px-4 py-3 text-card-foreground shadow-2xl"
         style={{
           backgroundColor: "var(--retro-paper, var(--card))",
-          backgroundImage: "var(--retro-paper-texture, none)",
+          backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
           backgroundSize: "165px 165px",
           left: messagePlatformBubbleLeft,
           top: messagePlatformBubbleTop,
@@ -1027,7 +1095,7 @@ function HomeEntryGuide({
             className="absolute -bottom-3 left-16 size-5 rotate-45 border-b border-r border-border"
             style={{
               backgroundColor: "var(--retro-paper, var(--card))",
-              backgroundImage: "var(--retro-paper-texture, none)",
+              backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
               backgroundSize: "165px 165px",
             }}
           />
@@ -1049,7 +1117,16 @@ export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
   const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
-  const [pluginMode, setPluginMode] = useState<"market" | "manage">("manage");
+  const [webuiChatIdentity, setWebuiChatIdentity] = useState<{ userId?: string; userName?: string }>(() => ({
+    userId: window.localStorage.getItem(WEBUI_CHAT_USER_ID_STORAGE_KEY) ?? undefined,
+    userName: window.localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined,
+  }));
+  const [pluginMode, setPluginModeState] = useState<PluginPanelMode>("manage");
+  const [pluginSurfaceMode, setPluginSurfaceModeState] = useState<PluginSurfaceMode>(() => readPluginSurfaceMode());
+  const [pluginManageWebviewPath, setPluginManageWebviewPath] = useState(() => pluginWebuiPathForMode("manage"));
+  const [pluginMarketWebviewPath, setPluginMarketWebviewPath] = useState(() => pluginWebuiPathForMode("market"));
+  const [pluginManageWebviewVisited, setPluginManageWebviewVisited] = useState(true);
+  const [pluginMarketWebviewVisited, setPluginMarketWebviewVisited] = useState(false);
   const [pluginBuilderMode, setPluginBuilderModeState] = useState<PluginBuilderMode>(() => readPluginBuilderMode());
   const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
@@ -1069,6 +1146,39 @@ export function DesktopShell(): React.JSX.Element {
   const setPluginBuilderMode = useCallback((mode: PluginBuilderMode) => {
     setPluginBuilderModeState(mode);
     window.localStorage.setItem(PLUGIN_BUILDER_MODE_STORAGE_KEY, mode);
+  }, []);
+
+  const setPluginSurfaceMode = useCallback((mode: PluginSurfaceMode) => {
+    setPluginSurfaceModeState(mode);
+    window.localStorage.setItem(PLUGIN_SURFACE_MODE_STORAGE_KEY, mode);
+  }, []);
+
+  const setPluginMode = useCallback((mode: PluginPanelMode) => {
+    setPluginModeState(mode);
+    if (mode === "manage") {
+      setPluginManageWebviewVisited(true);
+    } else {
+      setPluginMarketWebviewVisited(true);
+    }
+  }, []);
+
+  const rememberWebuiIdentity = useCallback((identity: { userId?: string; userName?: string }) => {
+    if (!identity.userId && !identity.userName) {
+      return;
+    }
+    setWebuiChatIdentity((current) => {
+      const next = {
+        userId: identity.userId ?? current.userId,
+        userName: identity.userName ?? current.userName,
+      };
+      if (next.userId) {
+        window.localStorage.setItem(WEBUI_CHAT_USER_ID_STORAGE_KEY, next.userId);
+      }
+      if (next.userName) {
+        window.localStorage.setItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY, next.userName);
+      }
+      return next;
+    });
   }, []);
 
   const refreshSnapshot = useCallback(async () => {
@@ -1130,8 +1240,24 @@ export function DesktopShell(): React.JSX.Element {
   const maibotWebviewReady = maibotService?.status === "running" && maibotService.health === "ready";
   const useNativeLocalChat = snapshot?.launcherUiSettings?.chatPageMode === "native";
   const maibotChatWebviewTarget = useMemo(
-    () => createMaibotChatWebviewTarget(maibotService?.url ?? "http://127.0.0.1:8001"),
+    () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
     [maibotService?.url],
+  );
+  const maibotPluginManageWebviewTarget = useMemo(
+    () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginManageWebviewPath),
+    [maibotService?.url, pluginManageWebviewPath],
+  );
+  const maibotPluginMarketWebviewTarget = useMemo(
+    () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginMarketWebviewPath),
+    [maibotService?.url, pluginMarketWebviewPath],
+  );
+  const maibotPluginManageWebviewTitle = useMemo(
+    () => pluginWebviewTitle(pluginManageWebviewPath, "manage"),
+    [pluginManageWebviewPath],
+  );
+  const maibotPluginMarketWebviewTitle = useMemo(
+    () => pluginWebviewTitle(pluginMarketWebviewPath, "market"),
+    [pluginMarketWebviewPath],
   );
   const maibotWebviewReloadTrigger =
     maibotWebviewReady
@@ -1140,6 +1266,7 @@ export function DesktopShell(): React.JSX.Element {
   const qqBackendService = serviceById.get("napcat");
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
+  const pluginEffectiveSurfaceMode: PluginSurfaceMode = pluginMode === "market" ? "webui" : pluginSurfaceMode;
   const messagePlatformConfigured = Boolean(
     snapshot?.initState.messagePlatformConfigured && snapshot.initState.qqAccount?.trim(),
   );
@@ -1301,7 +1428,7 @@ export function DesktopShell(): React.JSX.Element {
       return;
     }
     setActiveTab(value);
-  }, [showTerminalTab]);
+  }, [setPluginMode, showTerminalTab]);
 
   const syncRetroTabIndicator = useCallback((value: string) => {
     const list = retroTabsRef.current;
@@ -1357,15 +1484,18 @@ export function DesktopShell(): React.JSX.Element {
 
   const openPluginConfig = useCallback((pluginId: string) => {
     setPluginMode("manage");
-    setRequestedConfigPluginId(pluginId);
+    setPluginManageWebviewPath(pluginConfigWebuiPath(pluginId));
+    setRequestedConfigPluginId(pluginSurfaceMode === "native" ? pluginId : null);
     setActiveTab("plugins");
-  }, []);
+  }, [pluginSurfaceMode, setPluginMode]);
 
   const openPluginDetail = useCallback((pluginId: string) => {
+    void pluginId;
     setPluginMode("market");
-    setRequestedDetailPluginId(pluginId);
+    setPluginMarketWebviewPath(pluginWebuiPathForMode("market"));
+    setRequestedDetailPluginId(null);
     setActiveTab("plugins");
-  }, []);
+  }, [setPluginMode]);
 
   const openTerminalSession = useCallback((sessionId: string) => {
     setActiveTab("terminal");
@@ -1475,6 +1605,11 @@ export function DesktopShell(): React.JSX.Element {
   useShortcut("Mod+Shift+X", stopAll);
   useShortcut("Mod+Shift+L", theme.toggle);
 
+  const webviewToolbarActive =
+    activeTab === "maibot" ||
+    activeTab === "localchat" ||
+    (activeTab === "plugins" && pluginEffectiveSurfaceMode === "webui");
+
   if (floatingMode) {
     return (
       <TooltipProvider delayDuration={250}>
@@ -1489,6 +1624,7 @@ export function DesktopShell(): React.JSX.Element {
           onRestore={restoreMainWindow}
           onWindowState={syncWindowState}
           useNativeLocalChat={useNativeLocalChat}
+          onWebuiIdentity={rememberWebuiIdentity}
         />
         <Toaster />
       </TooltipProvider>
@@ -1628,7 +1764,7 @@ export function DesktopShell(): React.JSX.Element {
                 </TabsList>
                 <div
                   className={cn(
-                    activeTab === "maibot" || activeTab === "localchat"
+                    webviewToolbarActive
                       ? "ml-auto flex min-w-0 flex-1 items-center justify-end"
                       : "hidden",
                     useRetroChrome ? "h-full px-2 py-1" : "h-full",
@@ -1638,10 +1774,80 @@ export function DesktopShell(): React.JSX.Element {
                 <div
                   className={cn(
                     "flex shrink-0 items-center gap-1",
-                    activeTab !== "maibot" && activeTab !== "localchat" && "ml-auto",
+                    !webviewToolbarActive && "ml-auto",
                     useRetroChrome && "py-1",
                   )}
                 >
+                {activeTab === "plugins" ? (
+                  <>
+                    {pluginMode === "manage" ? (
+                      <div
+                        className={cn(
+                          "mr-1 flex h-7 shrink-0 items-center overflow-hidden rounded-md border border-border bg-muted/60 p-0.5",
+                          useRetroChrome && "h-8 rounded-sm border-[var(--retro-line,var(--border))]",
+                        )}
+                      >
+                        <Button
+                          className="h-full rounded-sm px-2 text-[11px]"
+                          onClick={() => setPluginSurfaceMode("webui")}
+                          size="sm"
+                          variant={pluginSurfaceMode === "webui" ? "default" : "ghost"}
+                        >
+                          WebUI
+                        </Button>
+                        <Button
+                          className="h-full rounded-sm px-2 text-[11px]"
+                          onClick={() => setPluginSurfaceMode("native")}
+                          size="sm"
+                          variant={pluginSurfaceMode === "native" ? "default" : "ghost"}
+                        >
+                          原生
+                        </Button>
+                      </div>
+                    ) : null}
+                    <div
+                      className={cn(
+                        "mr-1 flex h-8 shrink-0 items-end gap-1 bg-transparent px-1",
+                        useRetroChrome && "h-9 px-1.5",
+                      )}
+                    >
+                      <Button
+                        className={cn(
+                          "relative h-8 rounded-none bg-transparent px-2.5 pb-1.5 pt-1 text-[12px] font-semibold text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground",
+                          "after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent after:content-['']",
+                          pluginMode === "manage" && "text-primary hover:text-primary after:bg-primary",
+                          useRetroChrome && [
+                            "h-9 px-3 text-sm text-[var(--retro-ink-soft,var(--muted-foreground))]",
+                            "after:h-[3px] after:rounded-none",
+                            pluginMode === "manage" && "text-[var(--retro-rust,var(--primary))] after:bg-[var(--retro-rust,var(--primary))]",
+                          ],
+                        )}
+                        onClick={() => setPluginMode("manage")}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        插件管理
+                      </Button>
+                      <Button
+                        className={cn(
+                          "relative h-8 rounded-none bg-transparent px-2.5 pb-1.5 pt-1 text-[12px] font-semibold text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground",
+                          "after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent after:content-['']",
+                          pluginMode === "market" && "text-primary hover:text-primary after:bg-primary",
+                          useRetroChrome && [
+                            "h-9 px-3 text-sm text-[var(--retro-ink-soft,var(--muted-foreground))]",
+                            "after:h-[3px] after:rounded-none",
+                            pluginMode === "market" && "text-[var(--retro-rust,var(--primary))] after:bg-[var(--retro-rust,var(--primary))]",
+                          ],
+                        )}
+                        onClick={() => setPluginMode("market")}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        插件市场
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1672,7 +1878,7 @@ export function DesktopShell(): React.JSX.Element {
                     <TooltipTrigger asChild>
                       <Button
                         aria-label={primaryServiceActionLabel}
-                        className={cn("retro-top-action w-16 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90", retroTopActionIconClassName)}
+                        className={cn("retro-top-action w-14 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90", retroTopActionIconClassName)}
                         disabled={primaryServiceActionDisabled}
                         onClick={runPrimaryServiceAction}
                         size="sm"
@@ -1802,6 +2008,7 @@ export function DesktopShell(): React.JSX.Element {
                   onStopService={stopService}
                   serviceActionBusy={actionBusy}
                   snapshot={snapshot}
+                  webuiChatIdentity={webuiChatIdentity}
                 />
               ) : (
                 <div className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -1822,11 +2029,12 @@ export function DesktopShell(): React.JSX.Element {
                 <WebviewPanel
                   active={activeTab === "maibot"}
                   emptyText="MaiBot Core 启动后会在这里载入官方 WebUI。"
+                  onWebuiIdentity={rememberWebuiIdentity}
                   title="MaiBot WebUI"
                   toolbarPlacement="external"
                   toolbarTarget={webviewToolbarHost}
                   reloadTrigger={maibotWebviewReloadTrigger}
-                  url={maibotService?.url ?? "http://127.0.0.1:8001"}
+                  url={maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL}
                 />
               ) : (
                 <MaiBotWebuiStatusPanel
@@ -1855,6 +2063,7 @@ export function DesktopShell(): React.JSX.Element {
                 <WebviewPanel
                   active={activeTab === "localchat"}
                   emptyText="MaiBot Core 启动后会在这里载入 WebUI 聊聊页面。"
+                  onWebuiIdentity={rememberWebuiIdentity}
                   postAuthTargetUrl={maibotChatWebviewTarget.postAuthTargetUrl}
                   title="MaiBot WebUI 聊聊"
                   toolbarPlacement="external"
@@ -1884,24 +2093,72 @@ export function DesktopShell(): React.JSX.Element {
             ) : null}
 
             <TabsContent
+              forceMount
               value="plugins"
-              className="min-h-0 flex-1 overflow-hidden outline-none"
+              className="min-h-0 flex-1 overflow-hidden outline-none data-[state=inactive]:hidden"
             >
-              <PluginMarketPanel
-                isStartingPluginBuilder={isStartingOpenCode}
-                maibotService={maibotService}
-                maibotVersion={snapshot?.moduleVersions.maibotLocal}
-                mode={pluginMode}
-                onModeChange={setPluginMode}
-                onOpenTerminalSession={openTerminalSession}
-                onRequestedDetailHandled={() => setRequestedDetailPluginId(null)}
-                onStartPluginBuilder={startOpenCode}
-                onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
-                pluginBuilderEnabled={pluginBuilderMode !== "disabled"}
-                retro={useRetroChrome}
-                requestedConfigPluginId={requestedConfigPluginId}
-                requestedDetailPluginId={requestedDetailPluginId}
-              />
+              {pluginEffectiveSurfaceMode === "webui" && !maibotWebviewReady ? (
+                <MaiBotWebuiStatusPanel
+                  busy={actionBusy?.startsWith("maibot:") ?? false}
+                  context="plugins"
+                  onStart={startService}
+                  retro={useRetroChrome}
+                  service={maibotService}
+                />
+              ) : (
+                <div className="relative h-full min-h-0">
+                  {maibotWebviewReady ? (
+                    <div className={cn("absolute inset-0", pluginEffectiveSurfaceMode !== "webui" && "hidden")}>
+                    {pluginManageWebviewVisited ? (
+                      <div className={cn("absolute inset-0", pluginMode !== "manage" && "hidden")}>
+                        <WebviewPanel
+                          active={activeTab === "plugins" && pluginMode === "manage"}
+                          emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件管理页面。"
+                          onWebuiIdentity={rememberWebuiIdentity}
+                          postAuthTargetUrl={maibotPluginManageWebviewTarget.postAuthTargetUrl}
+                          title={maibotPluginManageWebviewTitle}
+                          toolbarPlacement="external"
+                          toolbarTarget={webviewToolbarHost}
+                          reloadTrigger={maibotWebviewReloadTrigger}
+                          url={maibotPluginManageWebviewTarget.entryUrl}
+                        />
+                      </div>
+                    ) : null}
+                    {pluginMarketWebviewVisited ? (
+                      <div className={cn("absolute inset-0", pluginMode !== "market" && "hidden")}>
+                        <WebviewPanel
+                          active={activeTab === "plugins" && pluginMode === "market"}
+                          emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件市场页面。"
+                          onWebuiIdentity={rememberWebuiIdentity}
+                          postAuthTargetUrl={maibotPluginMarketWebviewTarget.postAuthTargetUrl}
+                          title={maibotPluginMarketWebviewTitle}
+                          toolbarPlacement="external"
+                          toolbarTarget={webviewToolbarHost}
+                          reloadTrigger={maibotWebviewReloadTrigger}
+                          url={maibotPluginMarketWebviewTarget.entryUrl}
+                        />
+                      </div>
+                    ) : null}
+                    </div>
+                  ) : null}
+                  {pluginEffectiveSurfaceMode !== "webui" ? (
+                    <PluginMarketPanel
+                      isStartingPluginBuilder={isStartingOpenCode}
+                      maibotService={maibotService}
+                      maibotVersion={snapshot?.moduleVersions.maibotLocal}
+                      mode="manage"
+                      onOpenTerminalSession={openTerminalSession}
+                      onRequestedDetailHandled={() => setRequestedDetailPluginId(null)}
+                      onStartPluginBuilder={startOpenCode}
+                      onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
+                      pluginBuilderEnabled={pluginBuilderMode !== "disabled"}
+                      retro={useRetroChrome}
+                      requestedConfigPluginId={requestedConfigPluginId}
+                      requestedDetailPluginId={requestedDetailPluginId}
+                    />
+                  ) : null}
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent
