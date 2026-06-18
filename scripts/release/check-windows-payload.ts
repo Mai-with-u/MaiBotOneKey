@@ -203,6 +203,24 @@ const requiredModuleResourceExclusions = [
   "!MaiBot/data/**",
   "!MaiBot/logs/**",
   "!MaiBot/plugins/**",
+  "!napcat/cache/**",
+  "!napcat/config/**",
+  "!napcat/data/**",
+  "!napcat/logs/**",
+  "!napcat/temp/**",
+  "!napcat/tmp/**",
+  "!napcat/napcat/cache/**",
+  "!napcat/napcat/config/**",
+  "!napcat/napcat/data/**",
+  "!napcat/napcat/logs/**",
+  "!napcat/napcat/temp/**",
+  "!napcat/napcat/tmp/**",
+  "!napcat/versions/**/resources/app/napcat/cache/**",
+  "!napcat/versions/**/resources/app/napcat/config/**",
+  "!napcat/versions/**/resources/app/napcat/data/**",
+  "!napcat/versions/**/resources/app/napcat/logs/**",
+  "!napcat/versions/**/resources/app/napcat/temp/**",
+  "!napcat/versions/**/resources/app/napcat/tmp/**",
 ];
 
 function asRecord(value: unknown): JsonRecord | undefined {
@@ -366,7 +384,7 @@ async function main(): Promise<void> {
   if (missingModuleResourceExclusions.length > 0) {
     console.log("");
     console.log("[missing] modules extraResources filter should exclude runtime MaiBot state.");
-    console.log("Do not package local MaiBot config/data/logs or user plugins into the installer.");
+    console.log("Do not package local MaiBot or NapCat runtime config/data/logs/cache/temp into the installer.");
     for (const entry of missingModuleResourceExclusions) {
       console.log(`  - ${entry}`);
     }
