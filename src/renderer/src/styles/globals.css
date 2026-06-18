@@ -834,6 +834,24 @@ body,
   contain: paint;
 }
 
+:root[data-floating-glass-collapsed="true"] #root {
+  border-radius: 0;
+}
+
+:root[data-floating-bubble-open="true"],
+:root[data-floating-bubble-open="true"] body,
+:root[data-floating-bubble-open="true"] #root {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+:root[data-floating-bubble-open="true"] #root {
+  overflow: visible;
+  border-radius: 0;
+  contain: none;
+}
+
 body {
   margin: 0;
   overflow: hidden;
@@ -1158,7 +1176,7 @@ select,
   border-radius: 2px !important;
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   :root[data-appearance-mode="future-retro"] .plugin-card-grid {
     column-gap: var(--retro-plugin-card-gap-x) !important;
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
@@ -1522,4 +1540,122 @@ samp {
   background: oklch(1 0 0 / 0.28);
   background-clip: padding-box;
   border: 2px solid transparent;
+}
+
+:root[data-appearance-mode="future-retro"] .floating-glass-stack {
+  appearance: none;
+  display: block;
+  width: 80px !important;
+  min-width: 80px !important;
+  max-width: 80px !important;
+  height: 86px !important;
+  min-height: 86px !important;
+  max-height: 86px !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  font-size: 0;
+  line-height: 0;
+  outline: 0;
+}
+
+:root[data-appearance-mode="future-retro"] .floating-glass-pane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 80px !important;
+  height: 80px !important;
+  border-radius: 0;
+  background: transparent;
+}
+
+:root[data-appearance-mode="future-retro"] .floating-glass-bars {
+  position: absolute;
+  left: 0;
+  top: 80px;
+  display: block;
+  width: 80px !important;
+  min-width: 80px !important;
+  max-width: 80px !important;
+  height: 6px !important;
+  overflow: hidden;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='6' viewBox='0 0 80 6' shape-rendering='crispEdges'%3E%3Crect x='0' y='0' width='80' height='2' fill='%230a4550'/%3E%3Crect x='0' y='2' width='80' height='2' fill='%23c99a3e'/%3E%3Crect x='0' y='4' width='80' height='2' fill='%23c24d24'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 80px 6px;
+}
+
+:root[data-appearance-mode="future-retro"] .floating-collapsed-glow {
+  display: none;
+}
+
+.floating-chat-bubble {
+  position: relative;
+  max-width: 230px;
+  width: fit-content;
+  border-radius: 16px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow:
+    0 10px 24px rgb(0 0 0 / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.18);
+  backdrop-filter: blur(14px) saturate(1.16);
+  -webkit-backdrop-filter: blur(14px) saturate(1.16);
+}
+
+.floating-chat-bubble::after {
+  content: "";
+  position: absolute;
+  right: 18px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+}
+
+.floating-chat-bubble-bot {
+  align-self: flex-end;
+  margin-right: 18px;
+  background: color-mix(in oklab, var(--background) 76%, transparent);
+  color: var(--foreground);
+}
+
+.floating-chat-bubble-bot::after {
+  background: color-mix(in oklab, var(--background) 76%, transparent);
+}
+
+.floating-chat-bubble-user {
+  align-self: flex-end;
+  margin-right: 38px;
+  background: color-mix(in oklab, var(--primary) 82%, transparent);
+  color: var(--primary-foreground);
+}
+
+.floating-chat-bubble-user::after {
+  right: 18px;
+  background: color-mix(in oklab, var(--primary) 82%, transparent);
+}
+
+.floating-pet-chat,
+.floating-collapsed-root {
+  background: transparent !important;
+}
+
+.floating-pet-chat-input {
+  background: color-mix(in oklab, var(--background) 54%, transparent);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.16);
+  backdrop-filter: blur(16px) saturate(1.16);
+  -webkit-backdrop-filter: blur(16px) saturate(1.16);
+}
+
+.codex-pet-sprite {
+  line-height: 0;
+}
+
+.codex-pet-sprite-frame {
+  image-rendering: auto;
+  transform: translateX(0);
+  transform-origin: left top;
 }

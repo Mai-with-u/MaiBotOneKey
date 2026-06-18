@@ -135,8 +135,10 @@ const desktopBridge: DesktopBridge = {
     close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
     setFloatingMode: (enabled: boolean) =>
       ipcRenderer.invoke("desktop:window:setFloatingMode", enabled) as Promise<WindowState>,
-    setFloatingPanelExpanded: (expanded: boolean) =>
-      ipcRenderer.invoke("desktop:window:setFloatingPanelExpanded", expanded) as Promise<WindowState>,
+    setFloatingGlassEffect: (enabled: boolean) =>
+      ipcRenderer.invoke("desktop:window:setFloatingGlassEffect", enabled) as Promise<WindowState>,
+    setFloatingBubbleExpanded: (expanded: boolean) =>
+      ipcRenderer.invoke("desktop:window:setFloatingBubbleExpanded", expanded) as Promise<WindowState>,
     moveFloatingBy: (deltaX: number, deltaY: number) =>
       ipcRenderer.invoke("desktop:window:moveFloatingBy", deltaX, deltaY) as Promise<WindowState>,
     moveFloatingTo: (offsetX: number, offsetY: number) =>
@@ -255,6 +257,10 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
     saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>
       ipcRenderer.invoke("plugins:saveConfig", pluginId, config, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
+    saveConfigRaw: (pluginId: string, raw: string, serviceUrl?: string) =>
+      ipcRenderer.invoke("plugins:saveConfigRaw", pluginId, raw, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
+    resetConfig: (pluginId: string, serviceUrl?: string) =>
+      ipcRenderer.invoke("plugins:resetConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
     getReadme: (pluginId: string, repositoryUrl?: string, sourcePreset?: MaiBotPluginMarketSource) =>
       ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl, sourcePreset) as Promise<MaiBotPluginReadmeResult>,
     getStats: (pluginId: string) =>

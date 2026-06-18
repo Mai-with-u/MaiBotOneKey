@@ -497,6 +497,77 @@ export class MaiBotPluginClient {
     };
   }
 
+  async saveConfigRaw(
+    pluginId: string,
+    raw: string,
+    serviceUrl?: string,
+  ): Promise<MaiBotPluginConfigSaveResult> {
+    const pluginPath = await this.requireInstalledPluginPath(pluginId);
+    const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
+    if (!isPathInside(pluginPath, configPath)) {
+      throw new Error("Plugin config path is outside the allowed range");
+    }
+
+    const writtenRaw = raw.endsWith("\n") ? raw : `${raw}\n`;
+    const parsedConfig = parsePluginConfig(writtenRaw, configPath);
+    const runtimeResult = await this.saveRuntimeConfigRaw(pluginId, writtenRaw, pluginPath, configPath, serviceUrl);
+    if (runtimeResult) {
+      return runtimeResult;
+    }
+
+    let backupPath: string | undefined;
+    if (await pathExists(configPath)) {
+      backupPath = `${configPath}.${new Date().toISOString().replace(/[:.]/gu, "-")}.bak`;
+      await copyFile(configPath, backupPath);
+    }
+
+    await mkdir(pluginPath, { recursive: true });
+    await writeFile(configPath, writtenRaw, "utf8");
+
+    return {
+      pluginId,
+      configPath,
+      config: parsedConfig,
+      schema: await buildLocalPluginConfigSchema(pluginPath, parsedConfig)
+        ?? buildPluginConfigSchema(parsedConfig, "local"),
+      raw: writtenRaw,
+      backupPath,
+      savedAt: Date.now(),
+    };
+  }
+
+  async resetConfig(pluginId: string, serviceUrl?: string): Promise<MaiBotPluginConfigSaveResult> {
+    const pluginPath = await this.requireInstalledPluginPath(pluginId);
+    const configPath = resolve(pluginPath, PLUGIN_CONFIG_FILE);
+    if (!isPathInside(pluginPath, configPath)) {
+      throw new Error("Plugin config path is outside the allowed range");
+    }
+
+    const runtimeResult = await this.resetRuntimeConfig(pluginId, pluginPath, configPath, serviceUrl);
+    if (runtimeResult) {
+      return runtimeResult;
+    }
+
+    let backupPath: string | undefined;
+    if (await pathExists(configPath)) {
+      backupPath = `${configPath}.${new Date().toISOString().replace(/[:.]/gu, "-")}.bak`;
+      await copyFile(configPath, backupPath);
+      await rm(configPath, { force: true });
+    }
+
+    const config: Record<string, MaiBotPluginConfigValue> = {};
+    return {
+      pluginId,
+      configPath,
+      config,
+      schema: await buildLocalPluginConfigSchema(pluginPath, config)
+        ?? buildPluginConfigSchema(config, "local"),
+      raw: "",
+      backupPath,
+      savedAt: Date.now(),
+    };
+  }
+
   async getReadme(
     pluginId: string,
     repositoryUrl?: string,
@@ -1168,6 +1239,92 @@ export class MaiBotPluginClient {
         config: state.config,
         schema: state.schema,
         raw: state.raw,
+        savedAt: Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveRuntimeConfigRaw(
+    pluginId: string,
+    raw: string,
+    pluginPath: string,
+    configPath: string,
+    serviceUrl?: string,
+  ): Promise<MaiBotPluginConfigSaveResult | null> {
+    const rawUrl = maibotApiUrl(serviceUrl, `/api/webui/plugins/config/${encodeURIComponent(pluginId)}/raw`);
+    if (!rawUrl) {
+      return null;
+    }
+
+    try {
+      const response = await fetchWithTimeout(rawUrl, MAIBOT_API_TIMEOUT_MS, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await this.maibotRuntimeAuthHeaders(serviceUrl)),
+        },
+        body: JSON.stringify({ config: raw }),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as unknown;
+      if (!isUnknownRecord(payload) || payload.success !== true) {
+        return null;
+      }
+      const state = await this.getRuntimeConfig(pluginId, pluginPath, configPath, serviceUrl);
+      if (!state) {
+        return null;
+      }
+      return {
+        pluginId,
+        configPath,
+        config: state.config,
+        schema: state.schema,
+        raw: state.raw,
+        savedAt: Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async resetRuntimeConfig(
+    pluginId: string,
+    pluginPath: string,
+    configPath: string,
+    serviceUrl?: string,
+  ): Promise<MaiBotPluginConfigSaveResult | null> {
+    const resetUrl = maibotApiUrl(serviceUrl, `/api/webui/plugins/config/${encodeURIComponent(pluginId)}/reset`);
+    if (!resetUrl) {
+      return null;
+    }
+
+    try {
+      const response = await fetchWithTimeout(resetUrl, MAIBOT_API_TIMEOUT_MS, {
+        method: "POST",
+        headers: await this.maibotRuntimeAuthHeaders(serviceUrl),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as unknown;
+      if (!isUnknownRecord(payload) || payload.success !== true) {
+        return null;
+      }
+      const state = await this.getRuntimeConfig(pluginId, pluginPath, configPath, serviceUrl);
+      if (!state) {
+        return null;
+      }
+      return {
+        pluginId,
+        configPath,
+        config: state.config,
+        schema: state.schema,
+        raw: state.raw,
+        backupPath: typeof payload.backup === "string" ? payload.backup : undefined,
         savedAt: Date.now(),
       };
     } catch {

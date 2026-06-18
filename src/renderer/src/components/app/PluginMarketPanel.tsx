@@ -1,4 +1,5 @@
-import { AlertTriangle, BarChart3, BookOpen, Bot, Cloud, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, TerminalSquare, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, Bot, Cloud, Code2, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Layout, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, RotateCcw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor, SourceSettings } from "@shared/contracts";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   fetchInstalledPlugins,
   fetchMarketPlugins,
@@ -46,6 +47,8 @@ import {
   ratePlugin,
   recordPluginDownload,
   savePluginConfig,
+  savePluginConfigRaw,
+  resetPluginConfig,
   uninstallMaiBotPlugin,
   updateMaiBotPlugin,
 } from "@/lib/maibot-plugin-api";
@@ -79,6 +82,8 @@ type QuickStatsBusy = { pluginId: string; action: QuickStatsAction } | null;
 
 type PluginRuntimeState = "disabled" | "failed" | "loaded" | "inactive" | "loading";
 type AdapterConfigPage = "connection" | "chat";
+type ConfigEditMode = "visual" | "source";
+type ConfigPageTab = "settings" | "details";
 const CONFIG_SAVE_PROGRESS_MS = 3_000;
 const HIDDEN_ADAPTER_CHAT_FIELDS = new Set([
   "enable_chat_list_filter",
@@ -248,13 +253,10 @@ function readStoredMarketSource(): MaiBotPluginMarketSource {
 }
 
 export function PluginMarketPanel({
-  isStartingPluginBuilder = false,
   mode,
   onModeChange,
   maibotService,
   maibotVersion,
-  onStartPluginBuilder,
-  pluginBuilderEnabled = false,
   retro = false,
   requestedConfigPluginId,
   requestedDetailPluginId,
@@ -262,13 +264,10 @@ export function PluginMarketPanel({
   onRequestedDetailHandled,
   onOpenTerminalSession,
 }: {
-  isStartingPluginBuilder?: boolean;
   mode: PluginPanelMode;
   onModeChange?: (mode: PluginPanelMode) => void;
   maibotService?: ServiceDescriptor;
   maibotVersion?: string;
-  onStartPluginBuilder?: () => void;
-  pluginBuilderEnabled?: boolean;
   retro?: boolean;
   requestedConfigPluginId?: string | null;
   requestedDetailPluginId?: string | null;
@@ -295,6 +294,11 @@ export function PluginMarketPanel({
   const [configPlugin, setConfigPlugin] = useState<InstalledPlugin | null>(null);
   const [configState, setConfigState] = useState<PluginConfigState | null>(null);
   const [configDraft, setConfigDraft] = useState<Record<string, PluginConfigValue> | null>(null);
+  const [configRawDraft, setConfigRawDraft] = useState("");
+  const [configEditMode, setConfigEditMode] = useState<ConfigEditMode>("visual");
+  const [configPageTab, setConfigPageTab] = useState<ConfigPageTab>("settings");
+  const [configCloseConfirmOpen, setConfigCloseConfirmOpen] = useState(false);
+  const [configResetConfirmOpen, setConfigResetConfirmOpen] = useState(false);
   const [configBusy, setConfigBusy] = useState<ConfigBusyState>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configSaveProgressOpen, setConfigSaveProgressOpen] = useState(false);
@@ -325,8 +329,23 @@ export function PluginMarketPanel({
     setConfigPlugin(null);
     setConfigState(null);
     setConfigDraft(null);
+    setConfigRawDraft("");
+    setConfigEditMode("visual");
+    setConfigPageTab("settings");
+    setConfigCloseConfirmOpen(false);
+    setConfigResetConfirmOpen(false);
     setConfigError(null);
   }, []);
+
+  const configDirty = useMemo(() => {
+    if (!configState) {
+      return false;
+    }
+    if (configEditMode === "source") {
+      return configRawDraft !== (configState.raw ?? "");
+    }
+    return JSON.stringify(configDraft ?? {}) !== JSON.stringify(configState.config ?? {});
+  }, [configDraft, configEditMode, configRawDraft, configState]);
 
   const loadPlugins = useCallback(async (forceRefresh = false) => {
     setLoadState("loading");
@@ -455,12 +474,18 @@ export function PluginMarketPanel({
     setConfigPlugin(plugin);
     setConfigState(null);
     setConfigDraft(null);
+    setConfigRawDraft("");
+    setConfigEditMode("visual");
+    setConfigPageTab("settings");
+    setConfigCloseConfirmOpen(false);
+    setConfigResetConfirmOpen(false);
     setConfigError(null);
     setConfigBusy("load");
     try {
       const state = await fetchPluginConfig(plugin.id, maibotService);
       setConfigState(state);
       setConfigDraft(clonePluginConfig(state.config));
+      setConfigRawDraft(state.raw ?? "");
     } catch (nextError) {
       setConfigError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
@@ -521,7 +546,12 @@ export function PluginMarketPanel({
     setConfigBusy("save");
     setConfigError(null);
     try {
-      const result = await savePluginConfig(configPlugin.id, configDraft, maibotService);
+      if (configEditMode === "source") {
+        parseToml(configRawDraft);
+      }
+      const result = configEditMode === "source"
+        ? await savePluginConfigRaw(configPlugin.id, configRawDraft, maibotService)
+        : await savePluginConfig(configPlugin.id, configDraft, maibotService);
       setConfigState((state) =>
         state
           ? {
@@ -535,6 +565,7 @@ export function PluginMarketPanel({
           : state,
       );
       setConfigDraft(clonePluginConfig(result.config));
+      setConfigRawDraft(result.raw ?? "");
       toast.success(`配置已保存：${pluginName(configPlugin)}`);
       await loadPlugins();
       return true;
@@ -544,7 +575,48 @@ export function PluginMarketPanel({
     } finally {
       setConfigBusy(null);
     }
-  }, [configDraft, configPlugin, loadPlugins, maibotService]);
+  }, [configDraft, configEditMode, configPlugin, configRawDraft, loadPlugins, maibotService]);
+
+  const resetOpenPluginConfig = useCallback(async () => {
+    if (!configPlugin) {
+      return;
+    }
+
+    setConfigBusy("save");
+    setConfigError(null);
+    try {
+      const result = await resetPluginConfig(configPlugin.id, maibotService);
+      setConfigState((state) =>
+        state
+          ? {
+              ...state,
+              exists: false,
+              config: result.config,
+              schema: result.schema,
+              raw: result.raw,
+              configPath: result.configPath,
+            }
+          : {
+              pluginId: configPlugin.id,
+              pluginPath: configPlugin.path,
+              configPath: result.configPath,
+              exists: false,
+              config: result.config,
+              schema: result.schema,
+              raw: result.raw,
+            },
+      );
+      setConfigDraft(clonePluginConfig(result.config));
+      setConfigRawDraft(result.raw ?? "");
+      setConfigResetConfirmOpen(false);
+      toast.success(`配置已重置：${pluginName(configPlugin)}`);
+      await loadPlugins();
+    } catch (nextError) {
+      setConfigError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setConfigBusy(null);
+    }
+  }, [configPlugin, loadPlugins, maibotService]);
 
   const togglePluginEnabled = useCallback(async (plugin: InstalledPlugin, enabled: boolean) => {
     setToggleBusyPluginId(plugin.id);
@@ -564,6 +636,29 @@ export function PluginMarketPanel({
   const updateConfigDraft = useCallback((path: string[], value: PluginConfigValue) => {
     setConfigDraft((draft) => (draft ? setPluginConfigValue(draft, path, value) : draft));
   }, []);
+
+  const changeConfigEditMode = useCallback((mode: ConfigEditMode) => {
+    if (mode === configEditMode) {
+      return;
+    }
+
+    try {
+      if (mode === "source" && configDraft) {
+        setConfigRawDraft(`${stringifyToml(configDraft)}\n`);
+      }
+      if (mode === "visual") {
+        const parsed = parseToml(configRawDraft);
+        const normalized = normalizeJsonPluginConfigValue(parsed);
+        if (isPluginConfigRecord(normalized)) {
+          setConfigDraft(clonePluginConfig(normalized));
+        }
+      }
+      setConfigEditMode(mode);
+      setConfigError(null);
+    } catch (nextError) {
+      setConfigError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [configDraft, configEditMode, configRawDraft]);
 
   const runPendingOperation = useCallback(async () => {
     if (!pendingOperation) {
@@ -789,7 +884,6 @@ export function PluginMarketPanel({
   const maibotRunning = maibotService?.status === "running";
   const title = isMarket ? "插件商店" : "插件管理";
   const description = "";
-  const showPluginBuilderEntry = !isMarket && pluginBuilderEnabled && Boolean(onStartPluginBuilder);
 
   return (
     <>
@@ -801,19 +895,6 @@ export function PluginMarketPanel({
               {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
             </div>
             <div className="flex items-center gap-2">
-              {showPluginBuilderEntry ? (
-                <Button
-                  className="h-8 gap-1.5 px-2.5 text-[11px]"
-                  disabled={isStartingPluginBuilder}
-                  onClick={onStartPluginBuilder}
-                  size="sm"
-                  title="在终端中启动 OpenCode 插件编写器"
-                  variant="default"
-                >
-                  {isStartingPluginBuilder ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}
-                  启动编写器
-                </Button>
-              ) : null}
               {onModeChange ? (
                 <Tabs
                   className="shrink-0"
@@ -961,14 +1042,29 @@ export function PluginMarketPanel({
       />
       <PluginConfigDialog
         busy={configBusy}
+        dirty={configDirty}
         draft={configDraft}
+        editMode={configEditMode}
         error={configError}
         onChange={updateConfigDraft}
+        onCloseConfirm={() => {
+          setConfigCloseConfirmOpen(false);
+          closeConfigDialog();
+        }}
+        onCloseConfirmOpenChange={setConfigCloseConfirmOpen}
+        onEditModeChange={changeConfigEditMode}
         onOpenChange={(open) => {
-          if (!open && configBusy === null) {
+          if (!open && configBusy === null && !configDirty) {
             closeConfigDialog();
+          } else if (!open && configBusy === null) {
+            setConfigCloseConfirmOpen(true);
           }
         }}
+        onPageTabChange={setConfigPageTab}
+        onRawChange={setConfigRawDraft}
+        onReset={() => setConfigResetConfirmOpen(true)}
+        onResetConfirm={() => void resetOpenPluginConfig()}
+        onResetConfirmOpenChange={setConfigResetConfirmOpen}
         onSave={() => {
           const savingPlugin = configPlugin;
           const terminalSessionId = terminalSessionIdForSavedConfig(savingPlugin);
@@ -987,7 +1083,11 @@ export function PluginMarketPanel({
             }
           });
         }}
+        pageTab={configPageTab}
         plugin={configPlugin}
+        rawDraft={configRawDraft}
+        resetConfirmOpen={configResetConfirmOpen}
+        closeConfirmOpen={configCloseConfirmOpen}
         state={configState}
       />
       <ConfigSaveProgressDialog open={configSaveProgressOpen} progress={configSaveProgress} />
@@ -1318,13 +1418,13 @@ function PluginGrid({
             <Sparkles className="size-4 text-primary" />
             <h3 className="text-base font-semibold">惊喜随意</h3>
           </div>
-          <div className="plugin-card-grid plugin-surprise-card-grid grid auto-cols-[minmax(260px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-1 xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-4">
+          <div className="plugin-card-grid plugin-surprise-card-grid grid auto-cols-[minmax(220px,1fr)] grid-flow-col gap-2.5 overflow-x-auto pb-1 lg:auto-cols-auto lg:grid-flow-row lg:grid-cols-4 xl:grid-cols-5">
             {surprisePlugins.map(renderPluginCard)}
           </div>
         </section>
       ) : null}
 
-      <div className="plugin-card-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <div className="plugin-card-grid grid gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         {mainPlugins.map(renderPluginCard)}
       </div>
     </div>
@@ -1357,7 +1457,7 @@ function InstalledGrid({
   }
 
   return (
-    <div className="plugin-card-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="plugin-card-grid grid gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
       {plugins.map((plugin) => {
         const updatePlugin = plugin.marketPlugin;
         const repositoryUrl = updatePlugin ? pluginRepositoryUrl(updatePlugin.manifest) : pluginRepositoryUrl(plugin.manifest);
@@ -1444,14 +1544,14 @@ function PluginDisplayIcon({
   }, [imageSource]);
 
   const baseClassName = cn(
-    "plugin-card-display-icon flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-primary/10 text-primary",
+    "plugin-card-display-icon flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-primary/10 text-primary",
     className,
   );
 
   if (icon?.type === "emoji") {
     return (
       <div className={baseClassName} style={style}>
-        <span aria-hidden="true" className={cn("text-xl leading-none", iconClassName)}>
+        <span aria-hidden="true" className={cn("text-lg leading-none", iconClassName)}>
           {icon.value}
         </span>
       </div>
@@ -1478,7 +1578,7 @@ function PluginDisplayIcon({
 
   return (
     <div className={baseClassName} style={style}>
-      <Icon className={cn("size-5", iconClassName)} />
+      <Icon className={cn("size-4.5", iconClassName)} />
     </div>
   );
 }
@@ -1546,18 +1646,18 @@ function PluginCard({
   return (
     <div
       aria-label={`查看 ${pluginTitle} 详情`}
-      className="plugin-card plugin-market-card flex min-h-44 cursor-pointer flex-col rounded-lg border border-border bg-card p-4 transition-[background-color,border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-[var(--retro-rust,var(--destructive))] hover:bg-card/95 hover:shadow-md hover:shadow-black/5 focus-visible:border-[var(--retro-rust,var(--destructive))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="plugin-card plugin-market-card flex min-h-36 cursor-pointer flex-col rounded-lg border border-border bg-card p-3 transition-[background-color,border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-[var(--retro-rust,var(--destructive))] hover:bg-card/95 hover:shadow-md hover:shadow-black/5 focus-visible:border-[var(--retro-rust,var(--destructive))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       role="button"
       tabIndex={0}
     >
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
+      <div className="flex min-w-0 items-start justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-2.5">
           <PluginDisplayIcon plugin={plugin} />
           <div className="min-w-0">
             <p
-              className={cn("plugin-card-title truncate font-sans text-base font-semibold leading-tight", titleMuted && "text-muted-foreground")}
+              className={cn("plugin-card-title truncate font-sans text-sm font-semibold leading-tight", titleMuted && "text-muted-foreground")}
               title={pluginTitle}
             >
               {pluginTitle}
@@ -1565,7 +1665,7 @@ function PluginCard({
             <p className="plugin-card-meta mt-1 truncate text-xs text-muted-foreground">
               v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
             </p>
-            <Badge className="mt-2" variant="secondary">{pluginTypeLabel(plugin)}</Badge>
+            <Badge className="mt-1.5" variant="secondary">{pluginTypeLabel(plugin)}</Badge>
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
@@ -1604,10 +1704,10 @@ function PluginCard({
           {compatibilityReason}
         </p>
       ) : null}
-      <p className="plugin-card-description mt-3 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
+      <p className="plugin-card-description mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
         {pluginDescription(plugin.manifest)}
       </p>
-      <div className="plugin-card-stats mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+      <div className="plugin-card-stats mt-2 flex items-center gap-2.5 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1">
           <Download className="size-3.5" />
           {downloads.toLocaleString()}
@@ -1625,8 +1725,8 @@ function PluginCard({
           {comments.toLocaleString()}
         </span>
       </div>
-      <div className="plugin-card-rule mt-3" />
-      <div className="plugin-card-footer-meta mt-3 space-y-1 text-xs text-muted-foreground">
+      <div className="plugin-card-rule mt-2" />
+      <div className="plugin-card-footer-meta mt-2 space-y-0.5 text-xs text-muted-foreground">
         <p className="truncate">
           v{pluginVersion(plugin.manifest)} · {pluginAuthor(plugin.manifest)}
         </p>
@@ -1634,15 +1734,15 @@ function PluginCard({
           支持: {plugin.manifest.host_application?.min_version ?? "任意"} - {plugin.manifest.host_application?.max_version ?? "最新"}
         </p>
       </div>
-      <div className="plugin-card-tags mt-3 flex flex-wrap gap-1">
-        {(plugin.manifest.categories ?? plugin.manifest.keywords ?? []).slice(0, 3).map((tag) => (
+      <div className="plugin-card-tags mt-2 flex flex-wrap gap-1">
+        {(plugin.manifest.categories ?? plugin.manifest.keywords ?? []).slice(0, 2).map((tag) => (
           <Badge key={tag} variant="secondary">
             {tag}
           </Badge>
         ))}
       </div>
-      <div className="mt-auto flex items-center justify-between gap-3 pt-4">
-        <div className="plugin-card-secondary-controls flex min-w-0 flex-wrap items-center gap-2">
+      <div className="mt-auto flex items-center justify-between gap-2 pt-3">
+        <div className="plugin-card-secondary-controls flex min-w-0 flex-wrap items-center gap-1.5">
           {quickStats ? (
             <PluginCardQuickStats
               busy={quickStats.busy}
@@ -2496,20 +2596,48 @@ function PluginConfigDialog({
   plugin,
   state,
   draft,
+  rawDraft,
   busy,
   error,
+  dirty,
+  editMode,
+  pageTab,
+  closeConfirmOpen,
+  resetConfirmOpen,
   onChange,
+  onRawChange,
+  onEditModeChange,
+  onPageTabChange,
   onSave,
+  onReset,
+  onCloseConfirm,
   onOpenChange,
+  onCloseConfirmOpenChange,
+  onResetConfirm,
+  onResetConfirmOpenChange,
 }: {
   plugin: InstalledPlugin | null;
   state: PluginConfigState | null;
   draft: Record<string, PluginConfigValue> | null;
+  rawDraft: string;
   busy: ConfigBusyState;
   error: string | null;
+  dirty: boolean;
+  editMode: ConfigEditMode;
+  pageTab: ConfigPageTab;
+  closeConfirmOpen: boolean;
+  resetConfirmOpen: boolean;
   onChange: (path: string[], value: PluginConfigValue) => void;
+  onRawChange: (value: string) => void;
+  onEditModeChange: (mode: ConfigEditMode) => void;
+  onPageTabChange: (tab: ConfigPageTab) => void;
   onSave: () => void;
+  onReset: () => void;
+  onCloseConfirm: () => void;
   onOpenChange: (open: boolean) => void;
+  onCloseConfirmOpenChange: (open: boolean) => void;
+  onResetConfirm: () => void;
+  onResetConfirmOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const sections = state?.schema.sections ?? [];
   const adapterView = plugin ? getAdapterConfigView(plugin.id) : null;
@@ -2537,6 +2665,7 @@ function PluginConfigDialog({
     : sections;
 
   return (
+    <>
     <Dialog open={plugin !== null} onOpenChange={onOpenChange}>
       <DialogContent size="xl">
         <DialogHeader
@@ -2560,44 +2689,268 @@ function PluginConfigDialog({
               </span>
             </div>
           ) : state && draft ? (
-            visibleSections.length > 0 ? (
-              <div className="grid gap-3">
-                {adapterView ? (
-                  <AdapterConfigPageHeader
-                    adapterPage={adapterPage}
-                    adapterView={adapterView}
-                    onPageChange={setAdapterPage}
-                  />
+            <Tabs className="space-y-4" onValueChange={(value) => onPageTabChange(value as ConfigPageTab)} value={pageTab}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <TabsList>
+                  <TabsTrigger value="settings">设置</TabsTrigger>
+                  <TabsTrigger value="details">详情</TabsTrigger>
+                </TabsList>
+                {pageTab === "settings" ? (
+                  <div className="flex items-center gap-1 rounded-md border border-border bg-muted/50 p-1">
+                    <Button
+                      className="h-7 px-2 text-[11px]"
+                      onClick={() => onEditModeChange("visual")}
+                      size="sm"
+                      type="button"
+                      variant={editMode === "visual" ? "default" : "ghost"}
+                    >
+                      <Layout />
+                      可视化
+                    </Button>
+                    <Button
+                      className="h-7 px-2 text-[11px]"
+                      onClick={() => onEditModeChange("source")}
+                      size="sm"
+                      type="button"
+                      variant={editMode === "source" ? "default" : "ghost"}
+                    >
+                      <Code2 />
+                      TOML
+                    </Button>
+                  </div>
                 ) : null}
-                {visibleSections.map((section) => (
-                  <PluginConfigSection
-                    draft={draft}
-                    hideHeader={adapterView !== null}
-                    key={section.name}
-                    onChange={onChange}
-                    section={section}
-                  />
-                ))}
               </div>
-            ) : (
-              <div className="rounded-lg border border-border bg-muted/40 px-3 py-8 text-center text-sm text-muted-foreground">
-                这个插件还没有可渲染的 config.toml
-              </div>
-            )
+              <TabsContent className="space-y-4" value="settings">
+                {dirty ? (
+                  <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
+                    有未保存的配置更改。
+                  </div>
+                ) : null}
+                {editMode === "source" ? (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold">config.toml</p>
+                      <Badge variant="outline">{state.configPath}</Badge>
+                    </div>
+                    <textarea
+                      className="min-h-[420px] w-full resize-y rounded-lg border border-border bg-background p-3 font-mono text-xs leading-relaxed text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                      disabled={busy !== null}
+                      onChange={(event) => onRawChange(event.target.value)}
+                      placeholder="TOML 配置内容"
+                      spellCheck={false}
+                      value={rawDraft}
+                    />
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      保存前会校验 TOML 格式。语法错误不会写入配置文件。
+                    </p>
+                  </div>
+                ) : visibleSections.length > 0 ? (
+                  <div className="grid gap-3">
+                    {adapterView ? (
+                      <AdapterConfigPageHeader
+                        adapterPage={adapterPage}
+                        adapterView={adapterView}
+                        onPageChange={setAdapterPage}
+                      />
+                    ) : null}
+                    {visibleSections.map((section) => (
+                      <PluginConfigSection
+                        draft={draft}
+                        hideHeader={adapterView !== null}
+                        key={section.name}
+                        onChange={onChange}
+                        section={section}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-border bg-muted/40 px-3 py-8 text-center text-sm text-muted-foreground">
+                    这个插件还没有可渲染的 config.toml
+                  </div>
+                )}
+              </TabsContent>
+              <TabsContent value="details">
+                {plugin ? <PluginConfigDetails plugin={plugin} state={state} /> : null}
+              </TabsContent>
+            </Tabs>
           ) : null}
         </DialogBody>
-        <DialogFooter>
-          <Button className="hidden" disabled={busy !== null} onClick={() => onOpenChange(false)} size="sm" variant="ghost">
+        <DialogFooter className="justify-between">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Button disabled={busy !== null || !state} onClick={onReset} size="sm" type="button" variant="outline">
+              <RotateCcw />
+              重置配置
+            </Button>
+            {state?.exists === false ? (
+              <span className="text-xs text-muted-foreground">当前插件还没有 config.toml</span>
+            ) : null}
+          </div>
+          <Button disabled={busy !== null} onClick={() => onOpenChange(false)} size="sm" type="button" variant="ghost">
             关闭
           </Button>
-          <Button className="[&>span]:hidden" disabled={busy !== null || !draft || !state} onClick={onSave} size="sm">
+          <Button disabled={busy !== null || !draft || !state || !dirty} onClick={onSave} size="sm" type="button">
             {busy === "save" ? <Loader2 className="animate-spin" /> : <Save />}
-            <span className="text-sm">保存并关闭</span>
-            保存配置
+            保存
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <Dialog open={closeConfirmOpen} onOpenChange={onCloseConfirmOpenChange}>
+      <DialogContent size="sm">
+        <DialogHeader
+          description="当前配置有未保存的更改，关闭后这些更改会被丢弃。"
+          icon={<AlertTriangle className="size-4" />}
+          title="放弃未保存更改？"
+          tone="warning"
+        />
+        <DialogFooter>
+          <Button onClick={() => onCloseConfirmOpenChange(false)} size="sm" type="button" variant="ghost">
+            继续编辑
+          </Button>
+          <Button onClick={onCloseConfirm} size="sm" type="button" variant="destructive">
+            放弃并关闭
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={resetConfirmOpen} onOpenChange={onResetConfirmOpenChange}>
+      <DialogContent size="sm">
+        <DialogHeader
+          description="会先备份当前配置，然后恢复为插件默认配置或移除本地 config.toml。"
+          icon={<RotateCcw className="size-4" />}
+          title="重置插件配置？"
+          tone="warning"
+        />
+        <DialogFooter>
+          <Button disabled={busy !== null} onClick={() => onResetConfirmOpenChange(false)} size="sm" type="button" variant="ghost">
+            取消
+          </Button>
+          <Button disabled={busy !== null} onClick={onResetConfirm} size="sm" type="button" variant="destructive">
+            {busy === "save" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+            重置
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
+  );
+}
+
+function PluginConfigDetails({
+  plugin,
+  state,
+}: {
+  plugin: InstalledPlugin;
+  state: PluginConfigState;
+}): React.JSX.Element {
+  const manifest = plugin.manifest;
+  const manifestUrls = (manifest.urls ?? {}) as {
+    repository?: string;
+    homepage?: string;
+    documentation?: string;
+    issues?: string;
+  };
+  const homepageUrl = pluginHomepageUrl(manifest);
+  const repositoryUrl = pluginRepositoryUrl(manifest);
+  const documentationUrl = manifestUrls.documentation?.trim();
+  const issuesUrl = manifestUrls.issues?.trim();
+  const details = [
+    { label: "插件 ID", value: manifest.id || plugin.id, code: true },
+    { label: "版本", value: pluginVersion(manifest) },
+    { label: "类型", value: pluginTypeLabel(plugin) },
+    { label: "作者", value: pluginAuthor(manifest) },
+    { label: "许可证", value: manifest.license ?? "未知" },
+    {
+      label: "MaiBot 版本",
+      value: manifest.host_application
+        ? `${manifest.host_application.min_version ?? "任意"} - ${manifest.host_application.max_version ?? "最新"}`
+        : "未声明",
+    },
+    { label: "Manifest", value: `v${manifest.manifest_version ?? 1}` },
+    { label: "Schema 来源", value: state.schema.source },
+    { label: "安装路径", value: plugin.path, code: true },
+    { label: "配置路径", value: state.configPath, code: true },
+  ].filter((item): item is { label: string; value: string; code?: boolean } =>
+    typeof item.value === "string" && item.value.trim().length > 0,
+  );
+  const keywords = [
+    ...(manifest.keywords ?? []),
+    ...(manifest.categories ?? []),
+  ].filter((value, index, list) => value.trim() && list.indexOf(value) === index);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="flex items-start gap-3">
+          <PluginDisplayIcon className="size-12" iconClassName="size-6" plugin={plugin} />
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-base font-semibold">{pluginName(plugin)}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              {pluginDescription(manifest)}
+            </p>
+          </div>
+        </div>
+        {keywords.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {keywords.map((keyword) => (
+              <Badge key={keyword} variant="secondary">{keyword}</Badge>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {details.map((item) => (
+          <ConfigDetailItem code={item.code} key={item.label} label={item.label} value={item.value} />
+        ))}
+      </div>
+
+      {(homepageUrl || repositoryUrl || documentationUrl || issuesUrl) ? (
+        <div className="flex flex-wrap gap-2">
+          {homepageUrl ? <ExternalLinkButton label="主页" url={homepageUrl} /> : null}
+          {repositoryUrl ? <ExternalLinkButton label="仓库" url={repositoryUrl} /> : null}
+          {documentationUrl ? <ExternalLinkButton label="文档" url={documentationUrl} /> : null}
+          {issuesUrl ? <ExternalLinkButton label="问题反馈" url={issuesUrl} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ConfigDetailItem({
+  label,
+  value,
+  code = false,
+}: {
+  label: string;
+  value: string;
+  code?: boolean;
+}): React.JSX.Element {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-muted/20 px-3 py-2">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      {code ? (
+        <code className="mt-1 block break-all text-xs">{value}</code>
+      ) : (
+        <p className="mt-1 break-words text-sm font-medium">{value}</p>
+      )}
+    </div>
+  );
+}
+
+function ExternalLinkButton({ label, url }: { label: string; url: string }): React.JSX.Element {
+  return (
+    <Button
+      onClick={() => {
+        void window.maibotDesktop?.openExternal(url);
+      }}
+      size="sm"
+      type="button"
+      variant="outline"
+    >
+      <ExternalLink />
+      {label}
+    </Button>
   );
 }
 

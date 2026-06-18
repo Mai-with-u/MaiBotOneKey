@@ -131,6 +131,7 @@ const fallbackSnapshot: DesktopSnapshot = {
   },
   launcherUiSettings: {
     chatPageMode: "webui",
+    floatingMascotMode: "maibot",
   },
   appIconSettings: {
     selectedIconId: "sprout",
@@ -151,6 +152,9 @@ const fallbackSnapshot: DesktopSnapshot = {
         description: "使用更近景、更圆润的橙团小芽头像。",
       },
     ],
+  },
+  codexPetSettings: {
+    options: [],
   },
   networkProxySettings: {
     enabled: false,
@@ -201,8 +205,12 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
     serviceStartupSettings: snapshot.serviceStartupSettings ?? fallbackSnapshot.serviceStartupSettings,
     openCodeSettings: snapshot.openCodeSettings ?? fallbackSnapshot.openCodeSettings,
-    launcherUiSettings: snapshot.launcherUiSettings ?? fallbackSnapshot.launcherUiSettings,
+    launcherUiSettings: {
+      ...fallbackSnapshot.launcherUiSettings,
+      ...snapshot.launcherUiSettings,
+    },
     appIconSettings: snapshot.appIconSettings ?? fallbackSnapshot.appIconSettings,
+    codexPetSettings: snapshot.codexPetSettings ?? fallbackSnapshot.codexPetSettings,
     networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,
     moduleVersions: {
       ...fallbackSnapshot.moduleVersions,

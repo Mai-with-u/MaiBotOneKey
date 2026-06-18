@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import process from "node:process";
 
@@ -15,6 +15,8 @@ type Requirement = {
   required: boolean;
   candidates: Candidate[];
 };
+
+type JsonRecord = Record<string, unknown>;
 
 const root = process.cwd();
 const pythonBootstrapPackages = new Set([
@@ -196,6 +198,36 @@ const requirements: Requirement[] = [
   },
 ];
 
+const requiredModuleResourceExclusions = [
+  "!MaiBot/config/**",
+  "!MaiBot/data/**",
+  "!MaiBot/logs/**",
+  "!MaiBot/plugins/**",
+];
+
+function asRecord(value: unknown): JsonRecord | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonRecord
+    : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+async function checkModuleResourceFilter(): Promise<string[]> {
+  const packageJson = asRecord(JSON.parse(await readFile(join(root, "package.json"), "utf8")));
+  const build = asRecord(packageJson?.build);
+  const extraResources = Array.isArray(build?.extraResources) ? build.extraResources : [];
+  const modulesResource = extraResources
+    .map(asRecord)
+    .find((resource) => resource?.from === "modules" && resource.to === "modules");
+  const filter = new Set(stringArray(modulesResource?.filter));
+  return requiredModuleResourceExclusions.filter((entry) => !filter.has(entry));
+}
+
 async function matches(candidate: Candidate): Promise<boolean> {
   try {
     const info = await stat(candidate.path);
@@ -326,6 +358,18 @@ async function main(): Promise<void> {
     console.log("");
     console.log(`Release payload is incomplete (${failures.length} required item(s) missing).`);
     console.log("Put runtime/ and modules/ in the repository root before running bun run release:win.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const missingModuleResourceExclusions = await checkModuleResourceFilter();
+  if (missingModuleResourceExclusions.length > 0) {
+    console.log("");
+    console.log("[missing] modules extraResources filter should exclude runtime MaiBot state.");
+    console.log("Do not package local MaiBot config/data/logs or user plugins into the installer.");
+    for (const entry of missingModuleResourceExclusions) {
+      console.log(`  - ${entry}`);
+    }
     process.exitCode = 1;
     return;
   }

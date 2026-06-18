@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "description": "Electron desktop shell for MaiBot OneKey.",
   "author": "![1779700604525](image/package/1779700604525.png)otricSeven",
   "license": "GPL-3.0-only",
@@ -108,6 +108,7 @@
           "!**/*.pyc",
           "!MaiBot/config/**",
           "!MaiBot/data/**",
+          "!MaiBot/logs/**",
           "!MaiBot/dashboard/.vite/**",
           "!MaiBot/dashboard/node_modules/**",
           "!MaiBot/maibot_statistics.html",

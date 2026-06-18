@@ -2,7 +2,6 @@
   CheckCircle2,
   ChevronDown,
   FolderOpen,
-  GripHorizontal,
   Home,
   Info,
   Loader2,
@@ -14,11 +13,15 @@
   Square,
   TerminalSquare,
 } from "lucide-react";
-import { type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
+  CodexPetOption,
   DesktopSnapshot,
+  LocalChatConnectionState,
+  LocalChatEvent,
+  LocalChatMessageEvent,
   PluginBuilderMode,
   ServiceDescriptor,
   ServiceId,
@@ -27,6 +30,7 @@ import type {
   WindowResizeEdge,
 } from "@shared/contracts";
 import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
+import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance } from "@/lib/use-appearance";
 import { useShortcut } from "@/lib/use-shortcut";
 import { useTheme } from "@/lib/use-theme";
@@ -73,6 +77,17 @@ const MAIBOT_DEFAULT_WEBUI_URL = "http://127.0.0.1:8001";
 const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
 const WEBUI_CHAT_USER_ID_STORAGE_KEY = "maibot-onekey.webui-chat-user-id";
 const WEBUI_CHAT_USER_NAME_STORAGE_KEY = "maibot-onekey.webui-chat-user-name";
+const CODEX_PET_ATLAS_COLUMNS = 8;
+const CODEX_PET_ATLAS_ROWS = 9;
+const CODEX_PET_CELL_WIDTH = 192;
+const CODEX_PET_CELL_HEIGHT = 208;
+type CodexPetMotion = "idle" | "waving" | "running-right" | "running-left";
+const CODEX_PET_MOTION_CONFIG: Record<CodexPetMotion, { row: number; durations: number[] }> = {
+  idle: { row: 0, durations: [280, 110, 110, 140, 140, 320] },
+  "running-right": { row: 1, durations: [120, 120, 120, 120, 120, 120, 120, 220] },
+  "running-left": { row: 2, durations: [120, 120, 120, 120, 120, 120, 120, 220] },
+  waving: { row: 3, durations: [140, 140, 140, 280] },
+};
 const toolbarMenuItemClassName =
   "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const retroTopActionIconClassName =
@@ -158,6 +173,67 @@ function createMaibotWebviewTarget(url: string, targetPath: string): WebviewEntr
 
 function createMaibotChatWebviewTarget(url: string): WebviewEntryTarget {
   return createMaibotWebviewTarget(url, MAIBOT_CHAT_WEBUI_PATH);
+}
+
+function selectedCodexPetOption(snapshot: DesktopSnapshot | null): CodexPetOption | null {
+  if (snapshot?.launcherUiSettings.floatingMascotMode !== "codex-pet") {
+    return null;
+  }
+  const options = snapshot.codexPetSettings.options;
+  return options.find((option) => option.id === snapshot.launcherUiSettings.floatingCodexPetId) ?? options[0] ?? null;
+}
+
+function CodexPetSprite({
+  pet,
+  height,
+  motion = "idle",
+  className,
+}: {
+  pet: CodexPetOption;
+  height: number;
+  motion?: CodexPetMotion;
+  className?: string;
+}): React.JSX.Element {
+  const width = Math.round((height * CODEX_PET_CELL_WIDTH) / CODEX_PET_CELL_HEIGHT);
+  const config = CODEX_PET_MOTION_CONFIG[motion];
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    setFrameIndex(0);
+  }, [motion, pet.spritesheetUrl]);
+
+  useEffect(() => {
+    const duration = config.durations[frameIndex] ?? config.durations[0] ?? 140;
+    const timeout = window.setTimeout(() => {
+      setFrameIndex((current) => (current + 1) % config.durations.length);
+    }, duration);
+    return () => window.clearTimeout(timeout);
+  }, [config.durations, frameIndex]);
+
+  return (
+    <span
+      aria-label={pet.displayName}
+      className={cn("codex-pet-sprite block shrink-0 overflow-hidden select-none", className)}
+      role="img"
+      style={{
+        "--codex-pet-frame-width": `${width}px`,
+        width,
+        height,
+      } as CSSProperties}
+    >
+      <img
+        alt=""
+        className="codex-pet-sprite-frame block h-full max-w-none select-none"
+        draggable={false}
+        src={pet.spritesheetUrl}
+        style={{
+          width: width * CODEX_PET_ATLAS_COLUMNS,
+          height: height * CODEX_PET_ATLAS_ROWS,
+          transform: `translate(${-frameIndex * width}px, ${-config.row * height}px)`,
+        }}
+      />
+    </span>
+  );
 }
 
 function readPluginBuilderMode(): PluginBuilderMode {
@@ -604,35 +680,26 @@ function MaiBotWebuiStatusPanel({
 }
 
 function FloatingShell({
-  expanded,
   edge,
-  chatWebviewTarget,
-  maibotWebviewReady,
   maibotService,
-  onExpand,
-  onCollapse,
+  codexPet,
   onRestore,
   onWindowState,
-  useNativeLocalChat,
-  onWebuiIdentity,
+  useNativeGlass,
 }: {
-  expanded: boolean;
   edge: "left" | "right" | null;
-  chatWebviewTarget: WebviewEntryTarget;
-  maibotWebviewReady: boolean;
   maibotService: ServiceDescriptor | undefined;
-  onExpand: () => void;
-  onCollapse: () => void;
+  codexPet: CodexPetOption | null;
   onRestore: () => void;
   onWindowState: (state: WindowState) => void;
-  useNativeLocalChat: boolean;
-  onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
+  useNativeGlass: boolean;
 }): React.JSX.Element {
   const dragRef = useRef<{
     offsetX: number;
     offsetY: number;
     startScreenX: number;
     startScreenY: number;
+    lastScreenX: number;
     moved: boolean;
     pointerId: number;
   } | null>(null);
@@ -643,12 +710,92 @@ function FloatingShell({
   } | null>(null);
   const dragFrameRef = useRef<number | null>(null);
   const suppressNextClickRef = useRef(false);
+  const [petMotion, setPetMotion] = useState<CodexPetMotion>("idle");
+  const [bubbleOpen, setBubbleOpen] = useState(false);
+  const [bubbleDraft, setBubbleDraft] = useState("");
+  const [bubbleMessages, setBubbleMessages] = useState<LocalChatMessageEvent[]>([]);
+  const [bubbleState, setBubbleState] = useState<LocalChatConnectionState>("idle");
+  const [bubbleError, setBubbleError] = useState<string | null>(null);
+  const [bubbleSending, setBubbleSending] = useState(false);
 
   const updateFloatingState = useCallback((state?: WindowState) => {
     if (state) {
       onWindowState(state);
     }
   }, [onWindowState]);
+
+  useEffect(() => {
+    const glassCollapsed = useNativeGlass && !bubbleOpen;
+    document.documentElement.dataset.floatingGlassCollapsed = glassCollapsed ? "true" : "false";
+    document.documentElement.dataset.floatingBubbleOpen = bubbleOpen ? "true" : "false";
+    void window.maibotDesktop?.window.setFloatingGlassEffect(glassCollapsed);
+    return () => {
+      document.documentElement.dataset.floatingGlassCollapsed = "false";
+      document.documentElement.dataset.floatingBubbleOpen = "false";
+      void window.maibotDesktop?.window.setFloatingGlassEffect(false);
+    };
+  }, [bubbleOpen, useNativeGlass]);
+
+  useEffect(() => {
+    void window.maibotDesktop?.window.setFloatingBubbleExpanded(bubbleOpen);
+    return () => {
+      void window.maibotDesktop?.window.setFloatingBubbleExpanded(false);
+    };
+  }, [bubbleOpen]);
+
+  useEffect(() => {
+    if (!bubbleOpen) {
+      return undefined;
+    }
+    if (maibotService?.status !== "running") {
+      setBubbleState("idle");
+      setBubbleError(maibotService?.status === "starting" ? "MaiBot Core 正在启动" : "请先启动 MaiBot Core");
+      return undefined;
+    }
+    const bridge = window.maibotDesktop?.localChat;
+    const unsubscribe = bridge?.onEvent((event: LocalChatEvent) => {
+      if ("type" in event) {
+        setBubbleState(event.state);
+        if (event.state === "connected") {
+          setBubbleError(null);
+        }
+        return;
+      }
+      setBubbleSending(false);
+      setBubbleMessages((current) => [...current, event].slice(-6));
+    });
+
+    setBubbleState("connecting");
+    setBubbleError(null);
+    void bridge?.connect()
+      .then(async (state) => {
+        setBubbleState(state);
+        if (state !== "connected") {
+          setBubbleError("聊天服务还没准备好");
+          return;
+        }
+        const history = await bridge.listMessages();
+        setBubbleMessages(history.slice(-6));
+      })
+      .catch((error) => {
+        setBubbleState("error");
+        setBubbleError(localChatErrorMessage(error));
+      });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [bubbleOpen, maibotService?.status]);
+
+  const startBubbleMaiBotCore = useCallback(() => {
+    if (!maibotService || maibotService.status === "starting" || maibotService.status === "stopping") {
+      return;
+    }
+    setBubbleError(null);
+    void window.maibotDesktop?.services.start("maibot").catch((error) => {
+      setBubbleError(localChatErrorMessage(error));
+    });
+  }, [maibotService]);
 
   const suppressNextClickBriefly = useCallback(() => {
     suppressNextClickRef.current = true;
@@ -663,8 +810,46 @@ function FloatingShell({
       event.stopPropagation();
       return;
     }
-    onExpand();
-  }, [onExpand]);
+    setBubbleOpen((current) => !current);
+  }, []);
+
+  const sendBubbleMessage = useCallback(() => {
+    const content = bubbleDraft.trim();
+    if (!content || bubbleSending || bubbleState !== "connected") {
+      return;
+    }
+    setBubbleDraft("");
+    setBubbleSending(true);
+    setBubbleError(null);
+    void window.maibotDesktop?.localChat
+      .send({ content })
+      .then((sent) => {
+        if (sent) {
+          setBubbleMessages((current) => [...current, sent].slice(-6));
+        }
+      })
+      .catch((error) => {
+        setBubbleDraft(content);
+        setBubbleError(localChatErrorMessage(error));
+      })
+      .finally(() => setBubbleSending(false));
+  }, [bubbleDraft, bubbleSending, bubbleState]);
+
+  const handlePetPointerEnter = useCallback(() => {
+    if (!dragRef.current) {
+      setPetMotion("waving");
+    }
+  }, []);
+
+  const handlePetPointerLeave = useCallback(() => {
+    if (!dragRef.current) {
+      setPetMotion("idle");
+    }
+  }, []);
+
+  const settlePetMotion = useCallback((target: HTMLElement) => {
+    setPetMotion(target.matches(":hover") ? "waving" : "idle");
+  }, []);
 
   const flushDragMove = useCallback(() => {
     if (dragFrameRef.current !== null) {
@@ -713,10 +898,12 @@ function FloatingShell({
       offsetY: event.clientY,
       startScreenX: event.screenX,
       startScreenY: event.screenY,
+      lastScreenX: event.screenX,
       moved: false,
       pointerId: event.pointerId,
     };
     dragPointRef.current = null;
+    setPetMotion("running-right");
   }, []);
 
   const cancelDrag = useCallback((event: PointerEvent<HTMLElement>) => {
@@ -733,7 +920,8 @@ function FloatingShell({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-  }, []);
+    settlePetMotion(event.currentTarget);
+  }, [settlePetMotion]);
 
   const drag = useCallback((event: PointerEvent<HTMLElement>) => {
     const current = dragRef.current;
@@ -752,6 +940,13 @@ function FloatingShell({
       return;
     }
     current.moved = true;
+    const deltaX = event.screenX - current.lastScreenX;
+    if (deltaX < -1) {
+      setPetMotion("running-left");
+    } else if (deltaX > 1) {
+      setPetMotion("running-right");
+    }
+    current.lastScreenX = event.screenX;
     dragPointRef.current = {
       clientX: current.offsetX,
       clientY: current.offsetY,
@@ -777,103 +972,185 @@ function FloatingShell({
       suppressNextClickBriefly();
       void window.maibotDesktop?.window.finishFloatingDrag().then(updateFloatingState);
     }
-  }, [suppressNextClickBriefly, updateFloatingState]);
+    settlePetMotion(event.currentTarget);
+  }, [settlePetMotion, suppressNextClickBriefly, updateFloatingState]);
 
-  if (!expanded) {
-    if (edge) {
-      return (
+  if (edge) {
+    return (
+      <div
+        className={cn(
+          "flex h-screen cursor-grab select-none items-center justify-center bg-transparent active:cursor-grabbing",
+          edge === "left" ? "pl-0.5" : "pr-0.5",
+        )}
+        data-floating-shell="true"
+        onClick={expandFromClick}
+        onPointerCancel={(event) => finishDrag(event)}
+        onPointerDown={startDrag}
+        onPointerEnter={handlePetPointerEnter}
+        onPointerLeave={handlePetPointerLeave}
+        onPointerMove={drag}
+        onPointerUp={(event) => finishDrag(event)}
+        title="拖动悬浮条，点击展开"
+      >
         <div
-          className={cn(
-            "flex h-screen cursor-grab select-none items-center justify-center bg-transparent active:cursor-grabbing",
-            edge === "left" ? "pl-0.5" : "pr-0.5",
-          )}
-          data-floating-shell="true"
-          onClick={expandFromClick}
-          onPointerCancel={(event) => finishDrag(event)}
-          onPointerDown={startDrag}
-          onPointerMove={drag}
-          onPointerUp={(event) => finishDrag(event)}
-          title="拖动悬浮条，点击展开"
+          className="floating-collapsed-surface grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl"
         >
-          <div
-            className="grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl"
-          >
+          {codexPet ? (
+            <CodexPetSprite className="max-w-none" height={56} motion={petMotion} pet={codexPet} />
+          ) : (
             <img
               alt=""
               className="h-14 max-w-none select-none object-cover"
               draggable={false}
               src={maiMascotImage}
             />
-          </div>
+          )}
         </div>
-      );
-    }
-
-    return (
-      <div className="grid h-screen place-items-center bg-transparent" data-floating-shell="true">
-        <button
-          className="relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl active:cursor-grabbing"
-          data-app-region="no-drag"
-          onClick={expandFromClick}
-          onPointerCancel={(event) => finishDrag(event)}
-          onPointerDown={startDrag}
-          onPointerMove={drag}
-          onPointerUp={(event) => finishDrag(event)}
-          title="打开悬浮菜单"
-          type="button"
-        >
-          <span className="absolute inset-x-3 bottom-1 h-7 rounded-full bg-primary/20 blur-md" />
-          <img alt="" className="relative mt-3 w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
-        </button>
       </div>
     );
   }
 
   return (
     <div
-      className="flex h-screen min-h-0 flex-col overflow-hidden border border-border bg-background text-foreground shadow-2xl"
+      className={cn(
+        "floating-collapsed-root h-screen bg-transparent",
+        bubbleOpen ? "relative" : useNativeGlass ? "grid place-items-start" : "grid place-items-center",
+      )}
       data-floating-shell="true"
-      style={{
-        borderRadius: "var(--app-window-radius, 16px)",
-      }}
     >
-      <div
-        className="flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-card px-2 active:cursor-grabbing"
-        data-app-region="no-drag"
-        onPointerCancel={(event) => finishDrag(event)}
-        onPointerDown={startDrag}
-        onPointerMove={drag}
-        onPointerUp={(event) => finishDrag(event)}
-      >
-        <GripHorizontal className="size-4 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold">MaiBot 悬浮球</span>
-        <div
-          className="flex shrink-0 items-center gap-1"
-          data-app-region="no-drag"
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <Button className="h-7 px-2 text-[11px]" onClick={onCollapse} size="sm" variant="secondary">
-            收起
-          </Button>
-          <Button className="h-7 px-2 text-[11px]" onClick={onRestore} size="sm" variant="default">
-            展开
-          </Button>
+      {bubbleOpen ? (
+        <div className="floating-pet-chat absolute inset-0 bg-transparent">
+          <div className="absolute bottom-[94px] right-[70px] flex w-[254px] flex-col items-end gap-1.5">
+            {bubbleError ? (
+              <div className="floating-chat-bubble floating-chat-bubble-bot text-destructive">
+                <div>{bubbleError}</div>
+                {maibotService && maibotService.status !== "running" && maibotService.status !== "stopping" ? (
+                  <button
+                    className="mt-1 text-[11px] font-semibold underline underline-offset-2"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      startBubbleMaiBotCore();
+                    }}
+                    type="button"
+                  >
+                    启动 MaiBot Core
+                  </button>
+                ) : null}
+              </div>
+            ) : bubbleMessages.length > 0 ? (
+              bubbleMessages.slice(-3).map((message) => (
+                <div
+                  className={cn(
+                    "floating-chat-bubble",
+                    message.role === "user" ? "floating-chat-bubble-user" : "floating-chat-bubble-bot",
+                  )}
+                  key={message.id}
+                >
+                  {message.content || (message.role === "bot" ? "……" : "")}
+                </div>
+              ))
+            ) : (
+              <div className="floating-chat-bubble floating-chat-bubble-bot">
+                {bubbleState === "connecting" ? "正在连接聊天服务……" : "直接和麦麦说话。"}
+              </div>
+            )}
+            {bubbleSending ? (
+              <div className="floating-chat-bubble floating-chat-bubble-bot">麦麦正在想……</div>
+            ) : null}
+          </div>
+          <div className="absolute bottom-2 left-2 w-[252px]">
+            <form
+              className="floating-pet-chat-input flex items-center gap-1.5 rounded-full px-2 py-1.5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendBubbleMessage();
+              }}
+            >
+              <button
+                aria-label="返回启动器"
+                className="grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-background/45 hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setBubbleOpen(false);
+                  onRestore();
+                }}
+                title="返回启动器"
+                type="button"
+              >
+                <Home className="size-3.5" />
+              </button>
+              <input
+                className="h-7 min-w-0 flex-1 bg-transparent px-1 text-xs outline-none placeholder:text-muted-foreground"
+                onChange={(event) => setBubbleDraft(event.target.value)}
+                placeholder={bubbleState === "connected" ? "直接输入..." : maibotService?.status === "running" ? "等待聊天服务" : "先启动 MaiBot Core"}
+                value={bubbleDraft}
+              />
+              <Button className="h-7 rounded-full px-2 text-xs" disabled={!bubbleDraft.trim() || bubbleSending || bubbleState !== "connected"} size="sm" type="submit">
+                发送
+              </Button>
+            </form>
+          </div>
+          <button
+            className="absolute bottom-2 right-2 grid size-20 cursor-grab place-items-center border-0 bg-transparent p-0 active:cursor-grabbing"
+            data-app-region="no-drag"
+            onClick={expandFromClick}
+            onPointerCancel={(event) => finishDrag(event)}
+            onPointerDown={startDrag}
+            onPointerEnter={handlePetPointerEnter}
+            onPointerLeave={handlePetPointerLeave}
+            onPointerMove={drag}
+            onPointerUp={(event) => finishDrag(event)}
+            title="收起气泡"
+            type="button"
+          >
+            {codexPet ? (
+              <CodexPetSprite className="drop-shadow-xl" height={78} motion={petMotion} pet={codexPet} />
+            ) : (
+              <img alt="" className="w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
+            )}
+          </button>
         </div>
-      </div>
-      <div className="min-h-0 flex-1">
-        {useNativeLocalChat || !maibotWebviewReady ? (
-          <LocalChatPanel active maibotService={maibotService} />
-        ) : (
-          <WebviewPanel
-            active
-            emptyText="MaiBot Core 启动后会在这里打开 WebUI 聊聊。"
-            onWebuiIdentity={onWebuiIdentity}
-            postAuthTargetUrl={chatWebviewTarget.postAuthTargetUrl}
-            title="MaiBot WebUI 聊聊"
-            url={chatWebviewTarget.entryUrl}
-          />
-        )}
-      </div>
+      ) : (
+        <button
+          className={cn(
+            useNativeGlass
+              ? "floating-glass-stack relative h-[86px] w-20 cursor-grab appearance-none rounded-none border-0 bg-transparent p-0 shadow-none outline-none active:cursor-grabbing"
+              : "floating-collapsed-surface relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl active:cursor-grabbing",
+          )}
+          data-app-region="no-drag"
+          onClick={expandFromClick}
+          onPointerCancel={(event) => finishDrag(event)}
+          onPointerDown={startDrag}
+          onPointerEnter={handlePetPointerEnter}
+          onPointerLeave={handlePetPointerLeave}
+          onPointerMove={drag}
+          onPointerUp={(event) => finishDrag(event)}
+          title="打开悬浮菜单"
+          type="button"
+        >
+          {useNativeGlass ? (
+            <>
+              <span className="floating-glass-pane grid h-20 w-20 place-items-center overflow-hidden">
+                {codexPet ? (
+                  <CodexPetSprite className="relative mt-1 drop-shadow-xl" height={78} motion={petMotion} pet={codexPet} />
+                ) : (
+                  <img alt="" className="relative mt-3 w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
+                )}
+              </span>
+              <span className="floating-glass-bars" aria-hidden="true" />
+            </>
+          ) : (
+            <>
+              <span className="floating-collapsed-glow absolute inset-x-3 bottom-1 h-7 rounded-full bg-primary/20 blur-md" />
+              {codexPet ? (
+                <CodexPetSprite className="relative mt-1 drop-shadow-xl" height={78} motion={petMotion} pet={codexPet} />
+              ) : (
+                <img alt="" className="relative mt-3 w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
+              )}
+            </>
+          )}
+        </button>
+      )}
     </div>
   );
 }
@@ -1135,7 +1412,6 @@ export function DesktopShell(): React.JSX.Element {
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [floatingMode, setFloatingMode] = useState(false);
-  const [floatingExpanded, setFloatingExpanded] = useState(false);
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const [homeEntryGuideSeen, setHomeEntryGuideSeen] = useState(() => readStorageFlag(HOME_ENTRY_GUIDE_KEY));
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
@@ -1266,11 +1542,17 @@ export function DesktopShell(): React.JSX.Element {
   const qqBackendService = serviceById.get("napcat");
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
+  const floatingCodexPet = selectedCodexPetOption(snapshot);
   const pluginEffectiveSurfaceMode: PluginSurfaceMode = pluginMode === "market" ? "webui" : pluginSurfaceMode;
   const messagePlatformConfigured = Boolean(
     snapshot?.initState.messagePlatformConfigured && snapshot.initState.qqAccount?.trim(),
   );
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
+  const showTopPluginBuilderEntry =
+    activeTab === "plugins" &&
+    pluginMode === "manage" &&
+    pluginEffectiveSurfaceMode !== "webui" &&
+    pluginBuilderMode !== "disabled";
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
   const canInterruptStartup =
     actionBusy === "all:start" ||
@@ -1375,7 +1657,6 @@ export function DesktopShell(): React.JSX.Element {
   );
 
   const enterFloatingMode = useCallback(() => {
-    setFloatingExpanded(false);
     setFloatingEdge(null);
     void window.maibotDesktop?.window.setFloatingMode(true).then((state) => {
       setFloatingMode(state.isFloating === true);
@@ -1383,18 +1664,7 @@ export function DesktopShell(): React.JSX.Element {
     });
   }, []);
 
-  const setFloatingPanel = useCallback((expanded: boolean) => {
-    setFloatingExpanded(expanded);
-    if (expanded) {
-      setFloatingEdge(null);
-    }
-    void window.maibotDesktop?.window.setFloatingPanelExpanded(expanded).then((state) => {
-      setFloatingEdge(state.floatingEdge ?? null);
-    });
-  }, []);
-
   const restoreMainWindow = useCallback(() => {
-    setFloatingExpanded(false);
     setFloatingEdge(null);
     void window.maibotDesktop?.window.setFloatingMode(false).then((state) => {
       setFloatingMode(state.isFloating === true);
@@ -1614,17 +1884,12 @@ export function DesktopShell(): React.JSX.Element {
     return (
       <TooltipProvider delayDuration={250}>
         <FloatingShell
-          chatWebviewTarget={maibotChatWebviewTarget}
+          codexPet={floatingCodexPet}
           edge={floatingEdge}
-          expanded={floatingExpanded}
-          maibotWebviewReady={maibotWebviewReady}
           maibotService={maibotService}
-          onCollapse={() => setFloatingPanel(false)}
-          onExpand={() => setFloatingPanel(true)}
           onRestore={restoreMainWindow}
           onWindowState={syncWindowState}
-          useNativeLocalChat={useNativeLocalChat}
-          onWebuiIdentity={rememberWebuiIdentity}
+          useNativeGlass={useRetroChrome}
         />
         <Toaster />
       </TooltipProvider>
@@ -1846,6 +2111,22 @@ export function DesktopShell(): React.JSX.Element {
                         插件市场
                       </Button>
                     </div>
+                    {showTopPluginBuilderEntry ? (
+                      <Button
+                        className={cn(
+                          "mr-1 h-8 gap-1.5 px-2.5 text-[11px]",
+                          useRetroChrome && "h-9 rounded-sm border-[var(--retro-line,var(--border))]",
+                        )}
+                        disabled={isStartingOpenCode}
+                        onClick={startOpenCode}
+                        size="sm"
+                        title="在终端中启动 OpenCode 插件编写器"
+                        variant="default"
+                      >
+                        {isStartingOpenCode ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}
+                        启动编写器
+                      </Button>
+                    ) : null}
                   </>
                 ) : null}
                 <Tooltip>
@@ -2143,15 +2424,12 @@ export function DesktopShell(): React.JSX.Element {
                   ) : null}
                   {pluginEffectiveSurfaceMode !== "webui" ? (
                     <PluginMarketPanel
-                      isStartingPluginBuilder={isStartingOpenCode}
                       maibotService={maibotService}
                       maibotVersion={snapshot?.moduleVersions.maibotLocal}
                       mode="manage"
                       onOpenTerminalSession={openTerminalSession}
                       onRequestedDetailHandled={() => setRequestedDetailPluginId(null)}
-                      onStartPluginBuilder={startOpenCode}
                       onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
-                      pluginBuilderEnabled={pluginBuilderMode !== "disabled"}
                       retro={useRetroChrome}
                       requestedConfigPluginId={requestedConfigPluginId}
                       requestedDetailPluginId={requestedDetailPluginId}

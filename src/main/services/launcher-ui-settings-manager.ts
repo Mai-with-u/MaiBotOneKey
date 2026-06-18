@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { LauncherChatPageMode, LauncherUiSettings, RuntimePaths } from "../../shared/contracts";
+import type { FloatingMascotMode, LauncherChatPageMode, LauncherUiSettings, RuntimePaths } from "../../shared/contracts";
 
 const LAUNCHER_UI_SETTINGS_FILE = "launcher-ui-settings.json";
 
@@ -48,6 +48,7 @@ export class LauncherUiSettingsManager {
 function defaultLauncherUiSettings(): LauncherUiSettings {
   return {
     chatPageMode: "webui",
+    floatingMascotMode: "maibot",
   };
 }
 
@@ -55,8 +56,22 @@ function normalizeChatPageMode(value: unknown): LauncherChatPageMode {
   return value === "native" ? "native" : "webui";
 }
 
+function normalizeFloatingMascotMode(value: unknown): FloatingMascotMode {
+  return value === "codex-pet" ? "codex-pet" : "maibot";
+}
+
+function normalizeCodexPetId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9._-]{1,80}$/u.test(trimmed) ? trimmed : undefined;
+}
+
 function normalizeLauncherUiSettings(value: Partial<LauncherUiSettings>): LauncherUiSettings {
   return {
     chatPageMode: normalizeChatPageMode(value.chatPageMode),
+    floatingMascotMode: normalizeFloatingMascotMode(value.floatingMascotMode),
+    floatingCodexPetId: normalizeCodexPetId(value.floatingCodexPetId),
   };
 }

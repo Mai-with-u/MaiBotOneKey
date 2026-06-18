@@ -138,9 +138,12 @@ export interface OpenCodeSettings {
 }
 
 export type LauncherChatPageMode = "webui" | "native";
+export type FloatingMascotMode = "maibot" | "codex-pet";
 
 export interface LauncherUiSettings {
   chatPageMode: LauncherChatPageMode;
+  floatingMascotMode: FloatingMascotMode;
+  floatingCodexPetId?: string;
 }
 
 export type AppIconId = "soft" | "sprout" | "bean";
@@ -155,6 +158,17 @@ export interface AppIconOption {
 export interface AppIconSettings {
   selectedIconId: AppIconId;
   options: AppIconOption[];
+}
+
+export interface CodexPetOption {
+  id: string;
+  displayName: string;
+  description?: string;
+  spritesheetUrl: string;
+}
+
+export interface CodexPetSettings {
+  options: CodexPetOption[];
 }
 
 export type PluginBuilderMode = "agent" | "disabled";
@@ -303,6 +317,7 @@ export interface DesktopSnapshot {
   openCodeSettings: OpenCodeSettings;
   launcherUiSettings: LauncherUiSettings;
   appIconSettings: AppIconSettings;
+  codexPetSettings: CodexPetSettings;
   networkProxySettings: NetworkProxySettings;
   appVersion: string;
   appLatestTag?: string;
@@ -1290,7 +1305,8 @@ export interface DesktopBridge {
     toggleMaximize: () => Promise<WindowState>;
     close: () => Promise<void>;
     setFloatingMode: (enabled: boolean) => Promise<WindowState>;
-    setFloatingPanelExpanded: (expanded: boolean) => Promise<WindowState>;
+    setFloatingGlassEffect: (enabled: boolean) => Promise<WindowState>;
+    setFloatingBubbleExpanded: (expanded: boolean) => Promise<WindowState>;
     moveFloatingBy: (deltaX: number, deltaY: number) => Promise<WindowState>;
     moveFloatingTo: (offsetX: number, offsetY: number) => Promise<WindowState>;
     finishFloatingDrag: () => Promise<WindowState>;
@@ -1367,6 +1383,12 @@ export interface DesktopBridge {
       config: Record<string, MaiBotPluginConfigValue>,
       serviceUrl?: string,
     ) => Promise<MaiBotPluginConfigSaveResult>;
+    saveConfigRaw: (
+      pluginId: string,
+      raw: string,
+      serviceUrl?: string,
+    ) => Promise<MaiBotPluginConfigSaveResult>;
+    resetConfig: (pluginId: string, serviceUrl?: string) => Promise<MaiBotPluginConfigSaveResult>;
     getReadme: (
       pluginId: string,
       repositoryUrl?: string,

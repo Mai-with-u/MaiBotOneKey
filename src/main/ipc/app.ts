@@ -1,10 +1,34 @@
-import { app, BrowserWindow, dialog, ipcMain, screen, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  screen,
+  session,
+  shell,
+} from "electron";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { cpus, freemem, loadavg, totalmem, uptime } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import type {
   CloseAction,
   AppIconId,
@@ -104,6 +128,7 @@ import {
 } from "../../shared/plugin-blueprint";
 import { InitManager } from "../services/init-manager";
 import type { AppIconManager } from "../services/app-icon-manager";
+import type { CodexPetManager } from "../services/codex-pet-manager";
 import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { LauncherUiSettingsManager } from "../services/launcher-ui-settings-manager";
@@ -118,7 +143,10 @@ import { RemoteSourceManager } from "../services/remote-source-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
 import { SourceSettingsManager } from "../services/source-settings-manager";
-import { getWindowWorkAreaBounds, isWindowVisuallyMaximized } from "../window-state";
+import {
+  getWindowWorkAreaBounds,
+  isWindowVisuallyMaximized,
+} from "../window-state";
 
 let previousCpuSample: { idle: number; total: number } | null = null;
 
@@ -143,14 +171,21 @@ const LAUNCHER_SETTING_FILES = [
 ];
 const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
-const REMOVE_RETRY_OPTIONS = { recursive: true, force: true, maxRetries: 8, retryDelay: 250 } as const;
+const REMOVE_RETRY_OPTIONS = {
+  recursive: true,
+  force: true,
+  maxRetries: 8,
+  retryDelay: 250,
+} as const;
 const NORMAL_MINIMUM_SIZE = { width: 1000, height: 680 };
 const NORMAL_DEFAULT_SIZE = { width: 1180, height: 760 };
 const NORMAL_RESTORE_MARGIN = 48;
 const FLOATING_BALL_SIZE = { width: 96, height: 96 };
-const FLOATING_PANEL_SIZE = { width: 380, height: 520 };
+const FLOATING_GLASS_SIZE = { width: 80, height: 86 };
+const FLOATING_BUBBLE_SIZE = { width: 360, height: 260 };
 const FLOATING_STRIP_SIZE = { width: 28, height: 112 };
 const FLOATING_EDGE_SNAP_DISTANCE = 18;
+const TRANSPARENT_WINDOW_BACKGROUND = "#00000000";
 const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
   "top",
   "right",
@@ -163,12 +198,17 @@ const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
 ]);
 const MAIBOT_WEBVIEW_PARTITION = "persist:maibot-webui";
 const ONEKEY_REPOSITORY_URL = "https://github.com/Mai-with-u/MaiBotOneKey.git";
-const ONEKEY_TAGS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/tags?per_page=100";
-const ONEKEY_LATEST_RELEASE_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
-const ONEKEY_RELEASES_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases?per_page=100";
+const ONEKEY_TAGS_API_URL =
+  "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/tags?per_page=100";
+const ONEKEY_LATEST_RELEASE_API_URL =
+  "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
+const ONEKEY_RELEASES_API_URL =
+  "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases?per_page=100";
 const ONEKEY_RELEASE_SOURCE = "Mai-with-u/MaiBotOneKey";
-const MAIBOT_RELEASES_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBot/releases?per_page=100";
-const MAIBOT_COMMITS_API_URL = "https://api.github.com/repos/Mai-with-u/MaiBot/commits";
+const MAIBOT_RELEASES_API_URL =
+  "https://api.github.com/repos/Mai-with-u/MaiBot/releases?per_page=100";
+const MAIBOT_COMMITS_API_URL =
+  "https://api.github.com/repos/Mai-with-u/MaiBot/commits";
 const MAIBOT_RELEASE_SOURCE = "Mai-with-u/MaiBot";
 const MAIBOT_UPDATE_SELECTION_FILE = "maibot-update-selection.json";
 
@@ -220,7 +260,9 @@ interface StoredMaiBotUpdateSelection {
   selectedAt: number;
 }
 
-type LauncherUpdateDownloadProgressCallback = (progress: LauncherUpdateDownloadProgress) => void;
+type LauncherUpdateDownloadProgressCallback = (
+  progress: LauncherUpdateDownloadProgress,
+) => void;
 
 interface RegisterAppIpcOptions {
   paths: RuntimePaths;
@@ -236,6 +278,7 @@ interface RegisterAppIpcOptions {
   serviceManager: ServiceManager;
   logStore: LogStore;
   appIconManager: AppIconManager;
+  codexPetManager: CodexPetManager;
   applyAppIcon: () => void;
   getMainWindow: () => BrowserWindow | null;
   requestQuit: () => void;
@@ -281,7 +324,12 @@ function readWindowState(
   };
 }
 
-function runProcess(file: string, args: string[], cwd: string, env?: Record<string, string>): Promise<string | undefined> {
+function runProcess(
+  file: string,
+  args: string[],
+  cwd: string,
+  env?: Record<string, string>,
+): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile(
       file,
@@ -310,7 +358,11 @@ function runProcess(file: string, args: string[], cwd: string, env?: Record<stri
 }
 
 function isRuntimeBusy(service: ServiceDescriptor): boolean {
-  return service.status === "starting" || service.status === "running" || service.status === "stopping";
+  return (
+    service.status === "starting" ||
+    service.status === "running" ||
+    service.status === "stopping"
+  );
 }
 
 function normalizePathForCompare(path: string): string {
@@ -326,7 +378,12 @@ function isPathInside(parent: string, child: string): boolean {
   const resolvedParent = resolve(parent);
   const resolvedChild = resolve(child);
   const diff = relative(resolvedParent, resolvedChild);
-  return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`) && !isAbsolute(diff);
+  return (
+    Boolean(diff) &&
+    diff !== ".." &&
+    !diff.startsWith(`..${sep}`) &&
+    !isAbsolute(diff)
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -348,7 +405,10 @@ function readSystemPerformance(): SystemPerformanceSnapshot {
   if (previousCpuSample && total > previousCpuSample.total) {
     const idleDelta = idle - previousCpuSample.idle;
     const totalDelta = total - previousCpuSample.total;
-    cpuUsagePercent = Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+    cpuUsagePercent = Math.max(
+      0,
+      Math.min(100, (1 - idleDelta / totalDelta) * 100),
+    );
   }
   previousCpuSample = { idle, total };
 
@@ -361,7 +421,10 @@ function readSystemPerformance(): SystemPerformanceSnapshot {
     loadAverage: loadavg(),
     memoryFreeBytes,
     memoryTotalBytes,
-    memoryUsedPercent: memoryTotalBytes > 0 ? ((memoryTotalBytes - memoryFreeBytes) / memoryTotalBytes) * 100 : 0,
+    memoryUsedPercent:
+      memoryTotalBytes > 0
+        ? ((memoryTotalBytes - memoryFreeBytes) / memoryTotalBytes) * 100
+        : 0,
     uptimeSeconds: uptime(),
   };
 }
@@ -406,7 +469,10 @@ async function retireAndRemovePath(path: string, root: string): Promise<void> {
 
   const retiredRoot = join(root, RETIRED_ENTRY_DIRECTORY);
   await mkdir(retiredRoot, { recursive: true });
-  const retiredPath = join(retiredRoot, `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const retiredPath = join(
+    retiredRoot,
+    `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
 
   try {
     await rename(path, retiredPath);
@@ -428,7 +494,10 @@ async function removeExistingPath(path: string): Promise<string[]> {
   return [path];
 }
 
-async function clearDirectoryContents(root: string, entryNames?: string[]): Promise<string[]> {
+async function clearDirectoryContents(
+  root: string,
+  entryNames?: string[],
+): Promise<string[]> {
   if (!existsSync(root)) {
     await mkdir(root, { recursive: true });
     return [];
@@ -436,7 +505,9 @@ async function clearDirectoryContents(root: string, entryNames?: string[]): Prom
 
   const entries = entryNames ?? (await readdir(root));
   const removedEntries = entries.map((entry) => join(root, entry));
-  await Promise.all(removedEntries.map((entryPath) => retireAndRemovePath(entryPath, root)));
+  await Promise.all(
+    removedEntries.map((entryPath) => retireAndRemovePath(entryPath, root)),
+  );
   await mkdir(root, { recursive: true });
   return removedEntries;
 }
@@ -464,7 +535,11 @@ function normalizePythonPackageName(name: string): string {
 }
 
 function normalizePythonVersion(version: string): number[] {
-  const clean = version.trim().toLowerCase().replace(/^v/u, "").split(/[+-]/u, 1)[0];
+  const clean = version
+    .trim()
+    .toLowerCase()
+    .replace(/^v/u, "")
+    .split(/[+-]/u, 1)[0];
   return clean.split(/[._-]/u).map((part) => {
     const value = part.match(/^\d+/u)?.[0];
     return value ? Number(value) : 0;
@@ -481,10 +556,16 @@ function comparePythonVersions(left: string, right: string): number {
       return diff;
     }
   }
-  return left.localeCompare(right, "en-US", { numeric: true, sensitivity: "base" });
+  return left.localeCompare(right, "en-US", {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
-async function readPythonDistInfoVersion(root: string, packageName: string): Promise<string | undefined> {
+async function readPythonDistInfoVersion(
+  root: string,
+  packageName: string,
+): Promise<string | undefined> {
   try {
     const { readdir, readFile } = await import("node:fs/promises");
     const expectedName = normalizePythonPackageName(packageName);
@@ -494,7 +575,10 @@ async function readPythonDistInfoVersion(root: string, packageName: string): Pro
       if (!entry.isDirectory() || !entry.name.endsWith(".dist-info")) {
         continue;
       }
-      const metadata = await readFile(join(root, entry.name, "METADATA"), "utf8").catch(() => undefined);
+      const metadata = await readFile(
+        join(root, entry.name, "METADATA"),
+        "utf8",
+      ).catch(() => undefined);
       if (!metadata) {
         continue;
       }
@@ -515,7 +599,9 @@ async function readPythonDistInfoVersion(root: string, packageName: string): Pro
 
 function parseVersionTag(tag: string): ParsedVersionTag | undefined {
   const normalized = tag.replace(/^v/iu, "");
-  const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:[-._]?([a-z]+)\.?(\d*)?)?$/iu);
+  const match = normalized.match(
+    /^(\d+(?:\.\d+){0,3})(?:[-._]?([a-z]+)\.?(\d*)?)?$/iu,
+  );
   if (!match) {
     return undefined;
   }
@@ -551,7 +637,10 @@ function prereleaseRank(label: string | undefined): number {
   }
 }
 
-function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): number {
+function compareParsedTags(
+  left: ParsedVersionTag,
+  right: ParsedVersionTag,
+): number {
   const length = Math.max(left.parts.length, right.parts.length);
   for (let index = 0; index < length; index++) {
     const diff = (left.parts[index] ?? 0) - (right.parts[index] ?? 0);
@@ -563,24 +652,41 @@ function compareParsedTags(left: ParsedVersionTag, right: ParsedVersionTag): num
     return left.prerelease ? -1 : 1;
   }
   if (left.prerelease && right.prerelease) {
-    const rankDiff = prereleaseRank(left.prereleaseLabel) - prereleaseRank(right.prereleaseLabel);
+    const rankDiff =
+      prereleaseRank(left.prereleaseLabel) -
+      prereleaseRank(right.prereleaseLabel);
     if (rankDiff !== 0) {
       return rankDiff;
     }
-    const numberDiff = (left.prereleaseNumber ?? 0) - (right.prereleaseNumber ?? 0);
+    const numberDiff =
+      (left.prereleaseNumber ?? 0) - (right.prereleaseNumber ?? 0);
     if (numberDiff !== 0) {
       return numberDiff;
     }
   }
-  return left.tag.localeCompare(right.tag, "en-US", { numeric: true, sensitivity: "base" });
+  return left.tag.localeCompare(right.tag, "en-US", {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 function pickLatestTags(
   rawTags: string[],
-): Pick<ModuleRuntimeVersions, "maibotLatestStableTag" | "maibotLatestPrereleaseTag"> {
-  const parsed = rawTags.map(parseVersionTag).filter((tag): tag is ParsedVersionTag => Boolean(tag));
-  const stable = parsed.filter((tag) => !tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
-  const prerelease = parsed.filter((tag) => tag.prerelease).sort(compareParsedTags).at(-1)?.tag;
+): Pick<
+  ModuleRuntimeVersions,
+  "maibotLatestStableTag" | "maibotLatestPrereleaseTag"
+> {
+  const parsed = rawTags
+    .map(parseVersionTag)
+    .filter((tag): tag is ParsedVersionTag => Boolean(tag));
+  const stable = parsed
+    .filter((tag) => !tag.prerelease)
+    .sort(compareParsedTags)
+    .at(-1)?.tag;
+  const prerelease = parsed
+    .filter((tag) => tag.prerelease)
+    .sort(compareParsedTags)
+    .at(-1)?.tag;
   return {
     maibotLatestStableTag: stable,
     maibotLatestPrereleaseTag: prerelease,
@@ -595,13 +701,19 @@ function pickLatestVersionTag(rawTags: string[]): string | undefined {
     .at(-1)?.tag;
 }
 
-function compareVersionTags(left: string | undefined, right: string | undefined): number {
+function compareVersionTags(
+  left: string | undefined,
+  right: string | undefined,
+): number {
   const parsedLeft = left ? parseVersionTag(left) : undefined;
   const parsedRight = right ? parseVersionTag(right) : undefined;
   if (parsedLeft && parsedRight) {
     return compareParsedTags(parsedLeft, parsedRight);
   }
-  return (left ?? "").localeCompare(right ?? "", "en-US", { numeric: true, sensitivity: "base" });
+  return (left ?? "").localeCompare(right ?? "", "en-US", {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 function releaseTagToVersion(tag: string | undefined): string | undefined {
@@ -625,20 +737,37 @@ function sanitizeDownloadFileName(value: string): string {
   return sanitized || "MaiBot-OneKey-update.exe";
 }
 
-function selectLauncherUpdateAsset(rawAssets: unknown): GitHubReleaseAsset | undefined {
-  const assets = Array.isArray(rawAssets) ? rawAssets.filter((item): item is GitHubReleaseAsset => {
-    return Boolean(item && typeof item === "object");
-  }) : [];
+function selectLauncherUpdateAsset(
+  rawAssets: unknown,
+): GitHubReleaseAsset | undefined {
+  const assets = Array.isArray(rawAssets)
+    ? rawAssets.filter((item): item is GitHubReleaseAsset => {
+        return Boolean(item && typeof item === "object");
+      })
+    : [];
   const executableAssets = assets.filter((asset) => {
     const name = typeof asset.name === "string" ? asset.name.toLowerCase() : "";
-    const url = typeof asset.browser_download_url === "string" ? asset.browser_download_url : "";
-    return name.endsWith(".exe") && !name.includes("uninstaller") && Boolean(url);
+    const url =
+      typeof asset.browser_download_url === "string"
+        ? asset.browser_download_url
+        : "";
+    return (
+      name.endsWith(".exe") && !name.includes("uninstaller") && Boolean(url)
+    );
   });
-  return executableAssets.find((asset) => String(asset.name ?? "").toLowerCase().includes("win"))
-    ?? executableAssets[0];
+  return (
+    executableAssets.find((asset) =>
+      String(asset.name ?? "")
+        .toLowerCase()
+        .includes("win"),
+    ) ?? executableAssets[0]
+  );
 }
 
-async function fetchLauncherReleaseNotesInRange(currentTag: string, latestTag: string): Promise<string | undefined> {
+async function fetchLauncherReleaseNotesInRange(
+  currentTag: string,
+  latestTag: string,
+): Promise<string | undefined> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -662,19 +791,25 @@ async function fetchLauncherReleaseNotesInRange(currentTag: string, latestTag: s
         }
         const tag = release.tag_name;
         return (
-          release.draft !== true
-          && typeof tag === "string"
-          && compareVersionTags(tag, currentTag) > 0
-          && compareVersionTags(tag, latestTag) <= 0
+          release.draft !== true &&
+          typeof tag === "string" &&
+          compareVersionTags(tag, currentTag) > 0 &&
+          compareVersionTags(tag, latestTag) <= 0
         );
       })
-      .sort((left, right) => compareVersionTags(String(right.tag_name), String(left.tag_name)))
+      .sort((left, right) =>
+        compareVersionTags(String(right.tag_name), String(left.tag_name)),
+      )
       .map((release) => {
         const tag = String(release.tag_name);
-        const title = typeof release.name === "string" && release.name.trim() ? release.name.trim() : tag;
-        const body = typeof release.body === "string" && release.body.trim()
-          ? release.body.trim()
-          : "此版本没有填写更新说明。";
+        const title =
+          typeof release.name === "string" && release.name.trim()
+            ? release.name.trim()
+            : tag;
+        const body =
+          typeof release.body === "string" && release.body.trim()
+            ? release.body.trim()
+            : "此版本没有填写更新说明。";
         return `## ${title}\n\n${body}`;
       });
 
@@ -690,8 +825,13 @@ function releaseBody(release: GitHubReleasePayload): string | undefined {
     : undefined;
 }
 
-function releaseTitle(release: GitHubReleasePayload, fallbackTag: string): string {
-  return typeof release.name === "string" && release.name.trim() ? release.name.trim() : fallbackTag;
+function releaseTitle(
+  release: GitHubReleasePayload,
+  fallbackTag: string,
+): string {
+  return typeof release.name === "string" && release.name.trim()
+    ? release.name.trim()
+    : fallbackTag;
 }
 
 async function fetchMaiBotReleases(): Promise<GitHubReleasePayload[]> {
@@ -711,11 +851,12 @@ async function fetchMaiBotReleases(): Promise<GitHubReleasePayload[]> {
       return [];
     }
 
-    return releases.filter((release): release is GitHubReleasePayload => (
-      Boolean(release && typeof release === "object")
-      && release.draft !== true
-      && typeof release.tag_name === "string"
-    ));
+    return releases.filter(
+      (release): release is GitHubReleasePayload =>
+        Boolean(release && typeof release === "object") &&
+        release.draft !== true &&
+        typeof release.tag_name === "string",
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -730,11 +871,13 @@ function releaseNotesInRange(
     .filter((release) => {
       const tag = String(release.tag_name);
       return (
-        (!currentTag || compareVersionTags(tag, currentTag) > 0)
-        && compareVersionTags(tag, targetTag) <= 0
+        (!currentTag || compareVersionTags(tag, currentTag) > 0) &&
+        compareVersionTags(tag, targetTag) <= 0
       );
     })
-    .sort((left, right) => compareVersionTags(String(right.tag_name), String(left.tag_name)))
+    .sort((left, right) =>
+      compareVersionTags(String(right.tag_name), String(left.tag_name)),
+    )
     .map((release) => {
       const tag = String(release.tag_name);
       return `## ${releaseTitle(release, tag)}\n\n${releaseBody(release) ?? "此版本没有填写更新说明。"}`;
@@ -761,21 +904,27 @@ function commitSubject(value: unknown): string {
   return value.trim().split(/\r?\n/u)[0]?.trim() || "无提交说明";
 }
 
-function formatBranchCommitNotes(branch: string, commits: GitHubCommitPayload[]): string | undefined {
+function formatBranchCommitNotes(
+  branch: string,
+  commits: GitHubCommitPayload[],
+): string | undefined {
   const items = commits
     .filter((commit) => typeof commit.sha === "string" && commit.sha.trim())
     .slice(0, 10)
     .map((commit) => {
       const sha = String(commit.sha);
       const shortSha = sha.slice(0, 7);
-      const url = typeof commit.html_url === "string" && commit.html_url.trim()
-        ? commit.html_url.trim()
-        : `https://github.com/Mai-with-u/MaiBot/commit/${encodeURIComponent(sha)}`;
-      const author = typeof commit.author?.login === "string" && commit.author.login.trim()
-        ? commit.author.login.trim()
-        : typeof commit.commit?.author?.name === "string" && commit.commit.author.name.trim()
-          ? commit.commit.author.name.trim()
-          : "未知作者";
+      const url =
+        typeof commit.html_url === "string" && commit.html_url.trim()
+          ? commit.html_url.trim()
+          : `https://github.com/Mai-with-u/MaiBot/commit/${encodeURIComponent(sha)}`;
+      const author =
+        typeof commit.author?.login === "string" && commit.author.login.trim()
+          ? commit.author.login.trim()
+          : typeof commit.commit?.author?.name === "string" &&
+              commit.commit.author.name.trim()
+            ? commit.commit.author.name.trim()
+            : "未知作者";
       const date = formatCommitDate(commit.commit?.author?.date);
       return `- [\`${shortSha}\`](${url}) ${commitSubject(commit.commit?.message)}\n  ${author} / ${date}`;
     });
@@ -787,7 +936,9 @@ function formatBranchCommitNotes(branch: string, commits: GitHubCommitPayload[])
   return `## dev 最新提交\n\n分支：\`${branch}\`\n\n${items.join("\n\n")}`;
 }
 
-async function fetchMaiBotBranchCommitNotes(branch: string): Promise<string | undefined> {
+async function fetchMaiBotBranchCommitNotes(
+  branch: string,
+): Promise<string | undefined> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   const url = new URL(MAIBOT_COMMITS_API_URL);
@@ -807,9 +958,12 @@ async function fetchMaiBotBranchCommitNotes(branch: string): Promise<string | un
       return undefined;
     }
 
-    return formatBranchCommitNotes(branch, commits.filter((commit): commit is GitHubCommitPayload => (
-      Boolean(commit && typeof commit === "object")
-    )));
+    return formatBranchCommitNotes(
+      branch,
+      commits.filter((commit): commit is GitHubCommitPayload =>
+        Boolean(commit && typeof commit === "object"),
+      ),
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -830,7 +984,9 @@ async function fetchMaiBotUpdateInfo(
       target,
       releaseName: `分支 ${targetName}`,
       releaseUrl: `${releaseUrlBase}/tree/${encodeURIComponent(targetName)}`,
-      releaseNotes: /^dev$/iu.test(targetName) ? await fetchMaiBotBranchCommitNotes(targetName) : undefined,
+      releaseNotes: /^dev$/iu.test(targetName)
+        ? await fetchMaiBotBranchCommitNotes(targetName)
+        : undefined,
       available: true,
       checkedAt: Date.now(),
       source: MAIBOT_RELEASE_SOURCE,
@@ -839,27 +995,37 @@ async function fetchMaiBotUpdateInfo(
 
   const targetTag = targetName;
   const releases = await fetchMaiBotReleases();
-  const targetRelease = releases.find((release) => String(release.tag_name) === targetTag);
-  const releaseNotes = releaseNotesInRange(releases, currentTag, targetTag)
-    ?? (targetRelease ? releaseBody(targetRelease) : undefined);
+  const targetRelease = releases.find(
+    (release) => String(release.tag_name) === targetTag,
+  );
+  const releaseNotes =
+    releaseNotesInRange(releases, currentTag, targetTag) ??
+    (targetRelease ? releaseBody(targetRelease) : undefined);
 
   return {
     currentVersion,
     currentTag,
     target,
     targetTag,
-    releaseName: targetRelease ? releaseTitle(targetRelease, targetTag) : targetTag,
-    releaseUrl: typeof targetRelease?.html_url === "string"
-      ? targetRelease.html_url
-      : `${releaseUrlBase}/releases/tag/${encodeURIComponent(targetTag)}`,
+    releaseName: targetRelease
+      ? releaseTitle(targetRelease, targetTag)
+      : targetTag,
+    releaseUrl:
+      typeof targetRelease?.html_url === "string"
+        ? targetRelease.html_url
+        : `${releaseUrlBase}/releases/tag/${encodeURIComponent(targetTag)}`,
     releaseNotes,
-    available: currentTag ? compareVersionTags(targetTag, currentTag) > 0 : true,
+    available: currentTag
+      ? compareVersionTags(targetTag, currentTag) > 0
+      : true,
     checkedAt: Date.now(),
     source: MAIBOT_RELEASE_SOURCE,
   };
 }
 
-async function fetchLauncherUpdateInfo(currentVersion: string): Promise<LauncherUpdateInternalInfo> {
+async function fetchLauncherUpdateInfo(
+  currentVersion: string,
+): Promise<LauncherUpdateInternalInfo> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -880,32 +1046,43 @@ async function fetchLauncherUpdateInfo(currentVersion: string): Promise<Launcher
     const latestTag = release.tag_name;
     const currentTag = `v${currentVersion}`;
     const available = compareVersionTags(latestTag, currentTag) > 0;
-    const latestReleaseNotes = typeof release.body === "string" && release.body.trim()
-      ? release.body.trim()
-      : undefined;
+    const latestReleaseNotes =
+      typeof release.body === "string" && release.body.trim()
+        ? release.body.trim()
+        : undefined;
     const releaseNotes = available
-      ? (await fetchLauncherReleaseNotesInRange(currentTag, latestTag).catch(() => undefined)) ?? latestReleaseNotes
+      ? ((await fetchLauncherReleaseNotesInRange(currentTag, latestTag).catch(
+          () => undefined,
+        )) ?? latestReleaseNotes)
       : latestReleaseNotes;
     return {
       currentVersion,
       latestTag,
       latestVersion: releaseTagToVersion(latestTag),
       releaseName: typeof release.name === "string" ? release.name : latestTag,
-      releaseUrl: typeof release.html_url === "string" ? release.html_url : "https://github.com/Mai-with-u/MaiBotOneKey/releases",
+      releaseUrl:
+        typeof release.html_url === "string"
+          ? release.html_url
+          : "https://github.com/Mai-with-u/MaiBotOneKey/releases",
       releaseNotes,
       assetName: typeof asset?.name === "string" ? asset.name : undefined,
       assetSize: typeof asset?.size === "number" ? asset.size : undefined,
       available,
       checkedAt: Date.now(),
       source: ONEKEY_RELEASE_SOURCE,
-      downloadUrl: typeof asset?.browser_download_url === "string" ? asset.browser_download_url : undefined,
+      downloadUrl:
+        typeof asset?.browser_download_url === "string"
+          ? asset.browser_download_url
+          : undefined,
     };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function publicLauncherUpdateInfo(update: LauncherUpdateInternalInfo): LauncherUpdateInfo {
+function publicLauncherUpdateInfo(
+  update: LauncherUpdateInternalInfo,
+): LauncherUpdateInfo {
   const { downloadUrl: _downloadUrl, ...publicUpdate } = update;
   return publicUpdate;
 }
@@ -929,11 +1106,16 @@ function launcherDownloadProgress(
     assetName: update.assetName,
     receivedBytes,
     totalBytes,
-    percent: totalBytes ? Math.min(100, Math.round((receivedBytes / totalBytes) * 1000) / 10) : undefined,
+    percent: totalBytes
+      ? Math.min(100, Math.round((receivedBytes / totalBytes) * 1000) / 10)
+      : undefined,
   };
 }
 
-async function writeDownloadChunk(stream: WriteStream, chunk: Buffer): Promise<void> {
+async function writeDownloadChunk(
+  stream: WriteStream,
+  chunk: Buffer,
+): Promise<void> {
   if (stream.write(chunk)) {
     return;
   }
@@ -957,7 +1139,9 @@ async function downloadLauncherUpdate(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
-    const response = await fetch(update.downloadUrl, { signal: controller.signal });
+    const response = await fetch(update.downloadUrl, {
+      signal: controller.signal,
+    });
     if (!response.ok) {
       throw new Error(`安装包下载失败: HTTP ${response.status}`);
     }
@@ -968,17 +1152,25 @@ async function downloadLauncherUpdate(
 
     const updatesRoot = getLauncherUpdateDownloadRoot(paths);
     await mkdir(updatesRoot, { recursive: true });
-    const installerPath = join(updatesRoot, sanitizeDownloadFileName(update.assetName));
+    const installerPath = join(
+      updatesRoot,
+      sanitizeDownloadFileName(update.assetName),
+    );
     const partialPath = `${installerPath}.download`;
     await rm(partialPath, { force: true }).catch(() => undefined);
 
-    const totalBytes = parseContentLength(response.headers.get("content-length")) ?? update.assetSize;
+    const totalBytes =
+      parseContentLength(response.headers.get("content-length")) ??
+      update.assetSize;
     const reader = response.body.getReader();
     const stream = createWriteStream(partialPath);
     let receivedBytes = 0;
     let lastProgressAt = 0;
 
-    const emitProgress = (phase: LauncherUpdateDownloadProgress["phase"], force = false): void => {
+    const emitProgress = (
+      phase: LauncherUpdateDownloadProgress["phase"],
+      force = false,
+    ): void => {
       if (!onProgress) {
         return;
       }
@@ -987,7 +1179,9 @@ async function downloadLauncherUpdate(
         return;
       }
       lastProgressAt = now;
-      onProgress(launcherDownloadProgress(phase, update, receivedBytes, totalBytes));
+      onProgress(
+        launcherDownloadProgress(phase, update, receivedBytes, totalBytes),
+      );
     };
 
     emitProgress("downloading", true);
@@ -1008,7 +1202,9 @@ async function downloadLauncherUpdate(
 
       await finishDownloadStream(stream);
       if (update.assetSize && receivedBytes !== update.assetSize) {
-        throw new Error(`安装包大小校验失败: ${receivedBytes} / ${update.assetSize}`);
+        throw new Error(
+          `安装包大小校验失败: ${receivedBytes} / ${update.assetSize}`,
+        );
       }
 
       await rm(installerPath, { force: true }).catch(() => undefined);
@@ -1031,7 +1227,9 @@ async function downloadLauncherUpdate(
 
 function parsePackageVersion(version: string): ParsedVersionTag | undefined {
   const normalized = version.replace(/^v/iu, "");
-  const match = normalized.match(/^(\d+(?:\.\d+){0,3})(?:(?:[-._]?(?:dev|a|alpha|b|beta|rc|pre|preview))\d*)?/iu);
+  const match = normalized.match(
+    /^(\d+(?:\.\d+){0,3})(?:(?:[-._]?(?:dev|a|alpha|b|beta|rc|pre|preview))\d*)?/iu,
+  );
   if (!match) {
     return undefined;
   }
@@ -1039,27 +1237,48 @@ function parsePackageVersion(version: string): ParsedVersionTag | undefined {
   return {
     tag: version,
     parts: match[1].split(".").map((part) => Number(part)),
-    prerelease: /(?:^|[._+-])(?:dev|a|alpha|b|beta|rc|pre|preview)\d*/iu.test(version),
+    prerelease: /(?:^|[._+-])(?:dev|a|alpha|b|beta|rc|pre|preview)\d*/iu.test(
+      version,
+    ),
   };
 }
 
 async function fetchPypiVersionSummary(
   packageName: string,
-): Promise<Pick<ModuleRuntimeVersions, "dashboardLatestPypi" | "dashboardLatestStablePypi" | "dashboardLatestPrereleasePypi">> {
+): Promise<
+  Pick<
+    ModuleRuntimeVersions,
+    | "dashboardLatestPypi"
+    | "dashboardLatestStablePypi"
+    | "dashboardLatestPrereleasePypi"
+  >
+> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    const response = await fetch(`https://pypi.org/pypi/${packageName}/json`, { signal: controller.signal });
+    const response = await fetch(`https://pypi.org/pypi/${packageName}/json`, {
+      signal: controller.signal,
+    });
     if (!response.ok) {
       return {};
     }
-    const data = (await response.json()) as { info?: { version?: unknown }; releases?: Record<string, unknown> };
-    const latestPypi = typeof data.info?.version === "string" ? data.info.version : undefined;
+    const data = (await response.json()) as {
+      info?: { version?: unknown };
+      releases?: Record<string, unknown>;
+    };
+    const latestPypi =
+      typeof data.info?.version === "string" ? data.info.version : undefined;
     const parsed = Object.keys(data.releases ?? {})
       .map(parsePackageVersion)
       .filter((version): version is ParsedVersionTag => Boolean(version));
-    const stable = parsed.filter((version) => !version.prerelease).sort(compareParsedTags).at(-1)?.tag;
-    const prerelease = parsed.filter((version) => version.prerelease).sort(compareParsedTags).at(-1)?.tag;
+    const stable = parsed
+      .filter((version) => !version.prerelease)
+      .sort(compareParsedTags)
+      .at(-1)?.tag;
+    const prerelease = parsed
+      .filter((version) => version.prerelease)
+      .sort(compareParsedTags)
+      .at(-1)?.tag;
     return {
       dashboardLatestPypi: latestPypi ?? stable,
       dashboardLatestStablePypi: stable,
@@ -1083,7 +1302,9 @@ function decodeStatisticText(content: string): string {
     .replace(/&amp;/giu, "&")
     .replace(/&lt;/giu, "<")
     .replace(/&gt;/giu, ">")
-    .replace(/&#(\d+);/gu, (_match, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#(\d+);/gu, (_match, code: string) =>
+      String.fromCodePoint(Number(code)),
+    )
     .replace(/\r\n?/gu, "\n");
 }
 
@@ -1092,15 +1313,24 @@ function escapeRegExp(value: string): string {
 }
 
 function readStatisticField(text: string, label: string): string | undefined {
-  const inlineValue = text.match(new RegExp(`${escapeRegExp(label)}\\s*[:\\uFF1A]\\s*([^\\n]+)`, "u"))?.[1]?.trim();
+  const inlineValue = text
+    .match(
+      new RegExp(`${escapeRegExp(label)}\\s*[:\\uFF1A]\\s*([^\\n]+)`, "u"),
+    )?.[1]
+    ?.trim();
   if (inlineValue) {
     return inlineValue;
   }
 
-  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
   const labelIndex = lines.findIndex((line) => line === label);
   const nextLine = labelIndex >= 0 ? lines[labelIndex + 1] : undefined;
-  return nextLine && !nextLine.endsWith(":") && !nextLine.endsWith("\uFF1A") ? nextLine : undefined;
+  return nextLine && !nextLine.endsWith(":") && !nextLine.endsWith("\uFF1A")
+    ? nextLine
+    : undefined;
 }
 
 function readStatisticCount(text: string, label: string): number | undefined {
@@ -1131,12 +1361,19 @@ function isChatStatisticBoundary(line: string): boolean {
     line.includes("\u6309\u8BF7\u6C42\u7C7B\u578B\u5206\u7C7B\u7EDF\u8BA1") ||
     line.includes("\u6570\u636E\u5206\u5E03\u56FE\u8868") ||
     line.includes("\u6307\u6807\u8D8B\u52BF") ||
-    /^(?:statistics\s+period|model\s+statistics|module\s+statistics|request\s+type\s+statistics|data\s+distribution|metrics\s+trend|charts?)$/iu.test(normalized)
+    /^(?:statistics\s+period|model\s+statistics|module\s+statistics|request\s+type\s+statistics|data\s+distribution|metrics\s+trend|charts?)$/iu.test(
+      normalized,
+    )
   );
 }
 
-function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] {
-  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+function parseChatStatistics(
+  text: string,
+): MaiBotStatisticSummary["chatStats"] {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
   const startIndex = lines.findIndex(isChatStatisticHeading);
   if (startIndex < 0) {
     return [];
@@ -1150,7 +1387,11 @@ function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] 
     if (isChatStatisticBoundary(line)) {
       break;
     }
-    if (line.startsWith("-") || line.includes("Token/") || line.toLowerCase().includes("cost")) {
+    if (
+      line.startsWith("-") ||
+      line.includes("Token/") ||
+      line.toLowerCase().includes("cost")
+    ) {
       break;
     }
     if (
@@ -1176,7 +1417,9 @@ function parseChatStatistics(text: string): MaiBotStatisticSummary["chatStats"] 
   return stats;
 }
 
-async function readMaiBotStatistics(paths: RuntimePaths): Promise<MaiBotStatisticSummary> {
+async function readMaiBotStatistics(
+  paths: RuntimePaths,
+): Promise<MaiBotStatisticSummary> {
   const candidates = [
     join(paths.maibotRoot, "maibot_statistics.html"),
     join(paths.maibotRoot, "data", "maibot_statistics.html"),
@@ -1187,10 +1430,21 @@ async function readMaiBotStatistics(paths: RuntimePaths): Promise<MaiBotStatisti
     return { available: false, updatedAt: Date.now(), chatStats: [] };
   }
 
-  const [content, fileStat] = await Promise.all([readFile(sourcePath, "utf8"), stat(sourcePath)]);
+  const [content, fileStat] = await Promise.all([
+    readFile(sourcePath, "utf8"),
+    stat(sourcePath),
+  ]);
   const text = decodeStatisticText(content);
-  const periodLabel = text.match(/(\u6700\u8FD1[^\s(\uFF08]*\u7EDF\u8BA1\u6570\u636E|period[^\s(]*)/iu)?.[1];
-  const startedAt = text.match(/(?:\u81EA\s*([^,\uFF0C)\uFF09]+)\u5F00\u59CB|started\s*[:\uFF1A]\s*([^\n]+))/iu)?.slice(1).find(Boolean)?.trim();
+  const periodLabel = text.match(
+    /(\u6700\u8FD1[^\s(\uFF08]*\u7EDF\u8BA1\u6570\u636E|period[^\s(]*)/iu,
+  )?.[1];
+  const startedAt = text
+    .match(
+      /(?:\u81EA\s*([^,\uFF0C)\uFF09]+)\u5F00\u59CB|started\s*[:\uFF1A]\s*([^\n]+))/iu,
+    )
+    ?.slice(1)
+    .find(Boolean)
+    ?.trim();
 
   return {
     available: true,
@@ -1205,7 +1459,10 @@ async function readMaiBotStatistics(paths: RuntimePaths): Promise<MaiBotStatisti
     totalTokens: readStatisticCount(text, "Token"),
     totalCost: readStatisticField(text, "\u603B\u82B1\u8D39"),
     costPerMessage: readStatisticField(text, "花费/消息数量"),
-    costPerReceivedMessage: readStatisticField(text, "\u82B1\u8D39/\u63A5\u53D7\u6D88\u606F\u6570\u91CF"),
+    costPerReceivedMessage: readStatisticField(
+      text,
+      "\u82B1\u8D39/\u63A5\u53D7\u6D88\u606F\u6570\u91CF",
+    ),
     costPerReply: readStatisticField(text, "花费/回复数量"),
     costPerHour: readStatisticField(text, "\u82B1\u8D39/\u65F6\u95F4"),
     tokensPerHour: readStatisticField(text, "Token/\u65F6\u95F4"),
@@ -1227,41 +1484,53 @@ export function registerAppIpc({
   serviceManager,
   logStore,
   appIconManager,
+  codexPetManager,
   applyAppIcon,
   getMainWindow,
   requestQuit,
   showMainWindow,
 }: RegisterAppIpcOptions): RegisteredAppIpcDisposables {
   let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
-  let remoteAppVersionCache: Pick<DesktopSnapshot, "appLatestTag" | "appLatestSource"> = {};
+  let remoteAppVersionCache: Pick<
+    DesktopSnapshot,
+    "appLatestTag" | "appLatestSource"
+  > = {};
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
   let initDependencyRefreshPromise: Promise<void> | null = null;
   let floatingMode = false;
-  let floatingPanelExpanded = false;
+  let floatingBubbleExpanded = false;
   let floatingEdgeSide: "left" | "right" | null = null;
+  let floatingGlassEffect = false;
   let normalBounds: Electron.Rectangle | null = null;
   let shellMaximized = false;
   let shellRestoreBounds: Electron.Rectangle | null = null;
   let resizeState: WindowResizeState | null = null;
-  const maibotUpdateSelectionPath = join(paths.userDataRoot, MAIBOT_UPDATE_SELECTION_FILE);
+  const maibotUpdateSelectionPath = join(
+    paths.userDataRoot,
+    MAIBOT_UPDATE_SELECTION_FILE,
+  );
 
   const readManagedWindowState = (window: BrowserWindow | null): WindowState =>
     readWindowState(window, floatingMode, floatingEdgeSide, shellMaximized);
 
-  const readMaiBotUpdateSelection = async (): Promise<Pick<
-    ModuleRuntimeVersions,
-    "maibotSelectedAt" | "maibotSelectedChannel" | "maibotSelectedTarget"
-  >> => {
+  const readMaiBotUpdateSelection = async (): Promise<
+    Pick<
+      ModuleRuntimeVersions,
+      "maibotSelectedAt" | "maibotSelectedChannel" | "maibotSelectedTarget"
+    >
+  > => {
     try {
-      const raw = JSON.parse(await readFile(maibotUpdateSelectionPath, "utf8")) as Partial<StoredMaiBotUpdateSelection>;
+      const raw = JSON.parse(
+        await readFile(maibotUpdateSelectionPath, "utf8"),
+      ) as Partial<StoredMaiBotUpdateSelection>;
       const target = raw.target;
       if (
-        raw.version !== 1
-        || !raw.channel
-        || !target
-        || (target.type !== "tag" && target.type !== "branch")
-        || typeof target.name !== "string"
-        || target.name.trim().length === 0
+        raw.version !== 1 ||
+        !raw.channel ||
+        !target ||
+        (target.type !== "tag" && target.type !== "branch") ||
+        typeof target.name !== "string" ||
+        target.name.trim().length === 0
       ) {
         return {};
       }
@@ -1271,7 +1540,8 @@ export function registerAppIpc({
           type: target.type,
           name: target.name.trim(),
         },
-        maibotSelectedAt: typeof raw.selectedAt === "number" ? raw.selectedAt : undefined,
+        maibotSelectedAt:
+          typeof raw.selectedAt === "number" ? raw.selectedAt : undefined,
       };
     } catch {
       return {};
@@ -1303,17 +1573,28 @@ export function registerAppIpc({
   };
 
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
+    if (window && floatingMode) {
+      ensureFloatingAlwaysOnTop(window);
+    }
     const state = readManagedWindowState(window);
     window?.webContents.send("desktop:window-state", state);
     return state;
   };
 
-  const clampFloatingBounds = (bounds: Electron.Rectangle): Electron.Rectangle => {
+  const clampFloatingBounds = (
+    bounds: Electron.Rectangle,
+  ): Electron.Rectangle => {
     const display = screen.getDisplayMatching(bounds);
     const workArea = display.workArea;
     return {
-      x: Math.min(Math.max(bounds.x, workArea.x), workArea.x + workArea.width - bounds.width),
-      y: Math.min(Math.max(bounds.y, workArea.y), workArea.y + workArea.height - bounds.height),
+      x: Math.min(
+        Math.max(bounds.x, workArea.x),
+        workArea.x + workArea.width - bounds.width,
+      ),
+      y: Math.min(
+        Math.max(bounds.y, workArea.y),
+        workArea.y + workArea.height - bounds.height,
+      ),
       width: bounds.width,
       height: bounds.height,
     };
@@ -1325,21 +1606,35 @@ export function registerAppIpc({
   ): Electron.Rectangle => {
     const display = screen.getDisplayMatching(window.getBounds());
     return {
-      x: Math.round(display.workArea.x + display.workArea.width - size.width - 18),
-      y: Math.round(display.workArea.y + display.workArea.height - size.height - 18),
+      x: Math.round(
+        display.workArea.x + display.workArea.width - size.width - 18,
+      ),
+      y: Math.round(
+        display.workArea.y + display.workArea.height - size.height - 18,
+      ),
       width: size.width,
       height: size.height,
     };
   };
 
+  const isFloatingGlassCollapsed = (): boolean =>
+    floatingMode &&
+    floatingGlassEffect &&
+    !floatingBubbleExpanded &&
+    !floatingEdgeSide;
+
   const activeFloatingSize = (): { width: number; height: number } =>
     floatingEdgeSide
       ? FLOATING_STRIP_SIZE
-      : floatingPanelExpanded
-        ? FLOATING_PANEL_SIZE
-        : FLOATING_BALL_SIZE;
+      : floatingBubbleExpanded
+          ? FLOATING_BUBBLE_SIZE
+          : isFloatingGlassCollapsed()
+            ? FLOATING_GLASS_SIZE
+            : FLOATING_BALL_SIZE;
 
-  const withActiveFloatingSize = (bounds: Electron.Rectangle): Electron.Rectangle => {
+  const withActiveFloatingSize = (
+    bounds: Electron.Rectangle,
+  ): Electron.Rectangle => {
     const size = activeFloatingSize();
     return {
       x: bounds.x,
@@ -1350,18 +1645,89 @@ export function registerAppIpc({
   };
 
   const restoreNormalWindowChrome = (window: BrowserWindow): void => {
+    applyFloatingBackgroundMaterial(window, false);
     window.setResizable(false);
     window.setMaximizable(true);
-    window.setMinimumSize(NORMAL_MINIMUM_SIZE.width, NORMAL_MINIMUM_SIZE.height);
+    window.setMinimumSize(
+      NORMAL_MINIMUM_SIZE.width,
+      NORMAL_MINIMUM_SIZE.height,
+    );
   };
 
-  const clampNormalBounds = (bounds: Electron.Rectangle): Electron.Rectangle => {
+  const applyFloatingBackgroundMaterial = (
+    window: BrowserWindow,
+    enabled: boolean,
+  ): void => {
+    if (process.platform !== "win32" || typeof window.setBackgroundMaterial !== "function") {
+      window.setBackgroundColor(TRANSPARENT_WINDOW_BACKGROUND);
+      return;
+    }
+    try {
+      window.setBackgroundMaterial(enabled ? "acrylic" : "none");
+    } catch {
+      // Older Windows builds can reject acrylic even when Electron exposes the API.
+    } finally {
+      window.setBackgroundColor(TRANSPARENT_WINDOW_BACKGROUND);
+    }
+  };
+
+  const ensureFloatingAlwaysOnTop = (window: BrowserWindow): void => {
+    if (!floatingMode || window.isDestroyed()) {
+      return;
+    }
+    window.setAlwaysOnTop(true, "screen-saver");
+    window.moveTop();
+  };
+
+  const syncFloatingBackgroundMaterial = (window: BrowserWindow): void => {
+    applyFloatingBackgroundMaterial(window, isFloatingGlassCollapsed());
+    ensureFloatingAlwaysOnTop(window);
+  };
+
+  const resizeFloatingToActiveSize = (
+    window: BrowserWindow,
+    animate: boolean,
+  ): void => {
+    const currentBounds = window.getBounds();
+    const size = activeFloatingSize();
+    window.setBounds(
+      clampFloatingBounds({
+        x: Math.round(currentBounds.x + (currentBounds.width - size.width) / 2),
+        y: Math.round(
+          currentBounds.y + (currentBounds.height - size.height) / 2,
+        ),
+        width: size.width,
+        height: size.height,
+      }),
+      animate,
+    );
+  };
+
+  const clampNormalBounds = (
+    bounds: Electron.Rectangle,
+  ): Electron.Rectangle => {
     const workArea = screen.getDisplayMatching(bounds).workArea;
-    const width = Math.min(Math.max(bounds.width, NORMAL_MINIMUM_SIZE.width), workArea.width);
-    const height = Math.min(Math.max(bounds.height, NORMAL_MINIMUM_SIZE.height), workArea.height);
+    const width = Math.min(
+      Math.max(bounds.width, NORMAL_MINIMUM_SIZE.width),
+      workArea.width,
+    );
+    const height = Math.min(
+      Math.max(bounds.height, NORMAL_MINIMUM_SIZE.height),
+      workArea.height,
+    );
     return {
-      x: Math.round(Math.min(Math.max(bounds.x, workArea.x), workArea.x + workArea.width - width)),
-      y: Math.round(Math.min(Math.max(bounds.y, workArea.y), workArea.y + workArea.height - height)),
+      x: Math.round(
+        Math.min(
+          Math.max(bounds.x, workArea.x),
+          workArea.x + workArea.width - width,
+        ),
+      ),
+      y: Math.round(
+        Math.min(
+          Math.max(bounds.y, workArea.y),
+          workArea.y + workArea.height - height,
+        ),
+      ),
       width: Math.round(width),
       height: Math.round(height),
     };
@@ -1370,11 +1736,23 @@ export function registerAppIpc({
   const fallbackNormalBounds = (window: BrowserWindow): Electron.Rectangle => {
     const workArea = getWindowWorkAreaBounds(window);
     const width = Math.min(
-      Math.max(NORMAL_MINIMUM_SIZE.width, Math.min(NORMAL_DEFAULT_SIZE.width, workArea.width - NORMAL_RESTORE_MARGIN * 2)),
+      Math.max(
+        NORMAL_MINIMUM_SIZE.width,
+        Math.min(
+          NORMAL_DEFAULT_SIZE.width,
+          workArea.width - NORMAL_RESTORE_MARGIN * 2,
+        ),
+      ),
       workArea.width,
     );
     const height = Math.min(
-      Math.max(NORMAL_MINIMUM_SIZE.height, Math.min(NORMAL_DEFAULT_SIZE.height, workArea.height - NORMAL_RESTORE_MARGIN * 2)),
+      Math.max(
+        NORMAL_MINIMUM_SIZE.height,
+        Math.min(
+          NORMAL_DEFAULT_SIZE.height,
+          workArea.height - NORMAL_RESTORE_MARGIN * 2,
+        ),
+      ),
       workArea.height,
     );
     return {
@@ -1437,7 +1815,12 @@ export function registerAppIpc({
     if (!window || window.isDestroyed()) {
       return readManagedWindowState(window);
     }
-    if (floatingMode || isShellWindowMaximized(window) || window.isFullScreen() || !WINDOW_RESIZE_EDGES.has(edge)) {
+    if (
+      floatingMode ||
+      isShellWindowMaximized(window) ||
+      window.isFullScreen() ||
+      !WINDOW_RESIZE_EDGES.has(edge)
+    ) {
       return sendWindowState(window);
     }
 
@@ -1457,7 +1840,12 @@ export function registerAppIpc({
       resizeState = null;
       return readManagedWindowState(window);
     }
-    if (!resizeState || floatingMode || isShellWindowMaximized(window) || window.isFullScreen()) {
+    if (
+      !resizeState ||
+      floatingMode ||
+      isShellWindowMaximized(window) ||
+      window.isFullScreen()
+    ) {
       return sendWindowState(window);
     }
 
@@ -1512,11 +1900,12 @@ export function registerAppIpc({
         window.unmaximize();
       }
       floatingMode = true;
-      floatingPanelExpanded = false;
+      floatingBubbleExpanded = false;
       floatingEdgeSide = null;
       window.setMinimumSize(1, 1);
       window.setResizable(false);
-      window.setAlwaysOnTop(true, "floating");
+      ensureFloatingAlwaysOnTop(window);
+      syncFloatingBackgroundMaterial(window);
       window.setBounds(floatingBounds(window, FLOATING_BALL_SIZE), true);
       window.show();
       window.focus();
@@ -1527,12 +1916,16 @@ export function registerAppIpc({
       resizeState = null;
       const shouldRestoreBounds = floatingMode;
       floatingMode = false;
-      floatingPanelExpanded = false;
+      floatingBubbleExpanded = false;
       floatingEdgeSide = null;
+      syncFloatingBackgroundMaterial(window);
       window.setAlwaysOnTop(false);
       restoreNormalWindowChrome(window);
       if (shouldRestoreBounds) {
-        window.setBounds(normalBounds ?? { x: 80, y: 80, width: 1180, height: 760 }, true);
+        window.setBounds(
+          normalBounds ?? { x: 80, y: 80, width: 1180, height: 760 },
+          true,
+        );
       }
       normalBounds = null;
       window.show();
@@ -1543,7 +1936,21 @@ export function registerAppIpc({
     return sendWindowState(window);
   };
 
-  const applyFloatingPanelExpanded = (expanded: boolean): WindowState => {
+  const applyFloatingGlassEffect = (enabled: boolean): WindowState => {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) {
+      return readManagedWindowState(window);
+    }
+    floatingGlassEffect = enabled;
+    if (floatingMode && !floatingEdgeSide) {
+      resizeFloatingToActiveSize(window, true);
+    }
+    syncFloatingBackgroundMaterial(window);
+    ensureFloatingAlwaysOnTop(window);
+    return sendWindowState(window);
+  };
+
+  const applyFloatingBubbleExpanded = (expanded: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
       return readManagedWindowState(window);
@@ -1551,22 +1958,16 @@ export function registerAppIpc({
     if (!floatingMode) {
       return sendWindowState(window);
     }
-    if (floatingPanelExpanded === expanded && (expanded || !floatingEdgeSide)) {
+    if (floatingBubbleExpanded === expanded) {
       return sendWindowState(window);
     }
-    floatingPanelExpanded = expanded;
-    floatingEdgeSide = null;
-    const currentBounds = window.getBounds();
-    const nextSize = expanded ? FLOATING_PANEL_SIZE : FLOATING_BALL_SIZE;
-    window.setBounds(
-      clampFloatingBounds({
-        x: currentBounds.x,
-        y: currentBounds.y,
-        width: nextSize.width,
-        height: nextSize.height,
-      }),
-      true,
-    );
+    floatingBubbleExpanded = expanded;
+    if (expanded) {
+      floatingEdgeSide = null;
+    }
+    resizeFloatingToActiveSize(window, true);
+    syncFloatingBackgroundMaterial(window);
+    ensureFloatingAlwaysOnTop(window);
     return sendWindowState(window);
   };
 
@@ -1583,13 +1984,18 @@ export function registerAppIpc({
     if (floatingEdgeSide) {
       const previousEdgeSide = floatingEdgeSide;
       floatingEdgeSide = null;
+      const nextSize = activeFloatingSize();
       const undockedBounds = {
-        x: previousEdgeSide === "left" ? currentBounds.x : currentBounds.x + currentBounds.width - FLOATING_BALL_SIZE.width,
+        x:
+          previousEdgeSide === "left"
+            ? currentBounds.x
+            : currentBounds.x + currentBounds.width - nextSize.width,
         y: currentBounds.y,
-        width: FLOATING_BALL_SIZE.width,
-        height: FLOATING_BALL_SIZE.height,
+        width: nextSize.width,
+        height: nextSize.height,
       };
       window.setBounds(clampFloatingBounds(undockedBounds), false);
+      syncFloatingBackgroundMaterial(window);
     }
 
     const bounds = window.getBounds();
@@ -1618,7 +2024,7 @@ export function registerAppIpc({
     if (floatingEdgeSide) {
       floatingEdgeSide = null;
       const currentBounds = window.getBounds();
-      const nextSize = floatingPanelExpanded ? FLOATING_PANEL_SIZE : FLOATING_BALL_SIZE;
+      const nextSize = activeFloatingSize();
       window.setBounds(
         clampFloatingBounds({
           x: currentBounds.x,
@@ -1628,15 +2034,16 @@ export function registerAppIpc({
         }),
         false,
       );
+      syncFloatingBackgroundMaterial(window);
     }
 
     const size = activeFloatingSize();
     const cursorPoint = screen.getCursorScreenPoint();
-    const safeOffsetX = wasEdgeDocked && !floatingPanelExpanded
-      ? Math.round(FLOATING_BALL_SIZE.width / 2)
+    const safeOffsetX = wasEdgeDocked
+      ? Math.round(size.width / 2)
       : Math.min(Math.max(Math.round(offsetX), 0), size.width);
-    const safeOffsetY = wasEdgeDocked && !floatingPanelExpanded
-      ? Math.round(FLOATING_BALL_SIZE.height / 2)
+    const safeOffsetY = wasEdgeDocked
+      ? Math.round(size.height / 2)
       : Math.min(Math.max(Math.round(offsetY), 0), size.height);
     window.setBounds(
       clampFloatingBounds({
@@ -1662,15 +2069,18 @@ export function registerAppIpc({
     const currentBounds = withActiveFloatingSize(window.getBounds());
     const display = screen.getDisplayMatching(currentBounds);
     const workArea = display.workArea;
-    const isNearLeft = currentBounds.x <= workArea.x + FLOATING_EDGE_SNAP_DISTANCE;
+    const isNearLeft =
+      currentBounds.x <= workArea.x + FLOATING_EDGE_SNAP_DISTANCE;
     const isNearRight =
-      currentBounds.x + currentBounds.width >= workArea.x + workArea.width - FLOATING_EDGE_SNAP_DISTANCE;
+      currentBounds.x + currentBounds.width >=
+      workArea.x + workArea.width - FLOATING_EDGE_SNAP_DISTANCE;
 
-    if (!floatingPanelExpanded && (isNearLeft || isNearRight)) {
+    if (isNearLeft || isNearRight) {
       floatingEdgeSide = isNearLeft ? "left" : "right";
-      const x = floatingEdgeSide === "left"
-        ? workArea.x
-        : workArea.x + workArea.width - FLOATING_STRIP_SIZE.width;
+      const x =
+        floatingEdgeSide === "left"
+          ? workArea.x
+          : workArea.x + workArea.width - FLOATING_STRIP_SIZE.width;
       window.setBounds(
         clampFloatingBounds({
           x,
@@ -1680,11 +2090,17 @@ export function registerAppIpc({
         }),
         true,
       );
+      syncFloatingBackgroundMaterial(window);
       return sendWindowState(window);
     }
 
     floatingEdgeSide = null;
-    window.setBounds(clampFloatingBounds(withActiveFloatingSize(currentBounds)), true);
+    window.setBounds(
+      clampFloatingBounds(withActiveFloatingSize(currentBounds)),
+      true,
+    );
+    syncFloatingBackgroundMaterial(window);
+    ensureFloatingAlwaysOnTop(window);
     return sendWindowState(window);
   };
 
@@ -1692,7 +2108,9 @@ export function registerAppIpc({
     const versions: ModuleRuntimeVersions = {};
     const maibotRoot = paths.maibotRoot;
 
-    const pyprojectVersion = await readPyprojectVersion(join(maibotRoot, "pyproject.toml"));
+    const pyprojectVersion = await readPyprojectVersion(
+      join(maibotRoot, "pyproject.toml"),
+    );
     if (pyprojectVersion) {
       versions.maibotLocal = pyprojectVersion;
       versions.maibotLocalSource = "pyproject";
@@ -1715,10 +2133,14 @@ export function registerAppIpc({
     if (existsSync(initManager.getGitPath())) {
       try {
         const tagsResult = await moduleUpdater.listMaiBotRemoteTagNames();
-        Object.assign(versions, pickLatestTags(Array.from(new Set(tagsResult.tags))));
+        Object.assign(
+          versions,
+          pickLatestTags(Array.from(new Set(tagsResult.tags))),
+        );
         versions.maibotRemoteSource = tagsResult.remoteUrl;
       } catch (error) {
-        versions.maibotRemoteError = error instanceof Error ? error.message : String(error);
+        versions.maibotRemoteError =
+          error instanceof Error ? error.message : String(error);
       }
     } else {
       versions.maibotRemoteError = `未找到可用 Git: ${initManager.getGitPath()}`;
@@ -1726,9 +2148,9 @@ export function registerAppIpc({
 
     const dashboardVersions = await fetchPypiVersionSummary("maibot-dashboard");
     if (
-      dashboardVersions.dashboardLatestPypi
-      || dashboardVersions.dashboardLatestStablePypi
-      || dashboardVersions.dashboardLatestPrereleasePypi
+      dashboardVersions.dashboardLatestPypi ||
+      dashboardVersions.dashboardLatestStablePypi ||
+      dashboardVersions.dashboardLatestPrereleasePypi
     ) {
       Object.assign(versions, dashboardVersions);
       versions.dashboardPypiSource = "PyPI";
@@ -1737,7 +2159,9 @@ export function registerAppIpc({
     return versions;
   };
 
-  const readRemoteAppVersion = async (): Promise<Pick<DesktopSnapshot, "appLatestTag" | "appLatestSource">> => {
+  const readRemoteAppVersion = async (): Promise<
+    Pick<DesktopSnapshot, "appLatestTag" | "appLatestSource">
+  > => {
     const gitPath = initManager.getGitPath();
     if (existsSync(gitPath)) {
       const tagsOutput = await runProcess(
@@ -1745,10 +2169,11 @@ export function registerAppIpc({
         ["ls-remote", "--tags", "--refs", ONEKEY_REPOSITORY_URL],
         paths.installRoot,
       );
-      const tags = tagsOutput
-        ?.split(/\r?\n/u)
-        .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
-        .filter((tag): tag is string => Boolean(tag)) ?? [];
+      const tags =
+        tagsOutput
+          ?.split(/\r?\n/u)
+          .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
+          .filter((tag): tag is string => Boolean(tag)) ?? [];
       const latestTag = pickLatestVersionTag(Array.from(new Set(tags)));
       if (latestTag) {
         return {
@@ -1761,13 +2186,17 @@ export function registerAppIpc({
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(ONEKEY_TAGS_API_URL, { signal: controller.signal });
+      const response = await fetch(ONEKEY_TAGS_API_URL, {
+        signal: controller.signal,
+      });
       if (!response.ok) {
         return {};
       }
       const data = (await response.json()) as Array<{ name?: unknown }>;
       const latestTag = pickLatestVersionTag(
-        data.map((tag) => typeof tag.name === "string" ? tag.name : "").filter(Boolean),
+        data
+          .map((tag) => (typeof tag.name === "string" ? tag.name : ""))
+          .filter(Boolean),
       );
       return latestTag
         ? {
@@ -1800,7 +2229,9 @@ export function registerAppIpc({
     return update;
   };
 
-  const buildSnapshot = async (options: { refreshDependencies?: boolean } = {}): Promise<DesktopSnapshot> => ({
+  const buildSnapshot = async (
+    options: { refreshDependencies?: boolean } = {},
+  ): Promise<DesktopSnapshot> => ({
     paths,
     services: serviceManager.snapshot(),
     serviceCommands: await serviceManager.getCommandConfigs(),
@@ -1811,6 +2242,7 @@ export function registerAppIpc({
     openCodeSettings: openCodeSettingsManager.getSettings(),
     launcherUiSettings: launcherUiSettingsManager.getSettings(),
     appIconSettings: appIconManager.getSettings(),
+    codexPetSettings: await codexPetManager.getSettings(),
     networkProxySettings: networkProxyManager.getSettings(),
     appVersion: app.getVersion(),
     appLatestTag: remoteAppVersionCache.appLatestTag,
@@ -1818,7 +2250,9 @@ export function registerAppIpc({
     moduleVersions: await readModuleVersions(),
     platform: process.platform,
     windowState: readManagedWindowState(getMainWindow()),
-    initState: await initManager.getState({ refreshDependencies: options.refreshDependencies ?? false }),
+    initState: await initManager.getState({
+      refreshDependencies: options.refreshDependencies ?? false,
+    }),
     startupAgreement: await initManager.getAgreementState(),
     recentLogs: logStore.list(),
   });
@@ -1835,7 +2269,10 @@ export function registerAppIpc({
     if (remoteModuleVersionsRefreshPromise) {
       return;
     }
-    remoteModuleVersionsRefreshPromise = Promise.all([readRemoteModuleVersions(), readRemoteAppVersion()])
+    remoteModuleVersionsRefreshPromise = Promise.all([
+      readRemoteModuleVersions(),
+      readRemoteAppVersion(),
+    ])
       .then(async ([versions, appVersion]) => {
         remoteModuleVersionsCache = versions;
         remoteAppVersionCache = appVersion;
@@ -1854,7 +2291,10 @@ export function registerAppIpc({
     if (remoteModuleVersionsRefreshPromise) {
       await remoteModuleVersionsRefreshPromise;
     } else {
-      const [versions, appVersion] = await Promise.all([readRemoteModuleVersions(), readRemoteAppVersion()]);
+      const [versions, appVersion] = await Promise.all([
+        readRemoteModuleVersions(),
+        readRemoteAppVersion(),
+      ]);
       remoteModuleVersionsCache = versions;
       remoteAppVersionCache = appVersion;
     }
@@ -1868,7 +2308,8 @@ export function registerAppIpc({
     if (initDependencyRefreshPromise) {
       return;
     }
-    initDependencyRefreshPromise = initManager.refreshDependencyChecks()
+    initDependencyRefreshPromise = initManager
+      .refreshDependencyChecks()
       .then(async () => {
         await broadcastSnapshot();
       })
@@ -1888,7 +2329,9 @@ export function registerAppIpc({
       remoteSourceManager,
     });
   let maibotPluginClient = createMaibotPluginClient();
-  const pluginBuilderLibrary = new PluginBuilderLibrary(paths.pluginBuilderRoot);
+  const pluginBuilderLibrary = new PluginBuilderLibrary(
+    paths.pluginBuilderRoot,
+  );
   const localChatAdapter = new LocalChatAdapter(paths, initManager);
 
   const assertServicesStoppedForResourceMove = (): void => {
@@ -1900,9 +2343,11 @@ export function registerAppIpc({
           service.status === "starting" ||
           service.status === "running" ||
           service.status === "stopping",
-    );
+      );
     if (active.length > 0) {
-      throw new Error(`请先停止服务，再调整覆盖路径：${active.map((service) => service.name).join(", ")}`);
+      throw new Error(
+        `请先停止服务，再调整覆盖路径：${active.map((service) => service.name).join(", ")}`,
+      );
     }
   };
 
@@ -1927,7 +2372,10 @@ export function registerAppIpc({
     }
     await serviceManager.resetRuntimePathConfig("python");
     await serviceManager.resetRuntimePathConfig("git");
-    await serviceManager.saveTerminalSettings({ ...serviceManager.getTerminalSettings(), useEmbeddedTerminal: true });
+    await serviceManager.saveTerminalSettings({
+      ...serviceManager.getTerminalSettings(),
+      useEmbeddedTerminal: true,
+    });
     await serviceManager.saveStartupSettings({ useLocalDashboard: false });
     await networkProxyManager.resetSettings();
     await launcherUiSettingsManager.resetSettings();
@@ -1936,7 +2384,9 @@ export function registerAppIpc({
     applyAppIcon();
 
     for (const key of ["maibot", "napcat"] as const) {
-      const config = resourceLocationManager.getPathConfigs().find((item) => item.key === key);
+      const config = resourceLocationManager
+        .getPathConfigs()
+        .find((item) => item.key === key);
       if (config?.customized) {
         await resourceLocationManager.resetPath(key);
       }
@@ -1953,7 +2403,9 @@ export function registerAppIpc({
 
     const removedEntries: string[] = [];
     for (const fileName of LAUNCHER_SETTING_FILES) {
-      removedEntries.push(...(await removeExistingPath(join(paths.userDataRoot, fileName))));
+      removedEntries.push(
+        ...(await removeExistingPath(join(paths.userDataRoot, fileName))),
+      );
     }
 
     await mkdir(paths.userDataRoot, { recursive: true });
@@ -1971,11 +2423,21 @@ export function registerAppIpc({
   const resetLauncherAll = async (): Promise<LauncherResetResult> => {
     assertServicesStoppedForResourceMove();
     const root = paths.defaultResourceRoot;
-    if (samePath(root, paths.installRoot) || isPathInside(root, paths.installRoot)) {
-      throw new Error("Refusing to reset all because the target path contains the install root.");
+    if (
+      samePath(root, paths.installRoot) ||
+      isPathInside(root, paths.installRoot)
+    ) {
+      throw new Error(
+        "Refusing to reset all because the target path contains the install root.",
+      );
     }
-    if (!samePath(root, paths.userDataRoot) && !isPathInside(paths.userDataRoot, root)) {
-      throw new Error("Refusing to reset all because the target path is outside the user data root.");
+    if (
+      !samePath(root, paths.userDataRoot) &&
+      !isPathInside(paths.userDataRoot, root)
+    ) {
+      throw new Error(
+        "Refusing to reset all because the target path is outside the user data root.",
+      );
     }
 
     await resetLauncherStores();
@@ -2019,17 +2481,26 @@ export function registerAppIpc({
     return snapshot;
   });
 
-  ipcMain.handle("desktop:getSystemPerformance", (): SystemPerformanceSnapshot => {
-    return readSystemPerformance();
-  });
+  ipcMain.handle(
+    "desktop:getSystemPerformance",
+    (): SystemPerformanceSnapshot => {
+      return readSystemPerformance();
+    },
+  );
 
-  ipcMain.handle("desktop:openExternal", async (_event, url: string): Promise<void> => {
-    await shell.openExternal(url);
-  });
+  ipcMain.handle(
+    "desktop:openExternal",
+    async (_event, url: string): Promise<void> => {
+      await shell.openExternal(url);
+    },
+  );
 
-  ipcMain.handle("desktop:openPath", async (_event, path: string): Promise<void> => {
-    await shell.openPath(path);
-  });
+  ipcMain.handle(
+    "desktop:openPath",
+    async (_event, path: string): Promise<void> => {
+      await shell.openPath(path);
+    },
+  );
 
   ipcMain.handle("desktop:clearWebviewCache", async (): Promise<void> => {
     const webviewSession = session.fromPartition(MAIBOT_WEBVIEW_PARTITION);
@@ -2045,55 +2516,92 @@ export function registerAppIpc({
 
   ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
     const result = await initManager.repair();
-    logStore.append("desktop", "system", `Initialization repair changed ${result.changedFiles.length} files.`);
+    logStore.append(
+      "desktop",
+      "system",
+      `Initialization repair changed ${result.changedFiles.length} files.`,
+    );
     await broadcastSnapshot();
     return result;
   });
 
-  ipcMain.handle("init:resetSnowLuma", async (): Promise<SnowLumaResetResult> => {
-    await serviceManager.refresh();
-    if (serviceManager.snapshot().some(isRuntimeBusy)) {
-      throw new Error("Stop MaiBot Core and QQ backend before resetting SnowLuma.");
-    }
+  ipcMain.handle(
+    "init:resetSnowLuma",
+    async (): Promise<SnowLumaResetResult> => {
+      await serviceManager.refresh();
+      if (serviceManager.snapshot().some(isRuntimeBusy)) {
+        throw new Error(
+          "Stop MaiBot Core and QQ backend before resetting SnowLuma.",
+        );
+      }
 
-    const result = await initManager.resetSnowLumaComponent();
-    serviceManager.reloadRuntimePaths();
-    logStore.append("desktop", "system", `SnowLuma 组件已重置: ${result.snowlumaRoot}`);
-    await broadcastSnapshot();
-    return result;
-  });
+      const result = await initManager.resetSnowLumaComponent();
+      serviceManager.reloadRuntimePaths();
+      logStore.append(
+        "desktop",
+        "system",
+        `SnowLuma 组件已重置: ${result.snowlumaRoot}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("init:upgradeQqComponents", async (): Promise<QqComponentUpgradeResult> => {
-    await serviceManager.refresh();
-    if (serviceManager.snapshot().some(isRuntimeBusy)) {
-      throw new Error("Stop MaiBot Core and QQ backend before upgrading NapCat / SnowLuma.");
-    }
+  ipcMain.handle(
+    "init:upgradeQqComponents",
+    async (): Promise<QqComponentUpgradeResult> => {
+      await serviceManager.refresh();
+      if (serviceManager.snapshot().some(isRuntimeBusy)) {
+        throw new Error(
+          "Stop MaiBot Core and QQ backend before upgrading NapCat / SnowLuma.",
+        );
+      }
 
-    const result = await initManager.upgradeQqComponents();
-    serviceManager.reloadRuntimePaths();
-    const summary = result.components
-      .map((component) => `${component.name}${component.skipped ? " skipped" : ` preserved ${component.preservedEntries.length}`}`)
-      .join(", ");
-    logStore.append("desktop", "system", `QQ backend components upgraded: ${summary}`);
-    await broadcastSnapshot();
-    return result;
-  });
+      const result = await initManager.upgradeQqComponents();
+      serviceManager.reloadRuntimePaths();
+      const summary = result.components
+        .map(
+          (component) =>
+            `${component.name}${component.skipped ? " skipped" : ` preserved ${component.preservedEntries.length}`}`,
+        )
+        .join(", ");
+      logStore.append(
+        "desktop",
+        "system",
+        `QQ backend components upgraded: ${summary}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("init:setQqBackend", async (_event, backend: QqBackend): Promise<InitState> => {
-    const currentInitState = await initManager.getState();
-    if (backend !== "napcat" && backend !== "snowluma") {
-      throw new Error("Unsupported QQ backend.");
-    }
-    if (backend !== currentInitState.qqBackend && serviceManager.snapshot().some(isRuntimeBusy)) {
-      throw new Error("Stop MaiBot Core and QQ backend before switching QQ backend.");
-    }
-    await initManager.setQqBackend(backend);
-    serviceManager.reloadRuntimePaths();
-    const state = await initManager.getState();
-    logStore.append("desktop", "system", `QQ 后端已切换为: ${backend === "snowluma" ? "SnowLuma" : "NapCat"}`);
-    await broadcastSnapshot();
-    return state;
-  });
+  ipcMain.handle(
+    "init:setQqBackend",
+    async (_event, backend: QqBackend): Promise<InitState> => {
+      const currentInitState = await initManager.getState();
+      if (backend !== "napcat" && backend !== "snowluma") {
+        throw new Error("Unsupported QQ backend.");
+      }
+      if (
+        backend !== currentInitState.qqBackend &&
+        serviceManager.snapshot().some(isRuntimeBusy)
+      ) {
+        throw new Error(
+          "Stop MaiBot Core and QQ backend before switching QQ backend.",
+        );
+      }
+      await initManager.setQqBackend(backend);
+      serviceManager.reloadRuntimePaths();
+      const state = await initManager.getState();
+      logStore.append(
+        "desktop",
+        "system",
+        `QQ 后端已切换为: ${backend === "snowluma" ? "SnowLuma" : "NapCat"}`,
+      );
+      await broadcastSnapshot();
+      return state;
+    },
+  );
 
   ipcMain.handle(
     "init:setQqAccount",
@@ -2104,7 +2612,9 @@ export function registerAppIpc({
         requestedBackend !== currentInitState.qqBackend &&
         serviceManager.snapshot().some(isRuntimeBusy)
       ) {
-        throw new Error("Stop MaiBot Core and QQ backend before switching QQ backend.");
+        throw new Error(
+          "Stop MaiBot Core and QQ backend before switching QQ backend.",
+        );
       }
       const state = await initManager.setQqAccount(
         request.qqAccount,
@@ -2113,124 +2623,191 @@ export function registerAppIpc({
         request.qqBackend,
       );
       serviceManager.reloadRuntimePaths();
-      logStore.append("desktop", "system", `机器人 QQ 号已配置: ${request.qqAccount}`);
+      logStore.append(
+        "desktop",
+        "system",
+        `机器人 QQ 号已配置: ${request.qqAccount}`,
+      );
       await broadcastSnapshot();
       return state;
     },
   );
 
-  ipcMain.handle("agreements:getState", async (): Promise<StartupAgreementState> => {
-    return initManager.getAgreementState();
-  });
+  ipcMain.handle(
+    "agreements:getState",
+    async (): Promise<StartupAgreementState> => {
+      return initManager.getAgreementState();
+    },
+  );
 
-  ipcMain.handle("agreements:confirm", async (): Promise<StartupAgreementConfirmResult> => {
-    const result = await initManager.confirmAgreements();
-    logStore.append("desktop", "system", `Startup agreements confirmed, changed ${result.changedFiles.length} files.`);
-    await broadcastSnapshot();
-    return result;
-  });
-
-  ipcMain.handle("modules:checkMaibotUpdate", async (_event, target: ModuleUpdateTarget): Promise<MaiBotUpdateInfo> => {
-    if (!target || typeof target.name !== "string" || !target.name.trim()) {
-      throw new Error("没有可用的 MaiBot 目标版本");
-    }
-    if (target.type !== "tag" && target.type !== "branch") {
-      throw new Error("MaiBot 目标版本类型不正确");
-    }
-
-    const localVersions = await readLocalModuleVersions();
-    return fetchMaiBotUpdateInfo(localVersions.maibotLocal, {
-      type: target.type,
-      name: target.name.trim(),
-    });
-  });
-
-  ipcMain.handle("modules:updateMaibot", async (_event, target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> => {
-    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
-    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
-      throw new Error("Stop MaiBot Core before updating MaiBot.");
-    }
-
-    logStore.append("desktop", "system", "Updating MaiBot module from Git.");
-    const result = await moduleUpdater.updateMaiBot(target);
-    if (target) {
-      await writeMaiBotUpdateSelection(
-        target.type === "tag" && target.name === remoteModuleVersionsCache.maibotLatestStableTag
-          ? "stable"
-          : target.type === "branch" && /^dev(?:elop(?:ment)?)?$/iu.test(target.name)
-            ? "dev"
-            : "custom",
-        target,
+  ipcMain.handle(
+    "agreements:confirm",
+    async (): Promise<StartupAgreementConfirmResult> => {
+      const result = await initManager.confirmAgreements();
+      logStore.append(
+        "desktop",
+        "system",
+        `Startup agreements confirmed, changed ${result.changedFiles.length} files.`,
       );
-    }
-    logStore.append(
-      "desktop",
-      "system",
-      `MaiBot update finished: ${result.before ?? "-"} -> ${result.after ?? "-"} (${result.changed ? "changed" : "unchanged"})`,
-    );
-    await broadcastSnapshot();
-    return result;
-  });
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("modules:refreshVersions", async (): Promise<DesktopSnapshot> => {
-    return refreshRemoteVersionsNow();
-  });
+  ipcMain.handle(
+    "modules:checkMaibotUpdate",
+    async (_event, target: ModuleUpdateTarget): Promise<MaiBotUpdateInfo> => {
+      if (!target || typeof target.name !== "string" || !target.name.trim()) {
+        throw new Error("没有可用的 MaiBot 目标版本");
+      }
+      if (target.type !== "tag" && target.type !== "branch") {
+        throw new Error("MaiBot 目标版本类型不正确");
+      }
 
-  ipcMain.handle("modules:listMaibotBranches", async (): Promise<ModuleBranchOption[]> => {
-    return moduleUpdater.listMaiBotBranches();
-  });
+      const localVersions = await readLocalModuleVersions();
+      return fetchMaiBotUpdateInfo(localVersions.maibotLocal, {
+        type: target.type,
+        name: target.name.trim(),
+      });
+    },
+  );
 
-  ipcMain.handle("modules:listMaibotTags", async (): Promise<ModuleTagOption[]> => {
-    return moduleUpdater.listMaiBotTags();
-  });
+  ipcMain.handle(
+    "modules:updateMaibot",
+    async (
+      _event,
+      target?: ModuleUpdateTarget,
+    ): Promise<ModuleUpdateResult> => {
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("Stop MaiBot Core before updating MaiBot.");
+      }
 
-  ipcMain.handle("modules:getSourceConfig", async (): Promise<ModuleSourceConfig> => {
-    return moduleUpdater.getSourceConfig();
-  });
+      logStore.append("desktop", "system", "Updating MaiBot module from Git.");
+      const result = await moduleUpdater.updateMaiBot(target);
+      if (target) {
+        await writeMaiBotUpdateSelection(
+          target.type === "tag" &&
+            target.name === remoteModuleVersionsCache.maibotLatestStableTag
+            ? "stable"
+            : target.type === "branch" &&
+                /^dev(?:elop(?:ment)?)?$/iu.test(target.name)
+              ? "dev"
+              : "custom",
+          target,
+        );
+      }
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot update finished: ${result.before ?? "-"} -> ${result.after ?? "-"} (${result.changed ? "changed" : "unchanged"})`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("modules:saveSourceConfig", async (_event, config: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
-    const result = await moduleUpdater.saveSourceConfig(config);
-    logStore.append("desktop", "system", `Module source saved: ${result.preset} (${result.maibotUrl})`);
-    return result;
-  });
+  ipcMain.handle(
+    "modules:refreshVersions",
+    async (): Promise<DesktopSnapshot> => {
+      return refreshRemoteVersionsNow();
+    },
+  );
 
+  ipcMain.handle(
+    "modules:listMaibotBranches",
+    async (): Promise<ModuleBranchOption[]> => {
+      return moduleUpdater.listMaiBotBranches();
+    },
+  );
 
-  ipcMain.handle("data:importMaibotDb", async (): Promise<MaiBotDataImportResult | null> => {
-    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
-    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
-      throw new Error("Stop MaiBot Core before importing the database.");
-    }
+  ipcMain.handle(
+    "modules:listMaibotTags",
+    async (): Promise<ModuleTagOption[]> => {
+      return moduleUpdater.listMaiBotTags();
+    },
+  );
 
-    const mainWindow = getMainWindow();
-    const dialogOptions: Electron.OpenDialogOptions = {
-      title: "Import MaiBot database",
-      properties: ["openFile"],
-      filters: [
-        { name: "MaiBot database", extensions: ["db"] },
-        { name: "All files", extensions: ["*"] },
-      ],
-    };
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
+  ipcMain.handle(
+    "modules:getSourceConfig",
+    async (): Promise<ModuleSourceConfig> => {
+      return moduleUpdater.getSourceConfig();
+    },
+  );
 
-    const importResult = await initManager.importMaiBotDatabase(result.filePaths[0]);
-    logStore.append(
-      "desktop",
-      "system",
-      `MaiBot.db imported: ${importResult.sourcePath} -> ${importResult.destPath}`,
-    );
-    await broadcastSnapshot();
-    return importResult;
-  });
+  ipcMain.handle(
+    "modules:saveSourceConfig",
+    async (_event, config: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
+      const result = await moduleUpdater.saveSourceConfig(config);
+      logStore.append(
+        "desktop",
+        "system",
+        `Module source saved: ${result.preset} (${result.maibotUrl})`,
+      );
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "data:importMaibotDb",
+    async (): Promise<MaiBotDataImportResult | null> => {
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("Stop MaiBot Core before importing the database.");
+      }
+
+      const mainWindow = getMainWindow();
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: "Import MaiBot database",
+        properties: ["openFile"],
+        filters: [
+          { name: "MaiBot database", extensions: ["db"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+
+      const importResult = await initManager.importMaiBotDatabase(
+        result.filePaths[0],
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot.db imported: ${importResult.sourcePath} -> ${importResult.destPath}`,
+      );
+      await broadcastSnapshot();
+      return importResult;
+    },
+  );
 
   ipcMain.handle(
     "data:importMaibotConfig",
-    async (_event, fileName: MaiBotConfigFileName): Promise<MaiBotConfigImportResult | null> => {
-      const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    async (
+      _event,
+      fileName: MaiBotConfigFileName,
+    ): Promise<MaiBotConfigImportResult | null> => {
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
       if (
         maibot?.managed ||
         maibot?.status === "starting" ||
@@ -2260,7 +2837,10 @@ export function registerAppIpc({
         return null;
       }
 
-      const importResult = await initManager.importMaiBotConfig(fileName, result.filePaths[0]);
+      const importResult = await initManager.importMaiBotConfig(
+        fileName,
+        result.filePaths[0],
+      );
       logStore.append(
         "desktop",
         "system",
@@ -2271,14 +2851,22 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle("data:getMaibotStorageStats", async (): Promise<MaiBotStorageStats> => {
-    return initManager.getMaiBotStorageStats();
-  });
+  ipcMain.handle(
+    "data:getMaibotStorageStats",
+    async (): Promise<MaiBotStorageStats> => {
+      return initManager.getMaiBotStorageStats();
+    },
+  );
 
   ipcMain.handle(
     "data:cleanupMaibotStorage",
-    async (_event, target: MaiBotStorageCleanupTarget): Promise<MaiBotStorageCleanupResult> => {
-      const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    async (
+      _event,
+      target: MaiBotStorageCleanupTarget,
+    ): Promise<MaiBotStorageCleanupResult> => {
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
       if (
         maibot?.managed ||
         maibot?.status === "starting" ||
@@ -2299,33 +2887,52 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle("data:resetMaibotData", async (): Promise<MaiBotDataResetResult> => {
-    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
-    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
-      throw new Error("Stop MaiBot Core before resetting data.");
-    }
+  ipcMain.handle(
+    "data:resetMaibotData",
+    async (): Promise<MaiBotDataResetResult> => {
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("Stop MaiBot Core before resetting data.");
+      }
 
-    const resetResult = await initManager.resetMaiBotData();
-    logStore.append(
-      "desktop",
-      "system",
-      `MaiBot data reset (${resetResult.removedEntries.length} entries): ${resetResult.dataDir}`,
-    );
-    await broadcastSnapshot();
-    return resetResult;
-  });
+      const resetResult = await initManager.resetMaiBotData();
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot data reset (${resetResult.removedEntries.length} entries): ${resetResult.dataDir}`,
+      );
+      await broadcastSnapshot();
+      return resetResult;
+    },
+  );
 
-  ipcMain.handle("launcher:resetSettings", async (): Promise<LauncherResetResult> => {
-    return resetLauncherSettings();
-  });
+  ipcMain.handle(
+    "launcher:resetSettings",
+    async (): Promise<LauncherResetResult> => {
+      return resetLauncherSettings();
+    },
+  );
 
-  ipcMain.handle("launcher:resetAll", async (): Promise<LauncherResetResult> => {
-    return resetLauncherAll();
-  });
+  ipcMain.handle(
+    "launcher:resetAll",
+    async (): Promise<LauncherResetResult> => {
+      return resetLauncherAll();
+    },
+  );
 
   ipcMain.handle(
     "launcher:saveNetworkProxySettings",
-    async (_event, settings: NetworkProxySettings): Promise<NetworkProxySettings> => {
+    async (
+      _event,
+      settings: NetworkProxySettings,
+    ): Promise<NetworkProxySettings> => {
       const result = await networkProxyManager.saveSettings(settings);
       logStore.append(
         "desktop",
@@ -2357,7 +2964,10 @@ export function registerAppIpc({
 
   ipcMain.handle(
     "launcher:saveUiSettings",
-    async (_event, settings: LauncherUiSettings): Promise<LauncherUiSettings> => {
+    async (
+      _event,
+      settings: LauncherUiSettings,
+    ): Promise<LauncherUiSettings> => {
       const result = await launcherUiSettingsManager.saveSettings(settings);
       logStore.append(
         "desktop",
@@ -2375,94 +2985,126 @@ export function registerAppIpc({
     return sourceSettingsManager.getSettings();
   });
 
-  ipcMain.handle("launcher:saveSourceSettings", async (_event, settings: SourceSettingsUpdate): Promise<SourceSettings> => {
-    const result = await sourceSettingsManager.saveSettings(settings);
-    logStore.append(
-      "desktop",
-      "system",
-      `Source settings saved: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
-    );
-    await broadcastSnapshot();
-    return result;
-  });
+  ipcMain.handle(
+    "launcher:saveSourceSettings",
+    async (_event, settings: SourceSettingsUpdate): Promise<SourceSettings> => {
+      const result = await sourceSettingsManager.saveSettings(settings);
+      logStore.append(
+        "desktop",
+        "system",
+        `Source settings saved: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("launcher:resetSourceSettings", async (): Promise<SourceSettings> => {
-    const result = await sourceSettingsManager.resetSettings();
-    logStore.append(
-      "desktop",
-      "system",
-      `Source settings reset to defaults: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
-    );
-    await broadcastSnapshot();
-    return result;
-  });
+  ipcMain.handle(
+    "launcher:resetSourceSettings",
+    async (): Promise<SourceSettings> => {
+      const result = await sourceSettingsManager.resetSettings();
+      logStore.append(
+        "desktop",
+        "system",
+        `Source settings reset to defaults: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("launcher:selectAppIcon", async (_event, iconId: AppIconId): Promise<AppIconSettings> => {
-    const result = await appIconManager.select(iconId);
-    applyAppIcon();
-    return result;
-  });
+  ipcMain.handle(
+    "launcher:selectAppIcon",
+    async (_event, iconId: AppIconId): Promise<AppIconSettings> => {
+      const result = await appIconManager.select(iconId);
+      applyAppIcon();
+      return result;
+    },
+  );
 
-  ipcMain.handle("launcher:checkUpdate", async (): Promise<LauncherUpdateInfo> => {
-    return publicLauncherUpdateInfo(await checkLauncherUpdate());
-  });
+  ipcMain.handle(
+    "launcher:checkUpdate",
+    async (): Promise<LauncherUpdateInfo> => {
+      return publicLauncherUpdateInfo(await checkLauncherUpdate());
+    },
+  );
 
-  ipcMain.handle("launcher:downloadAndInstallUpdate", async (event): Promise<LauncherUpdateApplyResult> => {
-    const sendProgress = (progress: LauncherUpdateDownloadProgress): void => {
-      if (!event.sender.isDestroyed()) {
-        event.sender.send("launcher:update-download-progress", progress);
+  ipcMain.handle(
+    "launcher:downloadAndInstallUpdate",
+    async (event): Promise<LauncherUpdateApplyResult> => {
+      const sendProgress = (progress: LauncherUpdateDownloadProgress): void => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("launcher:update-download-progress", progress);
+        }
+      };
+
+      sendProgress({
+        phase: "checking",
+        receivedBytes: 0,
+      });
+      const update = await checkLauncherUpdate();
+      if (!update.available) {
+        throw new Error("当前启动器已经是最新版本");
       }
-    };
 
-    sendProgress({
-      phase: "checking",
-      receivedBytes: 0,
-    });
-    const update = await checkLauncherUpdate();
-    if (!update.available) {
-      throw new Error("当前启动器已经是最新版本");
-    }
+      const download = await downloadLauncherUpdate(
+        paths,
+        update,
+        sendProgress,
+      );
+      const installerPath = download.installerPath;
+      const child = spawn(installerPath, [], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      });
+      child.unref();
+      sendProgress({
+        phase: "completed",
+        assetName: update.assetName,
+        receivedBytes: download.receivedBytes,
+        totalBytes: download.totalBytes,
+        percent: 100,
+      });
+      logStore.append(
+        "desktop",
+        "system",
+        `启动器更新安装器已启动: ${installerPath}`,
+      );
+      setTimeout(() => requestQuit(), 800);
+      return {
+        update: publicLauncherUpdateInfo(update),
+        installerPath,
+        started: true,
+        willQuit: true,
+      };
+    },
+  );
 
-    const download = await downloadLauncherUpdate(paths, update, sendProgress);
-    const installerPath = download.installerPath;
-    const child = spawn(installerPath, [], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    child.unref();
-    sendProgress({
-      phase: "completed",
-      assetName: update.assetName,
-      receivedBytes: download.receivedBytes,
-      totalBytes: download.totalBytes,
-      percent: 100,
-    });
-    logStore.append("desktop", "system", `启动器更新安装器已启动: ${installerPath}`);
-    setTimeout(() => requestQuit(), 800);
-    return {
-      update: publicLauncherUpdateInfo(update),
-      installerPath,
-      started: true,
-      willQuit: true,
-    };
-  });
+  ipcMain.handle(
+    "plugins:listMarket",
+    async (
+      _event,
+      serviceUrl?: string,
+      options?: MaiBotPluginListOptions,
+    ): Promise<MaiBotPluginListResult> => {
+      return maibotPluginClient.listMarket(serviceUrl, options);
+    },
+  );
 
-  ipcMain.handle("plugins:listMarket", async (
-    _event,
-    serviceUrl?: string,
-    options?: MaiBotPluginListOptions,
-  ): Promise<MaiBotPluginListResult> => {
-    return maibotPluginClient.listMarket(serviceUrl, options);
-  });
-
-  ipcMain.handle("plugins:listInstalled", async (_event, serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> => {
-    return maibotPluginClient.listInstalled(serviceUrl);
-  });
+  ipcMain.handle(
+    "plugins:listInstalled",
+    async (_event, serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> => {
+      return maibotPluginClient.listInstalled(serviceUrl);
+    },
+  );
 
   ipcMain.handle(
     "plugins:install",
-    async (_event, request: MaiBotPluginOperationRequest): Promise<MaiBotPluginOperationResult> => {
+    async (
+      _event,
+      request: MaiBotPluginOperationRequest,
+    ): Promise<MaiBotPluginOperationResult> => {
       if (!request.pluginId || !request.repositoryUrl) {
         throw new Error("Plugin id and repository url are required.");
       }
@@ -2472,14 +3114,21 @@ export function registerAppIpc({
         request.branch,
         request.sourcePreset,
       );
-      logStore.append("desktop", "system", `MaiBot plugin installed: ${request.pluginId}`);
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin installed: ${request.pluginId}`,
+      );
       return result;
     },
   );
 
   ipcMain.handle(
     "plugins:update",
-    async (_event, request: MaiBotPluginOperationRequest): Promise<MaiBotPluginOperationResult> => {
+    async (
+      _event,
+      request: MaiBotPluginOperationRequest,
+    ): Promise<MaiBotPluginOperationResult> => {
       if (!request.pluginId || !request.repositoryUrl) {
         throw new Error("Plugin id and repository url are required.");
       }
@@ -2490,7 +3139,11 @@ export function registerAppIpc({
         request.latestVersion,
         request.sourcePreset,
       );
-      logStore.append("desktop", "system", `MaiBot plugin updated: ${request.pluginId}`);
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin updated: ${request.pluginId}`,
+      );
       return result;
     },
   );
@@ -2502,50 +3155,86 @@ export function registerAppIpc({
         throw new Error("Plugin id is required.");
       }
       const result = await maibotPluginClient.uninstall(pluginId);
-      logStore.append("desktop", "system", `MaiBot plugin uninstalled: ${pluginId}`);
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin uninstalled: ${pluginId}`,
+      );
       return result;
     },
   );
 
   ipcMain.handle(
     "plugins:createFromBlueprint",
-    async (_event, request: MaiBotPluginBlueprintCreateRequest): Promise<MaiBotPluginBlueprintCreateResult> => {
+    async (
+      _event,
+      request: MaiBotPluginBlueprintCreateRequest,
+    ): Promise<MaiBotPluginBlueprintCreateResult> => {
       if (!request?.blueprint) {
         throw new Error("Plugin blueprint is required.");
       }
-      const result = await maibotPluginClient.createFromBlueprint(request.blueprint, request.overwrite === true);
-      logStore.append("desktop", "system", `MaiBot plugin generated from blueprint: ${result.pluginId}`);
+      const result = await maibotPluginClient.createFromBlueprint(
+        request.blueprint,
+        request.overwrite === true,
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin generated from blueprint: ${result.pluginId}`,
+      );
       await broadcastSnapshot();
       return result;
     },
   );
 
-  ipcMain.handle("plugins:parseToBlueprint", async (_event, pluginId: string): Promise<MaiBotPluginBlueprintParseResult> => {
-    if (!pluginId) {
-      throw new Error("Plugin id is required.");
-    }
-    return maibotPluginClient.parseToBlueprint(pluginId);
-  });
+  ipcMain.handle(
+    "plugins:parseToBlueprint",
+    async (
+      _event,
+      pluginId: string,
+    ): Promise<MaiBotPluginBlueprintParseResult> => {
+      if (!pluginId) {
+        throw new Error("Plugin id is required.");
+      }
+      return maibotPluginClient.parseToBlueprint(pluginId);
+    },
+  );
 
-  ipcMain.handle("plugins:listBuilderLibrary", async (): Promise<MaiBotPluginBuilderLibraryListResult> => {
-    return pluginBuilderLibrary.list();
-  });
+  ipcMain.handle(
+    "plugins:listBuilderLibrary",
+    async (): Promise<MaiBotPluginBuilderLibraryListResult> => {
+      return pluginBuilderLibrary.list();
+    },
+  );
 
   ipcMain.handle(
     "plugins:saveBuilderLibrary",
-    async (_event, request: MaiBotPluginBuilderLibrarySaveRequest): Promise<MaiBotPluginBuilderLibrarySaveResult> => {
+    async (
+      _event,
+      request: MaiBotPluginBuilderLibrarySaveRequest,
+    ): Promise<MaiBotPluginBuilderLibrarySaveResult> => {
       if (!request?.blueprint) {
         throw new Error("Plugin blueprint is required.");
       }
-      const result = await pluginBuilderLibrary.save(request.blueprint, request.overwrite !== false);
-      logStore.append("desktop", "system", `Builder plugin saved: ${result.item.pluginId}`);
+      const result = await pluginBuilderLibrary.save(
+        request.blueprint,
+        request.overwrite !== false,
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `Builder plugin saved: ${result.item.pluginId}`,
+      );
       return result;
     },
   );
 
   ipcMain.handle(
     "plugins:loadBuilderLibrary",
-    async (_event, pluginId: string): Promise<MaiBotPluginBuilderLibraryLoadResult> => {
+    async (
+      _event,
+      pluginId: string,
+    ): Promise<MaiBotPluginBuilderLibraryLoadResult> => {
       if (!pluginId) {
         throw new Error("Plugin id is required.");
       }
@@ -2555,12 +3244,19 @@ export function registerAppIpc({
 
   ipcMain.handle(
     "plugins:deleteBuilderLibrary",
-    async (_event, pluginId: string): Promise<MaiBotPluginBuilderLibraryDeleteResult> => {
+    async (
+      _event,
+      pluginId: string,
+    ): Promise<MaiBotPluginBuilderLibraryDeleteResult> => {
       if (!pluginId) {
         throw new Error("Plugin id is required.");
       }
       const result = await pluginBuilderLibrary.delete(pluginId);
-      logStore.append("desktop", "system", `Builder plugin deleted: ${result.pluginId}`);
+      logStore.append(
+        "desktop",
+        "system",
+        `Builder plugin deleted: ${result.pluginId}`,
+      );
       return result;
     },
   );
@@ -2589,7 +3285,10 @@ export function registerAppIpc({
         title: "Export plugin blueprint",
         defaultPath,
         filters: [
-          { name: "MaiBot 插件蓝图", extensions: ["maibot-plugin-blueprint.json", "json"] },
+          {
+            name: "MaiBot 插件蓝图",
+            extensions: ["maibot-plugin-blueprint.json", "json"],
+          },
           { name: "JSON", extensions: ["json"] },
         ],
       };
@@ -2608,8 +3307,16 @@ export function registerAppIpc({
         files: buildMaiBotPluginBlueprintFiles(request.blueprint),
       };
       await mkdir(dirname(result.filePath), { recursive: true });
-      await writeFile(result.filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-      logStore.append("desktop", "system", `Builder blueprint exported: ${pluginId} -> ${result.filePath}`);
+      await writeFile(
+        result.filePath,
+        `${JSON.stringify(payload, null, 2)}\n`,
+        "utf8",
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `Builder blueprint exported: ${pluginId} -> ${result.filePath}`,
+      );
       return {
         pluginId,
         filePath: result.filePath,
@@ -2620,7 +3327,10 @@ export function registerAppIpc({
 
   ipcMain.handle(
     "plugins:importBuilderBlueprint",
-    async (_event, sourcePath?: string): Promise<MaiBotPluginBuilderBlueprintImportResult | null> => {
+    async (
+      _event,
+      sourcePath?: string,
+    ): Promise<MaiBotPluginBuilderBlueprintImportResult | null> => {
       let nextSourcePath = sourcePath?.trim().replace(/^["']|["']$/gu, "");
       if (!nextSourcePath) {
         const mainWindow = getMainWindow();
@@ -2646,7 +3356,11 @@ export function registerAppIpc({
         blueprint?: MaiBotPluginBlueprint;
         version?: number;
       } & Partial<MaiBotPluginBlueprint>;
-      const blueprint = raw.blueprint ?? (raw.manifest && raw.components && raw.configFields ? raw as MaiBotPluginBlueprint : null);
+      const blueprint =
+        raw.blueprint ??
+        (raw.manifest && raw.components && raw.configFields
+          ? (raw as MaiBotPluginBlueprint)
+          : null);
       if (!blueprint?.manifest?.pluginId) {
         throw new Error("Not a valid MaiBot plugin blueprint file.");
       }
@@ -2656,7 +3370,11 @@ export function registerAppIpc({
       }
 
       const saveResult = await pluginBuilderLibrary.save(blueprint, true);
-      logStore.append("desktop", "system", `Builder blueprint imported: ${source} -> ${saveResult.item.pluginId}`);
+      logStore.append(
+        "desktop",
+        "system",
+        `Builder blueprint imported: ${source} -> ${saveResult.item.pluginId}`,
+      );
       return {
         item: saveResult.item,
         blueprint,
@@ -2673,9 +3391,16 @@ export function registerAppIpc({
     await shell.openPath(pluginBuilderLibrary.getRoot());
   });
 
-  ipcMain.handle("plugins:getConfig", async (_event, pluginId: string, serviceUrl?: string): Promise<MaiBotPluginConfigState> => {
-    return maibotPluginClient.getConfig(pluginId, serviceUrl);
-  });
+  ipcMain.handle(
+    "plugins:getConfig",
+    async (
+      _event,
+      pluginId: string,
+      serviceUrl?: string,
+    ): Promise<MaiBotPluginConfigState> => {
+      return maibotPluginClient.getConfig(pluginId, serviceUrl);
+    },
+  );
 
   ipcMain.handle(
     "plugins:saveConfig",
@@ -2685,8 +3410,57 @@ export function registerAppIpc({
       config: Record<string, MaiBotPluginConfigValue>,
       serviceUrl?: string,
     ): Promise<MaiBotPluginConfigSaveResult> => {
-      const result = await maibotPluginClient.saveConfig(pluginId, config, serviceUrl);
-      logStore.append("desktop", "system", `MaiBot plugin config saved: ${pluginId}`);
+      const result = await maibotPluginClient.saveConfig(
+        pluginId,
+        config,
+        serviceUrl,
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin config saved: ${pluginId}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "plugins:saveConfigRaw",
+    async (
+      _event,
+      pluginId: string,
+      raw: string,
+      serviceUrl?: string,
+    ): Promise<MaiBotPluginConfigSaveResult> => {
+      const result = await maibotPluginClient.saveConfigRaw(
+        pluginId,
+        raw,
+        serviceUrl,
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin raw config saved: ${pluginId}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "plugins:resetConfig",
+    async (
+      _event,
+      pluginId: string,
+      serviceUrl?: string,
+    ): Promise<MaiBotPluginConfigSaveResult> => {
+      const result = await maibotPluginClient.resetConfig(pluginId, serviceUrl);
+      logStore.append(
+        "desktop",
+        "system",
+        `MaiBot plugin config reset: ${pluginId}`,
+      );
       await broadcastSnapshot();
       return result;
     },
@@ -2700,122 +3474,190 @@ export function registerAppIpc({
       repositoryUrl?: string,
       sourcePreset?: MaiBotPluginMarketSource,
     ): Promise<MaiBotPluginReadmeResult> => {
-      return maibotPluginClient.getReadme(pluginId, repositoryUrl, sourcePreset);
+      return maibotPluginClient.getReadme(
+        pluginId,
+        repositoryUrl,
+        sourcePreset,
+      );
     },
   );
 
-  ipcMain.handle("plugins:getStats", async (_event, pluginId: string): Promise<MaiBotPluginStats | null> => {
-    return maibotPluginClient.getStats(pluginId);
-  });
+  ipcMain.handle(
+    "plugins:getStats",
+    async (_event, pluginId: string): Promise<MaiBotPluginStats | null> => {
+      return maibotPluginClient.getStats(pluginId);
+    },
+  );
 
-  ipcMain.handle("plugins:getUserState", async (
-    _event,
-    pluginId: string,
-    userId: string,
-  ): Promise<MaiBotPluginUserState | null> => {
-    return maibotPluginClient.getUserState(pluginId, userId);
-  });
+  ipcMain.handle(
+    "plugins:getUserState",
+    async (
+      _event,
+      pluginId: string,
+      userId: string,
+    ): Promise<MaiBotPluginUserState | null> => {
+      return maibotPluginClient.getUserState(pluginId, userId);
+    },
+  );
 
-  ipcMain.handle("plugins:getUserStates", async (
-    _event,
-    userId: string,
-  ): Promise<MaiBotPluginUserStates> => {
-    return maibotPluginClient.getUserStates(userId);
-  });
+  ipcMain.handle(
+    "plugins:getUserStates",
+    async (_event, userId: string): Promise<MaiBotPluginUserStates> => {
+      return maibotPluginClient.getUserStates(userId);
+    },
+  );
 
-  ipcMain.handle("plugins:like", async (
-    _event,
-    pluginId: string,
-    userId: string,
-  ): Promise<MaiBotPluginVoteResult> => {
-    return maibotPluginClient.likePlugin(pluginId, userId);
-  });
+  ipcMain.handle(
+    "plugins:like",
+    async (
+      _event,
+      pluginId: string,
+      userId: string,
+    ): Promise<MaiBotPluginVoteResult> => {
+      return maibotPluginClient.likePlugin(pluginId, userId);
+    },
+  );
 
-  ipcMain.handle("plugins:dislike", async (
-    _event,
-    pluginId: string,
-    userId: string,
-  ): Promise<MaiBotPluginVoteResult> => {
-    return maibotPluginClient.dislikePlugin(pluginId, userId);
-  });
+  ipcMain.handle(
+    "plugins:dislike",
+    async (
+      _event,
+      pluginId: string,
+      userId: string,
+    ): Promise<MaiBotPluginVoteResult> => {
+      return maibotPluginClient.dislikePlugin(pluginId, userId);
+    },
+  );
 
-  ipcMain.handle("plugins:rate", async (
-    _event,
-    pluginId: string,
-    rating: number | null | undefined,
-    comment: string | null | undefined,
-    userId: string,
-  ): Promise<MaiBotPluginRatingResult> => {
-    return maibotPluginClient.ratePlugin(pluginId, rating, comment, userId);
-  });
+  ipcMain.handle(
+    "plugins:rate",
+    async (
+      _event,
+      pluginId: string,
+      rating: number | null | undefined,
+      comment: string | null | undefined,
+      userId: string,
+    ): Promise<MaiBotPluginRatingResult> => {
+      return maibotPluginClient.ratePlugin(pluginId, rating, comment, userId);
+    },
+  );
 
-  ipcMain.handle("plugins:recordDownload", async (
-    _event,
-    pluginId: string,
-    userId?: string,
-    fingerprint?: string,
-  ): Promise<MaiBotPluginDownloadResult> => {
-    return maibotPluginClient.recordDownload(pluginId, userId, fingerprint);
-  });
+  ipcMain.handle(
+    "plugins:recordDownload",
+    async (
+      _event,
+      pluginId: string,
+      userId?: string,
+      fingerprint?: string,
+    ): Promise<MaiBotPluginDownloadResult> => {
+      return maibotPluginClient.recordDownload(pluginId, userId, fingerprint);
+    },
+  );
 
-  ipcMain.handle("statistics:getMaibot", async (): Promise<MaiBotStatisticSummary> => {
-    return readMaiBotStatistics(paths);
-  });
+  ipcMain.handle(
+    "statistics:getMaibot",
+    async (): Promise<MaiBotStatisticSummary> => {
+      return readMaiBotStatistics(paths);
+    },
+  );
 
   ipcMain.handle("pythonDeps:getState", (): PythonOverridesState => {
     return pythonDependencyManager.getState();
   });
 
-  ipcMain.handle("pythonDeps:saveSourcePreset", async (_event, preset: PythonPackageSourcePreset): Promise<PythonOverridesState> => {
-    const state = await pythonDependencyManager.saveSourcePreset(preset);
-    await broadcastSnapshot();
-    return state;
-  });
+  ipcMain.handle(
+    "pythonDeps:saveSourcePreset",
+    async (
+      _event,
+      preset: PythonPackageSourcePreset,
+    ): Promise<PythonOverridesState> => {
+      const state = await pythonDependencyManager.saveSourcePreset(preset);
+      await broadcastSnapshot();
+      return state;
+    },
+  );
 
-  ipcMain.handle("pythonDeps:listVersions", async (_event, packageName: ManagedPythonPackageName): Promise<PythonPackageVersionList> => {
-    return pythonDependencyManager.listVersions(packageName);
-  });
+  ipcMain.handle(
+    "pythonDeps:listVersions",
+    async (
+      _event,
+      packageName: ManagedPythonPackageName,
+    ): Promise<PythonPackageVersionList> => {
+      return pythonDependencyManager.listVersions(packageName);
+    },
+  );
 
-  ipcMain.handle("pythonDeps:installVersion", async (_event, request: PythonPackageInstallRequest): Promise<PythonPackageInstallResult> => {
-    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
-    if (maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping") {
-      throw new Error("Stop MaiBot Core before updating Python dependencies.");
-    }
+  ipcMain.handle(
+    "pythonDeps:installVersion",
+    async (
+      _event,
+      request: PythonPackageInstallRequest,
+    ): Promise<PythonPackageInstallResult> => {
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error(
+          "Stop MaiBot Core before updating Python dependencies.",
+        );
+      }
 
-    logStore.append("desktop", "system", `Installing Python dependency: ${request.packageName}==${request.version}`);
-    const result = await pythonDependencyManager.installVersion(request);
-    logStore.append(
-      "desktop",
-      "system",
-      `Python dependency installed: ${result.packageName}==${result.version} -> ${result.targetDir}`,
-    );
-    await broadcastSnapshot();
-    return result;
-  });
+      logStore.append(
+        "desktop",
+        "system",
+        `Installing Python dependency: ${request.packageName}==${request.version}`,
+      );
+      const result = await pythonDependencyManager.installVersion(request);
+      logStore.append(
+        "desktop",
+        "system",
+        `Python dependency installed: ${result.packageName}==${result.version} -> ${result.targetDir}`,
+      );
+      await broadcastSnapshot();
+      return result;
+    },
+  );
 
-  ipcMain.handle("services:start", async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
-    const descriptor = await serviceManager.start(serviceId);
-    await broadcastSnapshot();
-    return descriptor;
-  });
+  ipcMain.handle(
+    "services:start",
+    async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
+      const descriptor = await serviceManager.start(serviceId);
+      await broadcastSnapshot();
+      return descriptor;
+    },
+  );
 
-  ipcMain.handle("services:stop", async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
-    const descriptor = await serviceManager.stop(serviceId);
-    await broadcastSnapshot();
-    return descriptor;
-  });
+  ipcMain.handle(
+    "services:stop",
+    async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
+      const descriptor = await serviceManager.stop(serviceId);
+      await broadcastSnapshot();
+      return descriptor;
+    },
+  );
 
-  ipcMain.handle("services:restart", async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
-    const descriptor = await serviceManager.restart(serviceId);
-    await broadcastSnapshot();
-    return descriptor;
-  });
+  ipcMain.handle(
+    "services:restart",
+    async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
+      const descriptor = await serviceManager.restart(serviceId);
+      await broadcastSnapshot();
+      return descriptor;
+    },
+  );
 
-  ipcMain.handle("services:startAll", async (): Promise<ServiceDescriptor[]> => {
-    const services = await serviceManager.startAll();
-    await broadcastSnapshot();
-    return services;
-  });
+  ipcMain.handle(
+    "services:startAll",
+    async (): Promise<ServiceDescriptor[]> => {
+      const services = await serviceManager.startAll();
+      await broadcastSnapshot();
+      return services;
+    },
+  );
 
   ipcMain.handle("services:stopAll", async (): Promise<ServiceDescriptor[]> => {
     const services = await serviceManager.stopAll();
@@ -2829,75 +3671,112 @@ export function registerAppIpc({
     return services;
   });
 
-  ipcMain.handle("services:saveCommandConfig", async (_event, config: ServiceCommandUpdate): Promise<DesktopSnapshot["serviceCommands"]> => {
-    const configs = await serviceManager.saveCommandConfig(config);
-    await broadcastSnapshot();
-    return configs;
-  });
+  ipcMain.handle(
+    "services:saveCommandConfig",
+    async (
+      _event,
+      config: ServiceCommandUpdate,
+    ): Promise<DesktopSnapshot["serviceCommands"]> => {
+      const configs = await serviceManager.saveCommandConfig(config);
+      await broadcastSnapshot();
+      return configs;
+    },
+  );
 
-  ipcMain.handle("services:resetCommandConfig", async (_event, serviceId: ServiceId): Promise<DesktopSnapshot["serviceCommands"]> => {
-    const configs = await serviceManager.resetCommandConfig(serviceId);
-    await broadcastSnapshot();
-    return configs;
-  });
+  ipcMain.handle(
+    "services:resetCommandConfig",
+    async (
+      _event,
+      serviceId: ServiceId,
+    ): Promise<DesktopSnapshot["serviceCommands"]> => {
+      const configs = await serviceManager.resetCommandConfig(serviceId);
+      await broadcastSnapshot();
+      return configs;
+    },
+  );
 
-  ipcMain.handle("services:saveRuntimePathConfig", async (_event, config: RuntimePathUpdate): Promise<RuntimePathConfig[]> => {
-    const configs = await serviceManager.saveRuntimePathConfig(config);
-    if (config.key === "git") {
-      initManager.clearDependencyCache();
-      maibotPluginClient = createMaibotPluginClient();
-    }
-    await broadcastSnapshot();
-    return configs;
-  });
+  ipcMain.handle(
+    "services:saveRuntimePathConfig",
+    async (_event, config: RuntimePathUpdate): Promise<RuntimePathConfig[]> => {
+      const configs = await serviceManager.saveRuntimePathConfig(config);
+      if (config.key === "git") {
+        initManager.clearDependencyCache();
+        maibotPluginClient = createMaibotPluginClient();
+      }
+      await broadcastSnapshot();
+      return configs;
+    },
+  );
 
-  ipcMain.handle("services:resetRuntimePathConfig", async (_event, key: RuntimePathKey): Promise<RuntimePathConfig[]> => {
-    const configs = await serviceManager.resetRuntimePathConfig(key);
-    if (key === "git") {
-      initManager.clearDependencyCache();
-      maibotPluginClient = createMaibotPluginClient();
-    }
-    await broadcastSnapshot();
-    return configs;
-  });
+  ipcMain.handle(
+    "services:resetRuntimePathConfig",
+    async (_event, key: RuntimePathKey): Promise<RuntimePathConfig[]> => {
+      const configs = await serviceManager.resetRuntimePathConfig(key);
+      if (key === "git") {
+        initManager.clearDependencyCache();
+        maibotPluginClient = createMaibotPluginClient();
+      }
+      await broadcastSnapshot();
+      return configs;
+    },
+  );
 
-  ipcMain.handle("services:selectRuntimePathConfig", async (_event, key: RuntimePathKey): Promise<string | null> => {
-    const config = serviceManager.getRuntimePathConfigs().find((item) => item.key === key);
-    if (!config) {
-      throw new Error(`Unknown path config: ${key}`);
-    }
+  ipcMain.handle(
+    "services:selectRuntimePathConfig",
+    async (_event, key: RuntimePathKey): Promise<string | null> => {
+      const config = serviceManager
+        .getRuntimePathConfigs()
+        .find((item) => item.key === key);
+      if (!config) {
+        throw new Error(`Unknown path config: ${key}`);
+      }
 
-    const mainWindow = getMainWindow();
-    const dialogOptions: Electron.OpenDialogOptions = config.kind === "file"
-      ? {
-          title: `Select ${config.label}`,
-          properties: ["openFile"],
-          filters: key === "git"
-            ? [
-                { name: "Git", extensions: process.platform === "win32" ? ["exe"] : ["*"] },
-                { name: "全部文件", extensions: ["*"] },
-              ]
-            : [{ name: "全部文件", extensions: ["*"] }],
-        }
-      : {
-          title: `Select ${config.label}`,
-          properties: ["openDirectory"],
-        };
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
-  });
+      const mainWindow = getMainWindow();
+      const dialogOptions: Electron.OpenDialogOptions =
+        config.kind === "file"
+          ? {
+              title: `Select ${config.label}`,
+              properties: ["openFile"],
+              filters:
+                key === "git"
+                  ? [
+                      {
+                        name: "Git",
+                        extensions:
+                          process.platform === "win32" ? ["exe"] : ["*"],
+                      },
+                      { name: "全部文件", extensions: ["*"] },
+                    ]
+                  : [{ name: "全部文件", extensions: ["*"] }],
+            }
+          : {
+              title: `Select ${config.label}`,
+              properties: ["openDirectory"],
+            };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result.canceled || result.filePaths.length === 0
+        ? null
+        : result.filePaths[0];
+    },
+  );
 
-  ipcMain.handle("services:saveTerminalSettings", async (_event, settings: TerminalSettings): Promise<TerminalSettings> => {
-    const config = await serviceManager.saveTerminalSettings(settings);
-    await broadcastSnapshot();
-    return config;
-  });
+  ipcMain.handle(
+    "services:saveTerminalSettings",
+    async (_event, settings: TerminalSettings): Promise<TerminalSettings> => {
+      const config = await serviceManager.saveTerminalSettings(settings);
+      await broadcastSnapshot();
+      return config;
+    },
+  );
 
   ipcMain.handle(
     "services:saveStartupSettings",
-    async (_event, settings: ServiceStartupSettings): Promise<ServiceStartupSettings> => {
+    async (
+      _event,
+      settings: ServiceStartupSettings,
+    ): Promise<ServiceStartupSettings> => {
       const config = await serviceManager.saveStartupSettings(settings);
       logStore.append(
         "desktop",
@@ -2911,7 +3790,9 @@ export function registerAppIpc({
     },
   );
 
-  const chooseResourcePath = async (title: string): Promise<string | undefined> => {
+  const chooseResourcePath = async (
+    title: string,
+  ): Promise<string | undefined> => {
     const mainWindow = getMainWindow();
     const dialogOptions: Electron.OpenDialogOptions = {
       title,
@@ -2920,51 +3801,80 @@ export function registerAppIpc({
     const result = mainWindow
       ? await dialog.showOpenDialog(mainWindow, dialogOptions)
       : await dialog.showOpenDialog(dialogOptions);
-    return result.canceled || result.filePaths.length === 0 ? undefined : result.filePaths[0];
+    return result.canceled || result.filePaths.length === 0
+      ? undefined
+      : result.filePaths[0];
   };
 
   ipcMain.handle(
     "resources:migratePath",
-    async (_event, key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult | null> => {
+    async (
+      _event,
+      key: RuntimeResourcePathKey,
+    ): Promise<RuntimeResourcePathChangeResult | null> => {
       assertServicesStoppedForResourceMove();
-      const targetPath = await chooseResourcePath("Select migration target directory");
+      const targetPath = await chooseResourcePath(
+        "Select migration target directory",
+      );
       if (!targetPath) {
         return null;
       }
 
-      const migration = await resourceLocationManager.migratePath(key, targetPath);
+      const migration = await resourceLocationManager.migratePath(
+        key,
+        targetPath,
+      );
       return applyResourceMigrationResult(migration);
     },
   );
 
   ipcMain.handle(
     "resources:selectPath",
-    async (_event, key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult | null> => {
+    async (
+      _event,
+      key: RuntimeResourcePathKey,
+    ): Promise<RuntimeResourcePathChangeResult | null> => {
       assertServicesStoppedForResourceMove();
       const targetPath = await chooseResourcePath("Select existing directory");
       if (!targetPath) {
         return null;
       }
 
-      const selection = await resourceLocationManager.selectPath(key, targetPath);
+      const selection = await resourceLocationManager.selectPath(
+        key,
+        targetPath,
+      );
       return applyResourceMigrationResult(selection);
     },
   );
 
   ipcMain.handle(
     "resources:savePath",
-    async (_event, key: RuntimeResourcePathKey, targetPath: string): Promise<RuntimeResourcePathChangeResult> => {
+    async (
+      _event,
+      key: RuntimeResourcePathKey,
+      targetPath: string,
+    ): Promise<RuntimeResourcePathChangeResult> => {
       assertServicesStoppedForResourceMove();
-      const selection = await resourceLocationManager.selectPath(key, targetPath);
+      const selection = await resourceLocationManager.selectPath(
+        key,
+        targetPath,
+      );
       return applyResourceMigrationResult(selection);
     },
   );
 
-  ipcMain.handle("resources:resetPath", async (_event, key: RuntimeResourcePathKey): Promise<RuntimeResourcePathChangeResult> => {
-    assertServicesStoppedForResourceMove();
-    const migration = await resourceLocationManager.resetPath(key);
-    return applyResourceMigrationResult(migration);
-  });
+  ipcMain.handle(
+    "resources:resetPath",
+    async (
+      _event,
+      key: RuntimeResourcePathKey,
+    ): Promise<RuntimeResourcePathChangeResult> => {
+      assertServicesStoppedForResourceMove();
+      const migration = await resourceLocationManager.resetPath(key);
+      return applyResourceMigrationResult(migration);
+    },
+  );
 
   ipcMain.handle("logs:list", (): LogEntry[] => logStore.list());
 
@@ -2973,37 +3883,58 @@ export function registerAppIpc({
     void broadcastSnapshot();
   });
 
-  ipcMain.handle("localChat:connect", async (_event, request?: LocalChatConnectRequest): Promise<LocalChatConnectionState> => {
-    return localChatAdapter.connect(request);
-  });
+  ipcMain.handle(
+    "localChat:connect",
+    async (
+      _event,
+      request?: LocalChatConnectRequest,
+    ): Promise<LocalChatConnectionState> => {
+      return localChatAdapter.connect(request);
+    },
+  );
 
   ipcMain.handle("localChat:disconnect", async (): Promise<void> => {
     localChatAdapter.disconnect();
   });
 
-  ipcMain.handle("localChat:send", async (_event, request: LocalChatSendRequest): Promise<LocalChatMessageEvent> => {
-    return localChatAdapter.send(request);
-  });
+  ipcMain.handle(
+    "localChat:send",
+    async (
+      _event,
+      request: LocalChatSendRequest,
+    ): Promise<LocalChatMessageEvent> => {
+      return localChatAdapter.send(request);
+    },
+  );
 
-  ipcMain.handle("localChat:listMessages", async (_event, request?: LocalChatConnectRequest): Promise<LocalChatMessageEvent[]> => {
-    return localChatAdapter.listMessages(request);
-  });
+  ipcMain.handle(
+    "localChat:listMessages",
+    async (
+      _event,
+      request?: LocalChatConnectRequest,
+    ): Promise<LocalChatMessageEvent[]> => {
+      return localChatAdapter.listMessages(request);
+    },
+  );
 
   ipcMain.handle("desktop:openLogsDirectory", async (): Promise<void> => {
     await mkdir(paths.logsRoot, { recursive: true });
     await shell.openPath(paths.logsRoot);
   });
 
-  ipcMain.handle("desktop:chooseCloseAction", async (_event, action: CloseAction): Promise<void> => {
-    const mainWindow = getMainWindow();
+  ipcMain.handle(
+    "desktop:chooseCloseAction",
+    async (_event, action: CloseAction): Promise<void> => {
+      const mainWindow = getMainWindow();
 
-    if (action === "minimize") {
-      mainWindow?.hide();
-      return;
-    }
+      if (action === "minimize") {
+        mainWindow?.hide();
+        return;
+      }
 
-    requestQuit();
-  });
+      requestQuit();
+    },
+  );
 
   ipcMain.handle("desktop:show", (): void => showMainWindow());
 
@@ -3023,14 +3954,27 @@ export function registerAppIpc({
     getMainWindow()?.close();
   });
 
-  ipcMain.handle("desktop:window:setFloatingMode", (_event, enabled: boolean): WindowState => applyFloatingMode(enabled));
-
-  ipcMain.handle("desktop:window:setFloatingPanelExpanded", (_event, expanded: boolean): WindowState =>
-    applyFloatingPanelExpanded(expanded),
+  ipcMain.handle(
+    "desktop:window:setFloatingMode",
+    (_event, enabled: boolean): WindowState => applyFloatingMode(enabled),
   );
 
-  ipcMain.handle("desktop:window:moveFloatingBy", (_event, deltaX: number, deltaY: number): WindowState =>
-    moveFloatingBy(deltaX, deltaY),
+  ipcMain.handle(
+    "desktop:window:setFloatingGlassEffect",
+    (_event, enabled: boolean): WindowState =>
+      applyFloatingGlassEffect(enabled),
+  );
+
+  ipcMain.handle(
+    "desktop:window:setFloatingBubbleExpanded",
+    (_event, expanded: boolean): WindowState =>
+      applyFloatingBubbleExpanded(expanded),
+  );
+
+  ipcMain.handle(
+    "desktop:window:moveFloatingBy",
+    (_event, deltaX: number, deltaY: number): WindowState =>
+      moveFloatingBy(deltaX, deltaY),
   );
   ipcMain.handle(
     "desktop:window:moveFloatingTo",
@@ -3038,22 +3982,35 @@ export function registerAppIpc({
       moveFloatingTo(offsetX, offsetY),
   );
 
-  ipcMain.handle("desktop:window:finishFloatingDrag", (): WindowState => finishFloatingDrag());
+  ipcMain.handle(
+    "desktop:window:finishFloatingDrag",
+    (): WindowState => finishFloatingDrag(),
+  );
 
   ipcMain.handle(
     "desktop:window:startResize",
-    (_event, edge: WindowResizeEdge, screenX: number, screenY: number): WindowState =>
-      startWindowResize(edge, screenX, screenY),
+    (
+      _event,
+      edge: WindowResizeEdge,
+      screenX: number,
+      screenY: number,
+    ): WindowState => startWindowResize(edge, screenX, screenY),
   );
 
-  ipcMain.handle("desktop:window:resizeTo", (_event, screenX: number, screenY: number): WindowState =>
-    resizeWindowTo(screenX, screenY),
+  ipcMain.handle(
+    "desktop:window:resizeTo",
+    (_event, screenX: number, screenY: number): WindowState =>
+      resizeWindowTo(screenX, screenY),
   );
 
-  ipcMain.handle("desktop:window:finishResize", (): WindowState => finishWindowResize());
+  ipcMain.handle(
+    "desktop:window:finishResize",
+    (): WindowState => finishWindowResize(),
+  );
 
-  ipcMain.handle("desktop:window:getState", (): WindowState =>
-    readManagedWindowState(getMainWindow()),
+  ipcMain.handle(
+    "desktop:window:getState",
+    (): WindowState => readManagedWindowState(getMainWindow()),
   );
 
   return {

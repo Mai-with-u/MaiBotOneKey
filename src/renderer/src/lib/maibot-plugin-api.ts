@@ -114,6 +114,18 @@ export function comparePluginVersions(left: string | undefined, right: string | 
   return 0;
 }
 
+function comparePluginCompatibilityVersions(left: string | undefined, right: string | undefined): number {
+  const leftParts = normalizeVersion(left);
+  const rightParts = normalizeVersion(right);
+  for (let index = 0; index < 2; index++) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
 export function isNewerPluginVersion(candidate: string | undefined, current: string | undefined): boolean {
   return comparePluginVersions(candidate, current) > 0;
 }
@@ -137,10 +149,10 @@ export function getPluginCompatibilityReason(
     return null;
   }
 
-  if (host.min_version && comparePluginVersions(maibotVersion, host.min_version) < 0) {
+  if (host.min_version && comparePluginCompatibilityVersions(maibotVersion, host.min_version) < 0) {
     return `需要 MaiBot ${host.min_version}+，当前 ${maibotVersion}`;
   }
-  if (host.max_version && comparePluginVersions(maibotVersion, host.max_version) > 0) {
+  if (host.max_version && comparePluginCompatibilityVersions(maibotVersion, host.max_version) > 0) {
     return `最高支持 MaiBot ${host.max_version}，当前 ${maibotVersion}`;
   }
 
@@ -268,6 +280,21 @@ export function savePluginConfig(
   service?: ServiceDescriptor,
 ): Promise<PluginConfigSaveResponse> {
   return requirePluginBridge().saveConfig(pluginId, config, service?.url);
+}
+
+export function savePluginConfigRaw(
+  pluginId: string,
+  raw: string,
+  service?: ServiceDescriptor,
+): Promise<PluginConfigSaveResponse> {
+  return requirePluginBridge().saveConfigRaw(pluginId, raw, service?.url);
+}
+
+export function resetPluginConfig(
+  pluginId: string,
+  service?: ServiceDescriptor,
+): Promise<PluginConfigSaveResponse> {
+  return requirePluginBridge().resetConfig(pluginId, service?.url);
 }
 
 export function fetchPluginReadme(
