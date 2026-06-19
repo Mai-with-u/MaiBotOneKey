@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  BotAccountConfigState,
   CloseAction,
   AppIconId,
   AppIconSettings,
@@ -161,6 +162,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("init:resetSnowLuma") as Promise<SnowLumaResetResult>,
     upgradeQqComponents: () =>
       ipcRenderer.invoke("init:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
+    getBotAccountConfigState: () =>
+      ipcRenderer.invoke("init:getBotAccountConfigState") as Promise<BotAccountConfigState>,
     setQqBackend: (backend: QqBackend) =>
       ipcRenderer.invoke("init:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>

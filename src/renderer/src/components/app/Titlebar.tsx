@@ -79,7 +79,7 @@ function MacTrafficLights(): React.JSX.Element {
 function WinControls({ isMaximized, retro = false }: { isMaximized: boolean; retro?: boolean }): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   const baseBtn =
-    "grid h-full w-11 place-items-center text-foreground/75 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
+    "grid h-full w-9 place-items-center text-foreground/75 transition-colors hover:bg-accent hover:text-foreground focus:outline-none";
   return (
     <div
       className="flex h-full items-stretch"
@@ -123,7 +123,7 @@ function WinControls({ isMaximized, retro = false }: { isMaximized: boolean; ret
       </button>
       <button
         aria-label="关闭"
-        className="grid h-full w-11 place-items-center text-primary transition-colors hover:bg-primary hover:text-primary-foreground focus:outline-none"
+        className="grid h-full w-9 place-items-center text-primary transition-colors hover:bg-primary hover:text-primary-foreground focus:outline-none"
         onClick={() => bridge?.close()}
         type="button"
       >
@@ -183,7 +183,7 @@ export function Titlebar({
   return (
     <div
       className={cn(
-        "relative z-40 flex h-11 shrink-0 items-stretch border-b-2",
+        "relative z-40 flex h-9 shrink-0 items-stretch border-b-2",
         retro ? "border-[var(--retro-titlebar-line)]" : "border-border",
         "bg-card",
         !state.isFocused && "opacity-90",

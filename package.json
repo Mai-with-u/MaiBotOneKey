@@ -8,6 +8,8 @@
   "main": "out/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:reset": "bun run scripts/dev/reset-dev-state.ts",
+    "dev:fresh": "bun run dev:reset && bun run dev",
     "dev:web": "vite --config vite.renderer.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",

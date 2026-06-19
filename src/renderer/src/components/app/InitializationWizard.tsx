@@ -25,7 +25,6 @@ import {
   DialogHeader,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Kbd } from "@/components/ui/kbd";
 import { Progress } from "@/components/ui/progress";
 import { useShortcut } from "@/lib/use-shortcut";
 
@@ -33,15 +32,24 @@ interface InitializationWizardProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenTab: (tab: string) => void;
+  onRefreshLocalChat: () => void;
 }
 
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
-const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
+const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY =
+  "maibot.messagePlatformGuide.requested";
 const AUTO_START_DELAY_MS = 2000;
 const WEBUI_READY_TIMEOUT_MS = 90_000;
 const WEBUI_READY_POLL_MS = 1000;
-type WizardStep = "core" | "profile" | "webui" | "localchat" | "message-platform";
+const BOT_ACCOUNT_READY_TIMEOUT_MS = 2500;
+const BOT_ACCOUNT_READY_POLL_MS = 250;
+type WizardStep =
+  | "core"
+  | "profile"
+  | "webui"
+  | "localchat"
+  | "message-platform";
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -88,29 +96,38 @@ function requestMessagePlatformGuide(): void {
   window.dispatchEvent(new Event("maibot:open-message-platform-guide"));
 }
 
-function maibotServiceFrom(snapshot: DesktopSnapshot): ServiceDescriptor | undefined {
+function maibotServiceFrom(
+  snapshot: DesktopSnapshot,
+): ServiceDescriptor | undefined {
   return snapshot.services?.find((service) => service.id === "maibot");
 }
 
 function dependencyLogs(entries: LogEntry[]): LogEntry[] {
   return entries
     .filter((entry) => entry.source === "maibot" && entry.stream === "system")
-    .filter((entry) =>
-      entry.message.includes("startup dependency upgrade") ||
-      entry.message.includes("dependency") ||
-      entry.message.includes("pip"),
+    .filter(
+      (entry) =>
+        entry.message.includes("startup dependency upgrade") ||
+        entry.message.includes("dependency") ||
+        entry.message.includes("pip"),
     )
     .slice(-8);
 }
 
-function serviceProgress(service: ServiceDescriptor | undefined, busy: boolean): number {
+function serviceProgress(
+  service: ServiceDescriptor | undefined,
+  busy: boolean,
+): number {
   if (service?.status === "running" && service.health === "ready") {
     return 100;
   }
   if (service?.status === "running") {
     return service.health === "checking" ? 88 : 92;
   }
-  if (service?.status === "starting" && service.detail?.includes("依赖检查完成")) {
+  if (
+    service?.status === "starting" &&
+    service.detail?.includes("依赖检查完成")
+  ) {
     return 72;
   }
   if (service?.status === "starting") {
@@ -119,7 +136,10 @@ function serviceProgress(service: ServiceDescriptor | undefined, busy: boolean):
   return busy ? 18 : 0;
 }
 
-function wizardServiceDetail(service: ServiceDescriptor | undefined, busy: boolean): string {
+function wizardServiceDetail(
+  service: ServiceDescriptor | undefined,
+  busy: boolean,
+): string {
   if (service?.status === "running" && service.health === "ready") {
     return "MaiCore 已启动，正在进入首次配置";
   }
@@ -140,11 +160,14 @@ export function InitializationWizard({
   snapshot,
   onSnapshot,
   onOpenTab,
+  onRefreshLocalChat,
 }: InitializationWizardProps): React.JSX.Element | null {
   const [seen, setSeen] = useState(readStartupWizardSeen);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pythonDeps, setPythonDeps] = useState<PythonOverridesState | null>(null);
+  const [pythonDeps, setPythonDeps] = useState<PythonOverridesState | null>(
+    null,
+  );
   const [sourceSaving, setSourceSaving] = useState(false);
   const [downloadRestarting, setDownloadRestarting] = useState(false);
   const [localUserName, setLocalUserName] = useState(readLocalUserName);
@@ -154,7 +177,10 @@ export function InitializationWizard({
   const startupRunId = useRef(0);
   const agreementPending = !snapshot.startupAgreement.isConfirmed;
   const service = maibotServiceFrom(snapshot);
-  const logs = useMemo(() => dependencyLogs(snapshot.recentLogs ?? []), [snapshot.recentLogs]);
+  const logs = useMemo(
+    () => dependencyLogs(snapshot.recentLogs ?? []),
+    [snapshot.recentLogs],
+  );
   const running = service?.status === "running";
   const ready = running && service?.health === "ready";
   const starting = service?.status === "starting";
@@ -174,61 +200,86 @@ export function InitializationWizard({
     const startedAt = Date.now();
     while (Date.now() - startedAt < WEBUI_READY_TIMEOUT_MS) {
       const nextSnapshot = await refreshSnapshot();
-      const nextService = nextSnapshot ? maibotServiceFrom(nextSnapshot) : undefined;
+      const nextService = nextSnapshot
+        ? maibotServiceFrom(nextSnapshot)
+        : undefined;
       if (nextService?.status === "running" && nextService.health === "ready") {
         return;
       }
       if (nextService?.status === "error") {
-        throw new Error(nextService.error ?? nextService.detail ?? "MaiBot Core failed to start");
+        throw new Error(
+          nextService.error ??
+            nextService.detail ??
+            "MaiBot Core failed to start",
+        );
       }
       await delay(WEBUI_READY_POLL_MS);
     }
 
-    throw new Error("MaiBot WebUI startup timed out; check the terminal page logs");
+    throw new Error(
+      "MaiBot WebUI startup timed out; check the terminal page logs",
+    );
   }, [refreshSnapshot]);
+
+  const waitForBotAccountConfig = useCallback(async (): Promise<boolean> => {
+    const startedAt = Date.now();
+    do {
+      const botAccountState =
+        await window.maibotDesktop?.init.getBotAccountConfigState();
+      if (botAccountState?.configured) {
+        return true;
+      }
+      await delay(BOT_ACCOUNT_READY_POLL_MS);
+    } while (Date.now() - startedAt < BOT_ACCOUNT_READY_TIMEOUT_MS);
+
+    return false;
+  }, []);
 
   const close = useCallback(() => {
     markStartupWizardSeen();
     setSeen(true);
   }, []);
 
-  const runMaiCoreStartup = useCallback(async ({
-    repairFirst,
-    startService,
-  }: {
-    repairFirst: boolean;
-    startService: () => Promise<void>;
-  }) => {
-    const runId = startupRunId.current + 1;
-    startupRunId.current = runId;
-    setBusy(true);
-    setError(null);
-    try {
-      if (repairFirst) {
-        await window.maibotDesktop?.init.repair();
+  const runMaiCoreStartup = useCallback(
+    async ({
+      repairFirst,
+      startService,
+    }: {
+      repairFirst: boolean;
+      startService: () => Promise<void>;
+    }) => {
+      const runId = startupRunId.current + 1;
+      startupRunId.current = runId;
+      setBusy(true);
+      setError(null);
+      try {
+        if (repairFirst) {
+          await window.maibotDesktop?.init.repair();
+          if (startupRunId.current !== runId) {
+            return;
+          }
+        }
+        await startService();
         if (startupRunId.current !== runId) {
           return;
         }
+        await waitForMaiBotWebUi();
+        if (startupRunId.current === runId) {
+          setStep("profile");
+        }
+      } catch (nextError) {
+        if (startupRunId.current === runId) {
+          setError(messageFromError(nextError));
+          await refreshSnapshot().catch(() => undefined);
+        }
+      } finally {
+        if (startupRunId.current === runId) {
+          setBusy(false);
+        }
       }
-      await startService();
-      if (startupRunId.current !== runId) {
-        return;
-      }
-      await waitForMaiBotWebUi();
-      if (startupRunId.current === runId) {
-        setStep("profile");
-      }
-    } catch (nextError) {
-      if (startupRunId.current === runId) {
-        setError(messageFromError(nextError));
-        await refreshSnapshot().catch(() => undefined);
-      }
-    } finally {
-      if (startupRunId.current === runId) {
-        setBusy(false);
-      }
-    }
-  }, [refreshSnapshot, waitForMaiBotWebUi]);
+    },
+    [refreshSnapshot, waitForMaiBotWebUi],
+  );
 
   const startMaiCore = useCallback(async () => {
     await runMaiCoreStartup({
@@ -254,27 +305,31 @@ export function InitializationWizard({
     }
   }, [runMaiCoreStartup]);
 
-  const saveDependencySource = useCallback(async (preset: PythonPackageSourcePreset) => {
-    setError(null);
-    if (!busy && !starting && !running) {
-      autoStartRequested.current = false;
-      if (autoStartTimer.current) {
-        clearTimeout(autoStartTimer.current);
-        autoStartTimer.current = null;
+  const saveDependencySource = useCallback(
+    async (preset: PythonPackageSourcePreset) => {
+      setError(null);
+      if (!busy && !starting && !running) {
+        autoStartRequested.current = false;
+        if (autoStartTimer.current) {
+          clearTimeout(autoStartTimer.current);
+          autoStartTimer.current = null;
+        }
       }
-    }
-    setSourceSaving(true);
-    try {
-      const state = await window.maibotDesktop?.pythonDeps.saveSourcePreset(preset);
-      if (state) {
-        setPythonDeps(state);
+      setSourceSaving(true);
+      try {
+        const state =
+          await window.maibotDesktop?.pythonDeps.saveSourcePreset(preset);
+        if (state) {
+          setPythonDeps(state);
+        }
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setSourceSaving(false);
       }
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setSourceSaving(false);
-    }
-  }, [busy, running, starting]);
+    },
+    [busy, running, starting],
+  );
 
   const updateLocalUserName = useCallback((value: string) => {
     setLocalUserName(value);
@@ -306,7 +361,15 @@ export function InitializationWizard({
   }, [open]);
 
   useEffect(() => {
-    if (!open || step !== "core" || !pythonDeps || autoStartRequested.current || busy || starting || running) {
+    if (
+      !open ||
+      step !== "core" ||
+      !pythonDeps ||
+      autoStartRequested.current ||
+      busy ||
+      starting ||
+      running
+    ) {
       return;
     }
 
@@ -336,22 +399,29 @@ export function InitializationWizard({
     }
     saveLocalUserName(userName);
     onOpenTab("maibot");
-    close();
-  }, [close, localUserName, onOpenTab]);
+    setError(null);
+    setStep("webui");
+  }, [localUserName, onOpenTab]);
 
   const finishWebUiConfig = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
       await waitForMaiBotWebUi();
+      const botAccountConfigured = await waitForBotAccountConfig();
+      if (!botAccountConfigured) {
+        setError("请先在 WebUI 中配置机器人账号，保存后再继续。");
+        return;
+      }
       onOpenTab("localchat");
+      onRefreshLocalChat();
       setStep("localchat");
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(false);
     }
-  }, [onOpenTab, waitForMaiBotWebUi]);
+  }, [onOpenTab, onRefreshLocalChat, waitForBotAccountConfig, waitForMaiBotWebUi]);
 
   const finishLocalChatGuide = useCallback(() => {
     onOpenTab("home");
@@ -363,30 +433,57 @@ export function InitializationWizard({
     close();
   }, [close]);
 
-  useShortcut("Escape", close, { enabled: open && !busy, allowInEditable: true });
+  useShortcut("Escape", close, {
+    enabled: open && !busy,
+    allowInEditable: true,
+  });
 
-  if (open && step === "webui") {
+  if (open && (step === "webui" || step === "localchat" || step === "message-platform")) {
+    const floatingTitle =
+      step === "webui"
+        ? "在 WebUI 继续初始设置"
+        : step === "localchat"
+          ? "试试本地聊天"
+          : "连接 QQ 等 IM 平台";
+    const floatingDescription =
+      step === "webui"
+        ? "请在 WebUI 中完成基础配置，保存后点这里继续。"
+        : step === "localchat"
+          ? "已切到“聊聊”。这里可以直接和本机运行中的 MaiBot 对话，用来测试角色、回复风格和插件效果。"
+          : "接下来会回到首页并打开 Message Platform 配置。配置 QQ 号和后端后，MaiBot 就可以通过 QQ 等即时通讯平台收发消息。";
+    const floatingAction =
+      step === "webui" ? "已完成" : step === "localchat" ? "下一步" : "打开配置";
+    const floatingOnClick =
+      step === "webui"
+        ? () => void finishWebUiConfig()
+        : step === "localchat"
+          ? finishLocalChatGuide
+          : finishMessagePlatformGuide;
+
     return (
-      <div className="pointer-events-none fixed inset-x-4 bottom-4 z-[100] flex justify-end">
-        <section className="pointer-events-auto w-full max-w-md rounded-lg border border-border bg-card/95 p-4 text-card-foreground shadow-2xl backdrop-blur">
-          <p className="text-sm font-semibold">在 WebUI 继续初始设置</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            请在 WebUI 中完成基础配置，并按提示重启 MaiBot Core；重启完成后点这里继续。
-          </p>
-          {error ? (
-            <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
-              <ShieldAlert className="size-3.5 shrink-0" />
-              <span>{error}</span>
-            </div>
-          ) : null}
-          <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-            <Button disabled={busy} onClick={close} size="sm" variant="ghost">
-              稍后再说
-              <Kbd className="ml-1" keys="Esc" size="xs" tone="muted" />
-            </Button>
-            <Button disabled={busy} onClick={() => void finishWebUiConfig()} size="sm">
+      <div
+        className="pointer-events-none fixed right-4 top-1/2 z-[100] flex -translate-y-1/2 justify-end"
+        style={{
+          width: "min(8rem, calc((100vh - 2rem) / 2), calc(100vw - 2rem))",
+        }}
+      >
+        <section className="pointer-events-auto flex aspect-[1/3] w-full flex-col justify-between rounded-lg border border-border bg-card/95 p-4 text-card-foreground shadow-2xl backdrop-blur">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">{floatingTitle}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {floatingDescription}
+            </p>
+            {error ? (
+              <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
+                <ShieldAlert className="size-3.5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-2">
+            <Button className="w-full justify-center" disabled={busy} onClick={floatingOnClick} size="sm">
               {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-              我已配置并重启
+              {floatingAction}
             </Button>
           </div>
         </section>
@@ -395,7 +492,12 @@ export function InitializationWizard({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next && !busy) close(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !busy) close();
+      }}
+    >
       <DialogContent
         onPointerDownOutside={(event) => {
           if (busy) {
@@ -405,7 +507,9 @@ export function InitializationWizard({
         size="lg"
       >
         <DialogHeader
-          title={<span className="text-3xl font-bold tracking-normal">初始化</span>}
+          title={
+            <span className="text-3xl font-bold tracking-normal">初始化</span>
+          }
           tone="default"
         />
 
@@ -417,11 +521,27 @@ export function InitializationWizard({
                   <div className="min-w-0">
                     <p className="text-sm font-semibold">MaiBot Core</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      首次启动会检查运行目录、同步基础文件，并按需安装 Python 覆盖依赖。
+                      首次启动会检查运行目录、同步基础文件，并按需安装 Python
+                      覆盖依赖。
                     </p>
                   </div>
-                  <Badge dot variant={ready ? "success" : running || starting || busy ? "warning" : "secondary"}>
-                    {ready ? "WebUI 已就绪" : running ? "等待 WebUI" : starting || busy ? "初始化中" : "即将开始"}
+                  <Badge
+                    dot
+                    variant={
+                      ready
+                        ? "success"
+                        : running || starting || busy
+                          ? "warning"
+                          : "secondary"
+                    }
+                  >
+                    {ready
+                      ? "WebUI 已就绪"
+                      : running
+                        ? "等待 WebUI"
+                        : starting || busy
+                          ? "初始化中"
+                          : "即将开始"}
                   </Badge>
                 </div>
 
@@ -429,15 +549,38 @@ export function InitializationWizard({
                   依赖源
                   <select
                     className="h-9 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                    disabled={!pythonDeps || sourceSaving || downloadRestarting || running}
-                    onChange={(event) => void saveDependencySource(event.target.value as PythonPackageSourcePreset)}
+                    disabled={
+                      !pythonDeps ||
+                      sourceSaving ||
+                      downloadRestarting ||
+                      running
+                    }
+                    onChange={(event) =>
+                      void saveDependencySource(
+                        event.target.value as PythonPackageSourcePreset,
+                      )
+                    }
                     value={pythonDeps?.sourcePreset ?? "tuna"}
                   >
-                    {(pythonDeps?.sourceOptions ?? [
-                      { preset: "tuna", label: "清华源", url: "https://pypi.tuna.tsinghua.edu.cn/simple" },
-                      { preset: "pypi", label: "官方 PyPI", url: "https://pypi.org/simple" },
-                      { preset: "aliyun", label: "阿里源", url: "https://mirrors.aliyun.com/pypi/simple" },
-                    ]).map((option) => (
+                    {(
+                      pythonDeps?.sourceOptions ?? [
+                        {
+                          preset: "tuna",
+                          label: "清华源",
+                          url: "https://pypi.tuna.tsinghua.edu.cn/simple",
+                        },
+                        {
+                          preset: "pypi",
+                          label: "官方 PyPI",
+                          url: "https://pypi.org/simple",
+                        },
+                        {
+                          preset: "aliyun",
+                          label: "阿里源",
+                          url: "https://mirrors.aliyun.com/pypi/simple",
+                        },
+                      ]
+                    ).map((option) => (
                       <option key={option.preset} value={option.preset}>
                         {option.label}
                       </option>
@@ -448,13 +591,19 @@ export function InitializationWizard({
                 {restartDownloadVisible ? (
                   <div className="mt-3 flex justify-end">
                     <Button
-                      disabled={!pythonDeps || sourceSaving || downloadRestarting}
+                      disabled={
+                        !pythonDeps || sourceSaving || downloadRestarting
+                      }
                       onClick={() => void restartDependencyDownload()}
                       size="sm"
                       type="button"
                       variant="outline"
                     >
-                      {downloadRestarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                      {downloadRestarting ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <RotateCcw />
+                      )}
                       {downloadRestarting ? "正在重新下载" : "重新开始下载"}
                     </Button>
                   </div>
@@ -470,13 +619,20 @@ export function InitializationWizard({
 
               <section className="p-4">
                 <div className="flex items-center gap-2 text-[11px] font-semibold uppercase text-muted-foreground">
-                  {ready ? <CheckCircle2 className="size-3.5 text-success" /> : <Loader2 className="size-3.5 animate-spin" />}
+                  {ready ? (
+                    <CheckCircle2 className="size-3.5 text-success" />
+                  ) : (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  )}
                   依赖安装进度
                 </div>
                 <div className="mt-3 max-h-36 space-y-1 overflow-auto rounded-md border border-border p-3">
                   {logs.length > 0 ? (
                     logs.map((entry) => (
-                      <p className="font-mono text-[11px] leading-relaxed text-muted-foreground" key={entry.id}>
+                      <p
+                        className="font-mono text-[11px] leading-relaxed text-muted-foreground"
+                        key={entry.id}
+                      >
                         {entry.message}
                       </p>
                     ))
@@ -520,7 +676,8 @@ export function InitializationWizard({
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">在WebUI继续初始设置</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    已为你打开 MaiBot WebUI。请在 WebUI 中完成基础配置，并按提示重启 MaiBot Core；重启完成后回到这里继续。
+                    已为你打开 MaiBot WebUI。请在 WebUI
+                    中完成基础配置，保存后回到这里继续。
                   </p>
                 </div>
               </div>
@@ -534,7 +691,8 @@ export function InitializationWizard({
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">试试本地聊天</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    已切到“聊聊”。这里可以直接和本机运行中的 MaiBot 对话，用来测试角色、回复风格和插件效果，不需要先连接 QQ。
+                    已切到“聊聊”。这里可以直接和本机运行中的 MaiBot
+                    对话，用来测试角色、回复风格和插件效果，不需要先连接 QQ。
                   </p>
                 </div>
               </div>
@@ -548,7 +706,8 @@ export function InitializationWizard({
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">连接 QQ 等 IM 平台</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    接下来会回到首页并打开 Message Platform 配置。配置 QQ 号和后端后，MaiBot 就可以通过 QQ 等即时通讯平台收发消息。
+                    接下来会回到首页并打开 Message Platform 配置。配置 QQ
+                    号和后端后，MaiBot 就可以通过 QQ 等即时通讯平台收发消息。
                   </p>
                 </div>
               </div>
@@ -563,7 +722,8 @@ export function InitializationWizard({
           ) : null}
         </DialogBody>
 
-        {step !== "profile" && (step !== "core" || (error && !busy && !starting)) ? (
+        {step !== "profile" &&
+        (step !== "core" || (error && !busy && !starting)) ? (
           <DialogFooter>
             {step === "core" && error && !busy && !starting ? (
               <Button onClick={retry} size="sm">
@@ -572,9 +732,13 @@ export function InitializationWizard({
               </Button>
             ) : null}
             {step === "webui" ? (
-              <Button disabled={busy} onClick={() => void finishWebUiConfig()} size="sm">
+              <Button
+                disabled={busy}
+                onClick={() => void finishWebUiConfig()}
+                size="sm"
+              >
                 {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-                我已配置并重启
+                我已完成配置
               </Button>
             ) : null}
             {step === "localchat" ? (

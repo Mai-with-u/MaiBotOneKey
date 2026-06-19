@@ -8,7 +8,6 @@
   MessageSquare,
   Play,
   Puzzle,
-  RefreshCw,
   Settings,
   Square,
   TerminalSquare,
@@ -32,11 +31,8 @@ import type {
 import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance } from "@/lib/use-appearance";
-import { useShortcut } from "@/lib/use-shortcut";
-import { useTheme } from "@/lib/use-theme";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -69,7 +65,6 @@ function isServiceProcessActive(service: ServiceDescriptor): boolean {
 }
 
 const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
-const PLUGIN_SURFACE_MODE_STORAGE_KEY = "maibot-onekey.plugin-surface-mode";
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 const HOME_ENTRY_GUIDE_KEY = "maibot-onekey.home-entry-guide-seen.v2";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
@@ -132,15 +127,9 @@ interface WebviewEntryTarget {
 }
 
 type PluginPanelMode = "market" | "manage";
-type PluginSurfaceMode = "webui" | "native";
 
 function pluginWebuiPathForMode(mode: PluginPanelMode): string {
   return mode === "market" ? "/plugins/embed" : "/plugin-config/embed";
-}
-
-function pluginConfigWebuiPath(pluginId: string): string {
-  const params = new URLSearchParams({ plugin: pluginId });
-  return `/plugin-config/embed?${params.toString()}`;
 }
 
 function pluginWebviewTitle(path: string, mode: PluginPanelMode): string {
@@ -244,14 +233,6 @@ function readPluginBuilderMode(): PluginBuilderMode {
   return mode === "disabled" ? "disabled" : "agent";
 }
 
-function readPluginSurfaceMode(): PluginSurfaceMode {
-  if (typeof window === "undefined") {
-    return "webui";
-  }
-  const mode = window.localStorage.getItem(PLUGIN_SURFACE_MODE_STORAGE_KEY);
-  return mode === "native" ? "native" : "webui";
-}
-
 function readStorageFlag(key: string): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -350,14 +331,12 @@ function ServiceControlButtons({
   busy,
   onStart,
   onStop,
-  onRestart,
   className,
 }: {
   service: ServiceDescriptor;
   busy: boolean;
   onStart: (id: ServiceId) => void;
   onStop: (id: ServiceId) => void;
-  onRestart: (id: ServiceId) => void;
   className?: string;
 }): React.JSX.Element {
   const isTransitioning =
@@ -411,20 +390,6 @@ function ServiceControlButtons({
             </TooltipTrigger>
             <TooltipContent>停止</TooltipContent>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={`重启 ${service.name}`}
-                disabled={isTransitioning}
-                onClick={() => onRestart(service.id)}
-                className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-              >
-                <RefreshCw className="size-3" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>重启</TooltipContent>
-          </Tooltip>
         </>
       )}
     </div>
@@ -437,14 +402,12 @@ function ServiceTabControls({
   retro,
   onStart,
   onStop,
-  onRestart,
 }: {
   service: ServiceDescriptor | undefined;
   busy: boolean;
   retro: boolean;
   onStart: (id: ServiceId) => void;
   onStop: (id: ServiceId) => void;
-  onRestart: (id: ServiceId) => void;
 }): React.JSX.Element | null {
   if (!service) {
     return null;
@@ -457,7 +420,6 @@ function ServiceTabControls({
         busy={busy}
         onStart={onStart}
         onStop={onStop}
-        onRestart={onRestart}
       />
     </div>
   );
@@ -1399,10 +1361,7 @@ export function DesktopShell(): React.JSX.Element {
     userName: window.localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined,
   }));
   const [pluginMode, setPluginModeState] = useState<PluginPanelMode>("manage");
-  const [pluginSurfaceMode, setPluginSurfaceModeState] = useState<PluginSurfaceMode>(() => readPluginSurfaceMode());
-  const [pluginManageWebviewPath, setPluginManageWebviewPath] = useState(() => pluginWebuiPathForMode("manage"));
   const [pluginMarketWebviewPath, setPluginMarketWebviewPath] = useState(() => pluginWebuiPathForMode("market"));
-  const [pluginManageWebviewVisited, setPluginManageWebviewVisited] = useState(true);
   const [pluginMarketWebviewVisited, setPluginMarketWebviewVisited] = useState(false);
   const [pluginBuilderMode, setPluginBuilderModeState] = useState<PluginBuilderMode>(() => readPluginBuilderMode());
   const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
@@ -1414,9 +1373,9 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingMode, setFloatingMode] = useState(false);
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const [homeEntryGuideSeen, setHomeEntryGuideSeen] = useState(() => readStorageFlag(HOME_ENTRY_GUIDE_KEY));
+  const [localChatWebviewReloadRequest, setLocalChatWebviewReloadRequest] = useState(0);
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
-  const theme = useTheme();
   const useRetroChrome = appearance.mode === "future-retro";
 
   const setPluginBuilderMode = useCallback((mode: PluginBuilderMode) => {
@@ -1424,16 +1383,9 @@ export function DesktopShell(): React.JSX.Element {
     window.localStorage.setItem(PLUGIN_BUILDER_MODE_STORAGE_KEY, mode);
   }, []);
 
-  const setPluginSurfaceMode = useCallback((mode: PluginSurfaceMode) => {
-    setPluginSurfaceModeState(mode);
-    window.localStorage.setItem(PLUGIN_SURFACE_MODE_STORAGE_KEY, mode);
-  }, []);
-
   const setPluginMode = useCallback((mode: PluginPanelMode) => {
     setPluginModeState(mode);
-    if (mode === "manage") {
-      setPluginManageWebviewVisited(true);
-    } else {
+    if (mode === "market") {
       setPluginMarketWebviewVisited(true);
     }
   }, []);
@@ -1519,17 +1471,9 @@ export function DesktopShell(): React.JSX.Element {
     () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
     [maibotService?.url],
   );
-  const maibotPluginManageWebviewTarget = useMemo(
-    () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginManageWebviewPath),
-    [maibotService?.url, pluginManageWebviewPath],
-  );
   const maibotPluginMarketWebviewTarget = useMemo(
     () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginMarketWebviewPath),
     [maibotService?.url, pluginMarketWebviewPath],
-  );
-  const maibotPluginManageWebviewTitle = useMemo(
-    () => pluginWebviewTitle(pluginManageWebviewPath, "manage"),
-    [pluginManageWebviewPath],
   );
   const maibotPluginMarketWebviewTitle = useMemo(
     () => pluginWebviewTitle(pluginMarketWebviewPath, "market"),
@@ -1539,11 +1483,16 @@ export function DesktopShell(): React.JSX.Element {
     maibotWebviewReady
       ? maibotService.url
       : null;
+  const localChatWebviewReloadTrigger = localChatWebviewReloadRequest > 0
+    ? localChatWebviewReloadRequest
+    : maibotWebviewReloadTrigger;
+  const refreshLocalChatWebview = useCallback(() => {
+    setLocalChatWebviewReloadRequest(Date.now());
+  }, []);
   const qqBackendService = serviceById.get("napcat");
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
   const floatingCodexPet = selectedCodexPetOption(snapshot);
-  const pluginEffectiveSurfaceMode: PluginSurfaceMode = pluginMode === "market" ? "webui" : pluginSurfaceMode;
   const messagePlatformConfigured = Boolean(
     snapshot?.initState.messagePlatformConfigured && snapshot.initState.qqAccount?.trim(),
   );
@@ -1551,7 +1500,6 @@ export function DesktopShell(): React.JSX.Element {
   const showTopPluginBuilderEntry =
     activeTab === "plugins" &&
     pluginMode === "manage" &&
-    pluginEffectiveSurfaceMode !== "webui" &&
     pluginBuilderMode !== "disabled";
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
   const canInterruptStartup =
@@ -1624,7 +1572,6 @@ export function DesktopShell(): React.JSX.Element {
     startAll();
   }, [hasActiveServiceProcess, startAll, stopAll]);
   const primaryServiceActionLabel = hasActiveServiceProcess ? "停止全部服务" : "启动全部服务";
-  const primaryServiceActionShortcut = hasActiveServiceProcess ? "Mod+Shift+X" : "Mod+Shift+S";
   const primaryServiceActionDisabled = hasActiveServiceProcess
     ? actionBusy !== null && !canInterruptStartup
     : actionBusy !== null;
@@ -1754,10 +1701,9 @@ export function DesktopShell(): React.JSX.Element {
 
   const openPluginConfig = useCallback((pluginId: string) => {
     setPluginMode("manage");
-    setPluginManageWebviewPath(pluginConfigWebuiPath(pluginId));
-    setRequestedConfigPluginId(pluginSurfaceMode === "native" ? pluginId : null);
+    setRequestedConfigPluginId(pluginId);
     setActiveTab("plugins");
-  }, [pluginSurfaceMode, setPluginMode]);
+  }, [setPluginMode]);
 
   const openPluginDetail = useCallback((pluginId: string) => {
     void pluginId;
@@ -1869,16 +1815,10 @@ export function DesktopShell(): React.JSX.Element {
     };
   }, [useRetroChrome]);
 
-  // Global shortcuts
-  useShortcut("Mod+L", openMaiBotRoot);
-  useShortcut("Mod+Shift+S", startAll);
-  useShortcut("Mod+Shift+X", stopAll);
-  useShortcut("Mod+Shift+L", theme.toggle);
-
   const webviewToolbarActive =
     activeTab === "maibot" ||
     activeTab === "localchat" ||
-    (activeTab === "plugins" && pluginEffectiveSurfaceMode === "webui");
+    (activeTab === "plugins" && pluginMode === "market");
 
   if (floatingMode) {
     return (
@@ -1990,7 +1930,6 @@ export function DesktopShell(): React.JSX.Element {
                       retro={useRetroChrome}
                       onStart={startService}
                       onStop={stopService}
-                      onRestart={restartService}
                     />
                   </div>
                   <TabsTrigger
@@ -2045,31 +1984,6 @@ export function DesktopShell(): React.JSX.Element {
                 >
                 {activeTab === "plugins" ? (
                   <>
-                    {pluginMode === "manage" ? (
-                      <div
-                        className={cn(
-                          "mr-1 flex h-7 shrink-0 items-center overflow-hidden rounded-md border border-border bg-muted/60 p-0.5",
-                          useRetroChrome && "h-8 rounded-sm border-[var(--retro-line,var(--border))]",
-                        )}
-                      >
-                        <Button
-                          className="h-full rounded-sm px-2 text-[11px]"
-                          onClick={() => setPluginSurfaceMode("webui")}
-                          size="sm"
-                          variant={pluginSurfaceMode === "webui" ? "default" : "ghost"}
-                        >
-                          WebUI
-                        </Button>
-                        <Button
-                          className="h-full rounded-sm px-2 text-[11px]"
-                          onClick={() => setPluginSurfaceMode("native")}
-                          size="sm"
-                          variant={pluginSurfaceMode === "native" ? "default" : "ghost"}
-                        >
-                          原生
-                        </Button>
-                      </div>
-                    ) : null}
                     <div
                       className={cn(
                         "mr-1 flex h-8 shrink-0 items-end gap-1 bg-transparent px-1",
@@ -2129,31 +2043,24 @@ export function DesktopShell(): React.JSX.Element {
                     ) : null}
                   </>
                 ) : null}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label="设置"
-                      className={cn(
-                        useRetroChrome
-                          ? [
-                              cn("retro-top-action text-primary-foreground [&_svg]:stroke-primary-foreground", retroTopActionIconClassName),
-                              activeTab === "settings"
-                                ? "border-primary bg-primary text-primary-foreground"
-                                : "border-[var(--retro-ink)] bg-[var(--retro-ink)] text-primary-foreground hover:bg-[var(--retro-ink)]",
-                            ]
-                          : "size-7",
-                      )}
-                      onClick={() => selectTab("settings")}
-                      size="icon-sm"
-                      variant={useRetroChrome ? "secondary" : activeTab === "settings" ? "default" : "secondary"}
-                    >
-                      <Settings />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    设置
-                  </TooltipContent>
-                </Tooltip>
+                <Button
+                  aria-label="设置"
+                  className={cn(
+                    useRetroChrome
+                      ? [
+                          cn("retro-top-action text-primary-foreground [&_svg]:stroke-primary-foreground", retroTopActionIconClassName),
+                          activeTab === "settings"
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-[var(--retro-ink)] bg-[var(--retro-ink)] text-primary-foreground hover:bg-[var(--retro-ink)]",
+                        ]
+                      : "size-7",
+                  )}
+                  onClick={() => selectTab("settings")}
+                  size="icon-sm"
+                  variant={useRetroChrome ? "secondary" : activeTab === "settings" ? "default" : "secondary"}
+                >
+                  <Settings />
+                </Button>
                 {useRetroChrome ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -2175,9 +2082,7 @@ export function DesktopShell(): React.JSX.Element {
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <span className="flex items-center gap-1">
-                        {primaryServiceActionLabel} <Kbd keys={primaryServiceActionShortcut} size="xs" tone="inverse" />
-                      </span>
+                      {primaryServiceActionLabel}
                     </TooltipContent>
                   </Tooltip>
                 ) : (
@@ -2202,9 +2107,7 @@ export function DesktopShell(): React.JSX.Element {
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <span className="flex items-center gap-1">
-                          {primaryServiceActionLabel} <Kbd keys={primaryServiceActionShortcut} size="xs" tone="inverse" />
-                        </span>
+                        {primaryServiceActionLabel}
                       </TooltipContent>
                     </Tooltip>
                     {!hasActiveServiceProcess ? (
@@ -2229,7 +2132,6 @@ export function DesktopShell(): React.JSX.Element {
                             <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
                               <Play className="size-3.5" />
                               <span className="flex-1">启动全部服务</span>
-                              <Kbd keys="Mod+Shift+S" size="xs" />
                             </DropdownMenuPrimitive.Item>
                             <DropdownMenuPrimitive.Item
                               className={toolbarMenuItemClassName}
@@ -2267,9 +2169,7 @@ export function DesktopShell(): React.JSX.Element {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <span className="flex items-center gap-1">
-                      打开 MaiBot 根目录 <Kbd keys="Mod+L" size="xs" tone="inverse" />
-                    </span>
+                    打开 MaiBot 根目录
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -2349,7 +2249,7 @@ export function DesktopShell(): React.JSX.Element {
                   title="MaiBot WebUI 聊聊"
                   toolbarPlacement="external"
                   toolbarTarget={webviewToolbarHost}
-                  reloadTrigger={maibotWebviewReloadTrigger}
+                  reloadTrigger={localChatWebviewReloadTrigger}
                   url={maibotChatWebviewTarget.entryUrl}
                 />
               )}
@@ -2378,7 +2278,7 @@ export function DesktopShell(): React.JSX.Element {
               value="plugins"
               className="min-h-0 flex-1 overflow-hidden outline-none data-[state=inactive]:hidden"
             >
-              {pluginEffectiveSurfaceMode === "webui" && !maibotWebviewReady ? (
+              {pluginMode === "market" && !maibotWebviewReady ? (
                 <MaiBotWebuiStatusPanel
                   busy={actionBusy?.startsWith("maibot:") ?? false}
                   context="plugins"
@@ -2388,25 +2288,10 @@ export function DesktopShell(): React.JSX.Element {
                 />
               ) : (
                 <div className="relative h-full min-h-0">
-                  {maibotWebviewReady ? (
-                    <div className={cn("absolute inset-0", pluginEffectiveSurfaceMode !== "webui" && "hidden")}>
-                    {pluginManageWebviewVisited ? (
-                      <div className={cn("absolute inset-0", pluginMode !== "manage" && "hidden")}>
-                        <WebviewPanel
-                          active={activeTab === "plugins" && pluginMode === "manage"}
-                          emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件管理页面。"
-                          onWebuiIdentity={rememberWebuiIdentity}
-                          postAuthTargetUrl={maibotPluginManageWebviewTarget.postAuthTargetUrl}
-                          title={maibotPluginManageWebviewTitle}
-                          toolbarPlacement="external"
-                          toolbarTarget={webviewToolbarHost}
-                          reloadTrigger={maibotWebviewReloadTrigger}
-                          url={maibotPluginManageWebviewTarget.entryUrl}
-                        />
-                      </div>
-                    ) : null}
+                  {maibotWebviewReady && pluginMode === "market" ? (
+                    <div className="absolute inset-0">
                     {pluginMarketWebviewVisited ? (
-                      <div className={cn("absolute inset-0", pluginMode !== "market" && "hidden")}>
+                      <div className="absolute inset-0">
                         <WebviewPanel
                           active={activeTab === "plugins" && pluginMode === "market"}
                           emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件市场页面。"
@@ -2422,7 +2307,7 @@ export function DesktopShell(): React.JSX.Element {
                     ) : null}
                     </div>
                   ) : null}
-                  {pluginEffectiveSurfaceMode !== "webui" ? (
+                  {pluginMode === "manage" ? (
                     <PluginMarketPanel
                       maibotService={maibotService}
                       maibotVersion={snapshot?.moduleVersions.maibotLocal}
@@ -2467,7 +2352,12 @@ export function DesktopShell(): React.JSX.Element {
           <StartupAgreementDialog onSnapshot={setSnapshot} snapshot={snapshot} />
         ) : null}
         {snapshot ? (
-          <InitializationWizard onOpenTab={setActiveTab} onSnapshot={setSnapshot} snapshot={snapshot} />
+          <InitializationWizard
+            onOpenTab={setActiveTab}
+            onRefreshLocalChat={refreshLocalChatWebview}
+            onSnapshot={setSnapshot}
+            snapshot={snapshot}
+          />
         ) : null}
           <HomeEntryGuide open={showHomeEntryGuide} onConfirm={confirmHomeEntryGuide} />
           <Toaster />

@@ -427,6 +427,11 @@ export interface InitState {
   repairedAt?: number;
 }
 
+export interface BotAccountConfigState {
+  configured: boolean;
+  qqAccount?: string;
+}
+
 export interface InitRepairResult {
   state: InitState;
   changedFiles: string[];
@@ -1321,6 +1326,7 @@ export interface DesktopBridge {
     repair: () => Promise<InitRepairResult>;
     resetSnowLuma: () => Promise<SnowLumaResetResult>;
     upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
+    getBotAccountConfigState: () => Promise<BotAccountConfigState>;
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };

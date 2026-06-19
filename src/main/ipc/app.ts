@@ -30,6 +30,7 @@ import {
   sep,
 } from "node:path";
 import type {
+  BotAccountConfigState,
   CloseAction,
   AppIconId,
   AppIconSettings,
@@ -2600,6 +2601,13 @@ export function registerAppIpc({
       );
       await broadcastSnapshot();
       return state;
+    },
+  );
+
+  ipcMain.handle(
+    "init:getBotAccountConfigState",
+    async (): Promise<BotAccountConfigState> => {
+      return initManager.getBotAccountConfigState();
     },
   );
 

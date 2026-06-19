@@ -36,6 +36,7 @@ import type {
 
 const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
 const QQ_ACCOUNT_ASSIGNMENT_PATTERN = /^(\s*qq_account\s*=\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^#\r\n]*?)(\s*#.*)?$/mu;
+const UNCONFIGURED_QQ_ACCOUNTS = new Set(["0"]);
 const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
 const GIT_RUNTIME_DIR = "git";
@@ -970,7 +971,6 @@ export class InitManager {
   }
 
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
-    await this.repairBotConfigQqAccountFromMessagePlatformStore();
     const qqAccount = await this.readConfiguredQqAccount();
     const qqBackend = await this.readQqBackend();
     const messagePlatformConfigured = this.hasMessagePlatformConfigured();
@@ -1010,10 +1010,6 @@ export class InitManager {
 
   async repair(): Promise<InitRepairResult> {
     const changedFiles = await this.ensureModulesReady();
-    const repairedQqAccount = await this.repairBotConfigQqAccountFromMessagePlatformStore();
-    if (repairedQqAccount) {
-      changedFiles.push(repairedQqAccount);
-    }
 
     const state = {
       ...(await this.getState()),
@@ -1486,12 +1482,6 @@ export class InitManager {
       throw new Error("QQ 号必须是纯数字");
     }
 
-    const botConfigPath = this.botConfigPath();
-    let content = await this.readOrCreateBotConfigContent();
-    content = ensureBotQqConfig(content, qqAccount);
-
-    await mkdir(dirname(botConfigPath), { recursive: true });
-    await writeFile(botConfigPath, content, "utf8");
     await this.setQqBackend(qqBackend, { syncAdapters: false });
     const existingWebsocketServer = qqBackend === "snowluma"
       ? await this.readSnowLumaWebsocketServer(qqAccount)
@@ -1655,7 +1645,7 @@ export class InitManager {
   }
 
   private async syncSelectedQqAdapterConfigs(): Promise<string[]> {
-    const qqAccount = await this.readQqAccount();
+    const qqAccount = await this.readConfiguredQqAccount();
     if (!qqAccount) {
       return [];
     }
@@ -2037,6 +2027,14 @@ export class InitManager {
     const content = await readFile(botConfigPath, "utf8");
     const match = content.match(QQ_PATTERN);
     return match?.[1];
+  }
+
+  async getBotAccountConfigState(): Promise<{ configured: boolean; qqAccount?: string }> {
+    const qqAccount = await this.readQqAccount();
+    return {
+      configured: Boolean(qqAccount && isDigits(qqAccount) && !UNCONFIGURED_QQ_ACCOUNTS.has(qqAccount)),
+      qqAccount,
+    };
   }
 
   private async readConfiguredQqAccount(): Promise<string | undefined> {
