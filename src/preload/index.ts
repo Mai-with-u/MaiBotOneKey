@@ -20,6 +20,7 @@ import type {
   LauncherResetResult,
   LauncherUpdateDownloadProgress,
   MaiBotConfigFileName,
+  MaiBotBackupProgress,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
@@ -99,6 +100,8 @@ import type {
   TerminalSettings,
   WindowResizeEdge,
   WindowState,
+  MaiBotBackupExportResult,
+  MaiBotBackupImportResult,
 } from "../shared/contracts";
 
 function onIpc<T>(channel: string, callback: (event: T) => void): () => void {
@@ -187,6 +190,14 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("modules:saveSourceConfig", config) as Promise<ModuleSourceConfig>,
   },
   data: {
+    onMaiBotBackupProgress: (callback: (progress: MaiBotBackupProgress) => void) =>
+      onIpc("data:maibot-backup-progress", callback),
+    exportMaiBotBackup: () =>
+      ipcRenderer.invoke("data:exportMaibotBackup") as Promise<MaiBotBackupExportResult | null>,
+    importMaiBotBackup: () =>
+      ipcRenderer.invoke("data:importMaibotBackup") as Promise<MaiBotBackupImportResult | null>,
+    cancelMaiBotBackupOperation: () =>
+      ipcRenderer.invoke("data:cancelMaibotBackupOperation") as Promise<boolean>,
     importMaiBotDatabase: () =>
       ipcRenderer.invoke("data:importMaibotDb") as Promise<MaiBotDataImportResult | null>,
     importMaiBotConfig: (fileName: MaiBotConfigFileName) =>

@@ -1,8 +1,10 @@
 ﻿import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { basename, delimiter, dirname, join, relative, resolve, sep } from "node:path";
+import { createGunzip, createGzip } from "node:zlib";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type {
   AgreementDocument,
@@ -10,6 +12,10 @@ import type {
   InitCheck,
   InitRepairResult,
   InitState,
+  MaiBotBackupExportResult,
+  MaiBotBackupImportResult,
+  MaiBotBackupManifest,
+  MaiBotBackupProgress,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
@@ -67,6 +73,9 @@ const SNOWLUMA_COMPONENT_PROTECTED_PATHS = ["config", "data", "logs"];
 const NAPCAT_VERSION_CONFIG_PATTERN = /^versions\/[^/]+\/resources\/app\/napcat\/config(?:\/|$)/iu;
 const COMPONENT_DATA_FILE_PATTERN = /(?:\.db|\.sqlite|\.sqlite3)(?:-(?:shm|wal))?$/iu;
 const COMPONENT_LOG_FILE_PATTERN = /\.log$/iu;
+const MAIBOT_BACKUP_FORMAT = "maibot-onekey-backup" as const;
+const MAIBOT_BACKUP_FORMAT_VERSION = 1 as const;
+const TAR_BLOCK_SIZE = 512;
 
 function uniqueExistingPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -138,12 +147,65 @@ interface StorageStatSummary {
   latestModifiedAt?: number;
 }
 
+type MaiBotBackupProgressCallback = (progress: MaiBotBackupProgress) => void;
+
 const emptyStorageStat: StorageStatSummary = {
   exists: false,
   sizeBytes: 0,
   fileCount: 0,
   directoryCount: 0,
 };
+
+function clampProgressPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function progressInRange(start: number, end: number, processed: number, total: number): number {
+  if (total <= 0) {
+    return start;
+  }
+  return clampProgressPercent(start + ((end - start) * processed) / total);
+}
+
+function emitMaiBotBackupProgress(
+  onProgress: MaiBotBackupProgressCallback | undefined,
+  progress: Omit<MaiBotBackupProgress, "timestamp">,
+): void {
+  onProgress?.({
+    ...progress,
+    percent: clampProgressPercent(progress.percent),
+    timestamp: Date.now(),
+  });
+}
+
+function createMaiBotBackupAbortError(): Error {
+  const error = new Error("操作已取消");
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function assertMaiBotBackupNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createMaiBotBackupAbortError();
+  }
+}
+
+function normalizeMaiBotBackupIoError(error: unknown): Error {
+  if (isAbortError(error)) {
+    return error;
+  }
+  if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOSPC") {
+    return new Error("磁盘空间不足，迁移操作已失败。");
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 function mergeStorageStats(stats: StorageStatSummary[]): StorageStatSummary {
   return stats.reduce<StorageStatSummary>(
@@ -187,6 +249,408 @@ async function readStorageStats(targetPath: string): Promise<StorageStatSummary>
     directoryCount: mergedChildren.directoryCount + 1,
     latestModifiedAt: Math.max(latestModifiedAt, mergedChildren.latestModifiedAt ?? 0) || latestModifiedAt,
   };
+}
+
+function backupManifestPathInfo(stats: StorageStatSummary): MaiBotBackupManifest["paths"]["data"] {
+  return {
+    exists: stats.exists,
+    sizeBytes: stats.sizeBytes,
+    fileCount: stats.fileCount,
+    directoryCount: stats.directoryCount,
+  };
+}
+
+function tarPaddingSize(size: number): number {
+  return (TAR_BLOCK_SIZE - (size % TAR_BLOCK_SIZE)) % TAR_BLOCK_SIZE;
+}
+
+function writeTarString(buffer: Buffer, offset: number, length: number, value: string): void {
+  const encoded = Buffer.from(value, "utf8");
+  encoded.copy(buffer, offset, 0, Math.min(encoded.length, length));
+}
+
+function writeTarOctal(buffer: Buffer, offset: number, length: number, value: number): void {
+  const encoded = value.toString(8).padStart(length - 1, "0").slice(-(length - 1));
+  writeTarString(buffer, offset, length, `${encoded}\0`);
+}
+
+function readTarString(buffer: Buffer, offset: number, length: number): string {
+  const end = buffer.indexOf(0, offset);
+  const actualEnd = end >= offset && end < offset + length ? end : offset + length;
+  return buffer.toString("utf8", offset, actualEnd).trim();
+}
+
+function readTarOctal(buffer: Buffer, offset: number, length: number): number {
+  const value = readTarString(buffer, offset, length).replace(/\0/gu, "").trim();
+  return value ? Number.parseInt(value, 8) : 0;
+}
+
+function makePaxRecord(key: string, value: string): string {
+  const payload = `${key}=${value}\n`;
+  let length = Buffer.byteLength(payload, "utf8") + 3;
+  while (true) {
+    const record = `${length} ${payload}`;
+    const actualLength = Buffer.byteLength(record, "utf8");
+    if (actualLength === length) {
+      return record;
+    }
+    length = actualLength;
+  }
+}
+
+function parsePaxRecords(content: Buffer): Record<string, string> {
+  const text = content.toString("utf8");
+  const records: Record<string, string> = {};
+  let offset = 0;
+  while (offset < text.length) {
+    const spaceIndex = text.indexOf(" ", offset);
+    if (spaceIndex < 0) break;
+    const length = Number.parseInt(text.slice(offset, spaceIndex), 10);
+    if (!Number.isFinite(length) || length <= 0) break;
+    const record = text.slice(spaceIndex + 1, offset + length).replace(/\n$/u, "");
+    const equalsIndex = record.indexOf("=");
+    if (equalsIndex > 0) {
+      records[record.slice(0, equalsIndex)] = record.slice(equalsIndex + 1);
+    }
+    offset += length;
+  }
+  return records;
+}
+
+function createTarHeader(path: string, size: number, type: "0" | "5" | "x"): Buffer {
+  const header = Buffer.alloc(TAR_BLOCK_SIZE);
+  const fallbackName =
+    type === "x"
+      ? `./PaxHeaders/${basename(path).replace(/[^a-z0-9._-]/giu, "_").slice(0, 80) || "entry"}`
+      : path.replace(/[^a-z0-9/._-]/giu, "_").slice(0, 100) || "entry";
+  writeTarString(header, 0, 100, fallbackName);
+  writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, size);
+  writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
+  header.fill(0x20, 148, 156);
+  writeTarString(header, 156, 1, type);
+  writeTarString(header, 257, 6, "ustar");
+  writeTarString(header, 263, 2, "00");
+  let checksum = 0;
+  for (const byte of header) {
+    checksum += byte;
+  }
+  const checksumText = checksum.toString(8).padStart(6, "0").slice(-6);
+  writeTarString(header, 148, 8, `${checksumText}\0 `);
+  return header;
+}
+
+function normalizeArchivePath(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter(Boolean)
+    .join("/");
+}
+
+function isAllowedBackupArchivePath(path: string): boolean {
+  const normalized = normalizeArchivePath(path);
+  return (
+    normalized === "manifest.json" ||
+    normalized === "maibot" ||
+    normalized === "maibot/data" ||
+    normalized === "maibot/config" ||
+    normalized.startsWith("maibot/data/") ||
+    normalized.startsWith("maibot/config/")
+  );
+}
+
+function assertSafeArchivePath(root: string, archivePath: string): string {
+  const normalized = normalizeArchivePath(archivePath);
+  const parts = normalized.split("/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    parts.some((part) => part === "." || part === "..") ||
+    !isAllowedBackupArchivePath(normalized)
+  ) {
+    throw new Error(`备份包包含不允许的路径: ${archivePath}`);
+  }
+  const target = resolve(root, ...parts);
+  if (!sameOrInsidePath(root, target)) {
+    throw new Error(`备份包路径越界: ${archivePath}`);
+  }
+  return target;
+}
+
+async function waitForStreamFinish(stream: NodeJS.EventEmitter, signal?: AbortSignal): Promise<void> {
+  assertMaiBotBackupNotAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      stream.removeListener("finish", onFinish);
+      stream.removeListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onFinish = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: unknown): void => {
+      cleanup();
+      reject(normalizeMaiBotBackupIoError(error));
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(createMaiBotBackupAbortError());
+    };
+    stream.once("finish", onFinish);
+    stream.once("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  assertMaiBotBackupNotAborted(signal);
+}
+
+async function writeStreamChunk(stream: NodeJS.WritableStream, chunk: Buffer, signal?: AbortSignal): Promise<void> {
+  assertMaiBotBackupNotAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      stream.removeListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onError = (error: unknown): void => {
+      cleanup();
+      reject(normalizeMaiBotBackupIoError(error));
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(createMaiBotBackupAbortError());
+    };
+    stream.once("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    stream.write(chunk, (error?: Error | null) => {
+      cleanup();
+      if (error) {
+        reject(normalizeMaiBotBackupIoError(error));
+        return;
+      }
+      resolve();
+    });
+  });
+  assertMaiBotBackupNotAborted(signal);
+}
+
+class TarGzipWriter {
+  private readonly gzip = createGzip();
+  private readonly output: ReturnType<typeof createWriteStream>;
+  private streamError: Error | null = null;
+
+  constructor(private readonly targetPath: string, private readonly signal?: AbortSignal) {
+    this.output = createWriteStream(targetPath);
+    this.output.on("error", (error) => {
+      this.streamError = normalizeMaiBotBackupIoError(error);
+      this.gzip.destroy(this.streamError);
+    });
+    this.gzip.on("error", (error) => {
+      this.streamError = normalizeMaiBotBackupIoError(error);
+      this.output.destroy(this.streamError);
+    });
+    this.signal?.addEventListener("abort", () => {
+      const error = createMaiBotBackupAbortError();
+      this.streamError = error;
+      this.gzip.destroy(error);
+      this.output.destroy(error);
+    }, { once: true });
+    this.gzip.pipe(this.output);
+  }
+
+  async addBuffer(path: string, content: Buffer): Promise<void> {
+    await this.addPaxHeader(path);
+    await this.write(createTarHeader(path, content.length, "0"));
+    await this.write(content);
+    await this.writePadding(content.length);
+  }
+
+  async addDirectory(path: string): Promise<void> {
+    await this.addPaxHeader(path);
+    await this.write(createTarHeader(path, 0, "5"));
+  }
+
+  async addFile(path: string, sourcePath: string, size: number): Promise<void> {
+    await this.addPaxHeader(path);
+    await this.write(createTarHeader(path, size, "0"));
+    for await (const chunk of createReadStream(sourcePath)) {
+      this.throwIfFailed();
+      await this.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    await this.writePadding(size);
+  }
+
+  async close(): Promise<void> {
+    await this.write(Buffer.alloc(TAR_BLOCK_SIZE * 2));
+    const finishPromise = waitForStreamFinish(this.output, this.signal);
+    this.gzip.end();
+    await finishPromise;
+    this.throwIfFailed();
+  }
+
+  async destroy(): Promise<void> {
+    const error = this.streamError ?? createMaiBotBackupAbortError();
+    const closePromise = this.output.closed
+      ? Promise.resolve()
+      : once(this.output, "close").then(() => undefined).catch(() => undefined);
+    this.gzip.destroy(error);
+    this.output.destroy(error);
+    await closePromise;
+  }
+
+  private async addPaxHeader(path: string): Promise<void> {
+    const content = Buffer.from(makePaxRecord("path", normalizeArchivePath(path)), "utf8");
+    await this.write(createTarHeader(path, content.length, "x"));
+    await this.write(content);
+    await this.writePadding(content.length);
+  }
+
+  private async writePadding(size: number): Promise<void> {
+    const padding = tarPaddingSize(size);
+    if (padding > 0) {
+      await this.write(Buffer.alloc(padding));
+    }
+  }
+
+  private async write(chunk: Buffer): Promise<void> {
+    this.throwIfFailed();
+    await writeStreamChunk(this.gzip, chunk, this.signal);
+    this.throwIfFailed();
+  }
+
+  private throwIfFailed(): void {
+    assertMaiBotBackupNotAborted(this.signal);
+    if (this.streamError) {
+      throw this.streamError;
+    }
+  }
+}
+
+async function extractTarGzipArchive(
+  archivePath: string,
+  targetRoot: string,
+  onCompressedRead?: (bytes: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertMaiBotBackupNotAborted(signal);
+  const source = createReadStream(archivePath);
+  if (onCompressedRead) {
+    source.on("data", (chunk: Buffer | string) => {
+      onCompressedRead(Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk));
+    });
+  }
+  const input = source.pipe(createGunzip());
+  signal?.addEventListener("abort", () => {
+    const error = createMaiBotBackupAbortError();
+    source.destroy(error);
+    input.destroy(error);
+  }, { once: true });
+  const iterator = input[Symbol.asyncIterator]();
+  let pending = Buffer.alloc(0);
+  let pendingPax: Record<string, string> | null = null;
+
+  const readExactly = async (size: number): Promise<Buffer> => {
+    assertMaiBotBackupNotAborted(signal);
+    while (pending.length < size) {
+      const next = await iterator.next();
+      if (next.done) {
+        throw new Error("备份包内容不完整");
+      }
+      pending = Buffer.concat([pending, Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value)]);
+    }
+    const result = pending.subarray(0, size);
+    pending = pending.subarray(size);
+    assertMaiBotBackupNotAborted(signal);
+    return result;
+  };
+
+  const discard = async (size: number): Promise<void> => {
+    let remaining = size;
+    assertMaiBotBackupNotAborted(signal);
+    while (remaining > 0) {
+      if (pending.length === 0) {
+        const next = await iterator.next();
+        if (next.done) {
+          throw new Error("备份包内容不完整");
+        }
+        pending = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
+      }
+      const consumed = Math.min(remaining, pending.length);
+      pending = pending.subarray(consumed);
+      remaining -= consumed;
+      assertMaiBotBackupNotAborted(signal);
+    }
+  };
+
+  const writeFileContent = async (targetPath: string, size: number): Promise<void> => {
+    assertMaiBotBackupNotAborted(signal);
+    await mkdir(dirname(targetPath), { recursive: true });
+    const output = createWriteStream(targetPath);
+    signal?.addEventListener("abort", () => {
+      output.destroy(createMaiBotBackupAbortError());
+    }, { once: true });
+    let remaining = size;
+    try {
+      while (remaining > 0) {
+        assertMaiBotBackupNotAborted(signal);
+        if (pending.length === 0) {
+          const next = await iterator.next();
+          if (next.done) {
+            throw new Error("备份包文件内容不完整");
+          }
+          pending = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
+        }
+        const chunk = pending.subarray(0, Math.min(remaining, pending.length));
+        pending = pending.subarray(chunk.length);
+        remaining -= chunk.length;
+        await writeStreamChunk(output, chunk, signal);
+      }
+    } finally {
+      const finishPromise = waitForStreamFinish(output, signal);
+      output.end();
+      await finishPromise;
+    }
+  };
+
+  while (true) {
+    assertMaiBotBackupNotAborted(signal);
+    const header = await readExactly(TAR_BLOCK_SIZE);
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
+
+    const rawName = readTarString(header, 0, 100);
+    const prefix = readTarString(header, 345, 155);
+    const size = readTarOctal(header, 124, 12);
+    const type = readTarString(header, 156, 1) || "0";
+    const headerPath = prefix ? `${prefix}/${rawName}` : rawName;
+
+    if (type === "x") {
+      const content = await readExactly(size);
+      pendingPax = parsePaxRecords(content);
+      await discard(tarPaddingSize(size));
+      continue;
+    }
+
+    const archiveEntryPath = pendingPax?.path ?? headerPath;
+    pendingPax = null;
+    const targetPath = assertSafeArchivePath(targetRoot, archiveEntryPath);
+
+    if (type === "5") {
+      await mkdir(targetPath, { recursive: true });
+      continue;
+    }
+
+    if (type === "0" || type === "") {
+      await writeFileContent(targetPath, size);
+      await discard(tarPaddingSize(size));
+      continue;
+    }
+
+    await discard(size + tarPaddingSize(size));
+  }
 }
 
 function storageCategory(
@@ -1093,6 +1557,317 @@ export class InitManager {
     return join(this.paths.maibotRoot, "config");
   }
 
+  async exportMaiBotBackup(
+    targetPath: string,
+    launcherVersion: string,
+    onProgress?: MaiBotBackupProgressCallback,
+    signal?: AbortSignal,
+  ): Promise<MaiBotBackupExportResult> {
+    assertMaiBotBackupNotAborted(signal);
+    if (!targetPath) {
+      throw new Error("未选择备份保存位置");
+    }
+    emitMaiBotBackupProgress(onProgress, {
+      operation: "export",
+      phase: "scanning",
+      percent: 2,
+      detail: "正在扫描 MaiBot 数据与配置",
+    });
+    const dataDir = this.getMaiBotDataDir();
+    const configDir = this.getMaiBotConfigDir();
+    const dataStats = await readStorageStats(dataDir);
+    const configStats = await readStorageStats(configDir);
+    const totalBytes = dataStats.sizeBytes + configStats.sizeBytes;
+    const totalFiles = dataStats.fileCount + configStats.fileCount;
+    let processedBytes = 0;
+    let processedFiles = 0;
+    const exportedAt = Date.now();
+    const manifest: MaiBotBackupManifest = {
+      format: MAIBOT_BACKUP_FORMAT,
+      formatVersion: MAIBOT_BACKUP_FORMAT_VERSION,
+      createdAt: exportedAt,
+      createdAtIso: new Date(exportedAt).toISOString(),
+      launcherVersion,
+      maibotRoot: this.paths.maibotRoot,
+      includesPlugins: false,
+      includedEntries: [
+        ...(dataStats.exists ? (["maibot/data"] as const) : []),
+        ...(configStats.exists ? (["maibot/config"] as const) : []),
+      ],
+      excludedEntries: ["maibot/plugins"],
+      paths: {
+        data: backupManifestPathInfo(dataStats),
+        config: backupManifestPathInfo(configStats),
+      },
+    };
+
+    await mkdir(dirname(targetPath), { recursive: true });
+    const writer = new TarGzipWriter(targetPath, signal);
+    try {
+      assertMaiBotBackupNotAborted(signal);
+      emitMaiBotBackupProgress(onProgress, {
+        operation: "export",
+        phase: "packing",
+        percent: 8,
+        detail: "正在写入 manifest.json",
+        currentPath: "manifest.json",
+        processedBytes,
+        totalBytes,
+        processedFiles,
+        totalFiles,
+      });
+      await writer.addBuffer("manifest.json", Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"));
+      const reportFilePacked = (archivePath: string, sizeBytes: number): void => {
+        processedBytes += sizeBytes;
+        processedFiles += 1;
+        emitMaiBotBackupProgress(onProgress, {
+          operation: "export",
+          phase: "packing",
+          percent: progressInRange(8, 98, processedBytes, totalBytes),
+          detail: "正在打包文件",
+          currentPath: archivePath,
+          processedBytes,
+          totalBytes,
+          processedFiles,
+          totalFiles,
+        });
+      };
+      if (dataStats.exists) {
+        await this.addDirectoryToBackup(writer, dataDir, "maibot/data", new Set(), reportFilePacked);
+      }
+      if (configStats.exists) {
+        await this.addDirectoryToBackup(writer, configDir, "maibot/config", new Set(), reportFilePacked);
+      }
+      emitMaiBotBackupProgress(onProgress, {
+        operation: "export",
+        phase: "writing",
+        percent: 98,
+        detail: "正在完成迁移包写入",
+        processedBytes,
+        totalBytes,
+        processedFiles,
+        totalFiles,
+      });
+      await writer.close();
+    } catch (error) {
+      await writer.destroy();
+      await rm(targetPath, { force: true });
+      throw normalizeMaiBotBackupIoError(error);
+    }
+
+    assertMaiBotBackupNotAborted(signal);
+    const archiveStat = await stat(targetPath);
+    emitMaiBotBackupProgress(onProgress, {
+      operation: "export",
+      phase: "completed",
+      percent: 100,
+      detail: "迁移包导出完成",
+      currentPath: targetPath,
+      processedBytes,
+      totalBytes,
+      processedFiles,
+      totalFiles,
+    });
+    return {
+      filePath: targetPath,
+      manifest,
+      sizeBytes: archiveStat.size,
+      exportedAt,
+    };
+  }
+
+  async importMaiBotBackup(
+    sourcePath: string,
+    onProgress?: MaiBotBackupProgressCallback,
+    signal?: AbortSignal,
+  ): Promise<MaiBotBackupImportResult> {
+    assertMaiBotBackupNotAborted(signal);
+    if (samePath(this.paths.maibotRoot, join(this.paths.bundledModulesRoot, "MaiBot"))) {
+      throw new Error("当前指向内置模板目录，拒绝导入迁移包；请在打包后的环境执行。");
+    }
+    if (!sourcePath) {
+      throw new Error("未选择迁移包");
+    }
+    if (!existsSync(sourcePath)) {
+      throw new Error(`迁移包不存在: ${sourcePath}`);
+    }
+    const sourceStat = await stat(sourcePath);
+    if (!sourceStat.isFile()) {
+      throw new Error("选择的路径不是文件");
+    }
+
+    const tempRoot = join(this.paths.userDataRoot, `.maibot-backup-import-${Date.now()}-${randomBytes(4).toString("hex")}`);
+    await rm(tempRoot, { recursive: true, force: true });
+    await mkdir(tempRoot, { recursive: true });
+    try {
+      let compressedReadBytes = 0;
+      let lastExtractProgressAt = 0;
+      emitMaiBotBackupProgress(onProgress, {
+        operation: "import",
+        phase: "extracting",
+        percent: 1,
+        detail: "正在解包迁移包",
+        currentPath: sourcePath,
+        processedBytes: compressedReadBytes,
+        totalBytes: sourceStat.size,
+      });
+      await extractTarGzipArchive(sourcePath, tempRoot, (bytes) => {
+        compressedReadBytes += bytes;
+        const now = Date.now();
+        if (now - lastExtractProgressAt < 120 && compressedReadBytes < sourceStat.size) {
+          return;
+        }
+        lastExtractProgressAt = now;
+        emitMaiBotBackupProgress(onProgress, {
+          operation: "import",
+          phase: "extracting",
+          percent: progressInRange(1, 35, compressedReadBytes, sourceStat.size),
+          detail: "正在解包迁移包",
+          currentPath: sourcePath,
+          processedBytes: compressedReadBytes,
+          totalBytes: sourceStat.size,
+        });
+      }, signal);
+      emitMaiBotBackupProgress(onProgress, {
+        operation: "import",
+        phase: "validating",
+        percent: 38,
+        detail: "正在校验 manifest.json",
+        currentPath: "manifest.json",
+        processedBytes: sourceStat.size,
+        totalBytes: sourceStat.size,
+      });
+      const manifestPath = join(tempRoot, "manifest.json");
+      if (!existsSync(manifestPath)) {
+        throw new Error("迁移包缺少 manifest.json");
+      }
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as MaiBotBackupManifest;
+      this.validateMaiBotBackupManifest(manifest);
+
+      const stagingDataDir = join(tempRoot, "maibot", "data");
+      const stagingConfigDir = join(tempRoot, "maibot", "config");
+      const hasData = existsSync(stagingDataDir);
+      const hasConfig = existsSync(stagingConfigDir);
+      if (!hasData && !hasConfig) {
+        throw new Error("迁移包没有可恢复的数据或配置目录");
+      }
+      const stagingDataStats = hasData ? await readStorageStats(stagingDataDir) : { ...emptyStorageStat };
+      const stagingConfigStats = hasConfig ? await readStorageStats(stagingConfigDir) : { ...emptyStorageStat };
+      const totalRestoreBytes = stagingDataStats.sizeBytes + stagingConfigStats.sizeBytes;
+      const totalRestoreFiles = stagingDataStats.fileCount + stagingConfigStats.fileCount;
+      let restoredBytes = 0;
+      let restoredFiles = 0;
+      const reportFileRestored = (targetPath: string, sizeBytes: number): void => {
+        restoredBytes += sizeBytes;
+        restoredFiles += 1;
+        emitMaiBotBackupProgress(onProgress, {
+          operation: "import",
+          phase: "restoring",
+          percent: progressInRange(58, 96, restoredBytes, totalRestoreBytes),
+          detail: "正在恢复文件",
+          currentPath: targetPath,
+          processedBytes: restoredBytes,
+          totalBytes: totalRestoreBytes,
+          processedFiles: restoredFiles,
+          totalFiles: totalRestoreFiles,
+        });
+      };
+
+      await mkdir(this.paths.maibotRoot, { recursive: true });
+      const importedAt = Date.now();
+      const result: MaiBotBackupImportResult = {
+        sourcePath,
+        manifest,
+        sizeBytes: sourceStat.size,
+        importedAt,
+      };
+      const dataDir = this.getMaiBotDataDir();
+      const configDir = this.getMaiBotConfigDir();
+      let backupDataDir: string | undefined;
+      let backupConfigDir: string | undefined;
+
+      try {
+        assertMaiBotBackupNotAborted(signal);
+        if (hasData) {
+          emitMaiBotBackupProgress(onProgress, {
+            operation: "import",
+            phase: "backing-up",
+            percent: 45,
+            detail: "正在备份当前 data 目录",
+            currentPath: dataDir,
+          });
+          backupDataDir = await this.retireExistingPath(dataDir, importedAt);
+          result.backupDataDir = backupDataDir;
+          emitMaiBotBackupProgress(onProgress, {
+            operation: "import",
+            phase: "restoring",
+            percent: 58,
+            detail: "正在恢复 data 目录",
+            currentPath: dataDir,
+          });
+          await this.copyDirectoryForBackupImport(stagingDataDir, dataDir, signal, reportFileRestored);
+          result.restoredDataDir = dataDir;
+        }
+
+        assertMaiBotBackupNotAborted(signal);
+        if (hasConfig) {
+          emitMaiBotBackupProgress(onProgress, {
+            operation: "import",
+            phase: "backing-up",
+            percent: hasData ? 74 : 55,
+            detail: "正在备份当前 config 目录",
+            currentPath: configDir,
+          });
+          backupConfigDir = await this.retireExistingPath(configDir, importedAt);
+          result.backupConfigDir = backupConfigDir;
+          emitMaiBotBackupProgress(onProgress, {
+            operation: "import",
+            phase: "restoring",
+            percent: hasData ? 86 : 78,
+            detail: "正在恢复 config 目录",
+            currentPath: configDir,
+          });
+          await this.copyDirectoryForBackupImport(stagingConfigDir, configDir, signal, reportFileRestored);
+          result.restoredConfigDir = configDir;
+        }
+      } catch (error) {
+        emitMaiBotBackupProgress(onProgress, {
+          operation: "import",
+          phase: "rollback",
+          percent: 92,
+          detail: "导入失败，正在回退原 data/config 目录",
+        });
+        try {
+          await this.rollbackMaiBotBackupImport({
+            dataDir,
+            configDir,
+            backupDataDir,
+            backupConfigDir,
+            restoreData: hasData,
+            restoreConfig: hasConfig,
+          });
+        } catch (rollbackError) {
+          const importMessage = error instanceof Error ? error.message : String(error);
+          const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+          throw new Error(`导入失败，且自动回退未完全完成。导入错误: ${importMessage}; 回退错误: ${rollbackMessage}`);
+        }
+        throw error;
+      }
+
+      emitMaiBotBackupProgress(onProgress, {
+        operation: "import",
+        phase: "completed",
+        percent: 100,
+        detail: "迁移包导入完成",
+        processedBytes: sourceStat.size,
+        totalBytes: sourceStat.size,
+      });
+      return result;
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+
   /**
    * Copy user-provided bot_config.toml / model_config.toml into MaiBot/config.
    * Prepare the writable MaiBot module config directory and back up original files with timestamps.
@@ -1339,6 +2114,153 @@ export class InitManager {
       removedBytes,
       cleanedAt: Date.now(),
     };
+  }
+
+  private async addDirectoryToBackup(
+    writer: TarGzipWriter,
+    sourceDir: string,
+    archiveDir: string,
+    excludedTopLevelEntries = new Set<string>(),
+    onFilePacked?: (archivePath: string, sizeBytes: number) => void,
+  ): Promise<void> {
+    await writer.addDirectory(archiveDir);
+    if (!existsSync(sourceDir)) {
+      return;
+    }
+
+    const entries = await readdir(sourceDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (excludedTopLevelEntries.has(entry.name)) {
+        continue;
+      }
+      const sourcePath = join(sourceDir, entry.name);
+      const archivePath = `${archiveDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await this.addDirectoryToBackup(writer, sourcePath, archivePath, new Set(), onFilePacked);
+      } else if (entry.isFile()) {
+        const fileStat = await stat(sourcePath);
+        await writer.addFile(archivePath, sourcePath, fileStat.size);
+        onFilePacked?.(archivePath, fileStat.size);
+      }
+    }
+  }
+
+  private validateMaiBotBackupManifest(manifest: MaiBotBackupManifest): void {
+    if (
+      manifest?.format !== MAIBOT_BACKUP_FORMAT ||
+      manifest.formatVersion !== MAIBOT_BACKUP_FORMAT_VERSION ||
+      !Array.isArray(manifest.includedEntries)
+    ) {
+      throw new Error("不支持的 MaiBot 迁移包格式");
+    }
+    for (const entry of manifest.includedEntries) {
+      if (entry !== "maibot/data" && entry !== "maibot/config") {
+        throw new Error(`迁移包包含不支持的入口: ${entry}`);
+      }
+    }
+  }
+
+  private async retireExistingPath(targetPath: string, timestamp: number): Promise<string | undefined> {
+    if (!existsSync(targetPath)) {
+      return undefined;
+    }
+    const backupPath = `${targetPath}.bak.${timestamp}`;
+    await rm(backupPath, { recursive: true, force: true });
+    await rename(targetPath, backupPath);
+    return backupPath;
+  }
+
+  private async rollbackMaiBotBackupImport({
+    dataDir,
+    configDir,
+    backupDataDir,
+    backupConfigDir,
+    restoreData,
+    restoreConfig,
+  }: {
+    dataDir: string;
+    configDir: string;
+    backupDataDir?: string;
+    backupConfigDir?: string;
+    restoreData: boolean;
+    restoreConfig: boolean;
+  }): Promise<void> {
+    const errors: string[] = [];
+    const rollbackPath = async (targetPath: string, backupPath: string | undefined): Promise<void> => {
+      try {
+        await rm(targetPath, { recursive: true, force: true });
+        if (backupPath && existsSync(backupPath)) {
+          await rename(backupPath, targetPath);
+        }
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    if (restoreConfig) {
+      await rollbackPath(configDir, backupConfigDir);
+    }
+    if (restoreData) {
+      await rollbackPath(dataDir, backupDataDir);
+    }
+    if (errors.length > 0) {
+      throw new Error(`导入失败且自动回退未完全完成: ${errors.join("; ")}`);
+    }
+  }
+
+  private async copyDirectoryForBackupImport(
+    sourceDir: string,
+    targetDir: string,
+    signal: AbortSignal | undefined,
+    onFileCopied?: (targetPath: string, sizeBytes: number) => void,
+  ): Promise<void> {
+    assertMaiBotBackupNotAborted(signal);
+    await mkdir(targetDir, { recursive: true });
+    const entries = await readdir(sourceDir, { withFileTypes: true });
+    for (const entry of entries) {
+      assertMaiBotBackupNotAborted(signal);
+      const sourcePath = join(sourceDir, entry.name);
+      const targetPath = join(targetDir, entry.name);
+      if (entry.isDirectory()) {
+        await this.copyDirectoryForBackupImport(sourcePath, targetPath, signal, onFileCopied);
+        continue;
+      }
+      if (entry.isFile()) {
+        const sourceStat = await stat(sourcePath);
+        await this.copyFileForBackupImport(sourcePath, targetPath, signal);
+        onFileCopied?.(targetPath, sourceStat.size);
+      }
+    }
+  }
+
+  private async copyFileForBackupImport(
+    sourcePath: string,
+    targetPath: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    assertMaiBotBackupNotAborted(signal);
+    await mkdir(dirname(targetPath), { recursive: true });
+    const input = createReadStream(sourcePath);
+    const output = createWriteStream(targetPath);
+    signal?.addEventListener("abort", () => {
+      const error = createMaiBotBackupAbortError();
+      input.destroy(error);
+      output.destroy(error);
+    }, { once: true });
+    try {
+      for await (const chunk of input) {
+        assertMaiBotBackupNotAborted(signal);
+        await writeStreamChunk(output, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), signal);
+      }
+      const finishPromise = waitForStreamFinish(output, signal);
+      output.end();
+      await finishPromise;
+    } catch (error) {
+      input.destroy();
+      output.destroy();
+      await rm(targetPath, { force: true });
+      throw normalizeMaiBotBackupIoError(error);
+    }
   }
 
   private async getMaiBotMarketCachePaths(dataDir: string): Promise<string[]> {

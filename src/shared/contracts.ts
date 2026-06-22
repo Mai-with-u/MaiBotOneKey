@@ -470,6 +470,77 @@ export interface MaiBotDataImportResult {
   importedAt: number;
 }
 
+export type MaiBotBackupEntry = "maibot/data" | "maibot/config";
+
+export interface MaiBotBackupManifestPathInfo {
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+}
+
+export interface MaiBotBackupManifest {
+  format: "maibot-onekey-backup";
+  formatVersion: 1;
+  createdAt: number;
+  createdAtIso: string;
+  launcherVersion: string;
+  maibotRoot: string;
+  includesPlugins: boolean;
+  includedEntries: MaiBotBackupEntry[];
+  excludedEntries: string[];
+  paths: {
+    data: MaiBotBackupManifestPathInfo;
+    config: MaiBotBackupManifestPathInfo;
+  };
+}
+
+export interface MaiBotBackupExportResult {
+  filePath: string;
+  manifest: MaiBotBackupManifest;
+  sizeBytes: number;
+  exportedAt: number;
+}
+
+export interface MaiBotBackupImportResult {
+  sourcePath: string;
+  manifest: MaiBotBackupManifest;
+  restoredDataDir?: string;
+  restoredConfigDir?: string;
+  backupDataDir?: string;
+  backupConfigDir?: string;
+  sizeBytes: number;
+  importedAt: number;
+}
+
+export type MaiBotBackupProgressOperation = "export" | "import";
+
+export type MaiBotBackupProgressPhase =
+  | "scanning"
+  | "packing"
+  | "writing"
+  | "extracting"
+  | "validating"
+  | "backing-up"
+  | "restoring"
+  | "rollback"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface MaiBotBackupProgress {
+  operation: MaiBotBackupProgressOperation;
+  phase: MaiBotBackupProgressPhase;
+  percent: number;
+  detail?: string;
+  currentPath?: string;
+  processedBytes?: number;
+  totalBytes?: number;
+  processedFiles?: number;
+  totalFiles?: number;
+  timestamp: number;
+}
+
 export interface MaiBotDataResetResult {
   dataDir: string;
   removedEntries: string[];
@@ -1344,6 +1415,10 @@ export interface DesktopBridge {
     saveSourceConfig: (config: ModuleSourceUpdate) => Promise<ModuleSourceConfig>;
   };
   data: {
+    onMaiBotBackupProgress: (callback: (progress: MaiBotBackupProgress) => void) => () => void;
+    exportMaiBotBackup: () => Promise<MaiBotBackupExportResult | null>;
+    importMaiBotBackup: () => Promise<MaiBotBackupImportResult | null>;
+    cancelMaiBotBackupOperation: () => Promise<boolean>;
     importMaiBotDatabase: () => Promise<MaiBotDataImportResult | null>;
     importMaiBotConfig: (fileName: MaiBotConfigFileName) => Promise<MaiBotConfigImportResult | null>;
     getMaiBotStorageStats: () => Promise<MaiBotStorageStats>;

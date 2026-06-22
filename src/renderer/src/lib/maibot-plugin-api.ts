@@ -51,6 +51,7 @@ export type PluginReadmeResult = MaiBotPluginReadmeResult;
 export type PluginConfigState = MaiBotPluginConfigState;
 export type PluginConfigValue = MaiBotPluginConfigValue;
 export type PluginConfigSaveResponse = MaiBotPluginConfigSaveResult;
+type PluginServiceTarget = Pick<ServiceDescriptor, "url">;
 
 function requirePluginBridge(): NonNullable<typeof window.maibotDesktop>["plugins"] {
   const bridge = window.maibotDesktop?.plugins;
@@ -60,7 +61,7 @@ function requirePluginBridge(): NonNullable<typeof window.maibotDesktop>["plugin
   return bridge;
 }
 
-export function maibotServiceBaseUrl(service?: ServiceDescriptor): string {
+export function maibotServiceBaseUrl(service?: PluginServiceTarget): string {
   try {
     return new URL(service?.url ?? "http://127.0.0.1:8001").origin;
   } catch {
@@ -176,19 +177,19 @@ function normalizeVersion(version: string | undefined): number[] {
   });
 }
 
-export function fetchInstalledPlugins(_service?: ServiceDescriptor): Promise<InstalledPlugin[]> {
+export function fetchInstalledPlugins(_service?: PluginServiceTarget): Promise<InstalledPlugin[]> {
   return requirePluginBridge().listInstalled(_service?.url);
 }
 
 export function fetchMarketPlugins(
-  _service?: ServiceDescriptor,
+  _service?: PluginServiceTarget,
   options?: MaiBotPluginListOptions,
 ): Promise<MaiBotPluginListResult> {
   return requirePluginBridge().listMarket(_service?.url, options);
 }
 
 export function installMaiBotPlugin(
-  _service: ServiceDescriptor | undefined,
+  _service: PluginServiceTarget | undefined,
   pluginId: string,
   repositoryUrl: string,
   branch: string,
@@ -203,14 +204,14 @@ export function installMaiBotPlugin(
 }
 
 export function uninstallMaiBotPlugin(
-  _service: ServiceDescriptor | undefined,
+  _service: PluginServiceTarget | undefined,
   pluginId: string,
 ): Promise<PluginOperationResponse> {
   return requirePluginBridge().uninstall(pluginId);
 }
 
 export function updateMaiBotPlugin(
-  _service: ServiceDescriptor | undefined,
+  _service: PluginServiceTarget | undefined,
   pluginId: string,
   repositoryUrl: string,
   branch: string,
@@ -270,14 +271,14 @@ export function openPluginBuilderLibrary(): Promise<void> {
   return requirePluginBridge().openBuilderLibrary();
 }
 
-export function fetchPluginConfig(pluginId: string, service?: ServiceDescriptor): Promise<PluginConfigState> {
+export function fetchPluginConfig(pluginId: string, service?: PluginServiceTarget): Promise<PluginConfigState> {
   return requirePluginBridge().getConfig(pluginId, service?.url);
 }
 
 export function savePluginConfig(
   pluginId: string,
   config: Record<string, PluginConfigValue>,
-  service?: ServiceDescriptor,
+  service?: PluginServiceTarget,
 ): Promise<PluginConfigSaveResponse> {
   return requirePluginBridge().saveConfig(pluginId, config, service?.url);
 }
@@ -285,14 +286,14 @@ export function savePluginConfig(
 export function savePluginConfigRaw(
   pluginId: string,
   raw: string,
-  service?: ServiceDescriptor,
+  service?: PluginServiceTarget,
 ): Promise<PluginConfigSaveResponse> {
   return requirePluginBridge().saveConfigRaw(pluginId, raw, service?.url);
 }
 
 export function resetPluginConfig(
   pluginId: string,
-  service?: ServiceDescriptor,
+  service?: PluginServiceTarget,
 ): Promise<PluginConfigSaveResponse> {
   return requirePluginBridge().resetConfig(pluginId, service?.url);
 }

@@ -47,6 +47,9 @@ import type {
   LocalChatConnectRequest,
   LocalChatMessageEvent,
   LocalChatSendRequest,
+  MaiBotBackupExportResult,
+  MaiBotBackupImportResult,
+  MaiBotBackupProgress,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
@@ -1510,6 +1513,7 @@ export function registerAppIpc({
     paths.userDataRoot,
     MAIBOT_UPDATE_SELECTION_FILE,
   );
+  let maiBotBackupAbortController: AbortController | null = null;
 
   const readManagedWindowState = (window: BrowserWindow | null): WindowState =>
     readWindowState(window, floatingMode, floatingEdgeSide, shellMaximized);
@@ -2760,6 +2764,162 @@ export function registerAppIpc({
         `Module source saved: ${result.preset} (${result.maibotUrl})`,
       );
       return result;
+    },
+  );
+
+  ipcMain.handle(
+    "data:cancelMaibotBackupOperation",
+    async (): Promise<boolean> => {
+      if (!maiBotBackupAbortController) {
+        return false;
+      }
+      maiBotBackupAbortController.abort();
+      return true;
+    },
+  );
+
+  ipcMain.handle(
+    "data:exportMaibotBackup",
+    async (event): Promise<MaiBotBackupExportResult | null> => {
+      const sendProgress = (progress: MaiBotBackupProgress): void => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("data:maibot-backup-progress", progress);
+        }
+      };
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("Stop MaiBot Core before exporting a backup.");
+      }
+
+      const createdAt = new Date().toISOString().replace(/[:.]/gu, "-");
+      const mainWindow = getMainWindow();
+      const dialogOptions: Electron.SaveDialogOptions = {
+        title: "Export MaiBot backup",
+        defaultPath: `MaiBot-backup-${createdAt}.maibot-backup.tar.gz`,
+        filters: [
+          { name: "MaiBot backup", extensions: ["tar.gz", "tgz"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      };
+      const result = mainWindow
+        ? await dialog.showSaveDialog(mainWindow, dialogOptions)
+        : await dialog.showSaveDialog(dialogOptions);
+      if (result.canceled || !result.filePath) {
+        return null;
+      }
+      if (maiBotBackupAbortController) {
+        throw new Error("已有 MaiBot 迁移任务正在运行。");
+      }
+
+      const controller = new AbortController();
+      maiBotBackupAbortController = controller;
+      try {
+        const exportResult = await initManager.exportMaiBotBackup(
+          result.filePath,
+          app.getVersion(),
+          sendProgress,
+          controller.signal,
+        );
+        logStore.append(
+          "desktop",
+          "system",
+          `MaiBot backup exported: ${exportResult.filePath}`,
+        );
+        return exportResult;
+      } catch (error) {
+        const cancelled = error instanceof Error && error.name === "AbortError";
+        sendProgress({
+          operation: "export",
+          phase: cancelled ? "cancelled" : "failed",
+          percent: 100,
+          detail: cancelled ? "已取消导出，正在清理未完成的迁移包" : error instanceof Error ? error.message : String(error),
+          timestamp: Date.now(),
+        });
+        throw error;
+      } finally {
+        if (maiBotBackupAbortController === controller) {
+          maiBotBackupAbortController = null;
+        }
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "data:importMaibotBackup",
+    async (event): Promise<MaiBotBackupImportResult | null> => {
+      const sendProgress = (progress: MaiBotBackupProgress): void => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("data:maibot-backup-progress", progress);
+        }
+      };
+      const maibot = serviceManager
+        .snapshot()
+        .find((service) => service.id === "maibot");
+      if (
+        maibot?.managed ||
+        maibot?.status === "starting" ||
+        maibot?.status === "running" ||
+        maibot?.status === "stopping"
+      ) {
+        throw new Error("Stop MaiBot Core before importing a backup.");
+      }
+
+      const mainWindow = getMainWindow();
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: "Import MaiBot backup",
+        properties: ["openFile"],
+        filters: [
+          { name: "MaiBot backup", extensions: ["tar.gz", "tgz"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+      if (maiBotBackupAbortController) {
+        throw new Error("已有 MaiBot 迁移任务正在运行。");
+      }
+
+      const controller = new AbortController();
+      maiBotBackupAbortController = controller;
+      try {
+        const importResult = await initManager.importMaiBotBackup(
+          result.filePaths[0],
+          sendProgress,
+          controller.signal,
+        );
+        logStore.append(
+          "desktop",
+          "system",
+          `MaiBot backup imported: ${importResult.sourcePath}`,
+        );
+        await broadcastSnapshot();
+        return importResult;
+      } catch (error) {
+        const cancelled = error instanceof Error && error.name === "AbortError";
+        sendProgress({
+          operation: "import",
+          phase: cancelled ? "cancelled" : "failed",
+          percent: 100,
+          detail: cancelled ? "已取消导入，必要时已回退原 data/config 目录" : error instanceof Error ? error.message : String(error),
+          timestamp: Date.now(),
+        });
+        throw error;
+      } finally {
+        if (maiBotBackupAbortController === controller) {
+          maiBotBackupAbortController = null;
+        }
+      }
     },
   );
 

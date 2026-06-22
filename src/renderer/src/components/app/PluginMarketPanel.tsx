@@ -307,6 +307,9 @@ export function PluginMarketPanel({
   const [detailRatingPanelOpen, setDetailRatingPanelOpen] = useState(false);
   const [toggleBusyPluginId, setToggleBusyPluginId] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const pluginServiceTarget = useMemo(() => (
+    maibotService?.url ? { url: maibotService.url } : undefined
+  ), [maibotService?.url]);
 
   useEffect(() => {
     if (!configSaveProgressOpen) {
@@ -353,15 +356,15 @@ export function PluginMarketPanel({
 
     try {
       if (mode === "market") {
-        const result = await fetchMarketPlugins(maibotService, { forceRefresh, marketSource });
+        const result = await fetchMarketPlugins(pluginServiceTarget, { forceRefresh, marketSource });
         setInstalledPlugins(result.installed);
         setMarketPlugins(result.market);
         setPluginStats(result.stats ?? {});
       } else {
-        const installed = await fetchInstalledPlugins(maibotService);
+        const installed = await fetchInstalledPlugins(pluginServiceTarget);
         setInstalledPlugins(installed);
         setLoadState("ready");
-        void fetchMarketPlugins(maibotService, { forceRefresh, marketSource })
+        void fetchMarketPlugins(pluginServiceTarget, { forceRefresh, marketSource })
           .then((marketResult) => {
             setMarketPlugins(marketResult.market);
             setPluginStats(marketResult.stats ?? {});
@@ -377,7 +380,7 @@ export function PluginMarketPanel({
       setLoadState("error");
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [maibotService, marketSource, mode]);
+  }, [marketSource, mode, pluginServiceTarget]);
 
   useEffect(() => {
     void loadPlugins();
@@ -482,7 +485,7 @@ export function PluginMarketPanel({
     setConfigError(null);
     setConfigBusy("load");
     try {
-      const state = await fetchPluginConfig(plugin.id, maibotService);
+      const state = await fetchPluginConfig(plugin.id, pluginServiceTarget);
       setConfigState(state);
       setConfigDraft(clonePluginConfig(state.config));
       setConfigRawDraft(state.raw ?? "");
@@ -491,7 +494,7 @@ export function PluginMarketPanel({
     } finally {
       setConfigBusy(null);
     }
-  }, [maibotService]);
+  }, [pluginServiceTarget]);
 
   useEffect(() => {
     if (!requestedConfigPluginId || mode !== "manage" || loadState === "idle" || loadState === "loading") {
@@ -550,8 +553,8 @@ export function PluginMarketPanel({
         parseToml(configRawDraft);
       }
       const result = configEditMode === "source"
-        ? await savePluginConfigRaw(configPlugin.id, configRawDraft, maibotService)
-        : await savePluginConfig(configPlugin.id, configDraft, maibotService);
+        ? await savePluginConfigRaw(configPlugin.id, configRawDraft, pluginServiceTarget)
+        : await savePluginConfig(configPlugin.id, configDraft, pluginServiceTarget);
       setConfigState((state) =>
         state
           ? {
@@ -575,7 +578,7 @@ export function PluginMarketPanel({
     } finally {
       setConfigBusy(null);
     }
-  }, [configDraft, configEditMode, configPlugin, configRawDraft, loadPlugins, maibotService]);
+  }, [configDraft, configEditMode, configPlugin, configRawDraft, loadPlugins, pluginServiceTarget]);
 
   const resetOpenPluginConfig = useCallback(async () => {
     if (!configPlugin) {
@@ -585,7 +588,7 @@ export function PluginMarketPanel({
     setConfigBusy("save");
     setConfigError(null);
     try {
-      const result = await resetPluginConfig(configPlugin.id, maibotService);
+      const result = await resetPluginConfig(configPlugin.id, pluginServiceTarget);
       setConfigState((state) =>
         state
           ? {
@@ -616,14 +619,14 @@ export function PluginMarketPanel({
     } finally {
       setConfigBusy(null);
     }
-  }, [configPlugin, loadPlugins, maibotService]);
+  }, [configPlugin, loadPlugins, pluginServiceTarget]);
 
   const togglePluginEnabled = useCallback(async (plugin: InstalledPlugin, enabled: boolean) => {
     setToggleBusyPluginId(plugin.id);
     try {
-      const state = await fetchPluginConfig(plugin.id, maibotService);
+      const state = await fetchPluginConfig(plugin.id, pluginServiceTarget);
       const nextConfig = setPluginConfigValue(clonePluginConfig(state.config), ["plugin", "enabled"], enabled);
-      await savePluginConfig(plugin.id, nextConfig, maibotService);
+      await savePluginConfig(plugin.id, nextConfig, pluginServiceTarget);
       toast.success(`${enabled ? "已启用" : "已禁用"}：${pluginName(plugin)}`);
       await loadPlugins();
     } catch (nextError) {
@@ -631,7 +634,7 @@ export function PluginMarketPanel({
     } finally {
       setToggleBusyPluginId(null);
     }
-  }, [loadPlugins, maibotService]);
+  }, [loadPlugins, pluginServiceTarget]);
 
   const updateConfigDraft = useCallback((path: string[], value: PluginConfigValue) => {
     setConfigDraft((draft) => (draft ? setPluginConfigValue(draft, path, value) : draft));
@@ -670,7 +673,7 @@ export function PluginMarketPanel({
       if (pendingOperation.kind === "install") {
         if (!pendingOperation.repositoryUrl) throw new Error("插件缺少仓库地址，无法安装");
         await installMaiBotPlugin(
-          maibotService,
+          pluginServiceTarget,
           pendingOperation.plugin.id,
           pendingOperation.repositoryUrl,
           pendingOperation.branch,
@@ -699,7 +702,7 @@ export function PluginMarketPanel({
           throw new Error("当前已是最新版本，无需更新");
         }
         const result = await updateMaiBotPlugin(
-          maibotService,
+          pluginServiceTarget,
           pendingOperation.plugin.id,
           pendingOperation.repositoryUrl,
           pendingOperation.branch,
@@ -712,7 +715,7 @@ export function PluginMarketPanel({
             : `插件已更新：${pluginName(pendingOperation.plugin)}`,
         );
       } else {
-        await uninstallMaiBotPlugin(maibotService, pendingOperation.plugin.id);
+        await uninstallMaiBotPlugin(pluginServiceTarget, pendingOperation.plugin.id);
         toast.success(`插件已卸载：${pluginName(pendingOperation.plugin)}`);
       }
 
@@ -723,7 +726,7 @@ export function PluginMarketPanel({
     } finally {
       setOperationBusy(false);
     }
-  }, [loadPlugins, maibotService, marketSource, pendingOperation]);
+  }, [loadPlugins, marketSource, pendingOperation, pluginServiceTarget]);
 
   const updatePluginUserState = useCallback((pluginId: string, partialState: Partial<PluginUserState>) => {
     setPluginUserStates((current) => ({
