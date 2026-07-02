@@ -10,6 +10,7 @@ import type {
   AgreementDocument,
   AgreementDocumentId,
   InitCheck,
+  InitRepairOptions,
   InitRepairResult,
   InitState,
   MaiBotBackupExportResult,
@@ -76,6 +77,32 @@ const COMPONENT_LOG_FILE_PATTERN = /\.log$/iu;
 const MAIBOT_BACKUP_FORMAT = "maibot-onekey-backup" as const;
 const MAIBOT_BACKUP_FORMAT_VERSION = 1 as const;
 const TAR_BLOCK_SIZE = 512;
+
+interface MaiBotWebUiEndpoint {
+  host: string;
+  port: number;
+  url: string;
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
+  sourcePath?: string;
+}
+
+interface AdapterConfigWriteOptions {
+  resetInvalidConfig?: boolean;
+}
+
+class AdapterConfigParseError extends Error {
+  constructor(
+    readonly backend: QqBackend,
+    readonly configPath: string,
+    cause: unknown,
+  ) {
+    super(
+      `ADAPTER_CONFIG_PARSE_FAILED::${backend}::${configPath}::${toDetail(cause)}`,
+    );
+    this.name = "AdapterConfigParseError";
+  }
+}
 
 function uniqueExistingPaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -953,11 +980,10 @@ function hostForUrl(host: string): string {
   return unwrapped.includes(":") ? `[${unwrapped}]` : unwrapped;
 }
 
-function buildMaiBotWebUiEndpoint(host = MAIBOT_WEBUI_FALLBACK_HOST, port = MAIBOT_WEBUI_FALLBACK_PORT): {
-  host: string;
-  port: number;
-  url: string;
-} {
+function buildMaiBotWebUiEndpoint(
+  host = MAIBOT_WEBUI_FALLBACK_HOST,
+  port = MAIBOT_WEBUI_FALLBACK_PORT,
+): MaiBotWebUiEndpoint {
   const resolvedHost = localWebUiHost(host);
   const resolvedPort = asTcpPort(port, MAIBOT_WEBUI_FALLBACK_PORT);
   try {
@@ -1436,7 +1462,10 @@ export class InitManager {
     return Boolean(qqAccount && isDigits(qqAccount));
   }
 
-  async setQqBackend(backend: QqBackend, options: { syncAdapters?: boolean } = {}): Promise<void> {
+  async setQqBackend(
+    backend: QqBackend,
+    options: { syncAdapters?: boolean } & InitRepairOptions = {},
+  ): Promise<void> {
     await mkdir(dirname(this.qqBackendPath()), { recursive: true });
     await writeFile(
       this.qqBackendPath(),
@@ -1447,7 +1476,9 @@ export class InitManager {
     if (options.syncAdapters !== false) {
       const qqAccount = await this.readConfiguredQqAccount();
       if (qqAccount) {
-        const syncedPaths = await this.syncSelectedQqAdapterConfigs();
+        const syncedPaths = await this.syncSelectedQqAdapterConfigs({
+          resetInvalidConfig: options.resetInvalidAdapterConfigs,
+        });
         const selectedConfigPath = backend === "snowluma"
           ? this.snowlumaAdapterConfigPath()
           : this.napcatAdapterConfigPath();
@@ -1485,6 +1516,7 @@ export class InitManager {
       this.checkPythonRuntime(),
       checkDir(this.paths.maibotRoot, "MaiBot 主模块", "maibot-module"),
       checkFile(join(this.paths.maibotRoot, "bot.py"), "MaiBot 启动文件", "maibot-entry"),
+      this.checkMaiBotWebUiEndpoint(),
       ...qqModuleChecks,
       ...dependencyChecks,
     ];
@@ -1496,8 +1528,13 @@ export class InitManager {
     return this.checkDependencies();
   }
 
-  async repair(): Promise<InitRepairResult> {
+  async repair(options: InitRepairOptions = {}): Promise<InitRepairResult> {
     const changedFiles = await this.ensureModulesReady();
+    changedFiles.push(
+      ...(await this.syncSelectedQqAdapterConfigs({
+        resetInvalidConfig: options.resetInvalidAdapterConfigs,
+      })),
+    );
 
     const state = {
       ...(await this.getState()),
@@ -2502,6 +2539,7 @@ export class InitManager {
     websocketToken?: string,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
     qqBackend: QqBackend = "napcat",
+    options: InitRepairOptions = {},
   ): Promise<InitState> {
     if (!isDigits(qqAccount)) {
       throw new Error("QQ 号必须是纯数字");
@@ -2531,6 +2569,7 @@ export class InitManager {
       resolvedWebsocketServer,
       qqAccount,
       chatOverrides,
+      { resetInvalidConfig: options.resetInvalidAdapterConfigs },
     );
     await this.markMessagePlatformConfigured(
       qqBackend,
@@ -2632,6 +2671,7 @@ export class InitManager {
     selectedWebsocketServer: NapcatWebsocketServerConfig,
     qqAccount?: string,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
+    options: AdapterConfigWriteOptions = {},
   ): Promise<boolean> {
     const napcatServer = qqBackend === "napcat"
       ? selectedWebsocketServer
@@ -2641,13 +2681,13 @@ export class InitManager {
       : await this.resolveSnowLumaAdapterServer(qqAccount);
 
     if (qqBackend === "snowluma") {
-      const wroteInactive = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false);
-      const wroteSelected = await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true);
+      const wroteInactive = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, false, options);
+      const wroteSelected = await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, true, options);
       return wroteSelected || wroteInactive;
     }
 
-    const wroteSelected = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, true);
-    const wroteInactive = await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false);
+    const wroteSelected = await this.writeNapcatAdapterConfigForServer(napcatServer, chatOverrides, true, options);
+    const wroteInactive = await this.writeSnowLumaAdapterConfigForServer(snowlumaServer, chatOverrides, false, options);
     return wroteSelected || wroteInactive;
   }
 
@@ -2669,7 +2709,7 @@ export class InitManager {
     };
   }
 
-  private async syncSelectedQqAdapterConfigs(): Promise<string[]> {
+  private async syncSelectedQqAdapterConfigs(options: AdapterConfigWriteOptions = {}): Promise<string[]> {
     const qqAccount = await this.readConfiguredQqAccount();
     if (!qqAccount) {
       return [];
@@ -2692,7 +2732,7 @@ export class InitManager {
       await this.ensureNapCatWebUiConfig();
     }
 
-    await this.writeQqAdapterConfigsForBackend(qqBackend, websocketServer, qqAccount);
+    await this.writeQqAdapterConfigsForBackend(qqBackend, websocketServer, qqAccount, undefined, options);
     return [
       this.napcatAdapterConfigPath(),
       this.snowlumaAdapterConfigPath(),
@@ -2703,6 +2743,7 @@ export class InitManager {
     websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
     enabled = true,
+    options: AdapterConfigWriteOptions = {},
   ): Promise<boolean> {
     const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
     let existing: NapcatAdapterConfig = defaults;
@@ -2720,8 +2761,10 @@ export class InitManager {
         if (parsed && typeof parsed === "object") {
           existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
         }
-      } catch {
-        // On parse failure, use default values directly.
+      } catch (error) {
+        if (!options.resetInvalidConfig) {
+          throw new AdapterConfigParseError("napcat", configPath, error);
+        }
       }
     }
 
@@ -2748,6 +2791,7 @@ export class InitManager {
     websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
     enabled = true,
+    options: AdapterConfigWriteOptions = {},
   ): Promise<boolean> {
     const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
     defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
@@ -2768,8 +2812,10 @@ export class InitManager {
         if (parsed && typeof parsed === "object") {
           existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
         }
-      } catch {
-        // 解析失败则直接以默认值覆盖
+      } catch (error) {
+        if (!options.resetInvalidConfig) {
+          throw new AdapterConfigParseError("snowluma", configPath, error);
+        }
       }
     }
 
@@ -3475,12 +3521,13 @@ export class InitManager {
     return { exists: sawExisting, error: firstError };
   }
 
-  readMaiBotWebUiEndpointSync(): { host: string; port: number; url: string } {
+  readMaiBotWebUiEndpointSync(): MaiBotWebUiEndpoint {
     const fallback = buildMaiBotWebUiEndpoint();
     const candidates = uniqueExistingPaths([
       this.botConfigPath(),
       join(this.paths.bundledModulesRoot, "MaiBot", "config", "bot_config.toml"),
     ]);
+    const failures: string[] = [];
 
     for (const candidate of candidates) {
       try {
@@ -3489,16 +3536,26 @@ export class InitManager {
           continue;
         }
 
-        return buildMaiBotWebUiEndpoint(
+        const endpoint = buildMaiBotWebUiEndpoint(
           asString(config["host"], fallback.host),
           asTcpPort(config["port"], fallback.port),
         );
-      } catch {
+        return {
+          ...endpoint,
+          sourcePath: candidate,
+          fallbackReason: failures.length > 0 ? failures[0] : undefined,
+        };
+      } catch (error) {
+        failures.push(`读取 WebUI 配置失败: ${candidate}: ${toDetail(error)}`);
         continue;
       }
     }
 
-    return fallback;
+    return {
+      ...fallback,
+      fallbackUsed: true,
+      fallbackReason: failures[0] ?? "未找到 WebUI 配置，已使用默认地址",
+    };
   }
 
   /**
@@ -3956,6 +4013,27 @@ export class InitManager {
       label: "NapCat WebUI token",
       status: "warning",
       detail: "尚未创建，保存 QQ 或启动 NapCat 前会自动生成",
+    };
+  }
+
+  private checkMaiBotWebUiEndpoint(): InitCheck {
+    const endpoint = this.readMaiBotWebUiEndpointSync();
+    if (endpoint.fallbackReason) {
+      return {
+        id: "maibot-webui-endpoint",
+        label: "MaiBot WebUI 地址",
+        status: "warning",
+        detail: `${endpoint.fallbackReason}；当前使用 ${endpoint.url}`,
+        path: endpoint.sourcePath,
+      };
+    }
+
+    return {
+      id: "maibot-webui-endpoint",
+      label: "MaiBot WebUI 地址",
+      status: "ok",
+      detail: `使用 ${endpoint.url}`,
+      path: endpoint.sourcePath,
     };
   }
 

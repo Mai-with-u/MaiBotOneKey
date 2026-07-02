@@ -15,6 +15,7 @@ import type {
   PythonPackageSourcePreset,
   ServiceDescriptor,
 } from "@shared/contracts";
+import { LOCAL_CHAT_USER_NAME_STORAGE_KEY } from "@shared/local-chat-defaults";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +27,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import {
+  adapterBackendLabel,
+  adapterConfigResetRequestFromError,
+  type AdapterConfigResetRequest,
+} from "@/lib/adapter-config-reset";
 import { useShortcut } from "@/lib/use-shortcut";
 
 interface InitializationWizardProps {
@@ -36,7 +42,6 @@ interface InitializationWizardProps {
 }
 
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
-const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
 const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY =
   "maibot.messagePlatformGuide.requested";
 const AUTO_START_DELAY_MS = 2000;
@@ -172,6 +177,8 @@ export function InitializationWizard({
   const [downloadRestarting, setDownloadRestarting] = useState(false);
   const [localUserName, setLocalUserName] = useState(readLocalUserName);
   const [step, setStep] = useState<WizardStep>("core");
+  const [adapterResetRequest, setAdapterResetRequest] =
+    useState<AdapterConfigResetRequest | null>(null);
   const autoStartRequested = useRef(false);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupRunId = useRef(0);
@@ -244,17 +251,22 @@ export function InitializationWizard({
     async ({
       repairFirst,
       startService,
+      resetInvalidAdapterConfigs = false,
     }: {
       repairFirst: boolean;
       startService: () => Promise<void>;
+      resetInvalidAdapterConfigs?: boolean;
     }) => {
       const runId = startupRunId.current + 1;
       startupRunId.current = runId;
       setBusy(true);
       setError(null);
+      setAdapterResetRequest(null);
       try {
         if (repairFirst) {
-          await window.maibotDesktop?.init.repair();
+          await window.maibotDesktop?.init.repair({
+            resetInvalidAdapterConfigs,
+          });
           if (startupRunId.current !== runId) {
             return;
           }
@@ -269,7 +281,13 @@ export function InitializationWizard({
         }
       } catch (nextError) {
         if (startupRunId.current === runId) {
-          setError(messageFromError(nextError));
+          const resetRequest = adapterConfigResetRequestFromError(nextError);
+          if (resetRequest) {
+            setAdapterResetRequest(resetRequest);
+            setError(null);
+          } else {
+            setError(messageFromError(nextError));
+          }
           await refreshSnapshot().catch(() => undefined);
         }
       } finally {
@@ -284,6 +302,16 @@ export function InitializationWizard({
   const startMaiCore = useCallback(async () => {
     await runMaiCoreStartup({
       repairFirst: true,
+      startService: async () => {
+        await window.maibotDesktop?.services.start("maibot");
+      },
+    });
+  }, [runMaiCoreStartup]);
+
+  const resetAdapterConfigAndStartMaiCore = useCallback(async () => {
+    await runMaiCoreStartup({
+      repairFirst: true,
+      resetInvalidAdapterConfigs: true,
       startService: async () => {
         await window.maibotDesktop?.services.start("maibot");
       },
@@ -410,7 +438,7 @@ export function InitializationWizard({
       await waitForMaiBotWebUi();
       const botAccountConfigured = await waitForBotAccountConfig();
       if (!botAccountConfigured) {
-        setError("请先在 WebUI 中配置机器人账号，保存后再继续。");
+        setError("请先在首页中配置平台账号，保存后再继续。");
         return;
       }
       onOpenTab("localchat");
@@ -508,7 +536,7 @@ export function InitializationWizard({
       >
         <DialogHeader
           title={
-            <span className="text-3xl font-bold tracking-normal">初始化</span>
+            <span className="text-3xl font-bold tracking-normal">初次配置麦麦</span>
           }
           tone="default"
         />
@@ -719,6 +747,42 @@ export function InitializationWizard({
               <ShieldAlert className="size-3.5 shrink-0" />
               <span>{error}</span>
             </div>
+          ) : null}
+          {adapterResetRequest ? (
+            <section className="rounded-lg border border-warning/40 bg-warning/15 p-4 text-sm">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-warning-foreground">
+                    {adapterBackendLabel(adapterResetRequest.backend)}配置解析失败
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {adapterResetRequest.configPath}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {adapterResetRequest.detail}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      disabled={busy}
+                      onClick={() => void resetAdapterConfigAndStartMaiCore()}
+                      size="sm"
+                    >
+                      {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                      重置默认配置
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() => setAdapterResetRequest(null)}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      暂不修复
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </section>
           ) : null}
         </DialogBody>
 

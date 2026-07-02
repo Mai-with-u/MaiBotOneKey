@@ -1,7 +1,7 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { delimiter, dirname, join } from "node:path";
 import type {
   ManagedPythonPackage,
   ManagedSourceEntry,
@@ -28,8 +28,11 @@ const PYTHON_OVERLAY_TARGET_ENV = "MAIBOT_PYTHON_OVERLAY_TARGET";
 const REQUEST_TIMEOUT_MS = 60_000;
 const PIP_TIMEOUT_MS = 10 * 60 * 1000;
 const STARTUP_UPGRADE_IDLE_TIMEOUT_MS = 10_000;
+const STALE_OVERLAY_TEMP_MS = 24 * 60 * 60 * 1000;
 const SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json, application/json;q=0.9, text/html;q=0.8";
-const DASHBOARD_PACKAGE_NAME = "maibot-dashboard";
+const OVERLAY_GENERATIONS_DIR = ".generations";
+const OVERLAY_ACTIVE_FILE = "active-generation.json";
+const OVERLAY_GENERATION_PREFIX = "generation-";
 
 interface SimpleProjectFile {
   filename?: unknown;
@@ -153,40 +156,6 @@ function packageImportName(name: string): string {
 
 function packageNameFromRequirement(requirement: string): string | undefined {
   return requirement.trim().match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/u)?.[1];
-}
-
-async function resolveGitDir(root: string): Promise<string | undefined> {
-  const dotGitPath = join(root, ".git");
-  if (!existsSync(dotGitPath)) {
-    return undefined;
-  }
-
-  try {
-    const dotGitFile = await readFile(dotGitPath, "utf8");
-    const match = /^gitdir:\s*(.+)$/imu.exec(dotGitFile.trim());
-    if (match?.[1]) {
-      const gitDir = match[1].trim();
-      return isAbsolute(gitDir) ? gitDir : join(root, gitDir);
-    }
-  } catch {
-    return dotGitPath;
-  }
-
-  return dotGitPath;
-}
-
-async function readGitBranch(root: string): Promise<string | undefined> {
-  const gitDir = await resolveGitDir(root);
-  if (!gitDir) {
-    return undefined;
-  }
-
-  try {
-    const head = (await readFile(join(gitDir, "HEAD"), "utf8")).trim();
-    return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 async function readRequirementsFile(path: string): Promise<string[]> {
@@ -414,6 +383,22 @@ export class PythonDependencyManager {
     return this.paths.pythonOverridesRoot;
   }
 
+  getActiveOverridesRoot(): string {
+    const root = this.getOverridesRoot();
+    try {
+      const raw = JSON.parse(readFileSync(join(root, OVERLAY_ACTIVE_FILE), "utf8")) as { active?: unknown };
+      if (typeof raw.active === "string" && /^[A-Za-z0-9._-]+$/u.test(raw.active)) {
+        const activeRoot = join(root, OVERLAY_GENERATIONS_DIR, raw.active);
+        if (existsSync(activeRoot)) {
+          return activeRoot;
+        }
+      }
+    } catch {
+      // Fall back to the legacy overlay root.
+    }
+    return root;
+  }
+
   getSourcePreset(): PythonPackageSourcePreset {
     try {
       const raw = JSON.parse(readFileSync(this.sourceConfigPath(), "utf8")) as { preset?: unknown };
@@ -438,7 +423,7 @@ export class PythonDependencyManager {
   getState(): PythonOverridesState {
     const sourcePreset = this.getSourcePreset();
     return {
-      root: this.getOverridesRoot(),
+      root: this.getActiveOverridesRoot(),
       sourcePreset,
       sourceUrl: this.getPrimaryIndex().url,
       sourceOptions: this.getPipIndexes().map(({ preset, label, url }) => ({ preset, label, url })),
@@ -447,7 +432,7 @@ export class PythonDependencyManager {
   }
 
   buildPythonPathEnv(baseEnv: Record<string, string | undefined> = process.env): Record<string, string> {
-    const overridesRoot = this.getOverridesRoot();
+    const overridesRoot = this.getActiveOverridesRoot();
     return {
       PYTHONPATH: [overridesRoot, baseEnv.PYTHONPATH].filter(Boolean).join(delimiter),
       [PYTHON_OVERLAY_TARGET_ENV]: overridesRoot,
@@ -504,7 +489,6 @@ export class PythonDependencyManager {
 
     const targetDir = this.getOverridesRoot();
     await mkdir(targetDir, { recursive: true });
-    await this.removeOverlayPackage(request.packageName, targetDir);
 
     const requirement = `${request.packageName}==${request.version.trim()}`;
     const baseArgs = [
@@ -513,8 +497,6 @@ export class PythonDependencyManager {
       "install",
       "--pre",
       "--upgrade",
-      "--target",
-      targetDir,
       "--timeout",
       "120",
       "--retries",
@@ -523,13 +505,13 @@ export class PythonDependencyManager {
       "--no-compile",
       "--no-warn-script-location",
     ];
-    const result = await this.runPipInstallWithFallback(baseArgs, [requirement]);
+    const result = await this.installRequirementsIntoOverlay(baseArgs, [requirement]);
 
     return {
       packageName: request.packageName,
       version: request.version.trim(),
       sourceUrl: result.sourceUrl,
-      targetDir,
+      targetDir: this.getActiveOverridesRoot(),
       output: result.output,
       installedAt: Date.now(),
     };
@@ -621,16 +603,6 @@ export class PythonDependencyManager {
     const sourceDependencies = pyprojectDependencies.length > 0
       ? pyprojectDependencies
       : await readRequirementsFile(requirementsPath);
-    const declaresDashboard = sourceDependencies.some(
-      (requirement) => normalizeProjectName(packageNameFromRequirement(requirement) ?? "") === DASHBOARD_PACKAGE_NAME,
-    );
-    const maibotBranch = await readGitBranch(maibotRoot);
-    const resetDashboardOverlay = maibotBranch === "main" && declaresDashboard;
-    if (resetDashboardOverlay) {
-      await this.removeOverlayPackage(DASHBOARD_PACKAGE_NAME);
-      onOutput?.("MaiBot main branch: reset maibot-dashboard overlay before dependency check");
-    }
-
     let unsatisfied: UnsatisfiedDependency[];
     try {
       unsatisfied = pyprojectDependencies.length > 0
@@ -644,15 +616,22 @@ export class PythonDependencyManager {
       }));
     }
 
-    const forceLatestDashboard = maibotBranch !== undefined && maibotBranch !== "main" && declaresDashboard;
-    if (forceLatestDashboard) {
-      unsatisfied = [
-        ...unsatisfied.filter((item) => normalizeProjectName(packageNameFromRequirement(item.requirement) ?? "") !== DASHBOARD_PACKAGE_NAME),
-        {
-          requirement: DASHBOARD_PACKAGE_NAME,
-          reason: `MaiBot ${maibotBranch} branch: upgrade maibot-dashboard to latest including prereleases`,
-        },
-      ];
+    const corruptInstalled = await this.getCorruptInstalledDependencySpecifiers(sourceDependencies);
+    if (corruptInstalled.length > 0) {
+      const existingPackageNames = new Set(
+        unsatisfied
+          .map((item) => packageNameFromRequirement(item.requirement))
+          .filter((name): name is string => Boolean(name))
+          .map(normalizeProjectName),
+      );
+      for (const corrupt of corruptInstalled) {
+        const packageName = packageNameFromRequirement(corrupt.requirement);
+        if (!packageName || existingPackageNames.has(normalizeProjectName(packageName))) {
+          continue;
+        }
+        unsatisfied.push(corrupt);
+        existingPackageNames.add(normalizeProjectName(packageName));
+      }
     }
 
     if (unsatisfied.length === 0) {
@@ -663,7 +642,7 @@ export class PythonDependencyManager {
       return {
         sourceFile,
         sourceUrl: this.getPrimaryIndex().url,
-        targetDir: this.getOverridesRoot(),
+        targetDir: this.getActiveOverridesRoot(),
         output,
         installedAt: Date.now(),
       };
@@ -675,18 +654,14 @@ export class PythonDependencyManager {
     const targetDir = this.getOverridesRoot();
     await mkdir(targetDir, { recursive: true });
     const sourceArgs = unsatisfied.map((item) => item.requirement);
-    await this.removeOverlayPackages(sourceArgs, targetDir);
 
     const baseArgs = [
       "-m",
       "pip",
       "install",
-      ...(forceLatestDashboard ? ["--pre"] : []),
       "--upgrade",
       "--upgrade-strategy",
       "only-if-needed",
-      "--target",
-      targetDir,
       "--timeout",
       "120",
       "--retries",
@@ -697,57 +672,205 @@ export class PythonDependencyManager {
       "--progress-bar",
       "off",
     ];
-    const result = await this.runPipInstallWithFallback(
+    const result = await this.installRequirementsIntoOverlay(
       baseArgs,
       sourceArgs,
       signal,
       onOutput,
-      this.buildPythonPathEnv(),
     );
 
     return {
       sourceFile,
       sourceUrl: result.sourceUrl,
-      targetDir,
+      targetDir: this.getActiveOverridesRoot(),
       output: result.output,
       installedAt: Date.now(),
     };
   }
 
-  private async removeOverlayPackages(requirements: string[], targetDir = this.getOverridesRoot()): Promise<void> {
-    const packageNames = requirements
-      .map(packageNameFromRequirement)
-      .filter((name): name is string => Boolean(name));
+  private async installRequirementsIntoOverlay(
+    baseArgs: string[],
+    requirements: string[],
+    signal?: AbortSignal,
+    onOutput?: PythonOutputHandler,
+  ): Promise<PipInstallAttemptResult> {
+    const targetDir = this.getOverridesRoot();
+    await mkdir(targetDir, { recursive: true });
+    const generationsDir = join(targetDir, OVERLAY_GENERATIONS_DIR);
+    await mkdir(generationsDir, { recursive: true });
+    await this.cleanupInactiveGenerations(generationsDir);
+    const generationDir = await mkdtemp(join(generationsDir, OVERLAY_GENERATION_PREFIX));
+    let activated = false;
 
+    try {
+      await this.seedGeneration(generationDir, requirements);
+      const result = await this.runPipInstallWithFallback(
+        [...baseArgs, "--target", generationDir],
+        requirements,
+        signal,
+        onOutput,
+      );
+      await this.assertOverlayIntegrity(generationDir);
+      await this.activateGeneration(generationDir);
+      activated = true;
+      return result;
+    } finally {
+      if (!activated) {
+        await rm(generationDir, { recursive: true, force: true });
+      }
+    }
+  }
+
+  private async cleanupInactiveGenerations(generationsDir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(generationsDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const activeRoot = this.getActiveOverridesRoot();
+    const now = Date.now();
     await Promise.all(
-      Array.from(new Set(packageNames.map(normalizeProjectName))).map((name) => this.removeOverlayPackage(name, targetDir)),
+      entries
+        .filter((entry) => entry.isDirectory())
+        .filter((entry) => entry.name.startsWith(OVERLAY_GENERATION_PREFIX))
+        .map(async (entry) => {
+          const path = join(generationsDir, entry.name);
+          if (path === activeRoot) {
+            return;
+          }
+          try {
+            const info = await stat(path);
+            if (now - info.mtimeMs < STALE_OVERLAY_TEMP_MS) {
+              return;
+            }
+            await rm(path, { recursive: true, force: true });
+          } catch {
+            // A concurrent cleanup or install may already have moved it.
+          }
+        }),
     );
   }
 
-  private async removeOverlayPackage(packageName: string, targetDir = this.getOverridesRoot()): Promise<void> {
-    const normalizedName = normalizeProjectName(packageName);
-    const importName = packageImportName(packageName);
+  private async seedGeneration(generationDir: string, requirements: string[]): Promise<void> {
+    const activeRoot = this.getActiveOverridesRoot();
+    if (!existsSync(activeRoot)) {
+      return;
+    }
+
+    const replacedEntries = new Set<string>();
+    for (const requirement of requirements) {
+      const packageName = packageNameFromRequirement(requirement);
+      if (!packageName) {
+        continue;
+      }
+      for (const entry of await this.overlayPackageEntries(packageName, activeRoot)) {
+        replacedEntries.add(entry);
+      }
+    }
+
     let entries;
     try {
-      entries = await readdir(targetDir, { withFileTypes: true });
+      entries = await readdir(activeRoot, { withFileTypes: true });
     } catch {
       return;
     }
 
     await Promise.all(
       entries
-        .filter((entry) => entry.isDirectory())
-        .filter((entry) => {
-          const normalizedEntryName = normalizeProjectName(entry.name);
-          const importEntryName = entry.name.toLowerCase().replace(/[-.]+/gu, "_");
-          return (
-            importEntryName === importName
-            || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-dist-info"))
-            || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-egg-info"))
-          );
-        })
-        .map((entry) => rm(join(targetDir, entry.name), { recursive: true, force: true })),
+        .filter((entry) => !replacedEntries.has(entry.name))
+        .filter((entry) => entry.name !== OVERLAY_GENERATIONS_DIR && entry.name !== OVERLAY_ACTIVE_FILE)
+        .filter((entry) => !entry.name.startsWith(OVERLAY_GENERATION_PREFIX))
+        .map((entry) => cp(join(activeRoot, entry.name), join(generationDir, entry.name), {
+          recursive: true,
+          force: true,
+          errorOnExist: false,
+        })),
     );
+  }
+
+  private async assertOverlayIntegrity(root: string): Promise<void> {
+    const corrupt = await this.findCorruptDistributions(root);
+    if (corrupt.length > 0) {
+      throw new Error(`Python overlay integrity check failed:\n${corrupt.slice(0, 8).join("\n")}`);
+    }
+  }
+
+  private async activateGeneration(generationDir: string): Promise<void> {
+    const root = this.getOverridesRoot();
+    const generationName = generationDir.split(/[\\/]/u).pop();
+    if (!generationName || !generationName.startsWith(OVERLAY_GENERATION_PREFIX)) {
+      throw new Error(`Invalid Python overlay generation path: ${generationDir}`);
+    }
+    const manifestPath = join(root, OVERLAY_ACTIVE_FILE);
+    const tempManifestPath = join(root, `${OVERLAY_ACTIVE_FILE}.${process.pid}.${Date.now().toString(36)}.tmp`);
+    await writeFile(
+      tempManifestPath,
+      `${JSON.stringify({ version: 1, active: generationName, activatedAt: Date.now() }, null, 2)}\n`,
+      "utf8",
+    );
+    await rename(tempManifestPath, manifestPath);
+  }
+
+  private async findCorruptDistributions(root: string): Promise<string[]> {
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const corrupt: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/(?:\.dist-info|\.egg-info)$/iu.test(entry.name)) {
+        continue;
+      }
+      const recordPath = join(root, entry.name, "RECORD");
+      let record;
+      try {
+        record = await readFile(recordPath, "utf8");
+      } catch {
+        continue;
+      }
+      const missing = record
+        .replace(/\r\n/gu, "\n")
+        .replace(/\r/gu, "\n")
+        .split("\n")
+        .map((line) => line.split(",", 1)[0]?.trim())
+        .filter((file): file is string => Boolean(file))
+        .filter((file) => !existsSync(join(root, ...file.split("/"))))
+        .slice(0, 3);
+      if (missing.length > 0) {
+        corrupt.push(`${entry.name}: RECORD references missing file(s): ${missing.join(", ")}`);
+      }
+    }
+
+    return corrupt;
+  }
+
+  private async overlayPackageEntries(packageName: string, targetDir = this.getOverridesRoot()): Promise<string[]> {
+    const normalizedName = normalizeProjectName(packageName);
+    const importName = packageImportName(packageName);
+    let entries;
+    try {
+      entries = await readdir(targetDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => {
+        const normalizedEntryName = normalizeProjectName(entry.name);
+        const importEntryName = entry.name.toLowerCase().replace(/[-.]+/gu, "_");
+        return (
+          importEntryName === importName
+          || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-dist-info"))
+          || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-egg-info"))
+        );
+      })
+      .map((entry) => entry.name);
   }
 
   private async getUnsatisfiedRequirements(requirementsPath: string): Promise<UnsatisfiedDependency[]> {
@@ -848,6 +971,97 @@ print(json.dumps(missing, ensure_ascii=False))
     } catch (error) {
       throw new Error(`检查 MaiBot pyproject.toml 依赖失败: ${toDetail(error)}`);
     }
+  }
+
+  private async getCorruptInstalledDependencySpecifiers(dependencies: string[]): Promise<UnsatisfiedDependency[]> {
+    const script = String.raw`
+import csv
+import importlib.metadata as metadata
+import io
+import json
+import pathlib
+import sys
+from packaging.requirements import Requirement
+
+dependencies = json.loads(sys.argv[1])
+overlay_root = pathlib.Path(sys.argv[2]).resolve()
+corrupt = []
+
+def is_inside(root, path):
+    try:
+        path.resolve().relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+for line in dependencies:
+    try:
+        requirement = Requirement(line)
+    except Exception:
+        continue
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        continue
+    try:
+        distribution = metadata.distribution(requirement.name)
+    except metadata.PackageNotFoundError:
+        continue
+
+    metadata_path = pathlib.Path(str(getattr(distribution, "_path", "")))
+    if not metadata_path or not is_inside(overlay_root, metadata_path):
+        continue
+
+    record_text = distribution.read_text("RECORD")
+    if not record_text:
+        continue
+
+    missing = []
+    for row in csv.reader(io.StringIO(record_text)):
+        if not row:
+            continue
+        file = row[0]
+        if not file:
+            continue
+        path = pathlib.Path(distribution.locate_file(file))
+        if is_inside(overlay_root, path) and not path.exists():
+            missing.append(file)
+            if len(missing) >= 3:
+                break
+    if missing:
+        corrupt.append({
+            "requirement": line,
+            "reason": f"corrupt install: {requirement.name} RECORD references missing file(s): {', '.join(missing)}",
+        })
+
+print(json.dumps(corrupt, ensure_ascii=False))
+`;
+
+    const output = await this.runPython(
+      ["-c", script, JSON.stringify(dependencies), this.getActiveOverridesRoot()],
+      undefined,
+      undefined,
+      this.buildPythonPathEnv(),
+    );
+    const raw = output.find((line) => line.trim().startsWith("[")) ?? "[]";
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((item): UnsatisfiedDependency[] => {
+      if (
+        typeof item === "object"
+        && item !== null
+        && "requirement" in item
+        && "reason" in item
+        && typeof item.requirement === "string"
+        && typeof item.reason === "string"
+        && item.requirement.trim()
+      ) {
+        return [{ requirement: item.requirement, reason: item.reason }];
+      }
+
+      return [];
+    });
   }
 
   private parseUnsatisfiedDependencies(output: string[]): UnsatisfiedDependency[] {

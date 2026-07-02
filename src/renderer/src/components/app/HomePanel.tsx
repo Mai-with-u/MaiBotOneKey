@@ -18,6 +18,7 @@ import {
   Plus,
   Radar,
   RefreshCw,
+  RotateCcw,
   Server,
   Settings,
   Send,
@@ -53,6 +54,13 @@ import type {
   ServiceStatus,
   SystemPerformanceSnapshot,
 } from "@shared/contracts";
+import {
+  LOCAL_CHAT_DEFAULT_USER_NAME,
+  LOCAL_CHAT_USER_NAME_STORAGE_KEY,
+  WEBUI_CHAT_SESSION_ID,
+  WEBUI_CHAT_USER_ID_STORAGE_KEY,
+  WEBUI_CHAT_USER_NAME_STORAGE_KEY,
+} from "@shared/local-chat-defaults";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -94,6 +102,11 @@ import {
   isValidPortText,
   readQqWebuiPort,
 } from "@/lib/qq-webui-port";
+import {
+  adapterBackendLabel,
+  adapterConfigResetRequestFromError,
+  type AdapterConfigResetRequest,
+} from "@/lib/adapter-config-reset";
 import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { WebviewPanel } from "./WebviewPanel";
@@ -110,10 +123,6 @@ type MaiBotVersionFetchProgress = {
   tone: "loading" | "success" | "error";
 };
 
-const LOCAL_CHAT_USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
-const WEBUI_CHAT_SESSION_ID = "webui-default";
-const WEBUI_CHAT_USER_ID_STORAGE_KEY = "maibot-onekey.webui-chat-user-id";
-const WEBUI_CHAT_USER_NAME_STORAGE_KEY = "maibot-onekey.webui-chat-user-name";
 const ADAPTER_CONFIG_PROMPTED_STORAGE_PREFIX = "maibot.adapterConfigPrompted";
 const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
 const MAIBOT_OFFICIAL_DOCS_URL = "https://docs.mai-mai.org/";
@@ -520,7 +529,7 @@ function LocalChatQuickCard({
     setSending(true);
     setError(null);
     try {
-      const resolvedUserName = userName ?? localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? "本地用户";
+      const resolvedUserName = userName ?? localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? LOCAL_CHAT_DEFAULT_USER_NAME;
       const sent = await window.maibotDesktop.localChat.send({ content, sessionId, userId, userName: resolvedUserName });
       setMessages((current) => mergeLocalChatMessage(current, sent));
     } catch (nextError) {
@@ -2198,6 +2207,8 @@ export function HomePanel({
   const [, setMascotClickCount] = useState(0);
   const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend>("napcat");
   const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
+  const [adapterResetRequest, setAdapterResetRequest] =
+    useState<AdapterConfigResetRequest | null>(null);
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
   const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
@@ -2632,6 +2643,7 @@ export function HomePanel({
 
   const openMessagePlatformDialog = useCallback(() => {
     setError(null);
+    setAdapterResetRequest(null);
     setMessagePlatformBackend(snapshot.initState.qqBackend ?? "napcat");
     setMessagePlatformAccount(snapshot.initState.qqAccount ?? "");
     setMessagePlatformDialogOpen(true);
@@ -2657,7 +2669,7 @@ export function HomePanel({
     };
   }, [openMessagePlatformDialog]);
 
-  const setupMessagePlatform = useCallback(async () => {
+  const setupMessagePlatform = useCallback(async (resetInvalidAdapterConfigs = false) => {
     const qqAccount = messagePlatformAccount.trim();
     if (!/^\d+$/u.test(qqAccount)) {
       setError("请输入正确的 QQ 号");
@@ -2670,10 +2682,12 @@ export function HomePanel({
 
     setBusy("message-platform:setup");
     setError(null);
+    setAdapterResetRequest(null);
     try {
       await window.maibotDesktop.init.setQqAccount({
         qqAccount,
         qqBackend: messagePlatformBackend,
+        resetInvalidAdapterConfigs,
       });
       await window.maibotDesktop.init.repair();
       await window.maibotDesktop.services.start("napcat");
@@ -2683,7 +2697,13 @@ export function HomePanel({
       markAdapterConfigPrompted(messagePlatformBackend);
       window.setTimeout(() => onOpenPluginConfig(adapterPluginIdForBackend(messagePlatformBackend)), 250);
     } catch (nextError) {
-      setError(messageFromError(nextError));
+      const resetRequest = adapterConfigResetRequestFromError(nextError);
+      if (resetRequest) {
+        setAdapterResetRequest(resetRequest);
+        setError(null);
+      } else {
+        setError(messageFromError(nextError));
+      }
       await refreshSnapshot().catch(() => undefined);
     } finally {
       setBusy(null);
@@ -3464,6 +3484,42 @@ export function HomePanel({
                 QQ 后端正在运行，请先停止后再新增或切换消息平台。
               </div>
             ) : null}
+            {adapterResetRequest ? (
+              <section className={cn("border border-warning/40 bg-warning/15 px-3 py-3 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
+                <div className="flex items-start gap-2">
+                  <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-warning-foreground">
+                      {adapterBackendLabel(adapterResetRequest.backend)}配置解析失败
+                    </p>
+                    <p className="mt-1 break-all text-muted-foreground">
+                      {adapterResetRequest.configPath}
+                    </p>
+                    <p className="mt-1 text-muted-foreground">
+                      {adapterResetRequest.detail}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        disabled={busy === "message-platform:setup"}
+                        onClick={() => void setupMessagePlatform(true)}
+                        size="sm"
+                      >
+                        {busy === "message-platform:setup" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                        重置默认配置
+                      </Button>
+                      <Button
+                        disabled={busy === "message-platform:setup"}
+                        onClick={() => setAdapterResetRequest(null)}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        暂不修复
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ) : null}
           </DialogBody>
           <DialogFooter>
             <Button disabled={busy === "message-platform:setup"} onClick={() => setMessagePlatformDialogOpen(false)} size="sm" variant="ghost">
@@ -3471,7 +3527,7 @@ export function HomePanel({
             </Button>
             <Button
               disabled={busy === "message-platform:setup" || qqBackendBusy || !messagePlatformAccount.trim()}
-              onClick={setupMessagePlatform}
+              onClick={() => void setupMessagePlatform()}
               size="sm"
             >
               {busy === "message-platform:setup" ? <Loader2 className="animate-spin" /> : <Server />}

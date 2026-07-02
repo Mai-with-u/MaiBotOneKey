@@ -139,11 +139,13 @@ export interface OpenCodeSettings {
 
 export type LauncherChatPageMode = "webui" | "native";
 export type FloatingMascotMode = "maibot" | "codex-pet";
+export type TopStartActionMode = "ask" | "maibot-only" | "with-qq-backend";
 
 export interface LauncherUiSettings {
   chatPageMode: LauncherChatPageMode;
   floatingMascotMode: FloatingMascotMode;
   floatingCodexPetId?: string;
+  topStartActionMode: TopStartActionMode;
 }
 
 export type AppIconId = "soft" | "sprout" | "bean";
@@ -425,6 +427,10 @@ export interface InitState {
   messagePlatformConfigured: boolean;
   checks: InitCheck[];
   repairedAt?: number;
+}
+
+export interface InitRepairOptions {
+  resetInvalidAdapterConfigs?: boolean;
 }
 
 export interface BotAccountConfigState {
@@ -1154,6 +1160,7 @@ export interface QqAccountSetupRequest {
   qqBackend?: QqBackend;
   websocketToken?: string;
   chat?: Partial<NapcatAdapterChatConfig>;
+  resetInvalidAdapterConfigs?: boolean;
 }
 
 export interface ModuleUpdateResult {
@@ -1394,11 +1401,11 @@ export interface DesktopBridge {
   };
   init: {
     getState: () => Promise<InitState>;
-    repair: () => Promise<InitRepairResult>;
+    repair: (options?: InitRepairOptions) => Promise<InitRepairResult>;
     resetSnowLuma: () => Promise<SnowLumaResetResult>;
     upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
     getBotAccountConfigState: () => Promise<BotAccountConfigState>;
-    setQqBackend: (backend: QqBackend) => Promise<InitState>;
+    setQqBackend: (backend: QqBackend, options?: InitRepairOptions) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };
   agreements: {

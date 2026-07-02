@@ -28,11 +28,23 @@ import type {
   WindowState,
   WindowResizeEdge,
 } from "@shared/contracts";
+import {
+  WEBUI_CHAT_USER_ID_STORAGE_KEY,
+  WEBUI_CHAT_USER_NAME_STORAGE_KEY,
+} from "@shared/local-chat-defaults";
 import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -70,8 +82,6 @@ const HOME_ENTRY_GUIDE_KEY = "maibot-onekey.home-entry-guide-seen.v2";
 const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
 const MAIBOT_DEFAULT_WEBUI_URL = "http://127.0.0.1:8001";
 const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
-const WEBUI_CHAT_USER_ID_STORAGE_KEY = "maibot-onekey.webui-chat-user-id";
-const WEBUI_CHAT_USER_NAME_STORAGE_KEY = "maibot-onekey.webui-chat-user-name";
 const CODEX_PET_ATLAS_COLUMNS = 8;
 const CODEX_PET_ATLAS_ROWS = 9;
 const CODEX_PET_CELL_WIDTH = 192;
@@ -1374,6 +1384,9 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const [homeEntryGuideSeen, setHomeEntryGuideSeen] = useState(() => readStorageFlag(HOME_ENTRY_GUIDE_KEY));
   const [localChatWebviewReloadRequest, setLocalChatWebviewReloadRequest] = useState(0);
+  const [topStartDialogOpen, setTopStartDialogOpen] = useState(false);
+  const [topStartIncludeQqBackend, setTopStartIncludeQqBackend] = useState(true);
+  const [topStartRememberChoice, setTopStartRememberChoice] = useState(false);
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const useRetroChrome = appearance.mode === "future-retro";
@@ -1552,12 +1565,78 @@ export function DesktopShell(): React.JSX.Element {
     [refreshSnapshot],
   );
 
+  const startFromMaiBotTabChoice = useCallback((includeQqBackend: boolean) => {
+    void runServiceAction(
+      "maibot:start",
+      async () => {
+        if (!window.maibotDesktop) throw new Error("Electron bridge 未连接");
+        if (includeQqBackend) {
+          return window.maibotDesktop.services.startAll();
+        }
+        return window.maibotDesktop.services.start("maibot");
+      },
+    );
+  }, [runServiceAction]);
   const startAll = useCallback(() => {
     void runServiceAction(
       "all:start",
       async () => window.maibotDesktop?.services.startAll() ?? [],
     );
   }, [runServiceAction]);
+  const startFromMaiBotTab = useCallback((id: ServiceId) => {
+    if (id !== "maibot") {
+      void runServiceAction(`${id}:start`, async () => {
+        if (!window.maibotDesktop) throw new Error("Electron bridge 未连接");
+        return window.maibotDesktop.services.start(id);
+      });
+      return;
+    }
+
+    const mode = snapshot?.launcherUiSettings.topStartActionMode ?? "ask";
+    if (mode === "maibot-only") {
+      startFromMaiBotTabChoice(false);
+      return;
+    }
+    if (mode === "with-qq-backend") {
+      startFromMaiBotTabChoice(true);
+      return;
+    }
+
+    setTopStartIncludeQqBackend(messagePlatformConfigured);
+    setTopStartRememberChoice(false);
+    setTopStartDialogOpen(true);
+  }, [
+    messagePlatformConfigured,
+    runServiceAction,
+    snapshot?.launcherUiSettings.topStartActionMode,
+    startFromMaiBotTabChoice,
+  ]);
+  const confirmTopStartChoice = useCallback(() => {
+    const includeQqBackend = topStartIncludeQqBackend && messagePlatformConfigured;
+    setTopStartDialogOpen(false);
+
+    if (topStartRememberChoice && snapshot) {
+      const nextLauncherUiSettings = {
+        ...snapshot.launcherUiSettings,
+        topStartActionMode: includeQqBackend ? "with-qq-backend" as const : "maibot-only" as const,
+      };
+      void window.maibotDesktop?.launcher.saveUiSettings(nextLauncherUiSettings)
+        .then((settings) => {
+          setSnapshot((current) => (current ? { ...current, launcherUiSettings: settings } : current));
+        })
+        .catch((error) => {
+          toast.error(`保存启动偏好失败：${errorMessage(error)}`);
+        });
+    }
+
+    startFromMaiBotTabChoice(includeQqBackend);
+  }, [
+    messagePlatformConfigured,
+    snapshot,
+    startFromMaiBotTabChoice,
+    topStartIncludeQqBackend,
+    topStartRememberChoice,
+  ]);
   const stopAll = useCallback(() => {
     void runServiceAction(
       "all:stop",
@@ -1928,7 +2007,7 @@ export function DesktopShell(): React.JSX.Element {
                       service={maibotService}
                       busy={actionBusy?.startsWith("maibot:") ?? false}
                       retro={useRetroChrome}
-                      onStart={startService}
+                      onStart={startFromMaiBotTab}
                       onStop={stopService}
                     />
                   </div>
@@ -2347,6 +2426,59 @@ export function DesktopShell(): React.JSX.Element {
             </TabsContent>
           </Tabs>
         </main>
+
+        <Dialog
+          open={topStartDialogOpen}
+          onOpenChange={(next) => {
+            if (!next) setTopStartDialogOpen(false);
+          }}
+        >
+          <DialogContent size="sm">
+            <DialogHeader
+              description={`选择本次启动 MaiBot Core 时，是否同时启动 ${qqBackendName}。`}
+              icon={<Play className="size-4" />}
+              title="从 MaiBot tab 启动"
+            />
+            <DialogBody className="space-y-3 text-sm">
+              <label
+                className={cn(
+                  "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border border-border bg-muted/40 p-3",
+                  !messagePlatformConfigured && "cursor-not-allowed opacity-70",
+                )}
+              >
+                <Checkbox
+                  checked={topStartIncludeQqBackend && messagePlatformConfigured}
+                  disabled={!messagePlatformConfigured}
+                  onCheckedChange={(checked) => setTopStartIncludeQqBackend(checked === true)}
+                />
+                <span className="min-w-0">
+                  <span className="block font-medium">同时启动 {qqBackendName}</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                    {messagePlatformConfigured
+                      ? "会先启动 QQ 后端，再启动 MaiBot Core。"
+                      : "尚未连接消息软件平台，本次只能启动 MaiBot Core。"}
+                  </span>
+                </span>
+              </label>
+              <label className="flex min-w-0 cursor-pointer items-center gap-3 rounded-md border border-border bg-card p-3">
+                <Checkbox
+                  checked={topStartRememberChoice}
+                  onCheckedChange={(checked) => setTopStartRememberChoice(checked === true)}
+                />
+                <span className="min-w-0 text-sm">记住并不再提示</span>
+              </label>
+            </DialogBody>
+            <DialogFooter>
+              <Button onClick={() => setTopStartDialogOpen(false)} size="sm" variant="ghost">
+                取消
+              </Button>
+              <Button onClick={confirmTopStartChoice} size="sm">
+                <Play className="size-3.5" />
+                启动
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {snapshot ? (
           <StartupAgreementDialog onSnapshot={setSnapshot} snapshot={snapshot} />

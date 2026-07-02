@@ -35,6 +35,7 @@ interface ServiceDefinition {
   port: number;
   ports: number[];
   url: string;
+  detail?: string;
   cwd: string;
   defaultRequiredPaths: string[];
   conflictPorts: number[];
@@ -566,7 +567,7 @@ export class ServiceManager extends EventEmitter {
         desired: false,
         restartAttempts: 0,
         healthFailures: 0,
-        detail: "\u7b49\u5f85\u542f\u52a8",
+        detail: definition.detail ?? "\u7b49\u5f85\u542f\u52a8",
       });
     }
 
@@ -1117,6 +1118,9 @@ export class ServiceManager extends EventEmitter {
         port: maibotWebUi.port,
         ports: [maibotWebUi.port],
         url: maibotWebUi.url,
+        detail: maibotWebUi.fallbackReason
+          ? `${maibotWebUi.fallbackReason}；当前使用 ${maibotWebUi.url}`
+          : undefined,
         cwd: maibotRoot,
         defaultRequiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
         conflictPorts: [maibotWebUi.port],

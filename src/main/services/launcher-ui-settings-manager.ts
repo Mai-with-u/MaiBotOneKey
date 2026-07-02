@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { FloatingMascotMode, LauncherChatPageMode, LauncherUiSettings, RuntimePaths } from "../../shared/contracts";
+import type {
+  FloatingMascotMode,
+  LauncherChatPageMode,
+  LauncherUiSettings,
+  RuntimePaths,
+  TopStartActionMode,
+} from "../../shared/contracts";
 
 const LAUNCHER_UI_SETTINGS_FILE = "launcher-ui-settings.json";
 
@@ -49,6 +55,7 @@ function defaultLauncherUiSettings(): LauncherUiSettings {
   return {
     chatPageMode: "webui",
     floatingMascotMode: "maibot",
+    topStartActionMode: "ask",
   };
 }
 
@@ -68,10 +75,15 @@ function normalizeCodexPetId(value: unknown): string | undefined {
   return /^[A-Za-z0-9._-]{1,80}$/u.test(trimmed) ? trimmed : undefined;
 }
 
+function normalizeTopStartActionMode(value: unknown): TopStartActionMode {
+  return value === "maibot-only" || value === "with-qq-backend" ? value : "ask";
+}
+
 function normalizeLauncherUiSettings(value: Partial<LauncherUiSettings>): LauncherUiSettings {
   return {
     chatPageMode: normalizeChatPageMode(value.chatPageMode),
     floatingMascotMode: normalizeFloatingMascotMode(value.floatingMascotMode),
     floatingCodexPetId: normalizeCodexPetId(value.floatingCodexPetId),
+    topStartActionMode: normalizeTopStartActionMode(value.topStartActionMode),
   };
 }

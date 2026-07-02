@@ -36,6 +36,7 @@ import type {
   AppIconSettings,
   DesktopSnapshot,
   InitRepairResult,
+  InitRepairOptions,
   InitState,
   LauncherUiSettings,
   LauncherUpdateApplyResult,
@@ -2537,12 +2538,12 @@ export function registerAppIpc({
     return initManager.getState({ refreshDependencies: true });
   });
 
-  ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
-    const result = await initManager.repair();
+  ipcMain.handle("init:repair", async (_event, options?: InitRepairOptions): Promise<InitRepairResult> => {
+    const result = await initManager.repair(options);
     logStore.append(
       "desktop",
       "system",
-      `Initialization repair changed ${result.changedFiles.length} files.`,
+      `Initialization repair changed ${result.changedFiles.length} files.${options?.resetInvalidAdapterConfigs ? " Invalid adapter configs were reset after confirmation." : ""}`,
     );
     await broadcastSnapshot();
     return result;
@@ -2600,7 +2601,7 @@ export function registerAppIpc({
 
   ipcMain.handle(
     "init:setQqBackend",
-    async (_event, backend: QqBackend): Promise<InitState> => {
+    async (_event, backend: QqBackend, options?: InitRepairOptions): Promise<InitState> => {
       const currentInitState = await initManager.getState();
       if (backend !== "napcat" && backend !== "snowluma") {
         throw new Error("Unsupported QQ backend.");
@@ -2613,7 +2614,7 @@ export function registerAppIpc({
           "Stop MaiBot Core and QQ backend before switching QQ backend.",
         );
       }
-      await initManager.setQqBackend(backend);
+      await initManager.setQqBackend(backend, options);
       serviceManager.reloadRuntimePaths();
       const state = await initManager.getState();
       logStore.append(
@@ -2651,6 +2652,7 @@ export function registerAppIpc({
         request.websocketToken,
         request.chat,
         request.qqBackend,
+        { resetInvalidAdapterConfigs: request.resetInvalidAdapterConfigs },
       );
       serviceManager.reloadRuntimePaths();
       logStore.append(
@@ -3158,9 +3160,7 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        result.chatPageMode === "native"
-          ? "聊聊页面已切换为启动器原生界面"
-          : "聊聊页面已切换为 MaiBot WebUI",
+        "启动器界面设置已保存",
       );
       await broadcastSnapshot();
       return result;

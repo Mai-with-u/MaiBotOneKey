@@ -6,6 +6,7 @@ import type {
   AppIconSettings,
   DesktopBridge,
   DesktopSnapshot,
+  InitRepairOptions,
   InitRepairResult,
   InitState,
   LauncherUiSettings,
@@ -160,15 +161,16 @@ const desktopBridge: DesktopBridge = {
   },
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
-    repair: () => ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
+    repair: (options?: InitRepairOptions) =>
+      ipcRenderer.invoke("init:repair", options) as Promise<InitRepairResult>,
     resetSnowLuma: () =>
       ipcRenderer.invoke("init:resetSnowLuma") as Promise<SnowLumaResetResult>,
     upgradeQqComponents: () =>
       ipcRenderer.invoke("init:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
     getBotAccountConfigState: () =>
       ipcRenderer.invoke("init:getBotAccountConfigState") as Promise<BotAccountConfigState>,
-    setQqBackend: (backend: QqBackend) =>
-      ipcRenderer.invoke("init:setQqBackend", backend) as Promise<InitState>,
+    setQqBackend: (backend: QqBackend, options?: InitRepairOptions) =>
+      ipcRenderer.invoke("init:setQqBackend", backend, options) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
       ipcRenderer.invoke("init:setQqAccount", request) as Promise<InitState>,
   },

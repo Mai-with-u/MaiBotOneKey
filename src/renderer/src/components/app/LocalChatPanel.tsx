@@ -28,6 +28,13 @@ import type {
   LocalChatVoiceAttachment,
   ServiceDescriptor,
 } from "@shared/contracts";
+import {
+  LOCAL_CHAT_BOT_AVATAR_STORAGE_KEY as BOT_AVATAR_STORAGE_KEY,
+  LOCAL_CHAT_DEFAULT_USER_NAME as DEFAULT_USER_NAME,
+  LOCAL_CHAT_PLANNER_VISIBLE_STORAGE_KEY as PLANNER_VISIBLE_STORAGE_KEY,
+  LOCAL_CHAT_USER_AVATAR_STORAGE_KEY as USER_AVATAR_STORAGE_KEY,
+  LOCAL_CHAT_USER_NAME_STORAGE_KEY as USER_NAME_STORAGE_KEY,
+} from "@shared/local-chat-defaults";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,11 +62,6 @@ interface ChatMessage {
   plannerTools?: LocalChatMessageEvent["plannerTools"];
 }
 
-const DEFAULT_USER_NAME = "本地用户";
-const USER_NAME_STORAGE_KEY = "maibot.localChat.userName";
-const USER_AVATAR_STORAGE_KEY = "maibot.localChat.userAvatar";
-const BOT_AVATAR_STORAGE_KEY = "maibot.localChat.botAvatar";
-const PLANNER_VISIBLE_STORAGE_KEY = "maibot.localChat.showPlanner";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_VOICE_BYTES = 16 * 1024 * 1024;

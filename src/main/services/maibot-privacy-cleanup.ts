@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { RuntimePaths } from "../../shared/contracts";
+import { LOCAL_CHAT_WEBUI_PROMPT_DIR } from "../../shared/local-chat-defaults";
 
 const CLEANUP_VERSION = "0.4.12";
 const CLEANUP_STATE_FILE = "maibot-privacy-cleanup-0.4.12.json";
@@ -12,12 +13,11 @@ interface MaiSakaPromptCleanupSpec {
 }
 
 const qqGroupPromptDirPattern = /^qq_group_\d+$/u;
-const localWebUiPromptDir = "webui_private_webui_user_onekey-local-user";
 
 const leakedMaiSakaPromptSpecs: MaiSakaPromptCleanupSpec[] = [
   { category: "expression_learner", matches: (name) => qqGroupPromptDirPattern.test(name) },
-  { category: "planner", matches: (name) => qqGroupPromptDirPattern.test(name) || name === localWebUiPromptDir },
-  { category: "replyer", matches: (name) => qqGroupPromptDirPattern.test(name) || name === localWebUiPromptDir },
+  { category: "planner", matches: (name) => qqGroupPromptDirPattern.test(name) || name === LOCAL_CHAT_WEBUI_PROMPT_DIR },
+  { category: "replyer", matches: (name) => qqGroupPromptDirPattern.test(name) || name === LOCAL_CHAT_WEBUI_PROMPT_DIR },
 ];
 
 const leakedRuntimeLogDirs = [

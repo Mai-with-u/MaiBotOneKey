@@ -16,12 +16,14 @@ import type {
   LocalChatVoiceAttachment,
   RuntimePaths,
 } from "../../shared/contracts";
+import {
+  LOCAL_CHAT_DEFAULT_SESSION_ID,
+  LOCAL_CHAT_DEFAULT_USER_ID,
+  LOCAL_CHAT_DEFAULT_USER_NAME,
+} from "../../shared/local-chat-defaults";
 import type { InitManager } from "./init-manager";
 
-const DEFAULT_USER_ID = "onekey-local-user";
-const DEFAULT_USER_NAME = "本地用户";
 const MESSAGE_HISTORY_LIMIT = 120;
-const DEFAULT_SESSION_ID = "desktop-simple-chat";
 const WS_REQUEST_TIMEOUT_MS = 8_000;
 const REPLY_MESSAGE_PREFIX = /^\s*\[回复消息\]\s*/u;
 
@@ -62,15 +64,15 @@ function asString(value: unknown): string | undefined {
 }
 
 function normalizeSessionId(value: unknown): string {
-  return asString(value) ?? DEFAULT_SESSION_ID;
+  return asString(value) ?? LOCAL_CHAT_DEFAULT_SESSION_ID;
 }
 
 function normalizeUserId(value: unknown): string {
-  return asString(value) ?? DEFAULT_USER_ID;
+  return asString(value) ?? LOCAL_CHAT_DEFAULT_USER_ID;
 }
 
 function normalizeUserName(value: unknown): string {
-  return asString(value) ?? DEFAULT_USER_NAME;
+  return asString(value) ?? LOCAL_CHAT_DEFAULT_USER_NAME;
 }
 
 function webuiUserId(userId: string): string {
@@ -645,7 +647,7 @@ function historyMessageToLocal(message: Record<string, unknown>): LocalChatMessa
     role: isBot ? "bot" : "user",
     content: parsed.content,
     timestamp: normalizeTimestamp(message.timestamp),
-    sender: asString(message.sender_name) ?? (isBot ? "MaiBot" : DEFAULT_USER_NAME),
+    sender: asString(message.sender_name) ?? (isBot ? "MaiBot" : LOCAL_CHAT_DEFAULT_USER_NAME),
     images,
     emojis,
     files,
@@ -660,14 +662,14 @@ export class LocalChatAdapter extends EventEmitter {
   private currentUrl = "";
   private connectingPromise: Promise<void> | null = null;
   private activeSession: LocalChatSessionOptions = {
-    sessionId: DEFAULT_SESSION_ID,
-    userId: DEFAULT_USER_ID,
-    userName: DEFAULT_USER_NAME,
+    sessionId: LOCAL_CHAT_DEFAULT_SESSION_ID,
+    userId: LOCAL_CHAT_DEFAULT_USER_ID,
+    userName: LOCAL_CHAT_DEFAULT_USER_NAME,
   };
   private messagesBySession = new Map<string, LocalChatMessageEvent[]>();
   private pendingRequests = new Map<string, PendingRequest>();
   private requestCounter = 0;
-  private lastUserName = DEFAULT_USER_NAME;
+  private lastUserName = LOCAL_CHAT_DEFAULT_USER_NAME;
   private runtimeSessionIds = new Map<string, string>();
   private monitorSessionId: string | null = null;
 

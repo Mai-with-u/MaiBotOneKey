@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, BookOpen, Bot, Cloud, Code2, Database, Download, ExternalLink, Gamepad2, Image as ImageIcon, Info, Layout, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, RotateCcw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, Bot, Cloud, Code2, Database, Download, ExternalLink, Eye, EyeOff, Gamepad2, Image as ImageIcon, Info, Layout, Link, Loader2, MessageSquare, Package, Plug, Plus, Puzzle, RefreshCw, RotateCcw, Save, ScrollText, Search, Settings, Shield, Sparkles, Star, Store, ThumbsDown, ThumbsUp, Trash2, Upload, Wrench, X, type LucideIcon } from "lucide-react";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type { MaiBotPluginDisplayIcon, MaiBotPluginMarketSource, MaiBotPluginType, ServiceDescriptor, SourceSettings } from "@shared/contracts";
 import type React from "react";
@@ -2650,6 +2650,12 @@ function PluginConfigDialog({
     setAdapterPage("chat");
   }, [plugin?.id]);
 
+  useEffect(() => {
+    if (adapterView && pageTab !== "settings") {
+      onPageTabChange("settings");
+    }
+  }, [adapterView, onPageTabChange, pageTab]);
+
   const visibleSections = adapterView
     ? sections.filter((section) =>
         adapterPage === "connection"
@@ -2673,7 +2679,7 @@ function PluginConfigDialog({
       <DialogContent size="xl">
         <DialogHeader
           description={plugin && !adapterView ? `${plugin.id} · ${state?.configPath ?? "config.toml"}` : undefined}
-          icon={<Settings className="size-4" />}
+          icon={adapterView ? undefined : <Settings className="size-4" />}
           title={plugin ? `${pluginName(plugin)} 配置` : "插件配置"}
           tone="primary"
         />
@@ -2694,10 +2700,12 @@ function PluginConfigDialog({
           ) : state && draft ? (
             <Tabs className="space-y-4" onValueChange={(value) => onPageTabChange(value as ConfigPageTab)} value={pageTab}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <TabsList>
-                  <TabsTrigger value="settings">设置</TabsTrigger>
-                  <TabsTrigger value="details">详情</TabsTrigger>
-                </TabsList>
+                {adapterView ? <span /> : (
+                  <TabsList>
+                    <TabsTrigger value="settings">设置</TabsTrigger>
+                    <TabsTrigger value="details">详情</TabsTrigger>
+                  </TabsList>
+                )}
                 {pageTab === "settings" ? (
                   <div className="flex items-center gap-1 rounded-md border border-border bg-muted/50 p-1">
                     <Button
@@ -2758,6 +2766,7 @@ function PluginConfigDialog({
                     ) : null}
                     {visibleSections.map((section) => (
                       <PluginConfigSection
+                        compact={adapterView !== null}
                         draft={draft}
                         hideHeader={adapterView !== null}
                         key={section.name}
@@ -2969,32 +2978,32 @@ function AdapterConfigPageHeader({
   const pageTitle = adapterPage === "connection" ? adapterView.connectionTitle : adapterView.chatTitle;
   const pageDescription = adapterPage === "connection"
     ? "填写与 QQ 后端 WebSocket 服务连接相关的地址、端口、token 和超时参数。"
-    : "设置允许响应的群聊、私聊与用户名单。这里会影响哪些聊天能进入 MaiBot。";
+    : "设置允许响应的群聊、私聊与用户名单。";
   return (
-    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">{pageTitle}</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{pageDescription}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
-          <Button
-            onClick={() => onPageChange("chat")}
-            size="sm"
-            type="button"
-            variant={adapterPage === "chat" ? "secondary" : "ghost"}
-          >
-            聊天过滤
-          </Button>
-          <Button
-            onClick={() => onPageChange("connection")}
-            size="sm"
-            type="button"
-            variant={adapterPage === "connection" ? "secondary" : "ghost"}
-          >
-            连接配置
-          </Button>
-        </div>
+    <div className="flex flex-col gap-3 border-b border-border/70 pb-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-semibold">{pageTitle}</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{pageDescription}</p>
+      </div>
+      <div className="grid shrink-0 grid-cols-2 gap-1 rounded-md border border-border/70 bg-background/40 p-1">
+        <Button
+          className="h-7 px-2.5 text-[11px]"
+          onClick={() => onPageChange("chat")}
+          size="sm"
+          type="button"
+          variant={adapterPage === "chat" ? "secondary" : "ghost"}
+        >
+          聊天过滤
+        </Button>
+        <Button
+          className="h-7 px-2.5 text-[11px]"
+          onClick={() => onPageChange("connection")}
+          size="sm"
+          type="button"
+          variant={adapterPage === "connection" ? "secondary" : "ghost"}
+        >
+          连接配置
+        </Button>
       </div>
     </div>
   );
@@ -3013,7 +3022,7 @@ function getAdapterConfigView(pluginId: string): AdapterConfigView | null {
       kind: "napcat",
       connectionSectionName: "napcat_server",
       connectionTitle: "NapCat 连接配置",
-      chatTitle: "聊天过滤配置",
+      chatTitle: "配置允许麦麦发言的群聊",
     };
   }
   if (pluginId === "maibot-team.snowluma-adapter") {
@@ -3032,16 +3041,18 @@ function PluginConfigSection({
   draft,
   onChange,
   hideHeader = false,
+  compact = false,
 }: {
   section: NonNullable<PluginConfigState["schema"]["sections"]>[number];
   draft: Record<string, PluginConfigValue>;
   onChange: (path: string[], value: PluginConfigValue) => void;
   hideHeader?: boolean;
+  compact?: boolean;
 }): React.JSX.Element {
   const title = resolveLocalizedText(section.title, section.name);
   const description = resolveLocalizedText(section.description, "");
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
+    <div className={cn(compact ? "grid gap-4" : "rounded-lg border border-border bg-card p-3")}>
       {hideHeader ? null : (
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -3052,9 +3063,10 @@ function PluginConfigSection({
           <Badge variant="secondary">{section.fields.length}</Badge>
         </div>
       )}
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className={cn("grid md:grid-cols-2", compact ? "gap-x-4 gap-y-5" : "gap-3")}>
         {section.fields.map((field) => (
           <PluginConfigField
+            compact={compact}
             field={field}
             key={field.path.join(".")}
             onChange={onChange}
@@ -3070,10 +3082,12 @@ function PluginConfigField({
   field,
   value,
   onChange,
+  compact = false,
 }: {
   field: PluginConfigState["schema"]["sections"][number]["fields"][number];
   value: PluginConfigValue;
   onChange: (path: string[], value: PluginConfigValue) => void;
+  compact?: boolean;
 }): React.JSX.Element {
   const label = fieldLabel(field);
   const description = fieldDescription(field);
@@ -3103,18 +3117,23 @@ function PluginConfigField({
             );
           })}
         </select>
-        <ConfigFieldHelp description={description} field={field} />
+        <ConfigFieldHelp description={description} field={field} showFieldName={!compact} />
       </label>
     );
   }
 
   if (typeof value === "boolean") {
     return (
-      <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-muted/35 px-3 py-2.5">
+      <label
+        className={cn(
+          "flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2.5",
+          compact ? "border-border/70 bg-background/35" : "border-border bg-muted/35",
+        )}
+      >
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium">{label}</span>
           {description ? <span className="block truncate text-[11px] text-muted-foreground">{description}</span> : null}
-          <span className="block truncate font-mono text-[10px] text-muted-foreground">{field.name}</span>
+          {compact ? null : <span className="block truncate font-mono text-[10px] text-muted-foreground">{field.name}</span>}
         </span>
         <Checkbox checked={value} disabled={disabled} onCheckedChange={(checked) => onChange(field.path, checked === true)} />
       </label>
@@ -3140,7 +3159,7 @@ function PluginConfigField({
           type={isSlider ? "range" : "number"}
           value={String(value)}
         />
-        <ConfigFieldHelp description={description} field={field} />
+        <ConfigFieldHelp description={description} field={field} showFieldName={!compact} />
       </label>
     );
   }
@@ -3159,7 +3178,21 @@ function PluginConfigField({
             rows={field.rows}
             value={value}
           />
-          <ConfigFieldHelp description={description} field={field} />
+          <ConfigFieldHelp description={description} field={field} showFieldName={!compact} />
+        </label>
+      );
+    }
+    if (widget === "password") {
+      return (
+        <label className="grid min-w-0 gap-1.5 text-xs font-medium">
+          <span className="truncate">{label}</span>
+          <PasswordConfigInput
+            disabled={disabled}
+            onChange={(nextValue) => onChange(field.path, nextValue)}
+            placeholder={placeholder}
+            value={value}
+          />
+          <ConfigFieldHelp description={description} field={field} showFieldName={!compact} />
         </label>
       );
     }
@@ -3171,10 +3204,10 @@ function PluginConfigField({
           monospace
           onChange={(event) => onChange(field.path, event.target.value)}
           placeholder={placeholder}
-          type={widget === "password" ? "password" : "text"}
+          type="text"
           value={value}
         />
-        <ConfigFieldHelp description={description} field={field} />
+        <ConfigFieldHelp description={description} field={field} showFieldName={!compact} />
       </label>
     );
   }
@@ -3182,6 +3215,7 @@ function PluginConfigField({
   if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
     return (
       <StringArrayConfigField
+        compact={compact}
         field={field}
         onChange={(nextValue) => onChange(field.path, nextValue)}
         value={value}
@@ -3198,14 +3232,52 @@ function PluginConfigField({
   );
 }
 
+function PasswordConfigInput({
+  value,
+  placeholder,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  placeholder: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}): React.JSX.Element {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-2">
+      <Input
+        disabled={disabled}
+        monospace
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        type={visible ? "text" : "password"}
+        value={value}
+      />
+      <Button
+        aria-label={visible ? "隐藏访问令牌" : "显示访问令牌"}
+        disabled={disabled}
+        onClick={() => setVisible((current) => !current)}
+        size="icon-sm"
+        type="button"
+        variant="outline"
+      >
+        {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+      </Button>
+    </div>
+  );
+}
+
 function StringArrayConfigField({
   field,
   value,
   onChange,
+  compact = false,
 }: {
   field: PluginConfigState["schema"]["sections"][number]["fields"][number];
   value: string[];
   onChange: (value: PluginConfigValue) => void;
+  compact?: boolean;
 }): React.JSX.Element {
   const [draft, setDraft] = useState("");
   const label = fieldLabel(field);
@@ -3230,8 +3302,13 @@ function StringArrayConfigField({
 
   return (
     <div className="grid min-w-0 gap-2 text-xs font-medium md:col-span-2">
-      <span className="truncate">{label}</span>
-      <div className="grid gap-2 rounded-md border border-border bg-muted/25 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate">{label}</span>
+        {compact ? (
+          <span className="text-[10.5px] font-medium tabular-nums text-muted-foreground">{value.length} 项</span>
+        ) : null}
+      </div>
+      <div className={cn("grid gap-2", compact ? "" : "rounded-md border border-border bg-muted/25 p-2")}>
         {value.length > 0 ? (
           value.map((item, index) => (
             <div className="grid grid-cols-[1fr_auto] gap-2" key={`${field.path.join(".")}-${index}`}>
@@ -3252,7 +3329,14 @@ function StringArrayConfigField({
             </div>
           ))
         ) : (
-          <div className="rounded-md border border-dashed border-border px-3 py-3 text-center text-[11px] text-muted-foreground">
+          <div
+            className={cn(
+              "rounded-md px-3 text-[11px] text-muted-foreground",
+              compact
+                ? "border border-border/60 bg-background/35 py-2 text-left"
+                : "border border-dashed border-border py-3 text-center",
+            )}
+          >
             暂无条目
           </div>
         )}
@@ -3274,7 +3358,7 @@ function StringArrayConfigField({
           </Button>
         </div>
       </div>
-      <ConfigFieldHelp description={description} field={field} />
+      <ConfigFieldHelp description={description} field={field} showFieldName={!compact} />
     </div>
   );
 }
@@ -3326,16 +3410,21 @@ function JsonConfigField({
 function ConfigFieldHelp({
   field,
   description,
+  showFieldName = true,
 }: {
   field: PluginConfigState["schema"]["sections"][number]["fields"][number];
   description: string;
+  showFieldName?: boolean;
 }): React.JSX.Element {
   const hint = resolveLocalizedText(field.hint, "");
+  if (!description && !hint && !showFieldName) {
+    return <></>;
+  }
   return (
     <span className="font-mono text-[10px] text-muted-foreground">
       {description ? <span className="mr-2 font-sans">{description}</span> : null}
       {hint ? <span className="mr-2 font-sans">{hint}</span> : null}
-      {field.name}
+      {showFieldName ? field.name : null}
     </span>
   );
 }

@@ -132,6 +132,7 @@ const fallbackSnapshot: DesktopSnapshot = {
   launcherUiSettings: {
     chatPageMode: "webui",
     floatingMascotMode: "maibot",
+    topStartActionMode: "ask",
   },
   appIconSettings: {
     selectedIconId: "sprout",
