@@ -24,6 +24,7 @@ import {
   Send,
   Sparkles,
   Square,
+  TerminalSquare,
   WandSparkles,
   Wrench,
   X,
@@ -623,56 +624,33 @@ function ServiceCardControls({
   busy,
   onStart,
   onStop,
-  onRestart,
   retro,
 }: {
   service: ServiceDescriptor;
   busy: boolean;
   onStart: (id: ServiceId) => void;
   onStop: (id: ServiceId) => void;
-  onRestart: (id: ServiceId) => void;
   retro: boolean;
 }): React.JSX.Element {
   const isTransitioning = service.status === "starting" || service.status === "stopping" || busy;
-  const isStarting = service.status === "starting";
-  const canStart = service.status === "stopped" || service.status === "error";
-  const canStop = service.status === "running" || service.status === "starting" || service.status === "error";
-  const stopDisabled = !canStop || (busy && !isStarting) || service.status === "stopping";
+  const isRunning = service.status === "running";
+  const actionLabel = isTransitioning
+    ? service.status === "stopping" ? `正在停止 ${service.name}` : `正在启动 ${service.name}`
+    : isRunning ? `停止 ${service.name}` : `启动 ${service.name}`;
+  const runServiceAction = isRunning ? onStop : onStart;
 
   return (
     <div className="flex shrink-0 items-center gap-1">
       <Button
-        aria-label={`启动 ${service.name}`}
-        className={cn(retro ? "size-8" : "size-7")}
-        disabled={!canStart || isTransitioning}
-        onClick={() => onStart(service.id)}
-        size="icon"
-        title="启动"
-        variant={retro ? "secondary" : "ghost"}
-      >
-        {busy && canStart ? <Loader2 className="animate-spin" /> : <Play />}
-      </Button>
-      <Button
-        aria-label={`停止 ${service.name}`}
-        className={cn(retro ? "size-8" : "size-7")}
-        disabled={stopDisabled}
-        onClick={() => onStop(service.id)}
-        size="icon"
-        title="停止"
-        variant={retro ? "secondary" : "ghost"}
-      >
-        <Square />
-      </Button>
-      <Button
-        aria-label={`重启 ${service.name}`}
+        aria-label={actionLabel}
         className={cn(retro ? "size-8" : "size-7")}
         disabled={isTransitioning}
-        onClick={() => onRestart(service.id)}
+        onClick={() => runServiceAction(service.id)}
         size="icon"
-        title="重启"
+        title={actionLabel}
         variant={retro ? "secondary" : "ghost"}
       >
-        <RefreshCw />
+        {isTransitioning ? <Loader2 className="animate-spin" /> : isRunning ? <Square /> : <Play />}
       </Button>
     </div>
   );
@@ -684,6 +662,7 @@ function ServiceSummary({
   service,
   serviceControls,
   webuiAction,
+  terminalAction,
   adapterAction,
   stoppedStatusAfterTitle = false,
   retro,
@@ -695,10 +674,13 @@ function ServiceSummary({
     busy: boolean;
     onStart: (id: ServiceId) => void;
     onStop: (id: ServiceId) => void;
-    onRestart: (id: ServiceId) => void;
   };
   webuiAction?: {
     title: string;
+    label: string;
+    onClick: () => void;
+  };
+  terminalAction?: {
     label: string;
     onClick: () => void;
   };
@@ -737,7 +719,6 @@ function ServiceSummary({
           {service && serviceControls ? (
             <ServiceCardControls
               busy={serviceControls.busy}
-              onRestart={serviceControls.onRestart}
               onStart={serviceControls.onStart}
               onStop={serviceControls.onStop}
               retro={retro}
@@ -753,6 +734,17 @@ function ServiceSummary({
             <div className={cn(retro ? "retro-control flex flex-wrap items-center justify-between gap-3 px-3 py-2" : "flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2")}>
               <p className={cn("min-w-0 truncate font-bold", retro ? "text-base" : "text-xs")}>{webuiAction.title}</p>
               <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
+                {terminalAction ? (
+                  <Button
+                    className="h-8 shrink-0 justify-self-start px-3 text-xs"
+                    onClick={terminalAction.onClick}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    <TerminalSquare className="size-4" />
+                    {terminalAction.label}
+                  </Button>
+                ) : null}
                 <Button
                   className="h-8 shrink-0 justify-self-start px-3 text-xs"
                   onClick={webuiAction.onClick}
@@ -916,18 +908,32 @@ function MaiBotOverviewCard({
   service,
   localVersion,
   latestStable,
+  controlBusy,
   updateBusy,
+  onStart,
+  onStop,
   onUpdate,
   retro,
 }: {
   service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
   latestStable: string | undefined;
+  controlBusy?: boolean;
   updateBusy?: boolean;
+  onStart: () => void;
+  onStop: () => void;
   onUpdate: () => void;
   retro: boolean;
 }): React.JSX.Element {
   const hasNewVersion = compareVersionText(latestStable, localVersion) > 0;
+  const serviceStatus = service?.status;
+  const serviceTransitioning = controlBusy || serviceStatus === "starting" || serviceStatus === "stopping";
+  const serviceRunning = serviceStatus === "running";
+  const controlDisabled = !service || serviceTransitioning;
+  const controlLabel = serviceTransitioning
+    ? serviceStatus === "stopping" ? "正在停止 MaiBot" : "正在启动 MaiBot"
+    : serviceRunning ? "停止 MaiBot" : "启动 MaiBot";
+  const runServiceControl = serviceRunning ? onStop : onStart;
 
   return (
     <div className={cn(retro ? "retro-panel grid min-w-0 gap-4 p-4 pl-6" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-3.5")}>
@@ -973,11 +979,25 @@ function MaiBotOverviewCard({
             {valueOrFallback(localVersion)}
           </p>
         </div>
-        <div className="grid min-w-0 gap-1 sm:min-w-44">
+        <div className="flex min-w-0 items-center justify-end gap-1 sm:min-w-44">
+          <Button
+            aria-label={controlLabel}
+            className={cn(
+              "mt-1 bg-transparent shadow-none hover:bg-transparent",
+              retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]",
+            )}
+            disabled={controlDisabled}
+            onClick={runServiceControl}
+            size={retro ? "icon" : "sm"}
+            title={controlLabel}
+            variant="secondary"
+          >
+            {serviceTransitioning ? <Loader2 className="animate-spin" /> : serviceRunning ? <Square /> : <Play />}
+          </Button>
           <Button
             aria-label="更新 MaiBot"
             className={cn(
-              "relative mt-1 justify-self-end bg-transparent shadow-none hover:bg-transparent",
+              "relative mt-1 bg-transparent shadow-none hover:bg-transparent",
               retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]",
             )}
             disabled={updateBusy}
@@ -2171,8 +2191,8 @@ export function HomePanel({
   onOpenTab,
   onOpenPluginConfig,
   onOpenPluginDetail,
+  onOpenTerminalSession,
   onEnterFloatingMode,
-  onRestartService,
   onStartService,
   onStopService,
   serviceActionBusy,
@@ -2184,8 +2204,8 @@ export function HomePanel({
   onOpenTab: (tab: string) => void;
   onOpenPluginConfig: (pluginId: string) => void;
   onOpenPluginDetail: (pluginId: string) => void;
+  onOpenTerminalSession: (sessionId: string) => void;
   onEnterFloatingMode: () => void;
-  onRestartService: (id: ServiceId) => void;
   onStartService: (id: ServiceId) => void;
   onStopService: (id: ServiceId) => void;
   serviceActionBusy: string | null;
@@ -2334,6 +2354,14 @@ export function HomePanel({
     }
     onSnapshot(await window.maibotDesktop.getSnapshot());
   }, [onSnapshot]);
+
+  const openNapcatWebui = useCallback(() => {
+    if (napcat?.status !== "running") {
+      toast.error(`请先启动 ${napcat?.name ?? "QQ 后端"}`);
+      return;
+    }
+    setNapcatWebuiOpen(true);
+  }, [napcat?.name, napcat?.status]);
 
   useEffect(() => {
     const syncQqWebuiPort = (): void => {
@@ -2772,6 +2800,9 @@ export function HomePanel({
           <MaiBotOverviewCard
             latestStable={snapshot.moduleVersions.maibotLatestStableTag}
             localVersion={snapshot.moduleVersions.maibotLocal}
+            controlBusy={serviceActionBusy?.startsWith("maibot:") ?? false}
+            onStart={() => onStartService("maibot")}
+            onStop={() => onStopService("maibot")}
             onUpdate={openMaiBotUpdate}
             retro={useRetroHome}
             service={maibot}
@@ -2796,7 +2827,7 @@ export function HomePanel({
           <ServiceSummary
             adapterAction={{
               title: `${adapterName.replace(/\s+/gu, "")}设置`,
-              label: "打开配置",
+              label: "配置",
               onClick: () => onOpenPluginConfig(adapterPluginId),
             }}
             icon={null}
@@ -2804,14 +2835,17 @@ export function HomePanel({
             service={napcat}
             serviceControls={napcat ? {
               busy: serviceActionBusy?.startsWith(`${napcat.id}:`) ?? false,
-              onRestart: onRestartService,
               onStart: onStartService,
               onStop: onStopService,
             } : undefined}
+            terminalAction={{
+              label: "终端",
+              onClick: () => onOpenTerminalSession("service:napcat"),
+            }}
             webuiAction={{
               title: `${napcat?.name ?? "NapCat"} 设置`,
-              label: "打开 WebUI",
-              onClick: () => setNapcatWebuiOpen(true),
+              label: "WebUI",
+              onClick: openNapcatWebui,
             }}
             stoppedStatusAfterTitle
           />
@@ -2872,12 +2906,13 @@ export function HomePanel({
     napcat,
     onOpenPluginConfig,
     onOpenPluginDetail,
+    onOpenTerminalSession,
     onOpenTab,
-    onRestartService,
     onStartService,
     onStopService,
     openLauncherUpdate,
     openMaiBotUpdate,
+    openNapcatWebui,
     qqWebuiPort,
     serviceActionBusy,
     snapshot,
@@ -3179,16 +3214,18 @@ export function HomePanel({
           </span>
         </button>
       ) : null}
-      <div className={cn(homeLayoutEditing && "pointer-events-none select-none blur-[1.5px] opacity-70 transition-[filter,opacity]")}>
-        {entry.content}
+      <div className="relative">
+        <div className={cn(homeLayoutEditing && "pointer-events-none select-none blur-[1.5px] opacity-70 transition-[filter,opacity]")}>
+          {entry.content}
+        </div>
+        {homeLayoutEditing ? (
+          <div className="pointer-events-none absolute inset-0 z-10 rounded-md bg-background/20 backdrop-blur-[1px]" />
+        ) : null}
       </div>
-      {homeLayoutEditing ? (
-        <div className="pointer-events-none absolute inset-0 z-10 rounded-md bg-background/20 backdrop-blur-[1px]" />
-      ) : null}
       {homeLayoutEditing && index === areaEntries.length - 1 ? (
         <div
           className={cn(
-            "mt-2 rounded-md border border-dashed py-2 text-center text-[11px] text-muted-foreground",
+            "relative z-20 mt-2 rounded-md border border-dashed py-2 text-center text-[11px] text-muted-foreground",
             homeInsertIndicator?.area === area && homeInsertIndicator.index === areaEntries.length
               ? "border-orange-500 bg-orange-500/10"
               : "border-primary/30",

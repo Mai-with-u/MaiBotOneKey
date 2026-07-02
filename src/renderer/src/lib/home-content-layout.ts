@@ -161,15 +161,7 @@ function normalizeHomeContentLayout(value: unknown): HomeContentEntry[] {
     return cloneHomeContentLayout(DEFAULT_HOME_CONTENT_LAYOUT);
   }
 
-  if (seenTypes.has("stats")) {
-    for (const type of ["official-docs", "quick-actions"] as const) {
-      if (!seenTypes.has(type)) {
-        entries.push({ id: type, type, area: "side", width: "full" });
-      }
-    }
-  }
-
-  return orderDefaultSideCards(entries);
+  return entries;
 }
 
 export const DEFAULT_SYSTEM_PERFORMANCE_METRICS: SystemPerformanceMetricKey[] = [
@@ -238,27 +230,4 @@ function cloneSettings(settings: HomeContentEntry["settings"]): HomeContentEntry
 
 function defaultAreaForType(type: HomeContentCardType): HomeContentArea {
   return type === "official-docs" || type === "stats" || type === "quick-actions" ? "side" : "main";
-}
-
-function orderDefaultSideCards(entries: HomeContentEntry[]): HomeContentEntry[] {
-  const defaultOrder = new Map<HomeContentCardType, number>([
-    ["official-docs", 0],
-    ["stats", 1],
-    ["quick-actions", 2],
-  ]);
-  const sideDefaults = entries
-    .filter((entry) => entry.area === "side" && defaultOrder.has(entry.type))
-    .sort((left, right) => (defaultOrder.get(left.type) ?? 0) - (defaultOrder.get(right.type) ?? 0));
-  if (sideDefaults.length === 0) {
-    return entries;
-  }
-
-  const withoutSideDefaults = entries.filter((entry) => !(entry.area === "side" && defaultOrder.has(entry.type)));
-  const firstSideIndex = withoutSideDefaults.findIndex((entry) => entry.area === "side");
-  const insertIndex = firstSideIndex < 0 ? withoutSideDefaults.length : firstSideIndex;
-  return [
-    ...withoutSideDefaults.slice(0, insertIndex),
-    ...sideDefaults,
-    ...withoutSideDefaults.slice(insertIndex),
-  ];
 }

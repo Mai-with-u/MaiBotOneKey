@@ -14,7 +14,6 @@
   Loader2,
   Network,
   Palette,
-  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -347,16 +346,6 @@ const closePreferenceOptions: Array<{ value: ClosePreference; label: string }> =
   { value: "ask", label: "每次询问" },
   { value: "minimize", label: "最小化到托盘" },
   { value: "quit", label: "关闭应用" },
-];
-
-const topStartActionModeOptions: Array<{
-  value: LauncherUiSettings["topStartActionMode"];
-  label: string;
-  description: string;
-}> = [
-  { value: "ask", label: "每次询问", description: "点击 MaiBot tab 的启动按钮时选择是否同时启动 QQ 后端。" },
-  { value: "maibot-only", label: "只启动 MaiBot", description: "MaiBot tab 的启动按钮直接启动 MaiBot Core。" },
-  { value: "with-qq-backend", label: "同时启动 QQ 后端", description: "MaiBot tab 的启动按钮会一并启动 NapCat / SnowLuma。" },
 ];
 
 const themeOptions: Array<{ value: ThemePreference; label: string }> = [
@@ -2051,62 +2040,6 @@ export function SettingsStatusPanel({
                       </label>
                     ))}
                   </RadioGroup>
-                </div>
-
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Play className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">MaiBot tab 启动按钮</p>
-                        <p className="text-xs text-muted-foreground">
-                          控制左侧 MaiBot tab 的启动按钮是否询问同时启动 NapCat / SnowLuma。
-                        </p>
-                      </div>
-                    </div>
-                    <Badge variant={launcherUiSettings.topStartActionMode === "ask" ? "secondary" : "success"}>
-                      {topStartActionModeOptions.find((option) => option.value === launcherUiSettings.topStartActionMode)?.label}
-                    </Badge>
-                  </div>
-
-                  <RadioGroup
-                    className="settings-option-list settings-option-cols-3 grid gap-0 md:grid-cols-3"
-                    onValueChange={(value) => {
-                      if (topStartActionModeOptions.some((option) => option.value === value)) {
-                        void saveLauncherUiSettings({
-                          ...launcherUiSettings,
-                          topStartActionMode: value as LauncherUiSettings["topStartActionMode"],
-                        });
-                      }
-                    }}
-                    value={launcherUiSettings.topStartActionMode}
-                  >
-                    {topStartActionModeOptions.map((option) => (
-                      <label
-                        className={cn(
-                          "settings-choice flex min-w-0 cursor-pointer items-start gap-2 p-3 transition-colors",
-                          launcherUiSettings.topStartActionMode === option.value
-                            ? "settings-choice-selected bg-primary/10 text-foreground"
-                            : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                        )}
-                        key={option.value}
-                      >
-                        <RadioGroupItem className="mt-0.5" disabled={busy !== null} value={option.value} />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">{option.label}</span>
-                          <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </RadioGroup>
-                  {busy === "launcher-ui-settings" ? (
-                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="size-3.5 animate-spin" />
-                      正在保存 MaiBot tab 启动偏好...
-                    </p>
-                  ) : null}
                 </div>
 
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">

@@ -1,6 +1,7 @@
 ﻿import {
   CheckCircle2,
   ChevronDown,
+  Fish,
   FolderOpen,
   Home,
   Info,
@@ -37,14 +38,6 @@ import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -332,105 +325,6 @@ function WindowResizeHandles(): React.JSX.Element {
           onPointerUp={finishResize}
         />
       ))}
-    </div>
-  );
-}
-
-function ServiceControlButtons({
-  service,
-  busy,
-  onStart,
-  onStop,
-  className,
-}: {
-  service: ServiceDescriptor;
-  busy: boolean;
-  onStart: (id: ServiceId) => void;
-  onStop: (id: ServiceId) => void;
-  className?: string;
-}): React.JSX.Element {
-  const isTransitioning =
-    service.status === "starting" || service.status === "stopping" || busy;
-  const isStarting = service.status === "starting";
-  const canStart = service.status === "stopped" || service.status === "error";
-  const canStop =
-    service.status === "running" ||
-    service.status === "starting" ||
-    service.status === "error";
-  const stopDisabled = !canStop || (busy && !isStarting) || service.status === "stopping";
-
-  return (
-    <div
-      className={cn("flex shrink-0 items-center gap-0.5", className)}
-      onClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      {canStart ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`启动 ${service.name}`}
-              disabled={isTransitioning}
-              onClick={() => onStart(service.id)}
-              className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              {busy ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Play className="size-3" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>启动</TooltipContent>
-        </Tooltip>
-      ) : (
-        <>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={`停止 ${service.name}`}
-                disabled={stopDisabled}
-                onClick={() => onStop(service.id)}
-                className="grid size-5 place-items-center rounded-full text-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-              >
-                <Square className="size-3" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>停止</TooltipContent>
-          </Tooltip>
-        </>
-      )}
-    </div>
-  );
-}
-
-function ServiceTabControls({
-  service,
-  busy,
-  retro,
-  onStart,
-  onStop,
-}: {
-  service: ServiceDescriptor | undefined;
-  busy: boolean;
-  retro: boolean;
-  onStart: (id: ServiceId) => void;
-  onStop: (id: ServiceId) => void;
-}): React.JSX.Element | null {
-  if (!service) {
-    return null;
-  }
-
-  return (
-    <div className={cn("flex h-full shrink-0 items-center pl-0.5 pr-2.5", !retro && "border-l border-current/20")}>
-      <ServiceControlButtons
-        service={service}
-        busy={busy}
-        onStart={onStart}
-        onStop={onStop}
-      />
     </div>
   );
 }
@@ -1384,9 +1278,6 @@ export function DesktopShell(): React.JSX.Element {
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const [homeEntryGuideSeen, setHomeEntryGuideSeen] = useState(() => readStorageFlag(HOME_ENTRY_GUIDE_KEY));
   const [localChatWebviewReloadRequest, setLocalChatWebviewReloadRequest] = useState(0);
-  const [topStartDialogOpen, setTopStartDialogOpen] = useState(false);
-  const [topStartIncludeQqBackend, setTopStartIncludeQqBackend] = useState(true);
-  const [topStartRememberChoice, setTopStartRememberChoice] = useState(false);
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const useRetroChrome = appearance.mode === "future-retro";
@@ -1512,15 +1403,12 @@ export function DesktopShell(): React.JSX.Element {
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
   const showTopPluginBuilderEntry =
     activeTab === "plugins" &&
-    pluginMode === "manage" &&
     pluginBuilderMode !== "disabled";
   const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
-  const canInterruptStartup =
-    actionBusy === "all:start" ||
-    services.some((service) => service.status === "starting");
-  const hasActiveServiceProcess =
-    actionBusy === "all:start" ||
-    services.some(isServiceProcessActive);
+  const primaryServiceActionTransitioning =
+    actionBusy !== null ||
+    services.some((service) => service.status === "starting" || service.status === "stopping");
+  const hasActiveServiceProcess = services.some(isServiceProcessActive);
   const showHomeEntryGuide =
     activeTab === "home" &&
     Boolean(snapshot?.startupAgreement.isConfirmed) &&
@@ -1565,78 +1453,12 @@ export function DesktopShell(): React.JSX.Element {
     [refreshSnapshot],
   );
 
-  const startFromMaiBotTabChoice = useCallback((includeQqBackend: boolean) => {
-    void runServiceAction(
-      "maibot:start",
-      async () => {
-        if (!window.maibotDesktop) throw new Error("Electron bridge 未连接");
-        if (includeQqBackend) {
-          return window.maibotDesktop.services.startAll();
-        }
-        return window.maibotDesktop.services.start("maibot");
-      },
-    );
-  }, [runServiceAction]);
   const startAll = useCallback(() => {
     void runServiceAction(
       "all:start",
       async () => window.maibotDesktop?.services.startAll() ?? [],
     );
   }, [runServiceAction]);
-  const startFromMaiBotTab = useCallback((id: ServiceId) => {
-    if (id !== "maibot") {
-      void runServiceAction(`${id}:start`, async () => {
-        if (!window.maibotDesktop) throw new Error("Electron bridge 未连接");
-        return window.maibotDesktop.services.start(id);
-      });
-      return;
-    }
-
-    const mode = snapshot?.launcherUiSettings.topStartActionMode ?? "ask";
-    if (mode === "maibot-only") {
-      startFromMaiBotTabChoice(false);
-      return;
-    }
-    if (mode === "with-qq-backend") {
-      startFromMaiBotTabChoice(true);
-      return;
-    }
-
-    setTopStartIncludeQqBackend(messagePlatformConfigured);
-    setTopStartRememberChoice(false);
-    setTopStartDialogOpen(true);
-  }, [
-    messagePlatformConfigured,
-    runServiceAction,
-    snapshot?.launcherUiSettings.topStartActionMode,
-    startFromMaiBotTabChoice,
-  ]);
-  const confirmTopStartChoice = useCallback(() => {
-    const includeQqBackend = topStartIncludeQqBackend && messagePlatformConfigured;
-    setTopStartDialogOpen(false);
-
-    if (topStartRememberChoice && snapshot) {
-      const nextLauncherUiSettings = {
-        ...snapshot.launcherUiSettings,
-        topStartActionMode: includeQqBackend ? "with-qq-backend" as const : "maibot-only" as const,
-      };
-      void window.maibotDesktop?.launcher.saveUiSettings(nextLauncherUiSettings)
-        .then((settings) => {
-          setSnapshot((current) => (current ? { ...current, launcherUiSettings: settings } : current));
-        })
-        .catch((error) => {
-          toast.error(`保存启动偏好失败：${errorMessage(error)}`);
-        });
-    }
-
-    startFromMaiBotTabChoice(includeQqBackend);
-  }, [
-    messagePlatformConfigured,
-    snapshot,
-    startFromMaiBotTabChoice,
-    topStartIncludeQqBackend,
-    topStartRememberChoice,
-  ]);
   const stopAll = useCallback(() => {
     void runServiceAction(
       "all:stop",
@@ -1644,19 +1466,21 @@ export function DesktopShell(): React.JSX.Element {
     );
   }, [runServiceAction]);
   const runPrimaryServiceAction = useCallback(() => {
+    if (primaryServiceActionTransitioning) {
+      return;
+    }
     if (hasActiveServiceProcess) {
       stopAll();
       return;
     }
     startAll();
-  }, [hasActiveServiceProcess, startAll, stopAll]);
-  const primaryServiceActionLabel = hasActiveServiceProcess ? "停止全部服务" : "启动全部服务";
-  const primaryServiceActionDisabled = hasActiveServiceProcess
-    ? actionBusy !== null && !canInterruptStartup
-    : actionBusy !== null;
-  const primaryServiceActionBusy = hasActiveServiceProcess
-    ? actionBusy === "all:stop"
-    : actionBusy === "all:start";
+  }, [hasActiveServiceProcess, primaryServiceActionTransitioning, startAll, stopAll]);
+  const primaryServiceActionLabel = primaryServiceActionTransitioning
+    ? actionBusy?.includes(":stop") || actionBusy === "all:stop" || services.some((service) => service.status === "stopping")
+      ? "正在停止服务"
+      : "正在启动服务"
+    : hasActiveServiceProcess ? "停止全部服务" : "启动全部服务";
+  const primaryServiceActionDisabled = primaryServiceActionTransitioning;
   const startService = useCallback(
     (id: ServiceId) =>
       void runServiceAction(`${id}:start`, async () => {
@@ -1673,15 +1497,6 @@ export function DesktopShell(): React.JSX.Element {
       }),
     [runServiceAction],
   );
-  const restartService = useCallback(
-    (id: ServiceId) =>
-      void runServiceAction(`${id}:restart`, async () => {
-        if (!window.maibotDesktop) throw new Error("Electron bridge 未连接");
-        return window.maibotDesktop.services.restart(id);
-      }),
-    [runServiceAction],
-  );
-
   const enterFloatingMode = useCallback(() => {
     setFloatingEdge(null);
     void window.maibotDesktop?.window.setFloatingMode(true).then((state) => {
@@ -1793,10 +1608,14 @@ export function DesktopShell(): React.JSX.Element {
   }, [setPluginMode]);
 
   const openTerminalSession = useCallback((sessionId: string) => {
+    if (!showTerminalTab) {
+      toast.error("请先在设置中启用内嵌终端");
+      return;
+    }
     setActiveTab("terminal");
     setTerminalFocusSessionId(null);
     window.setTimeout(() => setTerminalFocusSessionId(sessionId), 0);
-  }, []);
+  }, [showTerminalTab]);
 
   const startOpenCode = useCallback(async () => {
     const bridge = window.maibotDesktop;
@@ -1970,47 +1789,19 @@ export function DesktopShell(): React.JSX.Element {
                     <Home data-retro-fill={useRetroChrome ? "true" : undefined} />
                     首页
                   </TabsTrigger>
-                  <div
-                    className={cn(
-                      useRetroChrome
-                        ? "relative flex h-full shrink-0 items-center border-0 bg-transparent text-muted-foreground transition-colors hover:text-foreground/90"
-                        : "flex h-7 shrink-0 items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground/90",
-                      activeTab === "maibot" && (
-                        useRetroChrome
-                          ? "text-primary-foreground"
-                          : "border-primary/45 bg-primary/15 text-primary shadow-sm"
-                      ),
-                    )}
+                  <TabsTrigger
                     data-retro-active={useRetroChrome && activeTab === "maibot" ? "true" : undefined}
                     data-retro-tab-item={useRetroChrome ? "true" : undefined}
                     data-retro-tab-value={useRetroChrome ? "maibot" : undefined}
+                    value="maibot"
+                    className={cn("gap-1.5", useRetroChrome && "px-5")}
+                    style={{
+                      color: maibotService?.status === "running" && activeTab !== "maibot" ? "var(--primary)" : undefined,
+                    }}
                   >
-                    <TabsTrigger
-                      value="maibot"
-                      className={cn(
-                        "h-full flex-none gap-1.5 border-0 bg-transparent text-inherit hover:text-inherit",
-                        useRetroChrome
-                          ? "px-2 data-[state=active]:bg-transparent data-[state=active]:text-inherit"
-                          : "px-2.5 data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:text-inherit data-[state=active]:shadow-none",
-                      )}
-                    >
-                      <span
-                        className="inline-flex h-full items-center leading-none"
-                        style={{
-                          color: maibotService?.status === "running" && activeTab !== "maibot" ? "var(--primary)" : undefined,
-                        }}
-                      >
-                        MaiBot
-                      </span>
-                    </TabsTrigger>
-                    <ServiceTabControls
-                      service={maibotService}
-                      busy={actionBusy?.startsWith("maibot:") ?? false}
-                      retro={useRetroChrome}
-                      onStart={startFromMaiBotTab}
-                      onStop={stopService}
-                    />
-                  </div>
+                    <Fish />
+                    MaiBot
+                  </TabsTrigger>
                   <TabsTrigger
                     data-home-guide-target="localchat"
                     data-retro-active={useRetroChrome && activeTab === "localchat" ? "true" : undefined}
@@ -2063,6 +1854,22 @@ export function DesktopShell(): React.JSX.Element {
                 >
                 {activeTab === "plugins" ? (
                   <>
+                    {showTopPluginBuilderEntry ? (
+                      <Button
+                        className={cn(
+                          "mr-1 h-8 gap-1.5 px-2.5 text-[11px]",
+                          useRetroChrome && "h-9 rounded-sm border-[var(--retro-line,var(--border))]",
+                        )}
+                        disabled={isStartingOpenCode}
+                        onClick={startOpenCode}
+                        size="sm"
+                        title="在终端中启动 OpenCode 插件编写器"
+                        variant="default"
+                      >
+                        {isStartingOpenCode ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}
+                        启动编写器
+                      </Button>
+                    ) : null}
                     <div
                       className={cn(
                         "mr-1 flex h-8 shrink-0 items-end gap-1 bg-transparent px-1",
@@ -2104,22 +1911,6 @@ export function DesktopShell(): React.JSX.Element {
                         插件市场
                       </Button>
                     </div>
-                    {showTopPluginBuilderEntry ? (
-                      <Button
-                        className={cn(
-                          "mr-1 h-8 gap-1.5 px-2.5 text-[11px]",
-                          useRetroChrome && "h-9 rounded-sm border-[var(--retro-line,var(--border))]",
-                        )}
-                        disabled={isStartingOpenCode}
-                        onClick={startOpenCode}
-                        size="sm"
-                        title="在终端中启动 OpenCode 插件编写器"
-                        variant="default"
-                      >
-                        {isStartingOpenCode ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}
-                        启动编写器
-                      </Button>
-                    ) : null}
                   </>
                 ) : null}
                 <Button
@@ -2151,7 +1942,7 @@ export function DesktopShell(): React.JSX.Element {
                         size="sm"
                         variant="secondary"
                       >
-                        {primaryServiceActionBusy ? (
+                        {primaryServiceActionTransitioning ? (
                           <Loader2 className="animate-spin" />
                         ) : hasActiveServiceProcess ? (
                           <Square />
@@ -2176,7 +1967,7 @@ export function DesktopShell(): React.JSX.Element {
                           size="sm"
                           variant="default"
                         >
-                          {primaryServiceActionBusy ? (
+                          {primaryServiceActionTransitioning ? (
                             <Loader2 className="animate-spin" />
                           ) : hasActiveServiceProcess ? (
                             <Square />
@@ -2189,7 +1980,7 @@ export function DesktopShell(): React.JSX.Element {
                         {primaryServiceActionLabel}
                       </TooltipContent>
                     </Tooltip>
-                    {!hasActiveServiceProcess ? (
+                    {!hasActiveServiceProcess && !primaryServiceActionTransitioning ? (
                       <DropdownMenuPrimitive.Root>
                         <DropdownMenuPrimitive.Trigger asChild>
                           <Button
@@ -2261,9 +2052,9 @@ export function DesktopShell(): React.JSX.Element {
                   onEnterFloatingMode={enterFloatingMode}
                   onOpenPluginConfig={openPluginConfig}
                   onOpenPluginDetail={openPluginDetail}
+                  onOpenTerminalSession={openTerminalSession}
                   onOpenTab={selectTab}
                   onSnapshot={setSnapshot}
-                  onRestartService={restartService}
                   onStartService={startService}
                   onStopService={stopService}
                   serviceActionBusy={actionBusy}
@@ -2426,59 +2217,6 @@ export function DesktopShell(): React.JSX.Element {
             </TabsContent>
           </Tabs>
         </main>
-
-        <Dialog
-          open={topStartDialogOpen}
-          onOpenChange={(next) => {
-            if (!next) setTopStartDialogOpen(false);
-          }}
-        >
-          <DialogContent size="sm">
-            <DialogHeader
-              description={`选择本次启动 MaiBot Core 时，是否同时启动 ${qqBackendName}。`}
-              icon={<Play className="size-4" />}
-              title="从 MaiBot tab 启动"
-            />
-            <DialogBody className="space-y-3 text-sm">
-              <label
-                className={cn(
-                  "flex min-w-0 cursor-pointer items-start gap-3 rounded-md border border-border bg-muted/40 p-3",
-                  !messagePlatformConfigured && "cursor-not-allowed opacity-70",
-                )}
-              >
-                <Checkbox
-                  checked={topStartIncludeQqBackend && messagePlatformConfigured}
-                  disabled={!messagePlatformConfigured}
-                  onCheckedChange={(checked) => setTopStartIncludeQqBackend(checked === true)}
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium">同时启动 {qqBackendName}</span>
-                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                    {messagePlatformConfigured
-                      ? "会先启动 QQ 后端，再启动 MaiBot Core。"
-                      : "尚未连接消息软件平台，本次只能启动 MaiBot Core。"}
-                  </span>
-                </span>
-              </label>
-              <label className="flex min-w-0 cursor-pointer items-center gap-3 rounded-md border border-border bg-card p-3">
-                <Checkbox
-                  checked={topStartRememberChoice}
-                  onCheckedChange={(checked) => setTopStartRememberChoice(checked === true)}
-                />
-                <span className="min-w-0 text-sm">记住并不再提示</span>
-              </label>
-            </DialogBody>
-            <DialogFooter>
-              <Button onClick={() => setTopStartDialogOpen(false)} size="sm" variant="ghost">
-                取消
-              </Button>
-              <Button onClick={confirmTopStartChoice} size="sm">
-                <Play className="size-3.5" />
-                启动
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
 
         {snapshot ? (
           <StartupAgreementDialog onSnapshot={setSnapshot} snapshot={snapshot} />
