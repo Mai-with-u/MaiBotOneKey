@@ -71,15 +71,22 @@ await patchFile(
   CreateDirectory "$R2"
   ClearErrors
   SetOutPath "$R2"$1SetOutPath "$PLUGINSDIR"
+    StrCpy $R5 "Rename install directory to old backup"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     Rename "$R0" "$R3"
     IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Remove pre-created empty install directory"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     RMDir "$R0"
     IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Install directory still exists after rename/remove attempts"
     IfFileExists "$R0\\*.*" HandleExtract7zaError RenameStaged7za
 
   RenameStaged7za:
+    StrCpy $R5 "Rename staging directory to install directory"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     Rename "$R2" "$R0"
     IfErrors HandleExtract7zaError DoneExtract7za
@@ -115,15 +122,22 @@ await patchFile(
   CreateDirectory "$R2"
   ClearErrors
   SetOutPath "$R2"$1SetOutPath "$PLUGINSDIR"
+    StrCpy $R5 "Rename install directory to old backup"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     Rename "$R0" "$R3"
     IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Remove pre-created empty install directory"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     RMDir "$R0"
     IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Install directory still exists after rename/remove attempts"
     IfFileExists "$R0\\*.*" HandleExtract7zaError RenameStaged7za
 
   RenameStaged7za:
+    StrCpy $R5 "Rename staging directory to install directory"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     Rename "$R2" "$R0"
     IfErrors HandleExtract7zaError DoneExtract7za
@@ -152,7 +166,7 @@ await patchFile(
   "ensure direct-extract fallback targets install dir",
   /HandleExtract7zaError:\r?\n    IfErrors 0 DoneExtract7za([\s\S]*?)RMDir \/r "\$R2"\r?\n    RMDir \/r "\$R3"\r?\n\r?\n    Nsis7z::Extract "\$\{FILE\}"/u,
   `HandleExtract7zaError:
-    IfErrors 0 DoneExtract7za$1CreateDirectory "$R0"
+$1CreateDirectory "$R0"
     SetOutPath "$R0"
     RMDir /r "$R2"
     RMDir /r "$R3"
@@ -167,8 +181,6 @@ await patchFile(
   "restore old install dir before retrying staged rename",
   /HandleExtract7zaError:\r?\n    IfErrors 0 DoneExtract7za\r?\n\r?\n    DetailPrint/u,
   `HandleExtract7zaError:
-    IfErrors 0 DoneExtract7za
-
     IfFileExists "$R0\\*.*" 0 RestoreOld7za
     Goto ReportExtract7zaError
 
@@ -187,11 +199,16 @@ await patchFile(
   "handle pre-created empty install dir during staged rename",
   /IfFileExists "\$OUTDIR\\\*\.\*" 0 RenameStaged7za\r?\n    Rename "\$OUTDIR" "\$R3"\r?\n    IfErrors 0 RenameStaged7za\r?\n    Goto HandleExtract7zaError/u,
   `ClearErrors
+    StrCpy $R5 "Rename install directory to old backup"
+    DetailPrint "Replacing install directory: $R5"
     Rename "$OUTDIR" "$R3"
     IfErrors 0 RenameStaged7za
     ClearErrors
+    StrCpy $R5 "Remove pre-created empty install directory"
+    DetailPrint "Replacing install directory: $R5"
     RMDir "$OUTDIR"
     IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Install directory still exists after rename/remove attempts"
     IfFileExists "$OUTDIR\\*.*" HandleExtract7zaError RenameStaged7za`,
   'RMDir "$OUTDIR"',
   { optional: true },
@@ -231,11 +248,16 @@ await patchFile(
   "use saved install dir after changing SetOutPath",
   /ClearErrors\r?\n    Rename "\$OUTDIR" "\$R3"\r?\n    IfErrors 0 RenameStaged7za\r?\n    ClearErrors\r?\n    RMDir "\$OUTDIR"\r?\n    IfErrors 0 RenameStaged7za\r?\n    IfFileExists "\$OUTDIR\\\*\.\*" HandleExtract7zaError RenameStaged7za([\s\S]*?)Rename "\$R2" "\$OUTDIR"([\s\S]*?)IfFileExists "\$OUTDIR\\\*\.\*" 0 RestoreOld7za([\s\S]*?)Rename "\$R3" "\$OUTDIR"([\s\S]*?)CreateDirectory "\$OUTDIR"\r?\n    SetOutPath "\$OUTDIR"/u,
   `ClearErrors
+    StrCpy $R5 "Rename install directory to old backup"
+    DetailPrint "Replacing install directory: $R5"
     Rename "$R0" "$R3"
     IfErrors 0 RenameStaged7za
     ClearErrors
+    StrCpy $R5 "Remove pre-created empty install directory"
+    DetailPrint "Replacing install directory: $R5"
     RMDir "$R0"
     IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Install directory still exists after rename/remove attempts"
     IfFileExists "$R0\\*.*" HandleExtract7zaError RenameStaged7za$1Rename "$R2" "$R0"$2IfFileExists "$R0\\*.*" 0 RestoreOld7za$3Rename "$R3" "$R0"$4CreateDirectory "$R0"
     SetOutPath "$R0"`,
   'Rename "$R2" "$R0"',
@@ -257,6 +279,8 @@ await patchFile(
   "remove install-dir config preservation from staged install",
   /RenameStaged7za:\r?\n    ClearErrors\r?\n    Rename "\$R2" "\$R0"\r?\n    IfErrors HandleExtract7zaError PreserveUserConfigs7za\r?\n\r?\n  PreserveUserConfigs7za:\r?\n(?:    IfFileExists "\$R3\\resources\\modules\\napcat\\config\\\*\.\*" 0 \+3\r?\n      CreateDirectory "\$R0\\resources\\modules\\napcat\\config"\r?\n      CopyFiles \/SILENT "\$R3\\resources\\modules\\napcat\\config\\\*" "\$R0\\resources\\modules\\napcat\\config"\r?\n)?(?:    IfFileExists "\$R3\\resources\\modules\\napcat\\napcat\\config\\\*\.\*" 0 \+3\r?\n      CreateDirectory "\$R0\\resources\\modules\\napcat\\napcat\\config"\r?\n      CopyFiles \/SILENT "\$R3\\resources\\modules\\napcat\\napcat\\config\\\*" "\$R0\\resources\\modules\\napcat\\napcat\\config"\r?\n)?(?:    IfFileExists "\$R3\\resources\\modules\\SnowLuma\\config\\\*\.\*" 0 \+3\r?\n      CreateDirectory "\$R0\\resources\\modules\\SnowLuma\\config"\r?\n      CopyFiles \/SILENT "\$R3\\resources\\modules\\SnowLuma\\config\\\*" "\$R0\\resources\\modules\\SnowLuma\\config"\r?\n)?(?:    IfFileExists "\$R3\\resources\\modules\\SnowLuma\\data\\\*\.\*" 0 \+3\r?\n      CreateDirectory "\$R0\\resources\\modules\\SnowLuma\\data"\r?\n      CopyFiles \/SILENT "\$R3\\resources\\modules\\SnowLuma\\data\\\*" "\$R0\\resources\\modules\\SnowLuma\\data"\r?\n)?(?:    IfFileExists "\$R3\\resources\\modules\\SnowLuma\\logs\\\*\.\*" 0 \+3\r?\n      CreateDirectory "\$R0\\resources\\modules\\SnowLuma\\logs"\r?\n      CopyFiles \/SILENT "\$R3\\resources\\modules\\SnowLuma\\logs\\\*" "\$R0\\resources\\modules\\SnowLuma\\logs"\r?\n)?    Goto DoneExtract7za/u,
   `RenameStaged7za:
+    StrCpy $R5 "Rename staging directory to install directory"
+    DetailPrint "Replacing install directory: $R5"
     ClearErrors
     Rename "$R2" "$R0"
     IfErrors HandleExtract7zaError DoneExtract7za`,
@@ -325,9 +349,58 @@ await patchFile(
   "record install directory replacement failures",
   /ReportExtract7za(?:Error)?:\r?\n    DetailPrint [^\r\n]+/u,
   `ReportExtract7zaError:
-    StrCpy $R4 "Cannot replace install directory after $R1 attempt(s): $R0. Close running app processes, check directory permissions, or choose another install directory."
+    StrCpy $R4 "Cannot replace install directory after $R1 attempt(s) during $R5: $R0. Close running app processes, check directory permissions, or choose another install directory."
+    DetailPrint "Install directory replacement failed during $R5"
     DetailPrint \`Can't modify "\${PRODUCT_NAME}"'s files.\``,
-  "Cannot replace install directory after $R1 attempt(s)",
+  "Cannot replace install directory after $R1 attempt(s) during $R5",
+  { optional: true },
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "migrate replacement failure reason to include operation",
+  /StrCpy \$R4 "Cannot replace install directory after \$R1 attempt\(s\): \$R0\. Close running app processes, check directory permissions, or choose another install directory\."\r?\n    DetailPrint `Can't modify "\$\{PRODUCT_NAME\}"'s files\.`/u,
+  `StrCpy $R4 "Cannot replace install directory after $R1 attempt(s) during $R5: $R0. Close running app processes, check directory permissions, or choose another install directory."
+    DetailPrint "Install directory replacement failed during $R5"
+    DetailPrint \`Can't modify "\${PRODUCT_NAME}"'s files.\``,
+  "Cannot replace install directory after $R1 attempt(s) during $R5",
+  { optional: true },
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "route staged replace failures through retry handler",
+  /  HandleExtract7zaError:\r?\n    IfErrors 0 DoneExtract7za\r?\n\r?\n    IfFileExists "\$R0\\\*\.\*" 0 RestoreOld7za/u,
+  `  HandleExtract7zaError:
+    IfFileExists "$R0\\*.*" 0 RestoreOld7za`,
+  'HandleExtract7zaError:\n    IfFileExists "$R0\\*.*" 0 RestoreOld7za',
+  { optional: true },
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "log staged replacement operations",
+  /    ClearErrors\r?\n    Rename "\$R0" "\$R3"\r?\n    IfErrors 0 RenameStaged7za\r?\n    ClearErrors\r?\n    RMDir "\$R0"\r?\n    IfErrors 0 RenameStaged7za\r?\n    IfFileExists "\$R0\\\*\.\*" HandleExtract7zaError RenameStaged7za\r?\n\r?\n  RenameStaged7za:\r?\n    ClearErrors\r?\n    Rename "\$R2" "\$R0"\r?\n    IfErrors HandleExtract7zaError DoneExtract7za/u,
+  `    StrCpy $R5 "Rename install directory to old backup"
+    DetailPrint "Replacing install directory: $R5"
+    ClearErrors
+    Rename "$R0" "$R3"
+    IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Remove pre-created empty install directory"
+    DetailPrint "Replacing install directory: $R5"
+    ClearErrors
+    RMDir "$R0"
+    IfErrors 0 RenameStaged7za
+    StrCpy $R5 "Install directory still exists after rename/remove attempts"
+    IfFileExists "$R0\\*.*" HandleExtract7zaError RenameStaged7za
+
+  RenameStaged7za:
+    StrCpy $R5 "Rename staging directory to install directory"
+    DetailPrint "Replacing install directory: $R5"
+    ClearErrors
+    Rename "$R2" "$R0"
+    IfErrors HandleExtract7zaError DoneExtract7za`,
+  "Replacing install directory: $R5",
   { optional: true },
 );
 
@@ -410,6 +483,38 @@ await patchFile(
     FileWrite $9 "Old directory backup: $R3$\\r$\\n"
     FileWrite $9 "Package: \${FILE}$\\r$\\n"
     FileWrite $9 "Architecture: $packageArch$\\r$\\n"
+    FileWrite $9 "Replacement attempt: $R1$\\r$\\n"
+    FileWrite $9 "Last replacement operation: $R5$\\r$\\n"
+    IfFileExists "$R0\\*.*" 0 LogInstallDirMissing7za
+      FileWrite $9 "Install directory exists at failure: yes$\\r$\\n"
+      Goto LogStagingDirState7za
+    LogInstallDirMissing7za:
+      FileWrite $9 "Install directory exists at failure: no$\\r$\\n"
+    LogStagingDirState7za:
+    IfFileExists "$R2\\*.*" 0 LogStagingDirMissing7za
+      FileWrite $9 "Staging directory exists at failure: yes$\\r$\\n"
+      Goto LogStagedExeState7za
+    LogStagingDirMissing7za:
+      FileWrite $9 "Staging directory exists at failure: no$\\r$\\n"
+    LogStagedExeState7za:
+    IfFileExists "$R2\\\${APP_EXECUTABLE_FILENAME}" 0 LogStagedExeMissing7za
+      FileWrite $9 "Staged executable exists at failure: yes$\\r$\\n"
+      Goto LogOldDirState7za
+    LogStagedExeMissing7za:
+      FileWrite $9 "Staged executable exists at failure: no$\\r$\\n"
+    LogOldDirState7za:
+    IfFileExists "$R3\\*.*" 0 LogOldDirMissing7za
+      FileWrite $9 "Old backup directory exists at failure: yes$\\r$\\n"
+      Goto LogOldExeState7za
+    LogOldDirMissing7za:
+      FileWrite $9 "Old backup directory exists at failure: no$\\r$\\n"
+    LogOldExeState7za:
+    IfFileExists "$R3\\\${APP_EXECUTABLE_FILENAME}" 0 LogOldExeMissing7za
+      FileWrite $9 "Old backup executable exists at failure: yes$\\r$\\n"
+      Goto LogFailureTip7za
+    LogOldExeMissing7za:
+      FileWrite $9 "Old backup executable exists at failure: no$\\r$\\n"
+    LogFailureTip7za:
     FileWrite $9 "Tip: If files such as \${APP_EXECUTABLE_FILENAME}, node.exe, or .node native modules are missing, check Windows Security or antivirus quarantine.$\\r$\\n"
     FileClose $9
 
@@ -423,4 +528,46 @@ await patchFile(
     RMDir /r "$R3"
 !macroend`,
   "install-failure.log",
+);
+
+await patchFile(
+  join(nsisTemplateRoot, "include", "extractAppPackage.nsh"),
+  "write replacement diagnostics to failure log",
+  /    FileWrite \$9 "Architecture: \$packageArch\$\\r\$\\n"\r?\n    FileWrite \$9 "Tip: If files such as \$\{APP_EXECUTABLE_FILENAME\}, node\.exe, or \.node native modules are missing, check Windows Security or antivirus quarantine\.\$\\r\$\\n"/u,
+  `    FileWrite $9 "Architecture: $packageArch$\\r$\\n"
+    FileWrite $9 "Replacement attempt: $R1$\\r$\\n"
+    FileWrite $9 "Last replacement operation: $R5$\\r$\\n"
+    IfFileExists "$R0\\*.*" 0 LogInstallDirMissing7za
+      FileWrite $9 "Install directory exists at failure: yes$\\r$\\n"
+      Goto LogStagingDirState7za
+    LogInstallDirMissing7za:
+      FileWrite $9 "Install directory exists at failure: no$\\r$\\n"
+    LogStagingDirState7za:
+    IfFileExists "$R2\\*.*" 0 LogStagingDirMissing7za
+      FileWrite $9 "Staging directory exists at failure: yes$\\r$\\n"
+      Goto LogStagedExeState7za
+    LogStagingDirMissing7za:
+      FileWrite $9 "Staging directory exists at failure: no$\\r$\\n"
+    LogStagedExeState7za:
+    IfFileExists "$R2\\\${APP_EXECUTABLE_FILENAME}" 0 LogStagedExeMissing7za
+      FileWrite $9 "Staged executable exists at failure: yes$\\r$\\n"
+      Goto LogOldDirState7za
+    LogStagedExeMissing7za:
+      FileWrite $9 "Staged executable exists at failure: no$\\r$\\n"
+    LogOldDirState7za:
+    IfFileExists "$R3\\*.*" 0 LogOldDirMissing7za
+      FileWrite $9 "Old backup directory exists at failure: yes$\\r$\\n"
+      Goto LogOldExeState7za
+    LogOldDirMissing7za:
+      FileWrite $9 "Old backup directory exists at failure: no$\\r$\\n"
+    LogOldExeState7za:
+    IfFileExists "$R3\\\${APP_EXECUTABLE_FILENAME}" 0 LogOldExeMissing7za
+      FileWrite $9 "Old backup executable exists at failure: yes$\\r$\\n"
+      Goto LogFailureTip7za
+    LogOldExeMissing7za:
+      FileWrite $9 "Old backup executable exists at failure: no$\\r$\\n"
+    LogFailureTip7za:
+    FileWrite $9 "Tip: If files such as \${APP_EXECUTABLE_FILENAME}, node.exe, or .node native modules are missing, check Windows Security or antivirus quarantine.$\\r$\\n"`,
+  "Last replacement operation: $R5",
+  { optional: true },
 );
