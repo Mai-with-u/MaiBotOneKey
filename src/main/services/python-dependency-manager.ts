@@ -713,6 +713,7 @@ export class PythonDependencyManager {
       await this.assertOverlayIntegrity(generationDir);
       await this.activateGeneration(generationDir);
       activated = true;
+      await this.cleanupLegacyOverlayRoot(targetDir, onOutput);
       return result;
     } finally {
       if (!activated) {
@@ -788,6 +789,41 @@ export class PythonDependencyManager {
           errorOnExist: false,
         })),
     );
+  }
+
+  private async cleanupLegacyOverlayRoot(root: string, onOutput?: PythonOutputHandler): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const removableEntries = entries
+      .map((entry) => entry.name)
+      .filter((name) => name !== OVERLAY_GENERATIONS_DIR)
+      .filter((name) => name !== OVERLAY_ACTIVE_FILE);
+
+    if (removableEntries.length === 0) {
+      return;
+    }
+
+    const failed: string[] = [];
+    await Promise.all(removableEntries.map(async (name) => {
+      try {
+        await rm(join(root, name), { recursive: true, force: true });
+      } catch (error) {
+        failed.push(`${name}: ${toDetail(error)}`);
+      }
+    }));
+
+    const removedCount = removableEntries.length - failed.length;
+    if (removedCount > 0) {
+      onOutput?.(`legacy python-overrides cleanup removed ${removedCount} root entr${removedCount === 1 ? "y" : "ies"}`);
+    }
+    if (failed.length > 0) {
+      onOutput?.(`legacy python-overrides cleanup incomplete: ${failed.slice(0, 5).join("; ")}`);
+    }
   }
 
   private async assertOverlayIntegrity(root: string): Promise<void> {
