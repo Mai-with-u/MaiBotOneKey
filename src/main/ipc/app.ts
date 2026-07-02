@@ -369,6 +369,24 @@ function isRuntimeBusy(service: ServiceDescriptor): boolean {
   );
 }
 
+function isLauncherUpdateBlockedService(service: ServiceDescriptor): boolean {
+  return (
+    service.id === "maibot" ||
+    service.id === "napcat"
+  ) && (isRuntimeBusy(service) || Boolean(service.managed));
+}
+
+async function assertLauncherUpdateAllowed(serviceManager: ServiceManager): Promise<void> {
+  await serviceManager.refresh();
+  const busyService = serviceManager.snapshot().find(isLauncherUpdateBlockedService);
+  if (!busyService) {
+    return;
+  }
+
+  const serviceName = busyService.id === "maibot" ? "MaiBot Core" : busyService.name || "QQ 后端";
+  throw new Error(`请先停止 ${serviceName}，再更新一键包。`);
+}
+
 function normalizePathForCompare(path: string): string {
   const resolved = resolve(path);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -3210,6 +3228,7 @@ export function registerAppIpc({
         phase: "checking",
         receivedBytes: 0,
       });
+      await assertLauncherUpdateAllowed(serviceManager);
       const update = await checkLauncherUpdate();
       if (!update.available) {
         throw new Error("当前启动器已经是最新版本");
@@ -3220,6 +3239,7 @@ export function registerAppIpc({
         update,
         sendProgress,
       );
+      await assertLauncherUpdateAllowed(serviceManager);
       const installerPath = download.installerPath;
       const child = spawn(installerPath, [], {
         detached: true,

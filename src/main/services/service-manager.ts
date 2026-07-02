@@ -637,7 +637,7 @@ export class ServiceManager extends EventEmitter {
 
   async start(serviceId: ServiceId, resetRestartAttempts = true): Promise<ServiceDescriptor> {
     this.definitions = this.createDefinitions();
-    const definition = this.getDefinition(serviceId);
+    let definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
     const sessionId = serviceSessionId(serviceId);
     const existingSession = this.pty.list().find((session) => session.id === sessionId);
@@ -653,6 +653,15 @@ export class ServiceManager extends EventEmitter {
 
     if (state.status === "starting") {
       return this.toDescriptor(definition, state);
+    }
+
+    if (serviceId === "napcat") {
+      const repairedPaths = await this.initManager.ensureServiceReady("napcat");
+      if (repairedPaths.length > 0) {
+        this.logs.append(serviceId, "system", `startup repair copied ${repairedPaths.length} path(s): ${repairedPaths.join(", ")}`);
+        this.definitions = this.createDefinitions();
+        definition = this.getDefinition(serviceId);
+      }
     }
 
     if (existingSession && isLivePtyStatus(existingSession.status)) {

@@ -2236,6 +2236,7 @@ export function HomePanel({
     napcat?.status === "starting" || napcat?.status === "running" || napcat?.status === "stopping" || Boolean(napcat?.managed);
   const maibotUpdateBlocked =
     maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping";
+  const launcherUpdateBlocked = maibotUpdateBlocked || qqBackendBusy;
   const launcherCurrentTag = versionAsTag(launcherUpdateInfo?.currentVersion ?? snapshot.appVersion);
   const launcherLatestTag =
     launcherUpdateInfo?.latestTag
@@ -2612,6 +2613,10 @@ export function HomePanel({
       setError("桌面桥未就绪，无法安装启动器更新");
       return;
     }
+    if (launcherUpdateBlocked) {
+      setError("请先停止 MaiBot Core 和 QQ 后端，再更新一键包。");
+      return;
+    }
 
     setBusy("launcher:update");
     setError(null);
@@ -2623,7 +2628,7 @@ export function HomePanel({
       setError(messageFromError(nextError));
       setBusy(null);
     }
-  }, []);
+  }, [launcherUpdateBlocked]);
 
   const openMessagePlatformDialog = useCallback(() => {
     setError(null);
@@ -3532,7 +3537,7 @@ export function HomePanel({
               查看更新
             </Button>
             <Button
-              disabled={busy !== null || !launcherUpdateAvailable}
+              disabled={busy !== null || !launcherUpdateAvailable || launcherUpdateBlocked}
               onClick={() => void installLauncherUpdate()}
               size="sm"
             >

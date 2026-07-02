@@ -1159,6 +1159,12 @@ interface BundledComponentUpgradeSpec {
   isProtectedPath: (relativePath: string) => boolean;
 }
 
+interface WindowsProcessInfo {
+  ProcessId?: number;
+  ExecutablePath?: string;
+  CommandLine?: string;
+}
+
 function isDigits(value: string): boolean {
   return /^\d+$/.test(value);
 }
@@ -1282,6 +1288,7 @@ function runProcess(file: string, args: string[], cwd: string, timeoutMs = 8_000
         cwd,
         timeout: timeoutMs,
         windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
         env: {
           ...process.env,
           PYTHONIOENCODING: "utf-8",
@@ -1307,6 +1314,23 @@ function isCleanPipCheckOutput(output: string): boolean {
 
 function toDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isBusyComponentFsError(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+  return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+}
+
+function normalizeQqComponentUpgradeError(componentName: string, error: unknown): Error {
+  if (!isBusyComponentFsError(error)) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  const errorPath = typeof error === "object" && error !== null && "path" in error
+    ? String((error as NodeJS.ErrnoException).path)
+    : "";
+  const detail = errorPath ? `被占用路径: ${errorPath}` : toDetail(error);
+  return new Error(`${componentName} 文件被占用，请关闭残留进程后重试。${detail}`);
 }
 
 function parsePyLauncherPaths(output: string): PythonRuntimeCandidate[] {
@@ -2349,6 +2373,8 @@ export class InitManager {
   }
 
   async upgradeQqComponents(): Promise<QqComponentUpgradeResult> {
+    await this.cleanupQqComponentProcesses();
+
     const components: QqComponentUpgradeEntry[] = [];
     components.push(
       await this.upgradeBundledComponent({
@@ -2367,6 +2393,83 @@ export class InitManager {
       }),
     );
     return { components, upgradedAt: Date.now() };
+  }
+
+  private async cleanupQqComponentProcesses(): Promise<void> {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    const targetRoots = [this.paths.napcatRoot, this.paths.snowlumaRoot]
+      .filter((path) => path.trim().length > 0)
+      .map((path) => resolve(path));
+    if (targetRoots.length === 0) {
+      return;
+    }
+
+    let processes: WindowsProcessInfo[] = [];
+    try {
+      processes = await this.listWindowsProcesses();
+    } catch {
+      return;
+    }
+
+    const currentPid = process.pid;
+    const targetPids = processes
+      .filter((item) => typeof item.ProcessId === "number" && item.ProcessId > 0 && item.ProcessId !== currentPid)
+      .filter((item) => this.isQqComponentProcess(item, targetRoots))
+      .map((item) => item.ProcessId as number);
+
+    const uniquePids = [...new Set(targetPids)];
+    if (uniquePids.length === 0) {
+      return;
+    }
+
+    await Promise.all(uniquePids.map((pid) => this.killWindowsProcessTree(pid).catch(() => undefined)));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+
+  private async listWindowsProcesses(): Promise<WindowsProcessInfo[]> {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "Get-CimInstance Win32_Process |",
+      "Select-Object ProcessId,ExecutablePath,CommandLine |",
+      "ConvertTo-Json -Compress -Depth 2",
+    ].join(" ");
+    const output = await runProcess("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      script,
+    ], this.paths.installRoot, 12_000);
+    if (!output.trim()) {
+      return [];
+    }
+
+    const parsed = JSON.parse(output) as WindowsProcessInfo | WindowsProcessInfo[];
+    return Array.isArray(parsed) ? parsed : [parsed];
+  }
+
+  private isQqComponentProcess(processInfo: WindowsProcessInfo, targetRoots: string[]): boolean {
+    const executablePath = typeof processInfo.ExecutablePath === "string" ? processInfo.ExecutablePath : "";
+    if (executablePath && targetRoots.some((root) => sameOrInsidePath(root, executablePath))) {
+      return true;
+    }
+
+    const commandLine = typeof processInfo.CommandLine === "string" ? processInfo.CommandLine : "";
+    if (!commandLine) {
+      return false;
+    }
+
+    const normalizedCommandLine = commandLine.replace(/\//gu, "\\").toLowerCase();
+    return targetRoots
+      .map((root) => resolve(root).replace(/\//gu, "\\").toLowerCase())
+      .some((root) => normalizedCommandLine.includes(root));
+  }
+
+  private killWindowsProcessTree(pid: number): Promise<void> {
+    return runProcess("taskkill", ["/PID", String(pid), "/T", "/F"], this.paths.installRoot, 8_000).then(() => undefined);
   }
 
   private agreementStorePath(): string {
@@ -2770,15 +2873,16 @@ export class InitManager {
     }
 
     const backupRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-${upgradedAt}`);
-    const preservedEntries = existsSync(targetRoot)
-      ? await this.moveProtectedComponentEntries(targetRoot, backupRoot, spec.isProtectedPath)
-      : [];
+    const stagingRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-staging-${upgradedAt}`);
+    const replacedRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-replaced-${upgradedAt}`);
+    let preservedEntries: string[] = [];
+    let movedTargetAside = false;
 
     try {
-      await rm(targetRoot, { recursive: true, force: true });
       await mkdir(dirname(targetRoot), { recursive: true });
+      await rm(stagingRoot, { recursive: true, force: true });
       await runWithoutAsar(() =>
-        cp(bundledRoot, targetRoot, {
+        cp(bundledRoot, stagingRoot, {
           recursive: true,
           force: true,
           errorOnExist: false,
@@ -2791,11 +2895,30 @@ export class InitManager {
           },
         }),
       );
-      await this.restoreProtectedComponentEntries(backupRoot, targetRoot, preservedEntries);
+
+      if (existsSync(targetRoot)) {
+        preservedEntries = await this.moveProtectedComponentEntries(targetRoot, backupRoot, spec.isProtectedPath);
+        await this.restoreProtectedComponentEntries(backupRoot, stagingRoot, preservedEntries);
+        await this.movePath(targetRoot, replacedRoot);
+        movedTargetAside = true;
+      }
+
+      await this.movePath(stagingRoot, targetRoot);
+      if (movedTargetAside) {
+        await rm(replacedRoot, { recursive: true, force: true }).catch(() => undefined);
+      }
     } catch (error) {
-      await this.restoreProtectedComponentEntries(backupRoot, targetRoot, preservedEntries).catch(() => undefined);
-      throw error;
+      await this.rollbackBundledComponentUpgrade({
+        targetRoot,
+        backupRoot,
+        stagingRoot,
+        replacedRoot,
+        preservedEntries,
+        movedTargetAside,
+      }).catch(() => undefined);
+      throw normalizeQqComponentUpgradeError(spec.name, error);
     } finally {
+      await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
       await rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
     }
 
@@ -2809,6 +2932,39 @@ export class InitManager {
       skipped: false,
       upgradedAt,
     };
+  }
+
+  private async rollbackBundledComponentUpgrade({
+    targetRoot,
+    backupRoot,
+    stagingRoot,
+    replacedRoot,
+    preservedEntries,
+    movedTargetAside,
+  }: {
+    targetRoot: string;
+    backupRoot: string;
+    stagingRoot: string;
+    replacedRoot: string;
+    preservedEntries: string[];
+    movedTargetAside: boolean;
+  }): Promise<void> {
+    if (movedTargetAside && existsSync(replacedRoot)) {
+      await rm(targetRoot, { recursive: true, force: true }).catch(() => undefined);
+      await this.movePath(replacedRoot, targetRoot);
+    }
+
+    if (preservedEntries.length > 0 && existsSync(stagingRoot) && existsSync(targetRoot)) {
+      await this.restoreProtectedComponentEntries(stagingRoot, targetRoot, preservedEntries);
+    }
+
+    if (existsSync(backupRoot) && existsSync(targetRoot)) {
+      await cp(backupRoot, targetRoot, {
+        recursive: true,
+        force: true,
+        errorOnExist: false,
+      });
+    }
   }
 
   private async moveProtectedComponentEntries(
