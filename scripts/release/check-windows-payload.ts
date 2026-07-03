@@ -199,6 +199,10 @@ const requirements: Requirement[] = [
 ];
 
 const requiredModuleResourceExclusions = [
+  "!MaiBot/.venv/**",
+  "!MaiBot/.pytest_cache/**",
+  "!MaiBot/.ruff_cache/**",
+  "!MaiBot/.mypy_cache/**",
   "!MaiBot/config/**",
   "!MaiBot/data/**",
   "!MaiBot/logs/**",
