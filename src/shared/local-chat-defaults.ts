@@ -1,4 +1,3 @@
-export const LOCAL_CHAT_DEFAULT_SESSION_ID = "desktop-simple-chat";
 export const LOCAL_CHAT_DEFAULT_USER_ID = "onekey-local-user";
 export const LOCAL_CHAT_DEFAULT_USER_NAME = "人类";
 

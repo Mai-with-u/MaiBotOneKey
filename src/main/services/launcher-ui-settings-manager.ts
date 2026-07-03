@@ -3,7 +3,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
   FloatingMascotMode,
-  LauncherChatPageMode,
   LauncherUiSettings,
   RuntimePaths,
   TopStartActionMode,
@@ -53,14 +52,9 @@ export class LauncherUiSettingsManager {
 
 function defaultLauncherUiSettings(): LauncherUiSettings {
   return {
-    chatPageMode: "webui",
     floatingMascotMode: "maibot",
     topStartActionMode: "ask",
   };
-}
-
-function normalizeChatPageMode(value: unknown): LauncherChatPageMode {
-  return value === "native" ? "native" : "webui";
 }
 
 function normalizeFloatingMascotMode(value: unknown): FloatingMascotMode {
@@ -81,7 +75,6 @@ function normalizeTopStartActionMode(value: unknown): TopStartActionMode {
 
 function normalizeLauncherUiSettings(value: Partial<LauncherUiSettings>): LauncherUiSettings {
   return {
-    chatPageMode: normalizeChatPageMode(value.chatPageMode),
     floatingMascotMode: normalizeFloatingMascotMode(value.floatingMascotMode),
     floatingCodexPetId: normalizeCodexPetId(value.floatingCodexPetId),
     topStartActionMode: normalizeTopStartActionMode(value.topStartActionMode),

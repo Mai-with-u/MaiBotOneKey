@@ -130,7 +130,6 @@ const fallbackSnapshot: DesktopSnapshot = {
     useBundledPluginInstructions: true,
   },
   launcherUiSettings: {
-    chatPageMode: "webui",
     floatingMascotMode: "maibot",
     topStartActionMode: "ask",
   },

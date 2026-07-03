@@ -4,6 +4,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import type {
   LocalChatConnectionState,
+  LocalChatClientInfo,
   LocalChatConnectRequest,
   LocalChatEvent,
   LocalChatFileAttachment,
@@ -17,9 +18,9 @@ import type {
   RuntimePaths,
 } from "../../shared/contracts";
 import {
-  LOCAL_CHAT_DEFAULT_SESSION_ID,
   LOCAL_CHAT_DEFAULT_USER_ID,
   LOCAL_CHAT_DEFAULT_USER_NAME,
+  WEBUI_CHAT_SESSION_ID,
 } from "../../shared/local-chat-defaults";
 import type { InitManager } from "./init-manager";
 
@@ -28,6 +29,7 @@ const WS_REQUEST_TIMEOUT_MS = 8_000;
 const REPLY_MESSAGE_PREFIX = /^\s*\[回复消息\]\s*/u;
 
 interface LocalChatSessionOptions {
+  client: LocalChatClientInfo;
   sessionId: string;
   userId: string;
   userName: string;
@@ -64,7 +66,7 @@ function asString(value: unknown): string | undefined {
 }
 
 function normalizeSessionId(value: unknown): string {
-  return asString(value) ?? LOCAL_CHAT_DEFAULT_SESSION_ID;
+  return asString(value) ?? WEBUI_CHAT_SESSION_ID;
 }
 
 function normalizeUserId(value: unknown): string {
@@ -73,6 +75,20 @@ function normalizeUserId(value: unknown): string {
 
 function normalizeUserName(value: unknown): string {
   return asString(value) ?? LOCAL_CHAT_DEFAULT_USER_NAME;
+}
+
+function normalizeClientInfo(value: unknown): LocalChatClientInfo {
+  const raw = asRecord(value);
+  const type = asString(raw?.type);
+  const normalizedType =
+    type === "webui" || type === "floating" || type === "launcher"
+      ? type
+      : "launcher";
+  return {
+    type: normalizedType,
+    name: asString(raw?.name) ?? "MaiBot OneKey",
+    version: asString(raw?.version),
+  };
 }
 
 function webuiUserId(userId: string): string {
@@ -662,7 +678,8 @@ export class LocalChatAdapter extends EventEmitter {
   private currentUrl = "";
   private connectingPromise: Promise<void> | null = null;
   private activeSession: LocalChatSessionOptions = {
-    sessionId: LOCAL_CHAT_DEFAULT_SESSION_ID,
+    client: { type: "launcher", name: "MaiBot OneKey" },
+    sessionId: WEBUI_CHAT_SESSION_ID,
     userId: LOCAL_CHAT_DEFAULT_USER_ID,
     userName: LOCAL_CHAT_DEFAULT_USER_NAME,
   };
@@ -791,6 +808,7 @@ export class LocalChatAdapter extends EventEmitter {
 
   private resolveSessionOptions(request?: Partial<LocalChatConnectRequest & LocalChatSendRequest>): LocalChatSessionOptions {
     return {
+      client: normalizeClientInfo(request?.client),
       sessionId: normalizeSessionId(request?.sessionId),
       userId: normalizeUserId(request?.userId),
       userName: normalizeUserName(request?.userName ?? this.lastUserName),
@@ -860,6 +878,7 @@ export class LocalChatAdapter extends EventEmitter {
       method: "session.open",
       session: session.sessionId,
       data: {
+        client: session.client,
         user_id: session.userId,
         user_name: session.userName,
         platform: "webui",

@@ -30,6 +30,7 @@ import type {
   WindowResizeEdge,
 } from "@shared/contracts";
 import {
+  WEBUI_CHAT_SESSION_ID,
   WEBUI_CHAT_USER_ID_STORAGE_KEY,
   WEBUI_CHAT_USER_NAME_STORAGE_KEY,
 } from "@shared/local-chat-defaults";
@@ -49,7 +50,6 @@ import { Toaster } from "@/components/ui/sonner";
 import maiMascotImage from "@/assets/mai2.png";
 import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
-import { LocalChatPanel } from "./LocalChatPanel";
 import { PluginMarketPanel } from "./PluginMarketPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
@@ -546,19 +546,23 @@ function MaiBotWebuiStatusPanel({
 }
 
 function FloatingShell({
+  appVersion,
   edge,
   maibotService,
   codexPet,
   onRestore,
   onWindowState,
   useNativeGlass,
+  webuiChatIdentity,
 }: {
+  appVersion: string;
   edge: "left" | "right" | null;
   maibotService: ServiceDescriptor | undefined;
   codexPet: CodexPetOption | null;
   onRestore: () => void;
   onWindowState: (state: WindowState) => void;
   useNativeGlass: boolean;
+  webuiChatIdentity: { userId?: string; userName?: string };
 }): React.JSX.Element {
   const dragRef = useRef<{
     offsetX: number;
@@ -583,6 +587,16 @@ function FloatingShell({
   const [bubbleState, setBubbleState] = useState<LocalChatConnectionState>("idle");
   const [bubbleError, setBubbleError] = useState<string | null>(null);
   const [bubbleSending, setBubbleSending] = useState(false);
+  const bubbleChatRequest = useMemo(() => ({
+    client: {
+      type: "floating" as const,
+      name: "MaiBot OneKey",
+      version: appVersion,
+    },
+    sessionId: WEBUI_CHAT_SESSION_ID,
+    userId: webuiChatIdentity.userId,
+    userName: webuiChatIdentity.userName,
+  }), [appVersion, webuiChatIdentity.userId, webuiChatIdentity.userName]);
 
   const updateFloatingState = useCallback((state?: WindowState) => {
     if (state) {
@@ -621,26 +635,32 @@ function FloatingShell({
     const bridge = window.maibotDesktop?.localChat;
     const unsubscribe = bridge?.onEvent((event: LocalChatEvent) => {
       if ("type" in event) {
+        if (event.sessionId && event.sessionId !== bubbleChatRequest.sessionId) {
+          return;
+        }
         setBubbleState(event.state);
         if (event.state === "connected") {
           setBubbleError(null);
         }
         return;
       }
+      if (event.sessionId && event.sessionId !== bubbleChatRequest.sessionId) {
+        return;
+      }
       setBubbleSending(false);
-      setBubbleMessages((current) => [...current, event].slice(-6));
+      setBubbleMessages((current) => appendFloatingChatMessage(current, event));
     });
 
     setBubbleState("connecting");
     setBubbleError(null);
-    void bridge?.connect()
+    void bridge?.connect(bubbleChatRequest)
       .then(async (state) => {
         setBubbleState(state);
         if (state !== "connected") {
           setBubbleError("聊天服务还没准备好");
           return;
         }
-        const history = await bridge.listMessages();
+        const history = await bridge.listMessages(bubbleChatRequest);
         setBubbleMessages(history.slice(-6));
       })
       .catch((error) => {
@@ -651,7 +671,7 @@ function FloatingShell({
     return () => {
       unsubscribe?.();
     };
-  }, [bubbleOpen, maibotService?.status]);
+  }, [bubbleChatRequest, bubbleOpen, maibotService?.status]);
 
   const startBubbleMaiBotCore = useCallback(() => {
     if (!maibotService || maibotService.status === "starting" || maibotService.status === "stopping") {
@@ -688,10 +708,10 @@ function FloatingShell({
     setBubbleSending(true);
     setBubbleError(null);
     void window.maibotDesktop?.localChat
-      .send({ content })
+      .send({ ...bubbleChatRequest, content })
       .then((sent) => {
         if (sent) {
-          setBubbleMessages((current) => [...current, sent].slice(-6));
+          setBubbleMessages((current) => appendFloatingChatMessage(current, sent));
         }
       })
       .catch((error) => {
@@ -699,7 +719,7 @@ function FloatingShell({
         setBubbleError(localChatErrorMessage(error));
       })
       .finally(() => setBubbleSending(false));
-  }, [bubbleDraft, bubbleSending, bubbleState]);
+  }, [bubbleChatRequest, bubbleDraft, bubbleSending, bubbleState]);
 
   const handlePetPointerEnter = useCallback(() => {
     if (!dragRef.current) {
@@ -1058,6 +1078,17 @@ function syncRetroTabDividers(list: HTMLElement | null): void {
   list.style.setProperty("--retro-tab-divider-background", layers.join(", "));
 }
 
+function appendFloatingChatMessage(
+  messages: LocalChatMessageEvent[],
+  message: LocalChatMessageEvent,
+): LocalChatMessageEvent[] {
+  const existingIndex = messages.findIndex((item) => item.id === message.id);
+  if (existingIndex >= 0) {
+    return messages.map((item, index) => (index === existingIndex ? { ...item, ...message } : item)).slice(-6);
+  }
+  return [...messages, message].slice(-6);
+}
+
 function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | null): void {
   if (!list || !item) {
     list?.style.setProperty("--retro-tab-indicator-opacity", "0");
@@ -1370,7 +1401,6 @@ export function DesktopShell(): React.JSX.Element {
   );
   const maibotService = serviceById.get("maibot");
   const maibotWebviewReady = maibotService?.status === "running" && maibotService.health === "ready";
-  const useNativeLocalChat = snapshot?.launcherUiSettings?.chatPageMode === "native";
   const maibotChatWebviewTarget = useMemo(
     () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
     [maibotService?.url],
@@ -1722,12 +1752,14 @@ export function DesktopShell(): React.JSX.Element {
     return (
       <TooltipProvider delayDuration={250}>
         <FloatingShell
+          appVersion={snapshot?.appVersion ?? "0.1.0"}
           codexPet={floatingCodexPet}
           edge={floatingEdge}
           maibotService={maibotService}
           onRestore={restoreMainWindow}
           onWindowState={syncWindowState}
           useNativeGlass={useRetroChrome}
+          webuiChatIdentity={webuiChatIdentity}
         />
         <Toaster />
       </TooltipProvider>
@@ -2102,15 +2134,7 @@ export function DesktopShell(): React.JSX.Element {
               value="localchat"
               className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
             >
-              {useNativeLocalChat || !maibotWebviewReady ? (
-                <LocalChatPanel
-                  active={activeTab === "localchat"}
-                  maibotService={maibotService}
-                  retro={useRetroChrome}
-                  toolbarPlacement="external"
-                  toolbarTarget={webviewToolbarHost}
-                />
-              ) : (
+              {maibotWebviewReady ? (
                 <WebviewPanel
                   active={activeTab === "localchat"}
                   emptyText="MaiBot Core 启动后会在这里载入 WebUI 聊聊页面。"
@@ -2121,6 +2145,13 @@ export function DesktopShell(): React.JSX.Element {
                   toolbarTarget={webviewToolbarHost}
                   reloadTrigger={localChatWebviewReloadTrigger}
                   url={maibotChatWebviewTarget.entryUrl}
+                />
+              ) : (
+                <MaiBotWebuiStatusPanel
+                  busy={actionBusy?.startsWith("maibot:") ?? false}
+                  onStart={startService}
+                  retro={useRetroChrome}
+                  service={maibotService}
                 />
               )}
             </TabsContent>

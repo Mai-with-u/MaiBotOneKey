@@ -40,6 +40,7 @@ import futureRetroMascotImage from "@/assets/mai-fr.png";
 import type {
   DesktopSnapshot,
   LauncherUpdateInfo,
+  LocalChatClientInfo,
   LocalChatEvent,
   LocalChatMessageEvent,
   MaiBotStatisticSummary,
@@ -432,6 +433,7 @@ function ChoiceSwitch<T extends string>({
 function LocalChatQuickCard({
   active,
   disabledReason,
+  client,
   maibotService,
   onOpenFull,
   retro,
@@ -441,6 +443,7 @@ function LocalChatQuickCard({
 }: {
   active: boolean;
   disabledReason?: string;
+  client?: LocalChatClientInfo;
   maibotService: ServiceDescriptor | undefined;
   onOpenFull: () => void;
   retro: boolean;
@@ -476,7 +479,7 @@ function LocalChatQuickCard({
     setState("connecting");
     setError(null);
     try {
-      const request = { sessionId, userId, userName };
+      const request = { client, sessionId, userId, userName };
       const nextState = await window.maibotDesktop.localChat.connect(request);
       setState(nextState);
       const history = await window.maibotDesktop.localChat.listMessages(request);
@@ -488,7 +491,7 @@ function LocalChatQuickCard({
       setState("error");
       setError(messageFromError(nextError));
     }
-  }, [disabledReason, maibotService?.status, sessionId, userId, userName]);
+  }, [client, disabledReason, maibotService?.status, sessionId, userId, userName]);
 
   useEffect(() => {
     if (!active) {
@@ -531,7 +534,7 @@ function LocalChatQuickCard({
     setError(null);
     try {
       const resolvedUserName = userName ?? localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? LOCAL_CHAT_DEFAULT_USER_NAME;
-      const sent = await window.maibotDesktop.localChat.send({ content, sessionId, userId, userName: resolvedUserName });
+      const sent = await window.maibotDesktop.localChat.send({ client, content, sessionId, userId, userName: resolvedUserName });
       setMessages((current) => mergeLocalChatMessage(current, sent));
     } catch (nextError) {
       setDraft(content);
@@ -540,7 +543,7 @@ function LocalChatQuickCard({
     } finally {
       setSending(false);
     }
-  }, [connected, draft, sending, sessionId, userId, userName]);
+  }, [client, connected, draft, sending, sessionId, userId, userName]);
 
   const visibleMessages = messages
     .map((message) => ({ ...message, text: localChatText(message) }))
@@ -2254,9 +2257,13 @@ export function HomePanel({
   const services = snapshot.services ?? [];
   const maibot = services.find((service) => service.id === "maibot");
   const napcat = services.find((service) => service.id === "napcat");
-  const useWebuiChatPreview = snapshot.launcherUiSettings?.chatPageMode !== "native";
   const webuiPreviewUserId = webuiChatIdentity?.userId ?? localStorage.getItem(WEBUI_CHAT_USER_ID_STORAGE_KEY) ?? undefined;
   const webuiPreviewUserName = webuiChatIdentity?.userName ?? localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined;
+  const localChatClient = useMemo<LocalChatClientInfo>(() => ({
+    type: "launcher",
+    name: "MaiBot OneKey",
+    version: snapshot.appVersion,
+  }), [snapshot.appVersion]);
   const adapterPluginId = adapterPluginIdForBackend(snapshot.initState.qqBackend ?? "napcat");
   const adapterName = snapshot.initState.qqBackend === "snowluma" ? "SnowLuma 适配器" : "NapCat 适配器";
   const qqBackend = snapshot.initState.qqBackend ?? "napcat";
@@ -2816,10 +2823,11 @@ export function HomePanel({
             maibotService={maibot}
             onOpenFull={() => onOpenTab("localchat")}
             retro={useRetroHome}
-            disabledReason={useWebuiChatPreview && !webuiPreviewUserId ? "打开一次 WebUI 聊聊后会同步最近对话" : undefined}
-            sessionId={useWebuiChatPreview ? WEBUI_CHAT_SESSION_ID : undefined}
-            userId={useWebuiChatPreview ? webuiPreviewUserId : undefined}
-            userName={useWebuiChatPreview ? webuiPreviewUserName : undefined}
+            client={localChatClient}
+            disabledReason={!webuiPreviewUserId ? "打开一次 WebUI 聊聊后会同步最近对话" : undefined}
+            sessionId={WEBUI_CHAT_SESSION_ID}
+            userId={webuiPreviewUserId}
+            userName={webuiPreviewUserName}
           />
         );
       case "message-platform":
@@ -2917,7 +2925,6 @@ export function HomePanel({
     serviceActionBusy,
     snapshot,
     useRetroHome,
-    useWebuiChatPreview,
     webuiPreviewUserId,
     webuiPreviewUserName,
   ]);

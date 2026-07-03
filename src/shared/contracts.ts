@@ -137,12 +137,10 @@ export interface OpenCodeSettings {
   useBundledPluginInstructions: boolean;
 }
 
-export type LauncherChatPageMode = "webui" | "native";
 export type FloatingMascotMode = "maibot" | "codex-pet";
 export type TopStartActionMode = "ask" | "maibot-only" | "with-qq-backend";
 
 export interface LauncherUiSettings {
-  chatPageMode: LauncherChatPageMode;
   floatingMascotMode: FloatingMascotMode;
   floatingCodexPetId?: string;
   topStartActionMode: TopStartActionMode;
@@ -201,12 +199,19 @@ export interface RuntimePaths {
   logsRoot: string;
 }
 
+export interface LocalChatClientInfo {
+  type?: "webui" | "floating" | "launcher";
+  name?: string;
+  version?: string;
+}
+
 export interface LocalChatSendRequest {
   content: string;
   sessionId?: string;
   userId?: string;
   userName?: string;
   port?: number;
+  client?: LocalChatClientInfo;
   images?: LocalChatImageAttachment[];
   emojis?: LocalChatImageAttachment[];
   files?: LocalChatFileAttachment[];
@@ -218,6 +223,7 @@ export interface LocalChatConnectRequest {
   sessionId?: string;
   userId?: string;
   userName?: string;
+  client?: LocalChatClientInfo;
 }
 
 export interface LocalChatMessageEvent {
