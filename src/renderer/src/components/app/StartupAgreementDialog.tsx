@@ -110,7 +110,7 @@ export function StartupAgreementDialog({
         onPointerDownOutside={(event) => event.preventDefault()}
       >
         <DialogHeader
-          description="首次启动前需要阅读并同意 MaiBot 的协议文件；确认后会在可写 MaiBot 目录写入确认文件。"
+          description="首次启动前需要阅读并同意 MaiBot 的协议文件，下拉以阅读。"
           icon={<BookOpenCheck className="size-4" />}
           title="MaiBot 协议确认"
           tone="primary"
