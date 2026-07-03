@@ -32,7 +32,6 @@ import {
   adapterConfigResetRequestFromError,
   type AdapterConfigResetRequest,
 } from "@/lib/adapter-config-reset";
-import { useShortcut } from "@/lib/use-shortcut";
 
 interface InitializationWizardProps {
   snapshot: DesktopSnapshot;
@@ -245,6 +244,12 @@ export function InitializationWizard({
   const close = useCallback(() => {
     markStartupWizardSeen();
     setSeen(true);
+  }, []);
+  const preventWizardDismiss = useCallback((event: { preventDefault: () => void }) => {
+    event.preventDefault();
+  }, []);
+  const ignoreWizardOpenChange = useCallback((_next: boolean) => {
+    // Startup guidance is advanced only by explicit in-flow actions.
   }, []);
 
   const runMaiCoreStartup = useCallback(
@@ -461,11 +466,6 @@ export function InitializationWizard({
     close();
   }, [close]);
 
-  useShortcut("Escape", close, {
-    enabled: open && !busy,
-    allowInEditable: true,
-  });
-
   if (open && (step === "webui" || step === "localchat" || step === "message-platform")) {
     const floatingTitle =
       step === "webui"
@@ -520,18 +520,13 @@ export function InitializationWizard({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next && !busy) close();
-      }}
-    >
+    <Dialog open={open} onOpenChange={ignoreWizardOpenChange}>
       <DialogContent
-        onPointerDownOutside={(event) => {
-          if (busy) {
-            event.preventDefault();
-          }
-        }}
+        onEscapeKeyDown={preventWizardDismiss}
+        onFocusOutside={preventWizardDismiss}
+        onInteractOutside={preventWizardDismiss}
+        onPointerDownOutside={preventWizardDismiss}
+        showCloseButton={false}
         size="lg"
       >
         <DialogHeader
@@ -695,52 +690,7 @@ export function InitializationWizard({
                 </Button>
               </div>
             </section>
-          ) : step === "webui" ? (
-            <section className="rounded-lg border border-border bg-muted/40 p-4">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                  <TerminalSquare className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">在WebUI继续初始设置</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    已为你打开 MaiBot WebUI。请在 WebUI
-                    中完成基础配置，保存后回到这里继续。
-                  </p>
-                </div>
-              </div>
-            </section>
-          ) : step === "localchat" ? (
-            <section className="rounded-lg border border-border bg-muted/40 p-4">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                  <MessageSquare className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">试试本地聊天</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    已切到“聊聊”。这里可以直接和本机运行中的 MaiBot
-                    对话，用来测试角色、回复风格和插件效果，不需要先连接 QQ。
-                  </p>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <section className="rounded-lg border border-border bg-muted/40 p-4">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                  <Plug className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">连接 QQ 等 IM 平台</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    接下来会回到首页并打开 Message Platform 配置。配置 QQ
-                    号和后端后，MaiBot 就可以通过 QQ 等即时通讯平台收发消息。
-                  </p>
-                </div>
-              </div>
-            </section>
-          )}
+          ) : null}
 
           {error ? (
             <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
@@ -786,37 +736,12 @@ export function InitializationWizard({
           ) : null}
         </DialogBody>
 
-        {step !== "profile" &&
-        (step !== "core" || (error && !busy && !starting)) ? (
+        {step === "core" && error && !busy && !starting ? (
           <DialogFooter>
-            {step === "core" && error && !busy && !starting ? (
-              <Button onClick={retry} size="sm">
-                <RotateCcw />
-                重试
-              </Button>
-            ) : null}
-            {step === "webui" ? (
-              <Button
-                disabled={busy}
-                onClick={() => void finishWebUiConfig()}
-                size="sm"
-              >
-                {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-                我已完成配置
-              </Button>
-            ) : null}
-            {step === "localchat" ? (
-              <Button onClick={finishLocalChatGuide} size="sm">
-                <CheckCircle2 />
-                下一步
-              </Button>
-            ) : null}
-            {step === "message-platform" ? (
-              <Button onClick={finishMessagePlatformGuide} size="sm">
-                <Plug />
-                打开配置
-              </Button>
-            ) : null}
+            <Button onClick={retry} size="sm">
+              <RotateCcw />
+              重试
+            </Button>
           </DialogFooter>
         ) : null}
       </DialogContent>

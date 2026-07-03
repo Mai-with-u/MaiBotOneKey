@@ -22,6 +22,8 @@ const root = process.cwd();
 const pythonBootstrapPackages = new Set([
   "pip",
   "pip.dist-info",
+  "packaging",
+  "packaging.dist-info",
   "setuptools",
   "setuptools.dist-info",
   "wheel",
@@ -84,6 +86,11 @@ const requirements: Requirement[] = [
     label: "portable Python pip package",
     required: true,
     candidates: [dir("runtime/python/Lib/site-packages/pip"), dir("runtime/python/lib/site-packages/pip")],
+  },
+  {
+    label: "portable Python packaging package",
+    required: true,
+    candidates: [dir("runtime/python/Lib/site-packages/packaging"), dir("runtime/python/lib/site-packages/packaging")],
   },
   {
     label: "embedded Git directory",
@@ -401,7 +408,7 @@ async function main(): Promise<void> {
   if (bundledPythonPackages.length > 0 || bundledPythonScripts.length > 0) {
     console.log("");
     console.log("[missing] portable Python should not contain application dependencies.");
-    console.log("Keep runtime/python lean: only Python itself plus pip/setuptools/wheel are allowed.");
+    console.log("Keep runtime/python lean: only Python itself plus pip/setuptools/wheel/packaging are allowed.");
     console.log("Install MaiBot/dashboard dependencies into python-overrides at first run instead.");
     if (bundledPythonPackages.length > 0) {
       console.log(`Unexpected site-packages entries (${bundledPythonPackages.length}):`);
