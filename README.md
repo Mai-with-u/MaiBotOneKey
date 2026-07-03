@@ -73,7 +73,7 @@ modules/
   SnowLuma/
 ```
 
-`runtime/python` 必须保持干净，只允许 Python 自身和 `pip`/`setuptools`/`wheel` 等基础启动包；不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`。`release-assets/python-overrides` 不会进入安装包。
+`runtime/python` 必须保持为便携 Python，只允许 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`；不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`。macOS 包内路径是 `runtime/python/bin/python3`，Windows 包内路径是 `runtime/python/python.exe`。`release-assets/python-overrides` 不会进入安装包。
 
 编写器里的 OpenCode 入口依赖内置 CLI sidecar：打包前需要把 Windows x64 版 `opencode.exe` 放到 `runtime/opencode/opencode.exe`。当前接入按 `opencode-windows-x64` release binary 设计，`runtime/` 已被 `.gitignore` 忽略，所以该二进制不会进入源码提交；`bun run release:check` 会校验它是否存在。
 

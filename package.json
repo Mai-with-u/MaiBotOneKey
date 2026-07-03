@@ -123,6 +123,7 @@
           "!SnowLuma/config/**",
           "!SnowLuma/data/**",
           "!SnowLuma/logs/**",
+          "!napcat/**",
           "!napcat/*.db",
           "!napcat/*.db-*",
           "!napcat/*.log",
@@ -138,9 +139,6 @@
           "!napcat/napcat/logs/**",
           "!napcat/napcat/temp/**",
           "!napcat/napcat/tmp/**",
-          "!napcat/**/*linux*",
-          "!napcat/**/*darwin*",
-          "!napcat/**/*arm64*",
           "!napcat/versions/**/resources/app/napcat/cache/**",
           "!napcat/versions/**/resources/app/napcat/config/**",
           "!napcat/versions/**/resources/app/napcat/data/**",
@@ -196,10 +194,94 @@
       "target": "nsis",
       "icon": "resources/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "modules/napcat",
+          "to": "modules/napcat",
+          "filter": [
+            "**/*",
+            "!**/.git/**",
+            "!**/__pycache__/**",
+            "!**/*.pyc",
+            "!**/*linux*",
+            "!**/*darwin*",
+            "!**/*arm64*",
+            "!*.db",
+            "!*.db-*",
+            "!*.log",
+            "!config/**",
+            "!cache/**",
+            "!data/**",
+            "!logs/**",
+            "!temp/**",
+            "!tmp/**",
+            "!napcat/config/**",
+            "!napcat/cache/**",
+            "!napcat/data/**",
+            "!napcat/logs/**",
+            "!napcat/temp/**",
+            "!napcat/tmp/**",
+            "!versions/**/resources/app/napcat/cache/**",
+            "!versions/**/resources/app/napcat/config/**",
+            "!versions/**/resources/app/napcat/data/**",
+            "!versions/**/resources/app/napcat/logs/**",
+            "!versions/**/resources/app/napcat/temp/**",
+            "!versions/**/resources/app/napcat/tmp/**"
+          ]
+        }
+      ]
     },
     "mac": {
-      "icon": "resources/icon.icns"
+      "icon": "resources/icon.icns",
+      "extraResources": [
+        {
+          "from": "modules/napcat",
+          "to": "modules/napcat",
+          "filter": [
+            "**/*",
+            "!**/.git/**",
+            "!**/__pycache__/**",
+            "!**/*.pyc",
+            "!**/*linux*",
+            "!**/*win32*",
+            "!**/*.bat",
+            "!**/*.dll",
+            "!**/*.exe",
+            "!native/dpapi/**",
+            "!native/pty/**",
+            "!*.db",
+            "!*.db-*",
+            "!*.log",
+            "!config/**",
+            "!cache/**",
+            "!data/**",
+            "!logs/**",
+            "!temp/**",
+            "!tmp/**",
+            "!napcat/config/**",
+            "!napcat/cache/**",
+            "!napcat/data/**",
+            "!napcat/logs/**",
+            "!napcat/temp/**",
+            "!napcat/tmp/**",
+            "!versions/**/resources/app/napcat/cache/**",
+            "!versions/**/resources/app/napcat/config/**",
+            "!versions/**/resources/app/napcat/data/**",
+            "!versions/**/resources/app/napcat/logs/**",
+            "!versions/**/resources/app/napcat/temp/**",
+            "!versions/**/resources/app/napcat/tmp/**"
+          ]
+        },
+        {
+          "from": "resources/napcat/napcat-macos-launch.sh",
+          "to": "modules/napcat/napcat-macos-launch.sh"
+        },
+        {
+          "from": "resources/napcat/napcat.json",
+          "to": "modules/napcat/config/napcat.json"
+        }
+      ]
     },
     "linux": {
       "icon": "resources/icon.png"

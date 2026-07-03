@@ -1,7 +1,7 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   ManagedPythonPackage,
   ManagedSourceEntry,
@@ -152,6 +152,16 @@ function normalizeProjectName(name: string): string {
 
 function packageImportName(name: string): string {
   return normalizeProjectName(name).replace(/-/gu, "_");
+}
+
+function isInsidePath(root: string, path: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path));
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function isSameOrChildPath(parent: string, child: string): boolean {
+  const relativePath = relative(resolve(parent), resolve(child));
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 function packageNameFromRequirement(requirement: string): string | undefined {
@@ -761,6 +771,7 @@ export class PythonDependencyManager {
     }
 
     const replacedEntries = new Set<string>();
+    const replacedPaths = new Set<string>();
     for (const requirement of requirements) {
       const packageName = packageNameFromRequirement(requirement);
       if (!packageName) {
@@ -768,6 +779,9 @@ export class PythonDependencyManager {
       }
       for (const entry of await this.overlayPackageEntries(packageName, activeRoot)) {
         replacedEntries.add(entry);
+        for (const path of await this.installedRecordPaths(activeRoot, entry)) {
+          replacedPaths.add(resolve(path));
+        }
       }
     }
 
@@ -787,6 +801,7 @@ export class PythonDependencyManager {
           recursive: true,
           force: true,
           errorOnExist: false,
+          filter: (source) => !this.isReplacedRecordPath(source, replacedPaths),
         })),
     );
   }
@@ -833,6 +848,15 @@ export class PythonDependencyManager {
     }
   }
 
+  private isReplacedRecordPath(source: string, replacedPaths: Set<string>): boolean {
+    for (const path of replacedPaths) {
+      if (isSameOrChildPath(path, source)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private async activateGeneration(generationDir: string): Promise<void> {
     const root = this.getOverridesRoot();
     const generationName = generationDir.split(/[\\/]/u).pop();
@@ -869,20 +893,83 @@ export class PythonDependencyManager {
       } catch {
         continue;
       }
-      const missing = record
-        .replace(/\r\n/gu, "\n")
-        .replace(/\r/gu, "\n")
-        .split("\n")
-        .map((line) => line.split(",", 1)[0]?.trim())
-        .filter((file): file is string => Boolean(file))
-        .filter((file) => !existsSync(join(root, ...file.split("/"))))
-        .slice(0, 3);
+      const missing: string[] = [];
+      for (const file of this.recordFileNames(record)) {
+        const candidates = this.recordPathCandidates(root, file);
+        if (candidates.length > 0 && !candidates.some((candidate) => existsSync(candidate))) {
+          missing.push(file);
+        }
+        if (missing.length >= 3) {
+          break;
+        }
+      }
       if (missing.length > 0) {
         corrupt.push(`${entry.name}: RECORD references missing file(s): ${missing.join(", ")}`);
       }
     }
 
     return corrupt;
+  }
+
+  private async installedRecordPaths(root: string, metadataEntry: string): Promise<string[]> {
+    if (!/(?:\.dist-info|\.egg-info)$/iu.test(metadataEntry)) {
+      return [];
+    }
+
+    let record;
+    try {
+      record = await readFile(join(root, metadataEntry, "RECORD"), "utf8");
+    } catch {
+      return [];
+    }
+
+    const paths: string[] = [];
+    for (const file of this.recordFileNames(record)) {
+      for (const candidate of this.recordPathCandidates(root, file)) {
+        if (existsSync(candidate)) {
+          paths.push(candidate);
+          break;
+        }
+      }
+    }
+    return paths;
+  }
+
+  private recordFileNames(record: string): string[] {
+    return record
+      .replace(/\r\n/gu, "\n")
+      .replace(/\r/gu, "\n")
+      .split("\n")
+      .map((line) => line.split(",", 1)[0]?.trim())
+      .filter((file): file is string => Boolean(file));
+  }
+
+  private recordPathCandidates(root: string, file: string): string[] {
+    if (isAbsolute(file)) {
+      return [];
+    }
+
+    const parts = file.split("/").filter(Boolean);
+    const candidates: string[] = [];
+    if (file.startsWith("../")) {
+      const stripped = file.replace(/^(?:\.\.\/)+/u, "");
+      if (stripped && stripped !== file) {
+        candidates.push(resolve(root, ...stripped.split("/").filter(Boolean)));
+      }
+    }
+    candidates.push(resolve(root, ...parts));
+
+    const seen = new Set<string>();
+    return candidates
+      .filter((candidate) => isInsidePath(root, candidate))
+      .filter((candidate) => {
+        const normalized = resolve(candidate);
+        if (seen.has(normalized)) {
+          return false;
+        }
+        seen.add(normalized);
+        return true;
+      });
   }
 
   private async overlayPackageEntries(packageName: string, targetDir = this.getOverridesRoot()): Promise<string[]> {

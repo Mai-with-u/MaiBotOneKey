@@ -34,7 +34,6 @@ import type {
   QqBackend,
   RuntimePaths,
   RuntimePathKey,
-  PythonRuntimeCandidate,
   ServiceId,
   SnowLumaResetResult,
   StartupAgreementConfirmResult,
@@ -48,7 +47,7 @@ const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
 const GIT_RUNTIME_DIR = "git";
 const PYTHON_MINIMUM_VERSION = "3.12";
-const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/windows/";
+const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
 const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
@@ -128,25 +127,6 @@ function readRuntimePathOverride(paths: RuntimePaths, key: RuntimePathKey): stri
   } catch {
     return undefined;
   }
-}
-
-function uniquePythonCandidates(candidates: PythonRuntimeCandidate[]): PythonRuntimeCandidate[] {
-  const seen = new Set<string>();
-  const unique: PythonRuntimeCandidate[] = [];
-
-  for (const candidate of candidates) {
-    if (isWindowsAppsPythonAlias(candidate.path)) {
-      continue;
-    }
-    const normalized = normalizePathForCompare(candidate.path);
-    if (seen.has(normalized) || !existsSync(candidate.path)) {
-      continue;
-    }
-    seen.add(normalized);
-    unique.push(candidate);
-  }
-
-  return unique;
 }
 
 function normalizePathForCompare(path: string): string {
@@ -737,10 +717,6 @@ function isWindowsAppsAlias(path: string): boolean {
   return process.platform === "win32" && /\\microsoft\\windowsapps\\git\.exe$/iu.test(path);
 }
 
-function isWindowsAppsPythonAlias(path: string): boolean {
-  return process.platform === "win32" && /\\microsoft\\windowsapps\\python(?:3)?\.exe$/iu.test(path);
-}
-
 function pathGitCandidates(): string[] {
   const names = process.platform === "win32" ? ["git.exe"] : ["git"];
   const pathEntries = (process.env.PATH ?? "")
@@ -759,73 +735,6 @@ function pathGitCandidates(): string[] {
   }
 
   return candidates;
-}
-
-function pathPythonCandidates(): string[] {
-  const names = process.platform === "win32" ? ["python.exe", "python3.exe"] : ["python3", "python"];
-  const pathEntries = (process.env.PATH ?? "")
-    .split(delimiter)
-    .map(cleanPathEntry)
-    .filter(Boolean);
-  const candidates: string[] = [];
-
-  for (const entry of pathEntries) {
-    for (const name of names) {
-      const candidate = join(entry, name);
-      if (!isWindowsAppsPythonAlias(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-  }
-
-  return candidates;
-}
-
-function childPythonCandidates(root: string | undefined): string[] {
-  if (!root || !existsSync(root)) {
-    return [];
-  }
-
-  try {
-    return readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => join(root, entry.name, process.platform === "win32" ? "python.exe" : "bin/python3"))
-      .filter((candidate) => existsSync(candidate))
-      .sort((left, right) => right.localeCompare(left, "en-US", { numeric: true, sensitivity: "base" }));
-  } catch {
-    return [];
-  }
-}
-
-function childPythonCandidateDetails(root: string | undefined, source: string): PythonRuntimeCandidate[] {
-  return childPythonCandidates(root).map((path) => ({ path, source }));
-}
-
-function systemPythonCandidates(): string[] {
-  return systemPythonCandidateDetails().map((candidate) => candidate.path);
-}
-
-function systemPythonCandidateDetails(): PythonRuntimeCandidate[] {
-  if (process.platform !== "win32") {
-    return uniquePythonCandidates([
-      ...pathPythonCandidates().map((path) => ({ path, source: "PATH" })),
-      { path: "/usr/bin/python3", source: "/usr/bin" },
-      { path: "/usr/local/bin/python3", source: "/usr/local/bin" },
-      { path: "/opt/homebrew/bin/python3", source: "Homebrew" },
-    ]);
-  }
-
-  const candidates: PythonRuntimeCandidate[] = [];
-  if (process.env.LOCALAPPDATA) {
-    candidates.push(...childPythonCandidateDetails(join(process.env.LOCALAPPDATA, "Programs", "Python"), "用户 Python"));
-  }
-  candidates.push(...childPythonCandidateDetails(process.env.ProgramFiles, "Program Files"));
-  candidates.push(...childPythonCandidateDetails(process.env["ProgramFiles(x86)"], "Program Files (x86)"));
-  if (process.env.USERPROFILE) {
-    candidates.push(...childPythonCandidateDetails(join(process.env.USERPROFILE, ".pyenv", "pyenv-win", "versions"), "pyenv-win"));
-  }
-  candidates.push(...pathPythonCandidates().map((path) => ({ path, source: "PATH" })));
-  return uniquePythonCandidates(candidates);
 }
 
 function systemGitCandidates(): string[] {
@@ -1357,18 +1266,6 @@ function normalizeQqComponentUpgradeError(componentName: string, error: unknown)
     : "";
   const detail = errorPath ? `被占用路径: ${errorPath}` : toDetail(error);
   return new Error(`${componentName} 文件被占用，请关闭残留进程后重试。${detail}`);
-}
-
-function parsePyLauncherPaths(output: string): PythonRuntimeCandidate[] {
-  return output
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .map((line) => {
-      const match = line.match(/(?:-\d+(?:\.\d+)?(?:-\d+)?\s+\*?\s*)?(.+?python(?:3)?\.exe)$/iu);
-      return match?.[1]?.trim();
-    })
-    .filter((path): path is string => Boolean(path))
-    .map((path) => ({ path, source: "py launcher" }));
 }
 
 function createWebsocketToken(): string {
@@ -3194,26 +3091,7 @@ export class InitManager {
   }
 
   getPythonPath(): string {
-    const bundledPython = this.getBundledPythonPath();
-    if (bundledPython) {
-      return bundledPython;
-    }
-
-    return this.findSystemPythonPath() ?? this.getBundledPythonCandidates()[0];
-  }
-
-  async listSystemPythonRuntimeCandidates(): Promise<PythonRuntimeCandidate[]> {
-    const candidates = systemPythonCandidateDetails();
-    if (process.platform !== "win32") {
-      return candidates;
-    }
-
-    try {
-      const output = await runProcess("py", ["-0p"], this.paths.installRoot, 3_000);
-      return uniquePythonCandidates([...parsePyLauncherPaths(output), ...candidates]);
-    } catch {
-      return candidates;
-    }
+    return this.getBundledPythonPath() ?? this.getBundledPythonCandidates()[0];
   }
 
   getGitPath(): string {
@@ -3253,10 +3131,6 @@ export class InitManager {
     return uniqueExistingPaths(this.getBundledPythonCandidates())[0];
   }
 
-  private findSystemPythonPath(): string | undefined {
-    return uniqueExistingPaths(systemPythonCandidates())[0];
-  }
-
   private getGitRoot(): string {
     return join(this.paths.runtimeRoot, GIT_RUNTIME_DIR);
   }
@@ -3294,7 +3168,7 @@ export class InitManager {
       id: "runtime",
       label: "内置 runtime",
       status: "warning",
-      detail: "未找到内置 runtime，将使用系统 Python 与 Git",
+      detail: "未找到内置 runtime，Python 不会回退到系统环境",
       path: this.paths.runtimeRoot,
     };
   }
@@ -3311,22 +3185,11 @@ export class InitManager {
       };
     }
 
-    const systemPython = this.findSystemPythonPath();
-    if (systemPython) {
-      return {
-        id: "python-runtime",
-        label: "Python 运行时",
-        status: "ok",
-        detail: `使用系统 Python，后台检查版本是否 >= ${PYTHON_MINIMUM_VERSION}`,
-        path: systemPython,
-      };
-    }
-
     return {
       id: "python-runtime",
       label: "Python 运行时",
       status: "error",
-      detail: `未找到内置 Python 或系统 Python ${PYTHON_MINIMUM_VERSION}+`,
+      detail: `未找到内置 Python ${PYTHON_MINIMUM_VERSION}+，请检查安装包 runtime/python`,
       path: this.getBundledPythonCandidates()[0],
       actionLabel: "下载 Python",
       actionUrl: PYTHON_DOWNLOAD_URL,
@@ -3834,14 +3697,12 @@ export class InitManager {
 
     const checks: InitCheck[] = [];
     const python = this.getPythonPath();
-    const bundledPython = this.getBundledPythonPath();
-    const pythonSource = bundledPython && samePath(bundledPython, python) ? "内置 Python" : "系统 Python";
     if (!existsSync(python)) {
       checks.push({
         id: "python-dependencies",
         label: "Python 依赖完整性",
         status: "error",
-        detail: `未找到内置 Python 或系统 Python ${PYTHON_MINIMUM_VERSION}+，无法检查依赖`,
+        detail: `未找到内置 Python ${PYTHON_MINIMUM_VERSION}+，无法检查依赖`,
         path: python,
         actionLabel: "下载 Python",
         actionUrl: PYTHON_DOWNLOAD_URL,
@@ -3866,7 +3727,7 @@ export class InitManager {
           id: "python-runtime-smoke",
           label: "Python 标准库",
           status: "ok",
-          detail: output ? `${output} (${pythonSource})` : `${pythonSource} 可启动，ssl/sqlite3/tomllib 可导入`,
+          detail: output ? `${output} (内置 Python)` : "内置 Python 可启动，ssl/sqlite3/tomllib 可导入",
           path: python,
         });
       } catch (error) {

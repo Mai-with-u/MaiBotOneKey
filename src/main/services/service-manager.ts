@@ -1107,9 +1107,11 @@ export class ServiceManager extends EventEmitter {
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
     const napcatNode = join(napcatRoot, "node.exe");
     const napcatNodeEntry = join(napcatRoot, "index.js");
+    const napcatMacLauncher = join(napcatRoot, "napcat-macos-launch.sh");
     const napcatLauncherName = "napcat-launch.cmd";
     const napcatLauncherPath = join(napcatRoot, napcatLauncherName);
     const cmdShell = process.env.ComSpec || "cmd.exe";
+    const defaultMacQqExecutable = "/Applications/QQ.app/Contents/MacOS/QQ";
 
     return [
       {
@@ -1135,7 +1137,12 @@ export class ServiceManager extends EventEmitter {
         ports: qqBackend === "snowluma" ? [5099, 7988] : [6099],
         url: qqBackend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui",
         cwd: qqBackend === "snowluma" ? snowlumaRoot : napcatRoot,
-        defaultRequiredPaths: qqBackend === "snowluma" ? [snowlumaRoot, snowlumaEntry] : [napcatRoot],
+        defaultRequiredPaths: qqBackend === "snowluma"
+          ? [snowlumaRoot, snowlumaEntry]
+          : [
+              napcatRoot,
+              ...(process.platform === "darwin" ? [napcatMacLauncher, defaultMacQqExecutable] : []),
+            ],
         conflictPorts: qqBackend === "snowluma" ? [5099, 7988] : [6099],
         readyPorts: qqBackend === "snowluma" ? [5099] : [6099],
         displayDefaultCommandLine: async () => {
@@ -1143,6 +1150,9 @@ export class ServiceManager extends EventEmitter {
             return existsSync(snowlumaNode)
               ? `${quoteCommandPart(snowlumaNode)} index.mjs`
               : "node index.mjs";
+          }
+          if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
+            return `/bin/bash ${quoteCommandPart(napcatMacLauncher)} -q <QQ>`;
           }
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
             return `${quoteCommandPart(napcatNode)} index.js -q <QQ>`;
@@ -1155,6 +1165,9 @@ export class ServiceManager extends EventEmitter {
           }
           const qq = await this.initManager.readQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
+          if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
+            return qq ? ["/bin/bash", napcatMacLauncher, "-q", qq] : ["/bin/bash", napcatMacLauncher];
+          }
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
             return qq ? [napcatNode, napcatNodeEntry, "-q", qq] : [napcatNode, napcatNodeEntry];
           }
@@ -1176,6 +1189,9 @@ export class ServiceManager extends EventEmitter {
               : "node index.mjs";
           }
           await this.initManager.ensureNapCatWebUiConfig();
+          if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
+            return this.applyServicePlaceholders("napcat", `/bin/bash ${quoteCommandPart(napcatMacLauncher)} -q <QQ>`);
+          }
           if (existsSync(napcatNode) && existsSync(napcatNodeEntry)) {
             return this.applyServicePlaceholders("napcat", `${quoteCommandPart(napcatNode)} index.js -q <QQ>`);
           }

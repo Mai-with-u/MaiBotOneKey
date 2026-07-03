@@ -1,6 +1,6 @@
 # Release Engineering
 
-本文档记录桌面版发布流程。当前目标平台是 Windows x64，安装器使用 `electron-builder` 的 NSIS target。
+本文档记录桌面版发布流程。Windows x64 使用 `electron-builder` 的 NSIS target；macOS 使用 `dmg` target。
 
 ## 本地发布
 
@@ -13,21 +13,21 @@
 2. 准备 release payload。仓库根目录必须存在：
 
    ```text
-   runtime/python/python.exe
-   runtime/python/DLLs/
-   runtime/python/Lib/
-   runtime/python/Scripts/pip.exe
+   runtime/python/python.exe 或 runtime/python/bin/python3
+   runtime/python/DLLs/ 或 runtime/python/lib/
+   runtime/python/Lib/ 或 runtime/python/lib/python3.12/
+   runtime/python/Scripts/pip.exe 或 runtime/python/bin/pip
    runtime/git/bin/git.exe
    runtime/opencode/opencode.exe
    resources/opencode/plugin_code.md
    modules/MaiBot/bot.py
    modules/MaiBot/plugins/napcat-adapter/
    modules/MaiBot/plugins/snowluma-adapter/
-   modules/napcat/NapCatWinBootMain.exe
+   modules/napcat/NapCatWinBootMain.exe 或 modules/napcat/napcat-macos-launch.sh
    modules/SnowLuma/index.mjs
    ```
 
-   `runtime/python` 必须保持为基础 Python，只保留 Python 自身和 `pip`/`setuptools`/`wheel` 等启动包。不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`；`release-assets/python-overrides` 不会进入安装包。
+   `runtime/python` 必须保持为便携 Python，只保留 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`。不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages` 或 `runtime/python/lib/python3.12/site-packages`；`release-assets/python-overrides` 不会进入安装包。
 
    `resources/opencode/plugin_code.md` 会在打包时复制到安装包资源目录的 `runtime/opencode/plugin_code.md`，用于编写器内置 OpenCode 的默认插件编写说明。
 

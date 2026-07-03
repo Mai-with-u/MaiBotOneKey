@@ -100,11 +100,6 @@ export interface RuntimePathUpdate {
   value: string;
 }
 
-export interface PythonRuntimeCandidate {
-  path: string;
-  source: string;
-}
-
 export type RuntimeResourcePathKey = "maibot" | "napcat" | "pythonOverrides";
 
 export interface RuntimeResourcePathConfig {
