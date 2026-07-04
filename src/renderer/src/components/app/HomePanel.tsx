@@ -2221,6 +2221,7 @@ export function HomePanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
+  const [launcherQuitPromptOpen, setLauncherQuitPromptOpen] = useState(false);
   const [maibotUpdateInfo, setMaibotUpdateInfo] = useState<MaiBotUpdateInfo | null>(null);
   const [maibotUpdateInfoLoading, setMaibotUpdateInfoLoading] = useState(false);
   const [maibotUpdateInfoError, setMaibotUpdateInfoError] = useState<string | null>(null);
@@ -2669,12 +2670,37 @@ export function HomePanel({
     try {
       const result = await window.maibotDesktop.launcher.downloadAndInstallUpdate();
       setLauncherUpdateInfo(result.update);
-      toast.success(result.willQuit ? "安装器已启动，启动器即将退出" : "安装器已启动");
+      if (result.willQuit) {
+        toast.success("安装包已打开，启动器即将退出");
+        return;
+      }
+      setBusy(null);
+      if (snapshot.platform === "darwin") {
+        setUpdateDialog(null);
+        setLauncherQuitPromptOpen(true);
+      } else {
+        toast.success("安装包已打开");
+      }
     } catch (nextError) {
       setError(messageFromError(nextError));
       setBusy(null);
     }
-  }, [launcherUpdateBlocked]);
+  }, [launcherUpdateBlocked, snapshot.platform]);
+
+  const quitAfterLauncherUpdate = useCallback(async () => {
+    if (!window.maibotDesktop?.launcher) {
+      setError("桌面桥未就绪，无法退出启动器");
+      return;
+    }
+    setBusy("launcher:quit");
+    setError(null);
+    try {
+      await window.maibotDesktop.launcher.quit();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+      setBusy(null);
+    }
+  }, []);
 
   const openMessagePlatformDialog = useCallback(() => {
     setError(null);
@@ -3589,7 +3615,7 @@ export function HomePanel({
       >
         <DialogContent onInteractOutside={(event) => event.preventDefault()} size="lg">
           <DialogHeader
-            description="检查 MaiBot OneKey 的最新安装包，并在确认后启动安装器。"
+            description="检查 MaiBot OneKey 的最新安装包，并在确认后下载打开。"
             icon={<PackageCheck className="size-4" />}
             title="更新一键包"
             tone="primary"
@@ -3642,7 +3668,49 @@ export function HomePanel({
               size="sm"
             >
               {busy === "launcher:update" ? <Loader2 className="animate-spin" /> : <Download />}
-              下载并安装
+              下载并打开
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={launcherQuitPromptOpen}
+        onOpenChange={(next) => {
+          if (busy !== "launcher:quit") setLauncherQuitPromptOpen(next);
+        }}
+      >
+        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="sm">
+          <DialogHeader
+            description="请关闭当前启动器并拖拽替换。安装完成后再重新打开 MaiBot OneKey。"
+            icon={<PackageCheck className="size-4" />}
+            title="安装包已打开"
+            tone="primary"
+          />
+          <DialogBody className="space-y-3 text-sm text-muted-foreground">
+            {error ? (
+              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
+                {error}
+              </div>
+            ) : null}
+            <p>请在打开的 DMG 窗口中，把新版应用拖拽替换到 Applications。</p>
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              disabled={busy === "launcher:quit"}
+              onClick={() => setLauncherQuitPromptOpen(false)}
+              size="sm"
+              variant="ghost"
+            >
+              稍后退出
+            </Button>
+            <Button
+              disabled={busy === "launcher:quit"}
+              onClick={() => void quitAfterLauncherUpdate()}
+              size="sm"
+            >
+              {busy === "launcher:quit" ? <Loader2 className="animate-spin" /> : <X />}
+              退出启动器
             </Button>
           </DialogFooter>
         </DialogContent>

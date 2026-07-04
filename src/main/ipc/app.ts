@@ -751,40 +751,145 @@ function versionAsTag(version: string | undefined): string | undefined {
   return /^v/iu.test(trimmed) ? trimmed : `v${trimmed}`;
 }
 
-function sanitizeDownloadFileName(value: string): string {
+function launcherUpdatePackageLabel(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "darwin") {
+    return "macOS DMG 安装包";
+  }
+  if (platform === "win32") {
+    return "Windows 安装包";
+  }
+  return "当前平台安装包";
+}
+
+function launcherUpdateDefaultFileName(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "darwin") {
+    return "MaiBot-OneKey-update.dmg";
+  }
+  if (platform === "win32") {
+    return "MaiBot-OneKey-update.exe";
+  }
+  return "MaiBot-OneKey-update";
+}
+
+function launcherAssetArchNames(arch: string): string[] {
+  if (arch === "arm64") {
+    return ["arm64", "aarch64"];
+  }
+  if (arch === "x64") {
+    return ["x64", "x86_64", "amd64"];
+  }
+  return [arch.toLowerCase()];
+}
+
+function scoreLauncherUpdateAsset(
+  asset: GitHubReleaseAsset,
+  platformNames: string[],
+  arch: string,
+): number {
+  const name = String(asset.name ?? "").toLowerCase();
+  const archNames = launcherAssetArchNames(arch);
+  let score = 0;
+  if (platformNames.some((platformName) => name.includes(platformName))) {
+    score += 20;
+  }
+  if (archNames.some((archName) => name.includes(archName))) {
+    score += 10;
+  }
+  if (name.includes("universal")) {
+    score += 5;
+  }
+  return score;
+}
+
+function selectBestLauncherUpdateAsset(
+  assets: GitHubReleaseAsset[],
+  platformNames: string[],
+  arch: string,
+): GitHubReleaseAsset | undefined {
+  return assets
+    .map((asset, index) => ({
+      asset,
+      index,
+      score: scoreLauncherUpdateAsset(asset, platformNames, arch),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.index - right.index;
+    })[0]?.asset;
+}
+
+function sanitizeDownloadFileName(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const sanitized = basename(value)
     .replace(/[<>:"/\\|?*\u0000-\u001F]/gu, "-")
     .replace(/\s+/gu, " ")
     .trim()
     .replace(/[. ]+$/u, "");
-  return sanitized || "MaiBot-OneKey-update.exe";
+  return sanitized || launcherUpdateDefaultFileName(platform);
 }
 
 function selectLauncherUpdateAsset(
   rawAssets: unknown,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
 ): GitHubReleaseAsset | undefined {
   const assets = Array.isArray(rawAssets)
     ? rawAssets.filter((item): item is GitHubReleaseAsset => {
         return Boolean(item && typeof item === "object");
       })
     : [];
-  const executableAssets = assets.filter((asset) => {
+  const downloadableAssets = assets.filter((asset) => {
     const name = typeof asset.name === "string" ? asset.name.toLowerCase() : "";
     const url =
       typeof asset.browser_download_url === "string"
         ? asset.browser_download_url
         : "";
+    return Boolean(name && url);
+  });
+
+  if (platform === "darwin") {
+    const dmgAssets = downloadableAssets.filter((asset) => {
+      const name =
+        typeof asset.name === "string" ? asset.name.toLowerCase() : "";
+      return name.endsWith(".dmg");
+    });
+    return selectBestLauncherUpdateAsset(
+      dmgAssets,
+      ["mac", "darwin", "osx"],
+      arch,
+    );
+  }
+
+  if (platform === "win32") {
+    const executableAssets = downloadableAssets.filter((asset) => {
+      const name =
+        typeof asset.name === "string" ? asset.name.toLowerCase() : "";
+      return name.endsWith(".exe") && !name.includes("uninstaller");
+    });
+    return selectBestLauncherUpdateAsset(
+      executableAssets,
+      ["win", "windows"],
+      arch,
+    );
+  }
+
+  const linuxAssets = downloadableAssets.filter((asset) => {
+    const name = typeof asset.name === "string" ? asset.name.toLowerCase() : "";
     return (
-      name.endsWith(".exe") && !name.includes("uninstaller") && Boolean(url)
+      name.endsWith(".appimage") ||
+      name.endsWith(".deb") ||
+      name.endsWith(".rpm")
     );
   });
-  return (
-    executableAssets.find((asset) =>
-      String(asset.name ?? "")
-        .toLowerCase()
-        .includes("win"),
-    ) ?? executableAssets[0]
-  );
+  return selectBestLauncherUpdateAsset(linuxAssets, ["linux"], arch);
 }
 
 async function fetchLauncherReleaseNotesInRange(
@@ -1156,7 +1261,7 @@ async function downloadLauncherUpdate(
   onProgress?: LauncherUpdateDownloadProgressCallback,
 ): Promise<LauncherUpdateDownloadResult> {
   if (!update.downloadUrl || !update.assetName) {
-    throw new Error("最新版本没有可下载的 Windows 安装包");
+    throw new Error(`最新版本没有可下载的${launcherUpdatePackageLabel()}`);
   }
 
   const controller = new AbortController();
@@ -3241,12 +3346,21 @@ export function registerAppIpc({
       );
       await assertLauncherUpdateAllowed(serviceManager);
       const installerPath = download.installerPath;
-      const child = spawn(installerPath, [], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: false,
-      });
-      child.unref();
+      let willQuit = false;
+      if (process.platform === "win32") {
+        const child = spawn(installerPath, [], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: false,
+        });
+        child.unref();
+        willQuit = true;
+      } else {
+        const openError = await shell.openPath(installerPath);
+        if (openError) {
+          throw new Error(`安装包打开失败：${openError}`);
+        }
+      }
       sendProgress({
         phase: "completed",
         assetName: update.assetName,
@@ -3257,17 +3371,23 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        `启动器更新安装器已启动: ${installerPath}`,
+        `启动器更新安装包已打开: ${installerPath}`,
       );
-      setTimeout(() => requestQuit(), 800);
+      if (willQuit) {
+        setTimeout(() => requestQuit(), 800);
+      }
       return {
         update: publicLauncherUpdateInfo(update),
         installerPath,
         started: true,
-        willQuit: true,
+        willQuit,
       };
     },
   );
+
+  ipcMain.handle("launcher:quit", (): void => {
+    requestQuit();
+  });
 
   ipcMain.handle(
     "plugins:listMarket",
