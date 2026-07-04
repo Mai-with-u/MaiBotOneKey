@@ -1442,6 +1442,7 @@ export interface DesktopBridge {
     selectAppIcon: (iconId: AppIconId) => Promise<AppIconSettings>;
     checkUpdate: () => Promise<LauncherUpdateInfo>;
     downloadAndInstallUpdate: () => Promise<LauncherUpdateApplyResult>;
+    quit: () => Promise<void>;
     onDownloadProgress: (callback: (progress: LauncherUpdateDownloadProgress) => void) => () => void;
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;

@@ -233,6 +233,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("launcher:checkUpdate") as Promise<LauncherUpdateInfo>,
     downloadAndInstallUpdate: () =>
       ipcRenderer.invoke("launcher:downloadAndInstallUpdate") as Promise<LauncherUpdateApplyResult>,
+    quit: () =>
+      ipcRenderer.invoke("launcher:quit") as Promise<void>,
     onDownloadProgress: (callback: (progress: LauncherUpdateDownloadProgress) => void) =>
       onIpc("launcher:update-download-progress", callback),
     resetSettings: () =>
