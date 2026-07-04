@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream, createWriteStream, existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { createGunzip, createGzip } from "node:zlib";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -69,6 +70,12 @@ interface StoredRuntimePathFile {
   version: 1;
   paths?: Partial<Record<RuntimePathKey, string>>;
 }
+
+interface MacNapCatQqCleanupResult {
+  restoredPackage: boolean;
+  cleanedRuntime: boolean;
+}
+
 const SNOWLUMA_COMPONENT_PROTECTED_PATHS = ["config", "data", "logs"];
 const NAPCAT_VERSION_CONFIG_PATTERN = /^versions\/[^/]+\/resources\/app\/napcat\/config(?:\/|$)/iu;
 const COMPONENT_DATA_FILE_PATTERN = /(?:\.db|\.sqlite|\.sqlite3)(?:-(?:shm|wal))?$/iu;
@@ -119,6 +126,22 @@ function uniqueExistingPaths(paths: string[]): string[] {
   return existing;
 }
 
+function uniquePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const path of paths) {
+    const normalized = process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    unique.push(path);
+  }
+
+  return unique;
+}
+
 function readRuntimePathOverride(paths: RuntimePaths, key: RuntimePathKey): string | undefined {
   try {
     const raw = JSON.parse(readFileSync(join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE), "utf8")) as StoredRuntimePathFile;
@@ -144,6 +167,10 @@ function sameOrInsidePath(parent: string, child: string): boolean {
   }
   const diff = relative(resolve(parent), resolve(child));
   return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`);
+}
+
+function quoteShellArg(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 interface StorageStatSummary {
@@ -2771,12 +2798,20 @@ export class InitManager {
       });
     }
 
-    const changedFiles = await this.ensureBundledModuleSubtree("napcat", [
-      "node.exe",
-      "index.js",
-      "config.json",
-      join("napcat", "package.json"),
-    ], {
+    const napcatRequiredPaths = process.platform === "darwin"
+      ? [
+          "napcat.mjs",
+          "napcat-macos-launch.sh",
+          join("node_modules", "express", "package.json"),
+          join("node_modules", "ws", "package.json"),
+        ]
+      : [
+          "node.exe",
+          "index.js",
+          "config.json",
+          join("napcat", "package.json"),
+        ];
+    const changedFiles = await this.ensureBundledModuleSubtree("napcat", napcatRequiredPaths, {
       excludeRelativePaths: [
         "config",
         "data",
@@ -3319,9 +3354,98 @@ export class InitManager {
     return join(this.paths.modulesRoot, moduleName);
   }
 
+  async cleanupMacNapCatQqIntegration(): Promise<MacNapCatQqCleanupResult> {
+    const result: MacNapCatQqCleanupResult = {
+      restoredPackage: false,
+      cleanedRuntime: false,
+    };
+    if (process.platform !== "darwin") {
+      return result;
+    }
+
+    const qqApp = process.env.NAPCAT_QQ_APP?.trim() || "/Applications/QQ.app";
+    const qqPackage = join(qqApp, "Contents", "Resources", "app", "package.json");
+    const packageBackup = `${qqPackage}.maibot-onekey.bak`;
+    if (existsSync(qqPackage) && existsSync(packageBackup)) {
+      const currentRaw = await readFile(qqPackage, "utf8");
+      let currentMain: unknown;
+      try {
+        currentMain = (JSON.parse(currentRaw) as { main?: unknown }).main;
+      } catch {
+        currentMain = undefined;
+      }
+
+      if (typeof currentMain === "string" && currentMain.includes("loadNapCat.js")) {
+        try {
+          await copyFile(packageBackup, qqPackage);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EACCES" && code !== "EPERM") {
+            throw error;
+          }
+
+          const command = `cp ${quoteShellArg(packageBackup)} ${quoteShellArg(qqPackage)}`;
+          await runProcess(
+            "/usr/bin/osascript",
+            ["-e", `do shell script ${JSON.stringify(command)} with administrator privileges`],
+            dirname(qqPackage),
+            120_000,
+          );
+        }
+        result.restoredPackage = true;
+      }
+    }
+
+    const qqContainer = process.env.NAPCAT_QQ_CONTAINER?.trim()
+      ? resolve(process.env.NAPCAT_QQ_CONTAINER.trim())
+      : join(homedir(), "Library", "Containers", "com.tencent.qq", "Data");
+    const qqDocuments = join(qqContainer, "Documents");
+    const loaderPath = join(qqDocuments, "loadNapCat.js");
+    const napcatWorkDir = join(qqDocuments, "napcat");
+
+    if (existsSync(loaderPath)) {
+      await rm(loaderPath, { force: true });
+      result.cleanedRuntime = true;
+    }
+
+    if (existsSync(napcatWorkDir)) {
+      const entries = await readdir(napcatWorkDir, { withFileTypes: true });
+      await Promise.all(entries
+        .filter((entry) => entry.name !== "config")
+        .map((entry) => rm(join(napcatWorkDir, entry.name), { recursive: entry.isDirectory(), force: true })));
+      result.cleanedRuntime ||= entries.some((entry) => entry.name !== "config");
+    }
+
+    return result;
+  }
+
   async ensureNapCatWebUiConfig(): Promise<string | undefined> {
+    const writeDefaultWebUiConfig = async (token: string): Promise<void> => {
+      const defaultJson = {
+        host: "0.0.0.0",
+        port: 6099,
+        token,
+        loginRate: 10,
+        autoLoginAccount: "",
+        theme: { dark: {}, light: {} },
+        disableWebUI: false,
+        disableNonLANAccess: false,
+      };
+
+      for (const configDir of await this.findNapCatRuntimeConfigWriteDirs()) {
+        const target = join(configDir, "webui.json");
+        if (existsSync(target)) {
+          continue;
+        }
+
+        await mkdir(configDir, { recursive: true });
+        await writeFile(target, JSON.stringify(defaultJson, null, 2), "utf8");
+      }
+    };
+
     const existing = await this.readNapCatWebUiToken();
     if (existing.token) {
+      await writeDefaultWebUiConfig(existing.token);
       return existing.token;
     }
 
@@ -3329,32 +3453,13 @@ export class InitManager {
       throw new Error(existing.error ?? "NapCat WebUI config exists but token is missing; please check webui.json manually");
     }
 
-    const configDirs = await this.findNapCatWebUiConfigDirs();
+    const configDirs = await this.findNapCatRuntimeConfigWriteDirs();
     if (configDirs.length === 0) {
       return undefined;
     }
 
     const token = randomBytes(6).toString("hex");
-    const defaultJson = {
-      host: "0.0.0.0",
-      port: 6099,
-      token,
-      loginRate: 10,
-      autoLoginAccount: "",
-      theme: { dark: {}, light: {} },
-      disableWebUI: false,
-      disableNonLANAccess: false,
-    };
-
-    for (const configDir of configDirs) {
-      const target = join(configDir, "webui.json");
-      if (existsSync(target)) {
-        continue;
-      }
-
-      await mkdir(configDir, { recursive: true });
-      await writeFile(target, JSON.stringify(defaultJson, null, 2), "utf8");
-    }
+    await writeDefaultWebUiConfig(token);
 
     return token;
   }
@@ -3963,7 +4068,7 @@ export class InitManager {
       },
     };
 
-    for (const configDir of await this.findNapCatRuntimeConfigDirs()) {
+    for (const configDir of await this.findNapCatRuntimeConfigWriteDirs()) {
       await mkdir(configDir, { recursive: true });
       await writeFile(
         join(configDir, `napcat_protocol_${qqAccount}.json`),
@@ -4030,7 +4135,33 @@ export class InitManager {
   }
 
   private async findNapCatRuntimeConfigDirs(): Promise<string[]> {
-    return [join(this.paths.napcatRoot, "napcat", "config")];
+    if (process.platform !== "darwin") {
+      return uniquePaths([
+        join(this.paths.napcatRoot, "config"),
+        join(this.paths.napcatRoot, "napcat", "config"),
+      ]);
+    }
+
+    return uniquePaths([
+      this.macNapCatRuntimeConfigDir(),
+      join(homedir(), "Library", "Application Support", "QQ", "NapCat", "config"),
+      join(this.paths.napcatRoot, "napcat", "config"),
+    ]);
+  }
+
+  private async findNapCatRuntimeConfigWriteDirs(): Promise<string[]> {
+    if (process.platform === "darwin") {
+      return [this.macNapCatRuntimeConfigDir()];
+    }
+
+    return [join(this.paths.napcatRoot, "config")];
+  }
+
+  private macNapCatRuntimeConfigDir(): string {
+    const qqContainer = process.env.NAPCAT_QQ_CONTAINER?.trim()
+      ? resolve(process.env.NAPCAT_QQ_CONTAINER.trim())
+      : join(homedir(), "Library", "Containers", "com.tencent.qq", "Data");
+    return join(qqContainer, "Documents", "napcat", "config");
   }
 
 }

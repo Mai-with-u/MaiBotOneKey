@@ -875,6 +875,7 @@ export class ServiceManager extends EventEmitter {
       return this.stopExternalTerminal(definition, state, false);
     }
     if (!state.ptySessionId || state.status === "stopped") {
+      await this.restoreMacNapCatQqPatch(serviceId, "stop requested while service is not running");
       return this.toDescriptor(definition, state);
     }
 
@@ -909,6 +910,7 @@ export class ServiceManager extends EventEmitter {
       void this.kill(serviceId);
     }, STOP_FORCE_AFTER_MS + 500);
     this.states.set(serviceId, nextState);
+    await this.restoreMacNapCatQqPatch(serviceId, "stop requested");
     return this.toDescriptor(definition, nextState);
   }
 
@@ -936,6 +938,7 @@ export class ServiceManager extends EventEmitter {
         });
         return this.toDescriptor(definition, this.getState(serviceId));
       }
+      await this.restoreMacNapCatQqPatch(serviceId, "force kill requested while service is not running");
       return this.toDescriptor(definition, state);
     }
 
@@ -962,6 +965,7 @@ export class ServiceManager extends EventEmitter {
       });
     }
 
+    await this.restoreMacNapCatQqPatch(serviceId, "force kill requested");
     return this.toDescriptor(definition, this.getState(serviceId));
   }
 
@@ -1092,7 +1096,26 @@ export class ServiceManager extends EventEmitter {
       this.clearRestartTimer(state);
       void this.kill(serviceId);
     }
+    void this.restoreMacNapCatQqPatch("napcat", "service manager disposed");
     this.removeAllListeners();
+  }
+
+  private async restoreMacNapCatQqPatch(serviceId: ServiceId, reason: string): Promise<void> {
+    if (serviceId !== "napcat" || process.platform !== "darwin") {
+      return;
+    }
+
+    try {
+      const result = await this.initManager.cleanupMacNapCatQqIntegration();
+      if (result.restoredPackage) {
+        this.logs.append(serviceId, "system", `restored QQ package.json after NapCat patch: ${reason}`);
+      }
+      if (result.cleanedRuntime) {
+        this.logs.append(serviceId, "system", `cleaned QQ NapCat runtime files: ${reason}`);
+      }
+    } catch (error) {
+      this.logs.append(serviceId, "system", `failed to restore QQ package.json after NapCat patch: ${String(error)}`);
+    }
   }
 
   private createDefinitions(): ServiceDefinition[] {
@@ -1266,6 +1289,7 @@ export class ServiceManager extends EventEmitter {
     const shouldRestart = Boolean(current.desired && current.status !== "stopping");
     const stoppedByRequest = current.status === "stopping" || !current.desired;
     this.logs.append(serviceId, "system", `external terminal exit: code=${code ?? "null"} signal=${signal ?? "null"}`);
+    void this.restoreMacNapCatQqPatch(serviceId, "external terminal exited");
     this.setState(serviceId, {
       ...current,
       status: stoppedByRequest ? "stopped" : "error",
@@ -1311,6 +1335,7 @@ export class ServiceManager extends EventEmitter {
       this.logs.append(definition.id, "system", `external terminal stop failed: ${String(error)}`);
     }
 
+    await this.restoreMacNapCatQqPatch(definition.id, force ? "external terminal force kill requested" : "external terminal stop requested");
     this.externalProcesses.delete(definition.id);
     this.setState(definition.id, {
       ...this.getState(definition.id),
@@ -1590,6 +1615,7 @@ export class ServiceManager extends EventEmitter {
       }
 
       const stoppedByRequest = state.status === "stopping" || !state.desired;
+      void this.restoreMacNapCatQqPatch(definition.id, "pty session reconciled as exited");
       this.setState(definition.id, {
         ...state,
         status: stoppedByRequest ? "stopped" : "error",
@@ -1644,6 +1670,7 @@ export class ServiceManager extends EventEmitter {
     const shouldRestart = Boolean(current.desired && current.status !== "stopping");
     const stoppedByRequest = current.status === "stopping" || !current.desired;
     this.logs.append(serviceId, "system", `exit: code=${event.exitCode} signal=${event.signal ?? "null"}`);
+    void this.restoreMacNapCatQqPatch(serviceId, "pty exited");
     this.setState(serviceId, {
       ...current,
       status: stoppedByRequest ? "stopped" : "error",
@@ -1698,6 +1725,7 @@ export class ServiceManager extends EventEmitter {
 
     if (snapshot.status === "exited" || snapshot.status === "error") {
       const stoppedByRequest = state.status === "stopping" || !state.desired;
+      void this.restoreMacNapCatQqPatch(serviceId, "pty snapshot exited");
       this.setState(serviceId, {
         ...state,
         status: stoppedByRequest ? "stopped" : "error",

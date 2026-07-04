@@ -178,10 +178,26 @@ function createAppIcon(): Electron.NativeImage {
   return icon.isEmpty() ? createFallbackIcon() : icon;
 }
 
+function createTrayIcon(): Electron.NativeImage {
+  const trayIconPath = app.isPackaged
+    ? join(process.resourcesPath, "tray-icon.png")
+    : join(runtimePaths.installRoot, "resources", "tray-icon.png");
+  const icon = nativeImage.createFromPath(trayIconPath);
+  const resized = (icon.isEmpty() ? createAppIcon() : icon).resize({
+    width: process.platform === "darwin" ? 18 : 32,
+    height: process.platform === "darwin" ? 18 : 32,
+    quality: "best",
+  });
+  if (process.platform === "darwin") {
+    resized.setTemplateImage(true);
+  }
+  return resized;
+}
+
 function applyAppIcon(): void {
   const icon = createAppIcon();
   mainWindow?.setIcon(icon);
-  tray?.setImage(icon.resize({ width: 32, height: 32, quality: "best" }));
+  tray?.setImage(createTrayIcon());
 }
 
 function cleanupLauncherUpdateDownloadsOnStartup(): void {
@@ -403,22 +419,34 @@ function requestQuit(): void {
     "system",
     "quit requested, shutting down managed services",
   );
-  void serviceManager
-    .shutdownAll()
-    .catch((error: unknown) => {
+  void (async () => {
+    try {
+      await serviceManager.shutdownAll();
+    } catch (error: unknown) {
       logStore.append(
         "desktop",
         "system",
         `service shutdown failed: ${String(error)}`,
       );
-    })
-    .finally(() => {
+    } finally {
+      try {
+        const result = await initManager.cleanupMacNapCatQqIntegration();
+        if (result.restoredPackage) {
+          logStore.append("napcat", "system", "restored QQ package.json during app quit");
+        }
+        if (result.cleanedRuntime) {
+          logStore.append("napcat", "system", "cleaned QQ NapCat runtime files during app quit");
+        }
+      } catch (error: unknown) {
+        logStore.append("napcat", "system", `failed to restore QQ package.json during app quit: ${String(error)}`);
+      }
       app.quit();
-    });
+    }
+  })();
 }
 
 function createTray(): Tray {
-  const nextTray = new Tray(createAppIcon().resize({ width: 32, height: 32 }));
+  const nextTray = new Tray(createTrayIcon());
 
   const withLog = (action: () => Promise<unknown>) => (): void => {
     void action().catch((error: unknown) => {
@@ -467,6 +495,19 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
   app.whenReady().then(async () => {
     cleanupLauncherUpdateDownloadsOnStartup();
     await cleanupMaiBotPrivacyLeakOnStartup();
+    await initManager
+      .cleanupMacNapCatQqIntegration()
+      .then((result) => {
+        if (result.restoredPackage) {
+          logStore.append("napcat", "system", "restored stale QQ package.json patch on startup");
+        }
+        if (result.cleanedRuntime) {
+          logStore.append("napcat", "system", "cleaned stale QQ NapCat runtime files on startup");
+        }
+      })
+      .catch((error: unknown) => {
+        logStore.append("napcat", "system", `failed to restore stale QQ package.json patch on startup: ${String(error)}`);
+      });
     registerAppIconResourceProtocol();
     registerCodexPetResourceProtocol();
     await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
