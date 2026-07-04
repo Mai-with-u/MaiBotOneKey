@@ -990,6 +990,34 @@ async function fetchMaiBotReleases(): Promise<GitHubReleasePayload[]> {
   }
 }
 
+async function fetchOneKeyReleases(): Promise<GitHubReleasePayload[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(ONEKEY_RELEASES_API_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+    }
+
+    const releases = (await response.json()) as unknown;
+    if (!Array.isArray(releases)) {
+      return [];
+    }
+
+    return releases.filter(
+      (release): release is GitHubReleasePayload =>
+        Boolean(release && typeof release === "object") &&
+        release.draft !== true &&
+        typeof release.tag_name === "string",
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function releaseNotesInRange(
   releases: GitHubReleasePayload[],
   currentTag: string | undefined,
@@ -1170,31 +1198,57 @@ async function fetchLauncherUpdateInfo(
       throw new Error("Latest release metadata is incomplete");
     }
 
-    const asset = selectLauncherUpdateAsset(release.assets);
     const latestTag = release.tag_name;
     const currentTag = `v${currentVersion}`;
-    const available = compareVersionTags(latestTag, currentTag) > 0;
+    const latestAvailable = compareVersionTags(latestTag, currentTag) > 0;
+    let targetRelease = release;
+    const latestAsset = selectLauncherUpdateAsset(release.assets);
+    let asset = latestAsset;
+    if (latestAvailable && !asset) {
+      const releases = await fetchOneKeyReleases().catch(() => []);
+      const fallbackRelease = releases
+        .filter((item) => {
+          const tag = String(item.tag_name);
+          return compareVersionTags(tag, currentTag) > 0 && compareVersionTags(tag, latestTag) <= 0;
+        })
+        .sort((left, right) =>
+          compareVersionTags(String(right.tag_name), String(left.tag_name))
+        )
+        .find((item) => Boolean(selectLauncherUpdateAsset(item.assets)));
+      const fallbackAsset = fallbackRelease
+        ? selectLauncherUpdateAsset(fallbackRelease.assets)
+        : undefined;
+      if (fallbackRelease && fallbackAsset) {
+        targetRelease = fallbackRelease;
+        asset = fallbackAsset;
+      }
+    }
+    const downloadTag = typeof targetRelease.tag_name === "string" ? targetRelease.tag_name : latestTag;
+    const available = Boolean(asset) && compareVersionTags(downloadTag, currentTag) > 0;
     const latestReleaseNotes =
       typeof release.body === "string" && release.body.trim()
         ? release.body.trim()
         : undefined;
     const releaseNotes = available
-      ? ((await fetchLauncherReleaseNotesInRange(currentTag, latestTag).catch(
+      ? ((await fetchLauncherReleaseNotesInRange(currentTag, downloadTag).catch(
           () => undefined,
-        )) ?? latestReleaseNotes)
+        )) ?? releaseBody(targetRelease) ?? latestReleaseNotes)
       : latestReleaseNotes;
     return {
       currentVersion,
       latestTag,
       latestVersion: releaseTagToVersion(latestTag),
-      releaseName: typeof release.name === "string" ? release.name : latestTag,
+      downloadTag,
+      downloadVersion: releaseTagToVersion(downloadTag),
+      releaseName: releaseTitle(targetRelease, downloadTag),
       releaseUrl:
-        typeof release.html_url === "string"
-          ? release.html_url
+        typeof targetRelease.html_url === "string"
+          ? targetRelease.html_url
           : "https://github.com/Mai-with-u/MaiBotOneKey/releases",
       releaseNotes,
       assetName: typeof asset?.name === "string" ? asset.name : undefined,
       assetSize: typeof asset?.size === "number" ? asset.size : undefined,
+      latestAssetUnavailable: latestAvailable && !latestAsset,
       available,
       checkedAt: Date.now(),
       source: ONEKEY_RELEASE_SOURCE,
@@ -3336,7 +3390,9 @@ export function registerAppIpc({
       await assertLauncherUpdateAllowed(serviceManager);
       const update = await checkLauncherUpdate();
       if (!update.available) {
-        throw new Error("当前启动器已经是最新版本");
+        throw new Error(update.latestAssetUnavailable
+          ? `最新版本 ${update.latestTag ?? ""} 暂无可用的${launcherUpdatePackageLabel()}`
+          : "当前启动器已经是最新版本");
       }
 
       const download = await downloadLauncherUpdate(

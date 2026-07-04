@@ -39,6 +39,7 @@ import maiMascotImage from "@/assets/mai2.png";
 import futureRetroMascotImage from "@/assets/mai-fr.png";
 import type {
   DesktopSnapshot,
+  LauncherUpdateDownloadProgress,
   LauncherUpdateInfo,
   LocalChatClientInfo,
   LocalChatEvent,
@@ -212,6 +213,82 @@ function formatFileSize(bytes: number | undefined): string | undefined {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatDownloadBytes(bytes: number | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  }
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+const launcherDownloadPhaseLabels: Record<LauncherUpdateDownloadProgress["phase"], string> = {
+  checking: "检查更新",
+  downloading: "下载安装包",
+  starting: "打开安装包",
+  completed: "已完成",
+};
+
+function launcherDownloadProgressValue(progress: LauncherUpdateDownloadProgress): number {
+  if (typeof progress.percent === "number" && Number.isFinite(progress.percent)) {
+    return Math.max(0, Math.min(100, progress.percent));
+  }
+  if (progress.phase === "completed") {
+    return 100;
+  }
+  if (progress.phase === "starting") {
+    return 92;
+  }
+  if (progress.phase === "downloading") {
+    return Math.min(88, 18 + Math.log10(Math.max(1, progress.receivedBytes)) * 9);
+  }
+  return 8;
+}
+
+function LauncherDownloadProgressDetails({
+  progress,
+  retro,
+}: {
+  progress: LauncherUpdateDownloadProgress;
+  retro: boolean;
+}): React.JSX.Element {
+  const value = launcherDownloadProgressValue(progress);
+  const percentText =
+    typeof progress.percent === "number" && Number.isFinite(progress.percent)
+      ? `${Math.round(progress.percent)}%`
+      : progress.phase === "completed"
+        ? "100%"
+        : "接收中";
+  const totalText = progress.totalBytes ? formatDownloadBytes(progress.totalBytes) : undefined;
+  const byteText = totalText
+    ? `${formatDownloadBytes(progress.receivedBytes)} / ${totalText}`
+    : formatDownloadBytes(progress.receivedBytes);
+
+  return (
+    <div className={cn(retro ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <span className="min-w-0 truncate font-medium">
+          {launcherDownloadPhaseLabels[progress.phase]}
+          {progress.assetName ? ` · ${progress.assetName}` : ""}
+        </span>
+        <span className="shrink-0 font-mono tabular-nums">{percentText}</span>
+      </div>
+      <Progress value={value} />
+      <div className="flex min-w-0 items-center justify-between gap-3 text-muted-foreground">
+        <span className="min-w-0 truncate">{progress.assetName ?? "准备下载更新安装包"}</span>
+        <span className="shrink-0 font-mono tabular-nums">{byteText}</span>
+      </div>
+    </div>
+  );
 }
 
 function formatMemorySize(bytes: number | undefined): string {
@@ -2221,6 +2298,7 @@ export function HomePanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
+  const [launcherDownloadProgress, setLauncherDownloadProgress] = useState<LauncherUpdateDownloadProgress | null>(null);
   const [launcherQuitPromptOpen, setLauncherQuitPromptOpen] = useState(false);
   const [maibotUpdateInfo, setMaibotUpdateInfo] = useState<MaiBotUpdateInfo | null>(null);
   const [maibotUpdateInfoLoading, setMaibotUpdateInfoLoading] = useState(false);
@@ -2281,6 +2359,16 @@ export function HomePanel({
     launcherUpdateInfo?.latestTag
     ?? versionAsTag(launcherUpdateInfo?.latestVersion)
     ?? snapshot.appLatestTag;
+  const launcherDownloadTag =
+    launcherUpdateInfo?.downloadTag
+    ?? versionAsTag(launcherUpdateInfo?.downloadVersion)
+    ?? launcherLatestTag;
+  const launcherUsesFallbackAsset = Boolean(
+    launcherUpdateInfo?.latestAssetUnavailable
+    && launcherLatestTag
+    && launcherDownloadTag
+    && launcherLatestTag !== launcherDownloadTag,
+  );
   const launcherUpdateAvailable =
     launcherUpdateInfo?.available ?? (compareVersionText(launcherLatestTag, launcherCurrentTag) > 0);
   const maibotSelectedTarget = formatMaiBotSelectedTarget(snapshot);
@@ -2339,6 +2427,12 @@ export function HomePanel({
 
     return () => window.clearInterval(timer);
   }, [maibotRefsLoading]);
+
+  useEffect(() => {
+    return window.maibotDesktop?.launcher?.onDownloadProgress((progress) => {
+      setLauncherDownloadProgress(progress);
+    });
+  }, []);
 
   const handleMascotSecretTap = useCallback(() => {
     if (mascotIntroShownThisSession) {
@@ -2600,6 +2694,7 @@ export function HomePanel({
 
   const openLauncherUpdate = useCallback(() => {
     setError(null);
+    setLauncherDownloadProgress(null);
     setUpdateDialog("launcher");
   }, []);
 
@@ -2644,8 +2739,14 @@ export function HomePanel({
     try {
       const update = await window.maibotDesktop.launcher.checkUpdate();
       setLauncherUpdateInfo(update);
+      const latestLabel = update.latestTag ?? update.latestVersion ?? "";
+      const downloadLabel = update.downloadTag ?? update.downloadVersion ?? latestLabel;
       toast.success(update.available
-        ? `发现新版本 ${update.latestTag ?? update.latestVersion ?? ""}`
+        ? update.latestAssetUnavailable && latestLabel !== downloadLabel
+          ? `最新版本 ${latestLabel} 暂无当前平台安装包，可下载 ${downloadLabel}`
+          : `发现新版本 ${latestLabel}`
+        : update.latestAssetUnavailable
+          ? `最新版本 ${latestLabel} 暂无当前平台安装包`
         : "启动器已是最新版本");
       await refreshSnapshot();
     } catch (nextError) {
@@ -2667,6 +2768,10 @@ export function HomePanel({
 
     setBusy("launcher:update");
     setError(null);
+    setLauncherDownloadProgress({
+      phase: "checking",
+      receivedBytes: 0,
+    });
     try {
       const result = await window.maibotDesktop.launcher.downloadAndInstallUpdate();
       setLauncherUpdateInfo(result.update);
@@ -2683,6 +2788,7 @@ export function HomePanel({
       }
     } catch (nextError) {
       setError(messageFromError(nextError));
+      setLauncherDownloadProgress(null);
       setBusy(null);
     }
   }, [launcherUpdateBlocked, snapshot.platform]);
@@ -2763,7 +2869,9 @@ export function HomePanel({
         setAdapterResetRequest(resetRequest);
         setError(null);
       } else {
-        setError(messageFromError(nextError));
+        const message = messageFromError(nextError);
+        setError(message);
+        toast.error(message);
       }
       await refreshSnapshot().catch(() => undefined);
     } finally {
@@ -3629,12 +3737,26 @@ export function HomePanel({
             <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
               <DetailRow label="本地版本" value={launcherCurrentTag} retro={useRetroHome} />
               <DetailRow label="最新版本" value={launcherLatestTag} retro={useRetroHome} />
+              {launcherUsesFallbackAsset ? (
+                <DetailRow label="可用版本" value={launcherDownloadTag} retro={useRetroHome} />
+              ) : null}
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="发布版本" value={launcherUpdateInfo?.releaseName ?? launcherLatestTag} retro={useRetroHome} />
               <DetailRow label="安装包" value={launcherUpdateInfo?.assetName} retro={useRetroHome} />
               <DetailRow label="大小" value={formatFileSize(launcherUpdateInfo?.assetSize)} retro={useRetroHome} />
               <DetailRow label="更新源" value={launcherUpdateInfo?.source ?? snapshot.appLatestSource} retro={useRetroHome} />
             </div>
+            {launcherUsesFallbackAsset ? (
+              <div className={cn(useRetroHome ? "retro-control grid gap-1 p-3 text-xs" : "grid gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-100")}>
+                <p className="font-medium">最新版本暂不可下载</p>
+                <p>
+                  最新版本是 {launcherLatestTag}，{launcherLatestTag} 版本暂无可用内容，是否下载可用最新版本 {launcherDownloadTag}？
+                </p>
+              </div>
+            ) : null}
+            {launcherDownloadProgress ? (
+              <LauncherDownloadProgressDetails progress={launcherDownloadProgress} retro={useRetroHome} />
+            ) : null}
             {launcherUpdateInfo?.releaseNotes ? (
               <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3")}>
                 <p className="text-xs font-medium">更新说明</p>
@@ -3668,7 +3790,7 @@ export function HomePanel({
               size="sm"
             >
               {busy === "launcher:update" ? <Loader2 className="animate-spin" /> : <Download />}
-              下载并打开
+              {launcherUsesFallbackAsset ? "下载可用版本" : "下载并打开"}
             </Button>
           </DialogFooter>
         </DialogContent>

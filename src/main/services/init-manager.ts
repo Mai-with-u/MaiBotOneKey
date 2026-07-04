@@ -2469,6 +2469,7 @@ export class InitManager {
     }
 
     await this.setQqBackend(qqBackend, { syncAdapters: false });
+    await this.ensureServiceReady("maibot");
     const existingWebsocketServer = qqBackend === "snowluma"
       ? await this.readSnowLumaWebsocketServer(qqAccount)
       : await this.readNapcatWebsocketServer(qqAccount);
@@ -2674,6 +2675,9 @@ export class InitManager {
     const adapterRoot = dirname(configPath);
 
     if (!existsSync(adapterRoot)) {
+      if (enabled) {
+        throw new Error(`NapCat 适配器目录不存在，无法写入配置: ${adapterRoot}`);
+      }
       return false;
     }
 
@@ -2725,6 +2729,9 @@ export class InitManager {
     const adapterRoot = dirname(configPath);
 
     if (!existsSync(adapterRoot)) {
+      if (enabled) {
+        throw new Error(`SnowLuma 适配器目录不存在，无法写入配置: ${adapterRoot}`);
+      }
       return false;
     }
 
@@ -4096,10 +4103,7 @@ export class InitManager {
 
   private async findNapCatRuntimeConfigDirs(): Promise<string[]> {
     if (process.platform !== "darwin") {
-      return uniquePaths([
-        join(this.paths.napcatRoot, "config"),
-        join(this.paths.napcatRoot, "napcat", "config"),
-      ]);
+      return [join(this.paths.napcatRoot, "napcat", "config")];
     }
 
     return uniquePaths([
@@ -4114,7 +4118,7 @@ export class InitManager {
       return [this.macNapCatRuntimeConfigDir()];
     }
 
-    return [join(this.paths.napcatRoot, "config")];
+    return [join(this.paths.napcatRoot, "napcat", "config")];
   }
 
   private macNapCatRuntimeConfigDir(): string {

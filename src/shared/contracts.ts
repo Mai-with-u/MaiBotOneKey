@@ -347,11 +347,14 @@ export interface LauncherUpdateInfo {
   currentVersion: string;
   latestTag?: string;
   latestVersion?: string;
+  downloadTag?: string;
+  downloadVersion?: string;
   releaseName?: string;
   releaseUrl?: string;
   releaseNotes?: string;
   assetName?: string;
   assetSize?: number;
+  latestAssetUnavailable?: boolean;
   available: boolean;
   checkedAt: number;
   source: string;
