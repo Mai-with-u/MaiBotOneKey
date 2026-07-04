@@ -37,7 +37,7 @@ interface StoredResourcePathsFile {
 }
 
 const RESOURCE_LOCK_FILE = "resource.lock";
-const RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat", "pythonOverrides"];
+const RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat"];
 const EDITABLE_RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat"];
 
 function normalizePathForCompare(path: string): string {
@@ -87,8 +87,6 @@ function labelForKey(key: RuntimeResourcePathKey): string {
       return "MaiBot路径";
     case "napcat":
       return "NapCat路径";
-    case "pythonOverrides":
-      return "python可写环境";
   }
 }
 
@@ -163,9 +161,6 @@ export class ResourceLocationManager {
     targetPath: string,
     copyExisting: boolean,
   ): Promise<RuntimeResourcePathChangeResult> {
-    if (key === "pythonOverrides") {
-      throw new Error("python可写环境路径不允许修改");
-    }
     const normalizedTarget = this.normalizeTargetPath(targetPath);
     const previousPath = this.getPath(key);
     const pathChanged = !samePath(previousPath, normalizedTarget);
@@ -223,11 +218,8 @@ export class ResourceLocationManager {
       return;
     }
 
-    if (changedKey !== "pythonOverrides" && isPathNestedEitherWay(this.paths.bundledModulesRoot, targetPath)) {
+    if (isPathNestedEitherWay(this.paths.bundledModulesRoot, targetPath)) {
       throw new Error("MaiBot 与 NapCat 路径不能放在一键包内置 modules 模板目录中");
-    }
-    if (changedKey === "pythonOverrides" && isPathNestedEitherWay(this.paths.runtimeRoot, targetPath)) {
-      throw new Error("python可写环境不能放在 python基础环境目录中");
     }
   }
 
@@ -268,7 +260,6 @@ export class ResourceLocationManager {
     return {
       maibot: this.paths.maibotRoot,
       napcat: this.paths.napcatRoot,
-      pythonOverrides: this.paths.pythonOverridesRoot,
     };
   }
 
@@ -282,8 +273,6 @@ export class ResourceLocationManager {
         return this.paths.defaultMaibotRoot;
       case "napcat":
         return this.paths.defaultNapcatRoot;
-      case "pythonOverrides":
-        return this.paths.defaultPythonOverridesRoot;
     }
   }
 

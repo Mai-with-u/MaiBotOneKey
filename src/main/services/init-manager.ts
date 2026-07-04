@@ -56,7 +56,6 @@ const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
 const QQ_BACKEND_FILE = "qq-backend.json";
 const MESSAGE_PLATFORM_FILE = "message-platform.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
-const PYTHON_OVERRIDES_IGNORED_ENTRIES = new Set([".keep", "resource.lock"]);
 const NAPCAT_COMPONENT_PROTECTED_PATHS = [
   "config",
   "data",
@@ -3004,44 +3003,6 @@ export class InitManager {
       await cp(source, target, { recursive: true, force: true, errorOnExist: false });
       await rm(source, { recursive: true, force: true });
     }
-  }
-
-  async ensureBundledPythonOverrides(): Promise<string[]> {
-    const bundledRoot = join(dirname(this.paths.runtimeRoot), "python-overrides");
-    const targetRoot = this.paths.pythonOverridesRoot;
-    if (!existsSync(bundledRoot) || samePath(bundledRoot, targetRoot)) {
-      return [];
-    }
-
-    let bundledEntries: string[];
-    try {
-      bundledEntries = (await readdir(bundledRoot)).filter((entry) => !PYTHON_OVERRIDES_IGNORED_ENTRIES.has(entry));
-    } catch {
-      return [];
-    }
-    if (bundledEntries.length === 0) {
-      return [];
-    }
-
-    let targetEntries: string[] = [];
-    try {
-      targetEntries = (await readdir(targetRoot)).filter((entry) => !PYTHON_OVERRIDES_IGNORED_ENTRIES.has(entry));
-    } catch {
-      targetEntries = [];
-    }
-    if (targetEntries.length > 0) {
-      return [];
-    }
-
-    await mkdir(dirname(targetRoot), { recursive: true });
-    await runWithoutAsar(() =>
-      cp(bundledRoot, targetRoot, {
-        recursive: true,
-        force: false,
-        errorOnExist: false,
-      }),
-    );
-    return [targetRoot];
   }
 
   /**

@@ -1,12 +1,12 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   ManagedPythonPackage,
   ManagedSourceEntry,
   ManagedPythonPackageName,
-  PythonOverridesState,
+  PythonEnvironmentState,
   PythonPackageSourceOption,
   PythonPackageSourcePreset,
   PythonPackageInstallRequest,
@@ -20,6 +20,7 @@ import { SourceSettingsManager } from "./source-settings-manager";
 
 const PYTHON_SOURCE_FILE = "python-dependency-source.json";
 const PYPI_SIMPLE_INDEX = "https://pypi.org/simple";
+const RESOURCE_PATHS_FILE = "resource-paths.json";
 const MANAGED_PACKAGES: ManagedPythonPackage[] = [
   { name: "maibot-dashboard", label: "MaiBot Dashboard" },
   { name: "maim-message", label: "Maim Message" },
@@ -27,14 +28,10 @@ const MANAGED_PACKAGES: ManagedPythonPackage[] = [
 const REQUEST_TIMEOUT_MS = 60_000;
 const PIP_TIMEOUT_MS = 10 * 60 * 1000;
 const STARTUP_UPGRADE_IDLE_TIMEOUT_MS = 10_000;
-const STALE_OVERLAY_TEMP_MS = 24 * 60 * 60 * 1000;
 const SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json, application/json;q=0.9, text/html;q=0.8";
 const PYTHON_RUNTIME_DIR = "python";
-const PYTHON_ENV_DIR = "python-env";
 const PYTHON_ENV_MANIFEST = "maibot-python-env.json";
-const OVERLAY_GENERATIONS_DIR = ".generations";
-const OVERLAY_ACTIVE_FILE = "active-generation.json";
-const OVERLAY_GENERATION_PREFIX = "generation-";
+const UNIX_PYTHON_LINKS = ["python", "python3"] as const;
 
 interface SimpleProjectFile {
   filename?: unknown;
@@ -150,15 +147,6 @@ function versionEntry(version: string, upload?: { uploadedAt?: string; uploadedA
 
 function normalizeProjectName(name: string): string {
   return name.toLowerCase().replace(/[-_.]+/gu, "-");
-}
-
-function packageImportName(name: string): string {
-  return normalizeProjectName(name).replace(/-/gu, "_");
-}
-
-function isInsidePath(root: string, path: string): boolean {
-  const relativePath = relative(resolve(root), resolve(path));
-  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 function isSameOrChildPath(parent: string, child: string): boolean {
@@ -395,16 +383,12 @@ export class PythonDependencyManager {
     private readonly sourceSettingsManager?: SourceSettingsManager,
   ) {}
 
-  getOverridesRoot(): string {
-    return this.getPythonEnvRoot();
-  }
-
-  getActiveOverridesRoot(): string {
+  getPythonPackagesRoot(): string {
     return this.getExistingPythonSitePackagesRoot() ?? this.getPythonEnvRoot();
   }
 
   getPythonEnvRoot(): string {
-    return join(this.paths.defaultResourceRoot, PYTHON_ENV_DIR);
+    return this.paths.pythonEnvRoot;
   }
 
   getPythonPath(): string {
@@ -416,10 +400,24 @@ export class PythonDependencyManager {
   }
 
   private getPythonEnvCandidates(root = this.getPythonEnvRoot()): string[] {
+    const binRoot = join(root, "bin");
+    let versionedUnixPythons: string[] = [];
+    try {
+      versionedUnixPythons = readdirSync(binRoot, { withFileTypes: true })
+        .filter((entry) => entry.isFile() || entry.isSymbolicLink())
+        .map((entry) => entry.name)
+        .filter((name) => /^python\d+\.\d+(?:\.exe)?$/iu.test(name))
+        .sort((left, right) => right.localeCompare(left, "en-US", { numeric: true }))
+        .map((name) => join(binRoot, name));
+    } catch {
+      // Windows embeddable Python usually keeps python.exe at the root instead.
+    }
+
     return [
       join(root, "python.exe"),
       join(root, "Scripts", "python.exe"),
       join(root, "bin", "python.exe"),
+      ...versionedUnixPythons,
       join(root, "python"),
       join(root, "bin", "python3"),
       join(root, "bin", "python"),
@@ -454,6 +452,8 @@ export class PythonDependencyManager {
 
   async ensurePythonEnvironment(onOutput?: PythonOutputHandler): Promise<string[]> {
     if (this.getExistingPythonEnvPath()) {
+      await this.repairPythonEnvironmentLinks(onOutput);
+      await this.cleanupLegacyPythonDependencyRoot(onOutput);
       return [];
     }
 
@@ -500,6 +500,8 @@ export class PythonDependencyManager {
     }
 
     onOutput?.(`portable Python ready: ${python}`);
+    await this.repairPythonEnvironmentLinks(onOutput);
+    await this.cleanupLegacyPythonDependencyRoot(onOutput);
     return [targetRoot];
   }
 
@@ -512,7 +514,7 @@ export class PythonDependencyManager {
     }
   }
 
-  async saveSourcePreset(preset: PythonPackageSourcePreset): Promise<PythonOverridesState> {
+  async saveSourcePreset(preset: PythonPackageSourcePreset): Promise<PythonEnvironmentState> {
     const nextPreset = this.normalizeSourcePreset(preset);
     const path = this.sourceConfigPath();
     await mkdir(dirname(path), { recursive: true });
@@ -524,10 +526,10 @@ export class PythonDependencyManager {
     return this.getState();
   }
 
-  getState(): PythonOverridesState {
+  getState(): PythonEnvironmentState {
     const sourcePreset = this.getSourcePreset();
     return {
-      root: this.getActiveOverridesRoot(),
+      root: this.getPythonPackagesRoot(),
       sourcePreset,
       sourceUrl: this.getPrimaryIndex().url,
       sourceOptions: this.getPipIndexes().map(({ preset, label, url }) => ({ preset, label, url })),
@@ -601,13 +603,13 @@ export class PythonDependencyManager {
       "--no-warn-script-location",
     ];
     const result = await this.installRequirementsIntoEnvironment(baseArgs, [requirement]);
-    await this.cleanupLegacyPythonOverridesRoot();
+    await this.cleanupLegacyPythonDependencyRoot();
 
     return {
       packageName: request.packageName,
       version: request.version.trim(),
       sourceUrl: result.sourceUrl,
-      targetDir: this.getActiveOverridesRoot(),
+      targetDir: this.getPythonPackagesRoot(),
       output: result.output,
       installedAt: Date.now(),
     };
@@ -739,7 +741,7 @@ export class PythonDependencyManager {
       return {
         sourceFile,
         sourceUrl: this.getPrimaryIndex().url,
-        targetDir: this.getActiveOverridesRoot(),
+        targetDir: this.getPythonPackagesRoot(),
         output,
         installedAt: Date.now(),
       };
@@ -773,12 +775,12 @@ export class PythonDependencyManager {
       signal,
       onOutput,
     );
-    await this.cleanupLegacyPythonOverridesRoot(onOutput);
+    await this.cleanupLegacyPythonDependencyRoot(onOutput);
 
     return {
       sourceFile,
       sourceUrl: result.sourceUrl,
-      targetDir: this.getActiveOverridesRoot(),
+      targetDir: this.getPythonPackagesRoot(),
       output: result.output,
       installedAt: Date.now(),
     };
@@ -797,325 +799,94 @@ export class PythonDependencyManager {
       signal,
       onOutput,
     );
-    await this.assertOverlayIntegrity(this.getActiveOverridesRoot());
     return result;
   }
 
-  private async installRequirementsIntoOverlay(
-    baseArgs: string[],
-    requirements: string[],
-    signal?: AbortSignal,
-    onOutput?: PythonOutputHandler,
-  ): Promise<PipInstallAttemptResult> {
-    const targetDir = this.getOverridesRoot();
-    await mkdir(targetDir, { recursive: true });
-    const generationsDir = join(targetDir, OVERLAY_GENERATIONS_DIR);
-    await mkdir(generationsDir, { recursive: true });
-    await this.cleanupInactiveGenerations(generationsDir);
-    const generationDir = await mkdtemp(join(generationsDir, OVERLAY_GENERATION_PREFIX));
-    let activated = false;
-
-    try {
-      await this.seedGeneration(generationDir, requirements);
-      const result = await this.runPipInstallWithFallback(
-        [...baseArgs, "--target", generationDir],
-        requirements,
-        signal,
-        onOutput,
-      );
-      await this.assertOverlayIntegrity(generationDir);
-      await this.activateGeneration(generationDir);
-      activated = true;
-      await this.cleanupLegacyOverlayRoot(targetDir, onOutput);
-      return result;
-    } finally {
-      if (!activated) {
-        await rm(generationDir, { recursive: true, force: true });
-      }
-    }
-  }
-
-  private async cleanupInactiveGenerations(generationsDir: string): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(generationsDir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    const activeRoot = this.getActiveOverridesRoot();
-    const now = Date.now();
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isDirectory())
-        .filter((entry) => entry.name.startsWith(OVERLAY_GENERATION_PREFIX))
-        .map(async (entry) => {
-          const path = join(generationsDir, entry.name);
-          if (path === activeRoot) {
-            return;
-          }
-          try {
-            const info = await stat(path);
-            if (now - info.mtimeMs < STALE_OVERLAY_TEMP_MS) {
-              return;
-            }
-            await rm(path, { recursive: true, force: true });
-          } catch {
-            // A concurrent cleanup or install may already have moved it.
-          }
-        }),
-    );
-  }
-
-  private async seedGeneration(generationDir: string, requirements: string[]): Promise<void> {
-    const activeRoot = this.getActiveOverridesRoot();
-    if (!existsSync(activeRoot)) {
-      return;
-    }
-
-    const replacedEntries = new Set<string>();
-    const replacedPaths = new Set<string>();
-    for (const requirement of requirements) {
-      const packageName = packageNameFromRequirement(requirement);
-      if (!packageName) {
+  private async cleanupLegacyPythonDependencyRoot(onOutput?: PythonOutputHandler): Promise<void> {
+    for (const root of this.getLegacyPythonDependencyRoots()) {
+      if (!existsSync(root)) {
         continue;
       }
-      for (const entry of await this.overlayPackageEntries(packageName, activeRoot)) {
-        replacedEntries.add(entry);
-        for (const path of await this.installedRecordPaths(activeRoot, entry)) {
-          replacedPaths.add(resolve(path));
-        }
-      }
+      await rm(root, { recursive: true, force: true });
+      onOutput?.(`removed legacy Python dependency directory: ${root}`);
     }
-
-    let entries;
-    try {
-      entries = await readdir(activeRoot, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    await Promise.all(
-      entries
-        .filter((entry) => !replacedEntries.has(entry.name))
-        .filter((entry) => entry.name !== OVERLAY_GENERATIONS_DIR && entry.name !== OVERLAY_ACTIVE_FILE)
-        .filter((entry) => !entry.name.startsWith(OVERLAY_GENERATION_PREFIX))
-        .map((entry) => cp(join(activeRoot, entry.name), join(generationDir, entry.name), {
-          recursive: true,
-          force: true,
-          errorOnExist: false,
-          filter: (source) => !this.isReplacedRecordPath(source, replacedPaths),
-        })),
-    );
   }
 
-  private async cleanupLegacyOverlayRoot(root: string, onOutput?: PythonOutputHandler): Promise<void> {
-    let entries;
+  private getLegacyPythonDependencyRoots(): string[] {
+    const roots = new Set<string>([join(this.paths.defaultResourceRoot, "python-overrides")]);
     try {
-      entries = await readdir(root, { withFileTypes: true });
+      const raw = JSON.parse(readFileSync(join(this.paths.userDataRoot, RESOURCE_PATHS_FILE), "utf8")) as {
+        paths?: { pythonOverrides?: unknown };
+      };
+      if (typeof raw.paths?.pythonOverrides === "string" && raw.paths.pythonOverrides.trim()) {
+        roots.add(resolve(raw.paths.pythonOverrides));
+      }
     } catch {
+      // Older installs may not have a resource path settings file.
+    }
+
+    return Array.from(roots)
+      .filter((root) => !isSamePath(root, this.getPythonEnvRoot()))
+      .filter((root) => /(^|[/\\])python-overrides$/iu.test(root))
+      .filter((root) => isSameOrChildPath(this.paths.userDataRoot, root) || isSameOrChildPath(this.paths.defaultResourceRoot, root));
+  }
+
+  private async repairPythonEnvironmentLinks(onOutput?: PythonOutputHandler): Promise<void> {
+    if (process.platform === "win32") {
       return;
     }
 
-    const removableEntries = entries
-      .map((entry) => entry.name)
-      .filter((name) => name !== OVERLAY_GENERATIONS_DIR)
-      .filter((name) => name !== OVERLAY_ACTIVE_FILE);
-
-    if (removableEntries.length === 0) {
+    const root = this.getPythonEnvRoot();
+    const binRoot = join(root, "bin");
+    const versionedPython = this.getVersionedUnixPythonPath(root);
+    const versionedName = versionedPython?.split(/[\\/]/u).pop();
+    if (!versionedName) {
       return;
     }
 
-    const failed: string[] = [];
-    await Promise.all(removableEntries.map(async (name) => {
+    for (const linkName of UNIX_PYTHON_LINKS) {
+      const linkPath = join(binRoot, linkName);
+      let info;
       try {
-        await rm(join(root, name), { recursive: true, force: true });
-      } catch (error) {
-        failed.push(`${name}: ${toDetail(error)}`);
-      }
-    }));
-
-    const removedCount = removableEntries.length - failed.length;
-    if (removedCount > 0) {
-      onOutput?.(`legacy python-overrides cleanup removed ${removedCount} root entr${removedCount === 1 ? "y" : "ies"}`);
-    }
-    if (failed.length > 0) {
-      onOutput?.(`legacy python-overrides cleanup incomplete: ${failed.slice(0, 5).join("; ")}`);
-    }
-  }
-
-  private async cleanupLegacyPythonOverridesRoot(onOutput?: PythonOutputHandler): Promise<void> {
-    const root = this.paths.pythonOverridesRoot;
-    if (!root || isSamePath(root, this.getPythonEnvRoot())) {
-      return;
-    }
-    if (!/(^|[/\\])python-overrides$/iu.test(root)) {
-      return;
-    }
-    if (!isSameOrChildPath(this.paths.userDataRoot, root) && !isSameOrChildPath(this.paths.defaultResourceRoot, root)) {
-      return;
-    }
-    if (!existsSync(root)) {
-      return;
-    }
-
-    await rm(root, { recursive: true, force: true });
-    onOutput?.(`removed legacy python-overrides root: ${root}`);
-  }
-
-  private async assertOverlayIntegrity(root: string): Promise<void> {
-    const corrupt = await this.findCorruptDistributions(root);
-    if (corrupt.length > 0) {
-      throw new Error(`Python overlay integrity check failed:\n${corrupt.slice(0, 8).join("\n")}`);
-    }
-  }
-
-  private isReplacedRecordPath(source: string, replacedPaths: Set<string>): boolean {
-    for (const path of replacedPaths) {
-      if (isSameOrChildPath(path, source)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private async activateGeneration(generationDir: string): Promise<void> {
-    const root = this.getOverridesRoot();
-    const generationName = generationDir.split(/[\\/]/u).pop();
-    if (!generationName || !generationName.startsWith(OVERLAY_GENERATION_PREFIX)) {
-      throw new Error(`Invalid Python overlay generation path: ${generationDir}`);
-    }
-    const manifestPath = join(root, OVERLAY_ACTIVE_FILE);
-    const tempManifestPath = join(root, `${OVERLAY_ACTIVE_FILE}.${process.pid}.${Date.now().toString(36)}.tmp`);
-    await writeFile(
-      tempManifestPath,
-      `${JSON.stringify({ version: 1, active: generationName, activatedAt: Date.now() }, null, 2)}\n`,
-      "utf8",
-    );
-    await rename(tempManifestPath, manifestPath);
-  }
-
-  private async findCorruptDistributions(root: string): Promise<string[]> {
-    let entries;
-    try {
-      entries = await readdir(root, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-
-    const corrupt: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !/(?:\.dist-info|\.egg-info)$/iu.test(entry.name)) {
-        continue;
-      }
-      const recordPath = join(root, entry.name, "RECORD");
-      let record;
-      try {
-        record = await readFile(recordPath, "utf8");
+        info = await lstat(linkPath);
       } catch {
         continue;
       }
-      const missing: string[] = [];
-      for (const file of this.recordFileNames(record)) {
-        const candidates = this.recordPathCandidates(root, file);
-        if (candidates.length > 0 && !candidates.some((candidate) => existsSync(candidate))) {
-          missing.push(file);
-        }
-        if (missing.length >= 3) {
-          break;
-        }
+      if (!info.isSymbolicLink()) {
+        continue;
       }
-      if (missing.length > 0) {
-        corrupt.push(`${entry.name}: RECORD references missing file(s): ${missing.join(", ")}`);
-      }
-    }
 
-    return corrupt;
+      let currentTarget;
+      try {
+        currentTarget = await readlink(linkPath);
+      } catch {
+        continue;
+      }
+      if (currentTarget === versionedName || currentTarget === `./${versionedName}`) {
+        continue;
+      }
+      if (!isAbsolute(currentTarget)) {
+        continue;
+      }
+
+      await unlink(linkPath);
+      await symlink(versionedName, linkPath);
+      onOutput?.(`repaired portable Python link: ${linkPath} -> ${versionedName}`);
+    }
   }
 
-  private async installedRecordPaths(root: string, metadataEntry: string): Promise<string[]> {
-    if (!/(?:\.dist-info|\.egg-info)$/iu.test(metadataEntry)) {
-      return [];
-    }
-
-    let record;
+  private getVersionedUnixPythonPath(root = this.getPythonEnvRoot()): string | undefined {
+    const binRoot = join(root, "bin");
     try {
-      record = await readFile(join(root, metadataEntry, "RECORD"), "utf8");
+      return readdirSync(binRoot, { withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name)
+        .filter((name) => /^python\d+\.\d+$/iu.test(name))
+        .sort((left, right) => right.localeCompare(left, "en-US", { numeric: true }))
+        .map((name) => join(binRoot, name))[0];
     } catch {
-      return [];
+      return undefined;
     }
-
-    const paths: string[] = [];
-    for (const file of this.recordFileNames(record)) {
-      for (const candidate of this.recordPathCandidates(root, file)) {
-        if (existsSync(candidate)) {
-          paths.push(candidate);
-          break;
-        }
-      }
-    }
-    return paths;
-  }
-
-  private recordFileNames(record: string): string[] {
-    return record
-      .replace(/\r\n/gu, "\n")
-      .replace(/\r/gu, "\n")
-      .split("\n")
-      .map((line) => line.split(",", 1)[0]?.trim())
-      .filter((file): file is string => Boolean(file));
-  }
-
-  private recordPathCandidates(root: string, file: string): string[] {
-    if (isAbsolute(file)) {
-      return [];
-    }
-
-    const parts = file.split("/").filter(Boolean);
-    const candidates: string[] = [];
-    if (file.startsWith("../")) {
-      const stripped = file.replace(/^(?:\.\.\/)+/u, "");
-      if (stripped && stripped !== file) {
-        candidates.push(resolve(root, ...stripped.split("/").filter(Boolean)));
-      }
-    }
-    candidates.push(resolve(root, ...parts));
-
-    const seen = new Set<string>();
-    return candidates
-      .filter((candidate) => isInsidePath(root, candidate))
-      .filter((candidate) => {
-        const normalized = resolve(candidate);
-        if (seen.has(normalized)) {
-          return false;
-        }
-        seen.add(normalized);
-        return true;
-      });
-  }
-
-  private async overlayPackageEntries(packageName: string, targetDir = this.getOverridesRoot()): Promise<string[]> {
-    const normalizedName = normalizeProjectName(packageName);
-    const importName = packageImportName(packageName);
-    let entries;
-    try {
-      entries = await readdir(targetDir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .filter((entry) => {
-        const normalizedEntryName = normalizeProjectName(entry.name);
-        const importEntryName = entry.name.toLowerCase().replace(/[-.]+/gu, "_");
-        return (
-          importEntryName === importName
-          || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-dist-info"))
-          || (normalizedEntryName.startsWith(`${normalizedName}-`) && normalizedEntryName.endsWith("-egg-info"))
-        );
-      })
-      .map((entry) => entry.name);
   }
 
   private async getUnsatisfiedRequirements(requirementsPath: string): Promise<UnsatisfiedDependency[]> {
@@ -1281,7 +1052,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
 `;
 
     const output = await this.runPython(
-      ["-c", script, JSON.stringify(dependencies), this.getActiveOverridesRoot()],
+      ["-c", script, JSON.stringify(dependencies), this.getPythonPackagesRoot()],
     );
     const raw = output.find((line) => line.trim().startsWith("[")) ?? "[]";
     const parsed = JSON.parse(raw) as unknown;

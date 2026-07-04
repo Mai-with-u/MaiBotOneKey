@@ -136,7 +136,7 @@ function isDependencyPreparationLog(entry: LogEntry): boolean {
       entry.message.includes("python-env") ||
       entry.message.includes("pip install") ||
       entry.message.includes("dependency needs install") ||
-      entry.message.includes("removed legacy python-overrides")
+      entry.message.includes("removed legacy Python dependency directory")
     )
   );
 }

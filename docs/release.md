@@ -27,7 +27,7 @@
    modules/SnowLuma/index.mjs
    ```
 
-   `runtime/python` 必须保持为便携 Python，只保留 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`。不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages` 或 `runtime/python/lib/python3.12/site-packages`；`release-assets/python-overrides` 不会进入安装包。
+   `runtime/python` 必须保持为便携 Python，只保留 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`。不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages` 或 `runtime/python/lib/python3.12/site-packages`；首次启动会复制可写 `python-env` 并把运行依赖安装到其中。
 
    `resources/opencode/plugin_code.md` 会在打包时复制到安装包资源目录的 `runtime/opencode/plugin_code.md`，用于编写器内置 OpenCode 的默认插件编写说明。
 

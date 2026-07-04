@@ -98,7 +98,7 @@ import type {
   ModuleSourceUpdate,
   ModuleTagOption,
   ModuleUpdateTarget,
-  PythonOverridesState,
+  PythonEnvironmentState,
   PythonPackageSourcePreset,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
@@ -2141,12 +2141,12 @@ export function registerAppIpc({
     }
 
     const dashboardVersion = await readPythonDistInfoVersion(
-      pythonDependencyManager.getActiveOverridesRoot(),
+      pythonDependencyManager.getPythonPackagesRoot(),
       "maibot-dashboard",
     );
     if (dashboardVersion) {
-      versions.dashboardOverride = dashboardVersion;
-      versions.dashboardOverrideSource = "python-overrides";
+      versions.dashboardPythonEnv = dashboardVersion;
+      versions.dashboardPythonEnvSource = "python-env";
     }
 
     return versions;
@@ -3749,7 +3749,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle("pythonDeps:getState", (): PythonOverridesState => {
+  ipcMain.handle("pythonDeps:getState", (): PythonEnvironmentState => {
     return pythonDependencyManager.getState();
   });
 
@@ -3758,7 +3758,7 @@ export function registerAppIpc({
     async (
       _event,
       preset: PythonPackageSourcePreset,
-    ): Promise<PythonOverridesState> => {
+    ): Promise<PythonEnvironmentState> => {
       const state = await pythonDependencyManager.saveSourcePreset(preset);
       await broadcastSnapshot();
       return state;

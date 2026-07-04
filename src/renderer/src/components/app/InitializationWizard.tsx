@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopSnapshot,
   LogEntry,
-  PythonOverridesState,
+  PythonEnvironmentState,
   PythonPackageSourcePreset,
   ServiceDescriptor,
 } from "@shared/contracts";
@@ -169,7 +169,7 @@ export function InitializationWizard({
   const [seen, setSeen] = useState(readStartupWizardSeen);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pythonDeps, setPythonDeps] = useState<PythonOverridesState | null>(
+  const [pythonDeps, setPythonDeps] = useState<PythonEnvironmentState | null>(
     null,
   );
   const [sourceSaving, setSourceSaving] = useState(false);

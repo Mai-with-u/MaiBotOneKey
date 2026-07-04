@@ -409,7 +409,7 @@ async function main(): Promise<void> {
     console.log("");
     console.log("[missing] portable Python should not contain application dependencies.");
     console.log("Keep runtime/python lean: only Python itself plus pip/setuptools/wheel/packaging are allowed.");
-    console.log("Install MaiBot/dashboard dependencies into python-overrides at first run instead.");
+    console.log("Install MaiBot/dashboard dependencies into the writable python-env at first run instead.");
     if (bundledPythonPackages.length > 0) {
       console.log(`Unexpected site-packages entries (${bundledPythonPackages.length}):`);
       for (const name of bundledPythonPackages.slice(0, 30)) {

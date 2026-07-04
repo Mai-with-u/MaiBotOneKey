@@ -66,7 +66,7 @@ import type {
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
-  PythonOverridesState,
+  PythonEnvironmentState,
   PythonPackageSourcePreset,
   PythonPackageInstallRequest,
   PythonPackageInstallResult,
@@ -299,9 +299,9 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("statistics:getMaibot") as Promise<MaiBotStatisticSummary>,
   },
   pythonDeps: {
-    getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonOverridesState>,
+    getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonEnvironmentState>,
     saveSourcePreset: (preset: PythonPackageSourcePreset) =>
-      ipcRenderer.invoke("pythonDeps:saveSourcePreset", preset) as Promise<PythonOverridesState>,
+      ipcRenderer.invoke("pythonDeps:saveSourcePreset", preset) as Promise<PythonEnvironmentState>,
     listVersions: (packageName: ManagedPythonPackageName) =>
       ipcRenderer.invoke("pythonDeps:listVersions", packageName) as Promise<PythonPackageVersionList>,
     installVersion: (request: PythonPackageInstallRequest) =>

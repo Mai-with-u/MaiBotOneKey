@@ -1087,7 +1087,7 @@ export function SettingsStatusPanel({
   const serviceCommands = snapshot.serviceCommands ?? [];
   const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
-  const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs.filter((config) => config.key !== "pythonOverrides");
+  const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs;
   const editableRuntimePathConfigs = runtimePathConfigs.filter((config) => config.key !== "python");
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };

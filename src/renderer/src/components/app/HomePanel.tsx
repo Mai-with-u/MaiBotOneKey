@@ -3920,13 +3920,13 @@ export function HomePanel({
               </div>
             ) : null}
             <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
-              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardOverride} retro={useRetroHome} />
+              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardPythonEnv} retro={useRetroHome} />
               <div className="my-1 border-t border-border/70" />
               <DetailRow label="最新正式版" value={dashboardTarget} retro={useRetroHome} />
             </div>
             {maibotUpdateBlocked ? (
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
-                请先停止 MaiBot Core，再更新 WebUI 覆盖依赖。
+                请先停止 MaiBot Core，再更新 WebUI Python 环境依赖。
               </div>
             ) : null}
           </DialogBody>

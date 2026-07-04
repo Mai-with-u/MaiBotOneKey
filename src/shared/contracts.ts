@@ -100,7 +100,7 @@ export interface RuntimePathUpdate {
   value: string;
 }
 
-export type RuntimeResourcePathKey = "maibot" | "napcat" | "pythonOverrides";
+export type RuntimeResourcePathKey = "maibot" | "napcat";
 
 export interface RuntimeResourcePathConfig {
   key: RuntimeResourcePathKey;
@@ -188,8 +188,7 @@ export interface RuntimePaths {
   bundledModulesRoot: string;
   runtimeRoot: string;
   opencodePluginInstructionsPath: string;
-  defaultPythonOverridesRoot: string;
-  pythonOverridesRoot: string;
+  pythonEnvRoot: string;
   pluginBuilderRoot: string;
   logsRoot: string;
 }
@@ -301,8 +300,8 @@ export interface ModuleRuntimeVersions {
   maibotLatestPrereleaseTag?: string;
   maibotRemoteSource?: string;
   maibotRemoteError?: string;
-  dashboardOverride?: string;
-  dashboardOverrideSource?: "python-overrides" | "unknown";
+  dashboardPythonEnv?: string;
+  dashboardPythonEnvSource?: "python-env" | "unknown";
   dashboardLatestPypi?: string;
   dashboardLatestStablePypi?: string;
   dashboardLatestPrereleasePypi?: string;
@@ -1296,7 +1295,7 @@ export interface PythonPackageInstallResult {
   installedAt: number;
 }
 
-export interface PythonOverridesState {
+export interface PythonEnvironmentState {
   root: string;
   sourcePreset: PythonPackageSourcePreset;
   sourceUrl: string;
@@ -1504,8 +1503,8 @@ export interface DesktopBridge {
     getMaiBot: () => Promise<MaiBotStatisticSummary>;
   };
   pythonDeps: {
-    getState: () => Promise<PythonOverridesState>;
-    saveSourcePreset: (preset: PythonPackageSourcePreset) => Promise<PythonOverridesState>;
+    getState: () => Promise<PythonEnvironmentState>;
+    saveSourcePreset: (preset: PythonPackageSourcePreset) => Promise<PythonEnvironmentState>;
     listVersions: (packageName: ManagedPythonPackageName) => Promise<PythonPackageVersionList>;
     installVersion: (request: PythonPackageInstallRequest) => Promise<PythonPackageInstallResult>;
   };

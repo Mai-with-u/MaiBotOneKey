@@ -40,7 +40,6 @@ function defaultResourcePaths(defaultResourceRoot: string): RuntimeResourcePathM
   return {
     maibot: join(defaultResourceRoot, "modules", "MaiBot"),
     napcat: join(defaultResourceRoot, "modules", "napcat"),
-    pythonOverrides: join(defaultResourceRoot, "python-overrides"),
   };
 }
 
@@ -52,7 +51,6 @@ function readStoredResourcePaths(userDataRoot: string): Partial<RuntimeResourceP
       return {
         maibot: normalizePath(raw.paths?.maibot),
         napcat: normalizePath(raw.paths?.napcat),
-        pythonOverrides: normalizePath(raw.paths?.pythonOverrides),
       };
     } catch {
       return {};
@@ -79,9 +77,6 @@ export function applyRuntimeResourcePaths(paths: RuntimePaths, updates: Partial<
   }
   if (updates.napcat) {
     paths.napcatRoot = updates.napcat;
-  }
-  if (updates.pythonOverrides) {
-    paths.pythonOverridesRoot = updates.pythonOverrides;
   }
   paths.resourceRoot = paths.defaultResourceRoot;
   paths.modulesRoot = join(paths.defaultResourceRoot, "modules");
@@ -116,8 +111,7 @@ export function configureRuntimePaths(): RuntimePaths {
     opencodePluginInstructionsPath: app.isPackaged
       ? join(payloadRoot, "runtime", "opencode", "plugin_code.md")
       : join(installRoot, "resources", "opencode", "plugin_code.md"),
-    defaultPythonOverridesRoot: defaults.pythonOverrides,
-    pythonOverridesRoot: defaults.pythonOverrides,
+    pythonEnvRoot: join(defaultResourceRoot, "python-env"),
     pluginBuilderRoot: join(userDataRoot, "plugin-builder", "plugins"),
     logsRoot: join(userDataRoot, "logs"),
   };

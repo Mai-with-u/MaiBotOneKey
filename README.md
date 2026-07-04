@@ -45,11 +45,11 @@ bun run build
 
 ## 运行时资源
 
-打包版默认把可写运行资源放在 `%APPDATA%\MaiBotOneKeyDesktop\<安装目录hash>` 下；设置中心的「实例路径」页可以迁移运行时资源目录。迁移只移动 `modules/` 与 `python-overrides/`，日志、实例锁和一键包设置仍保留在用户数据目录。
+打包版默认把可写运行资源放在 `%APPDATA%\MaiBotOneKeyDesktop\<安装目录hash>` 下；设置中心的「实例路径」页可以迁移运行时资源目录。迁移只移动 `modules/`，日志、实例锁、`python-env` 和一键包设置仍保留在用户数据目录。
 
 ## Windows 打包
 
-Windows x64 NSIS 安装包当前产出正式版：`MaiBot OK-<version>-win.exe`。正式版会打包干净的基础 Python、内置 Git、MaiBot、NapCat、SnowLuma 以及 NapCat/SnowLuma 适配器插件，但不会打包 MaiBot Python 依赖，也不会打包 `python-overrides` 覆盖层；首次启动时再由启动器安装运行依赖。
+Windows x64 NSIS 安装包当前产出正式版：`MaiBot OK-<version>-win.exe`。正式版会打包干净的基础 Python、内置 Git、MaiBot、NapCat、SnowLuma 以及 NapCat/SnowLuma 适配器插件，但不会把 MaiBot Python 依赖预装进包内 runtime；首次启动时启动器会复制一份可写 `python-env` 并把运行依赖安装到其中。
 
 打包前需要在仓库根目录放好 payload：
 
@@ -73,7 +73,7 @@ modules/
   SnowLuma/
 ```
 
-`runtime/python` 必须保持为便携 Python，只允许 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`；不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`。macOS 包内路径是 `runtime/python/bin/python3`，Windows 包内路径是 `runtime/python/python.exe`。`release-assets/python-overrides` 不会进入安装包。
+`runtime/python` 必须保持为便携 Python，只允许 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`；不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`。macOS 包内路径是 `runtime/python/bin/python3.12` 或同版本真实二进制，Windows 包内路径是 `runtime/python/python.exe`。
 
 编写器里的 OpenCode 入口依赖内置 CLI sidecar：打包前需要把 Windows x64 版 `opencode.exe` 放到 `runtime/opencode/opencode.exe`。当前接入按 `opencode-windows-x64` release binary 设计，`runtime/` 已被 `.gitignore` 忽略，所以该二进制不会进入源码提交；`bun run release:check` 会校验它是否存在。
 
