@@ -701,7 +701,7 @@ export class ServiceManager extends EventEmitter {
 
     await this.assertPortsFree(definition);
 
-    const displayCommand = resolved.command ?? [resolved.commandLine];
+    let displayCommand = resolved.command ?? [resolved.commandLine];
     const dynamicUrl = await this.resolveServiceUrl(definition.id, definition.url);
 
     this.setState(serviceId, {
@@ -722,32 +722,20 @@ export class ServiceManager extends EventEmitter {
       dynamicUrl,
     });
 
-    this.logs.append(
-      serviceId,
-      "system",
-      `start: ${resolved.commandLine} cwd=${resolved.cwd}${resolved.customized ? " customized=true" : ""}`,
-    );
-
     try {
-      const useCommandLine = !resolved.command;
       const agreementEnv = await this.initManager.getAgreementEnvVars();
-      const usePythonOverlay = definition.id === "maibot" && Boolean(this.pythonDependencyManager);
-      const baseEnv = usePythonOverlay ? this.pythonDependencyManager?.buildPythonPathEnv() : undefined;
+      const usePythonEnvironment = definition.id === "maibot" && Boolean(this.pythonDependencyManager);
       const serviceEnv = createServiceSpecificEnv(definition.id, this.startupSettingsStore.get());
-      const mergedEnv: Record<string, string> = { ...(baseEnv ?? {}), ...agreementEnv, ...serviceEnv };
+      const mergedEnv: Record<string, string> = { ...agreementEnv, ...serviceEnv };
       if (serviceEnv[LOCAL_DASHBOARD_ENV_NAME]) {
         this.logs.append("maibot", "system", `local dashboard enabled: ${LOCAL_DASHBOARD_ENV_NAME}=1`);
       }
-      if (usePythonOverlay && this.pythonDependencyManager) {
-        const syncedPythonOverrides = await this.initManager.ensureBundledPythonOverrides();
-        if (syncedPythonOverrides.length > 0) {
-          this.logs.append("maibot", "system", `startup dependency upgrade: copied bundled Python overrides to ${syncedPythonOverrides[0]}`);
-        }
+      if (usePythonEnvironment && this.pythonDependencyManager) {
         this.setState("maibot", {
           ...this.getState("maibot"),
           detail: "\u6b63\u5728\u68c0\u67e5 MaiBot \u542f\u52a8\u4f9d\u8d56\uff0c\u5b8c\u6210\u540e\u4f1a\u542f\u52a8 PTY",
         });
-        this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependency files");
+        this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependencies in portable Python environment");
         const dependencyUpgradeStartedAt = Date.now();
         const dependencyUpgradeHeartbeat = setInterval(() => {
           const elapsedSeconds = Math.round((Date.now() - dependencyUpgradeStartedAt) / 1000);
@@ -763,14 +751,27 @@ export class ServiceManager extends EventEmitter {
           "system",
           `startup dependency upgrade completed: ${upgradeResult.sourceFile} -> ${upgradeResult.targetDir}`,
         );
+        this.definitions = this.createDefinitions();
+        definition = this.getDefinition(serviceId);
+        resolved = await this.resolveStartCommand(definition);
+        this.assertRequiredPaths(definition, resolved.requiredPaths);
+        displayCommand = resolved.command ?? [resolved.commandLine];
         if (!this.getState("maibot").desired) {
           return this.toDescriptor(definition, this.getState("maibot"));
         }
         this.setState("maibot", {
           ...this.getState("maibot"),
           detail: "\u4f9d\u8d56\u68c0\u67e5\u5b8c\u6210\uff0c\u6b63\u5728\u542f\u52a8 MaiBot Core PTY",
+          command: displayCommand,
+          cwd: resolved.cwd,
         });
       }
+      this.logs.append(
+        serviceId,
+        "system",
+        `start: ${resolved.commandLine} cwd=${resolved.cwd}${resolved.customized ? " customized=true" : ""}`,
+      );
+      const useCommandLine = !resolved.command;
       if (!this.shouldUseEmbeddedTerminal()) {
         const child = this.startExternalTerminal(definition, resolved, mergedEnv);
         this.setState(serviceId, {
@@ -1119,7 +1120,8 @@ export class ServiceManager extends EventEmitter {
   }
 
   private createDefinitions(): ServiceDefinition[] {
-    const python = this.initManager.getPythonPath();
+    const portablePython = this.pythonDependencyManager?.getPythonPath();
+    const python = portablePython && existsSync(portablePython) ? portablePython : this.initManager.getPythonPath();
     const maibotRoot = this.paths.maibotRoot;
     const maibotWebUi = this.initManager.readMaiBotWebUiEndpointSync();
     const napcatRoot = this.paths.napcatRoot;

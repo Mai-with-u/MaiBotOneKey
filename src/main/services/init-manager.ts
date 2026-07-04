@@ -2766,7 +2766,6 @@ export class InitManager {
     return [
       ...(await this.ensureServiceReady("maibot")),
       ...(await this.ensureServiceReady("napcat")),
-      ...(await this.ensureBundledPythonOverrides()),
     ];
   }
 

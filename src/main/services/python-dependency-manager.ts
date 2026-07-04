@@ -1,7 +1,7 @@
 ﻿import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   ManagedPythonPackage,
   ManagedSourceEntry,
@@ -24,12 +24,14 @@ const MANAGED_PACKAGES: ManagedPythonPackage[] = [
   { name: "maibot-dashboard", label: "MaiBot Dashboard" },
   { name: "maim-message", label: "Maim Message" },
 ];
-const PYTHON_OVERLAY_TARGET_ENV = "MAIBOT_PYTHON_OVERLAY_TARGET";
 const REQUEST_TIMEOUT_MS = 60_000;
 const PIP_TIMEOUT_MS = 10 * 60 * 1000;
 const STARTUP_UPGRADE_IDLE_TIMEOUT_MS = 10_000;
 const STALE_OVERLAY_TEMP_MS = 24 * 60 * 60 * 1000;
 const SIMPLE_ACCEPT = "application/vnd.pypi.simple.v1+json, application/json;q=0.9, text/html;q=0.8";
+const PYTHON_RUNTIME_DIR = "python";
+const PYTHON_ENV_DIR = "python-env";
+const PYTHON_ENV_MANIFEST = "maibot-python-env.json";
 const OVERLAY_GENERATIONS_DIR = ".generations";
 const OVERLAY_ACTIVE_FILE = "active-generation.json";
 const OVERLAY_GENERATION_PREFIX = "generation-";
@@ -162,6 +164,10 @@ function isInsidePath(root: string, path: string): boolean {
 function isSameOrChildPath(parent: string, child: string): boolean {
   const relativePath = relative(resolve(parent), resolve(child));
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function isSamePath(left: string, right: string): boolean {
+  return resolve(left) === resolve(right);
 }
 
 function packageNameFromRequirement(requirement: string): string | undefined {
@@ -390,23 +396,111 @@ export class PythonDependencyManager {
   ) {}
 
   getOverridesRoot(): string {
-    return this.paths.pythonOverridesRoot;
+    return this.getPythonEnvRoot();
   }
 
   getActiveOverridesRoot(): string {
-    const root = this.getOverridesRoot();
+    return this.getExistingPythonSitePackagesRoot() ?? this.getPythonEnvRoot();
+  }
+
+  getPythonEnvRoot(): string {
+    return join(this.paths.defaultResourceRoot, PYTHON_ENV_DIR);
+  }
+
+  getPythonPath(): string {
+    return this.getExistingPythonEnvPath() ?? this.getPythonEnvCandidates()[0];
+  }
+
+  private getBundledPythonRoot(): string {
+    return join(this.paths.runtimeRoot, PYTHON_RUNTIME_DIR);
+  }
+
+  private getPythonEnvCandidates(root = this.getPythonEnvRoot()): string[] {
+    return [
+      join(root, "python.exe"),
+      join(root, "Scripts", "python.exe"),
+      join(root, "bin", "python.exe"),
+      join(root, "python"),
+      join(root, "bin", "python3"),
+      join(root, "bin", "python"),
+    ];
+  }
+
+  private getExistingPythonEnvPath(): string | undefined {
+    return this.getPythonEnvCandidates().find((candidate) => existsSync(candidate));
+  }
+
+  private getPythonSitePackageCandidates(root = this.getPythonEnvRoot()): string[] {
+    const candidates = [
+      join(root, "Lib", "site-packages"),
+      join(root, "lib", "site-packages"),
+    ];
+    const libRoot = join(root, "lib");
     try {
-      const raw = JSON.parse(readFileSync(join(root, OVERLAY_ACTIVE_FILE), "utf8")) as { active?: unknown };
-      if (typeof raw.active === "string" && /^[A-Za-z0-9._-]+$/u.test(raw.active)) {
-        const activeRoot = join(root, OVERLAY_GENERATIONS_DIR, raw.active);
-        if (existsSync(activeRoot)) {
-          return activeRoot;
+      for (const entry of readdirSync(libRoot, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^python\d+(?:\.\d+)?$/iu.test(entry.name)) {
+          candidates.push(join(libRoot, entry.name, "site-packages"));
         }
       }
     } catch {
-      // Fall back to the legacy overlay root.
+      // The Windows portable runtime usually does not have a Unix-style lib tree.
     }
-    return root;
+    return Array.from(new Set(candidates));
+  }
+
+  private getExistingPythonSitePackagesRoot(): string | undefined {
+    return this.getPythonSitePackageCandidates().find((candidate) => existsSync(candidate));
+  }
+
+  async ensurePythonEnvironment(onOutput?: PythonOutputHandler): Promise<string[]> {
+    if (this.getExistingPythonEnvPath()) {
+      return [];
+    }
+
+    const sourceRoot = this.getBundledPythonRoot();
+    if (!existsSync(sourceRoot)) {
+      throw new Error(`内置 Python 缺失，无法创建便携环境: ${sourceRoot}`);
+    }
+
+    const targetRoot = this.getPythonEnvRoot();
+    const tempRoot = `${targetRoot}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    await rm(tempRoot, { recursive: true, force: true });
+    await mkdir(dirname(targetRoot), { recursive: true });
+    onOutput?.(`copying bundled Python runtime to writable environment: ${targetRoot}`);
+
+    try {
+      await cp(sourceRoot, tempRoot, { recursive: true, force: true, errorOnExist: false });
+      await writeFile(
+        join(tempRoot, PYTHON_ENV_MANIFEST),
+        `${JSON.stringify({
+          version: 1,
+          source: sourceRoot,
+          createdAt: Date.now(),
+          platform: process.platform,
+          arch: process.arch,
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await rm(targetRoot, { recursive: true, force: true });
+      await rename(tempRoot, targetRoot);
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+      if (code !== "EXDEV") {
+        await rm(tempRoot, { recursive: true, force: true });
+        throw error;
+      }
+      await rm(targetRoot, { recursive: true, force: true });
+      await cp(tempRoot, targetRoot, { recursive: true, force: true, errorOnExist: false });
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+
+    const python = this.getExistingPythonEnvPath();
+    if (!python) {
+      throw new Error(`便携 Python 环境创建失败，未找到 Python 可执行文件: ${targetRoot}`);
+    }
+
+    onOutput?.(`portable Python ready: ${python}`);
+    return [targetRoot];
   }
 
   getSourcePreset(): PythonPackageSourcePreset {
@@ -438,14 +532,6 @@ export class PythonDependencyManager {
       sourceUrl: this.getPrimaryIndex().url,
       sourceOptions: this.getPipIndexes().map(({ preset, label, url }) => ({ preset, label, url })),
       packages: MANAGED_PACKAGES,
-    };
-  }
-
-  buildPythonPathEnv(baseEnv: Record<string, string | undefined> = process.env): Record<string, string> {
-    const overridesRoot = this.getActiveOverridesRoot();
-    return {
-      PYTHONPATH: [overridesRoot, baseEnv.PYTHONPATH].filter(Boolean).join(delimiter),
-      [PYTHON_OVERLAY_TARGET_ENV]: overridesRoot,
     };
   }
 
@@ -497,8 +583,7 @@ export class PythonDependencyManager {
       throw new Error("Please select a version to install");
     }
 
-    const targetDir = this.getOverridesRoot();
-    await mkdir(targetDir, { recursive: true });
+    await this.ensurePythonEnvironment();
 
     const requirement = `${request.packageName}==${request.version.trim()}`;
     const baseArgs = [
@@ -515,7 +600,8 @@ export class PythonDependencyManager {
       "--no-compile",
       "--no-warn-script-location",
     ];
-    const result = await this.installRequirementsIntoOverlay(baseArgs, [requirement]);
+    const result = await this.installRequirementsIntoEnvironment(baseArgs, [requirement]);
+    await this.cleanupLegacyPythonOverridesRoot();
 
     return {
       packageName: request.packageName,
@@ -585,6 +671,7 @@ export class PythonDependencyManager {
     signal?: AbortSignal,
     onOutput?: PythonOutputHandler,
   ): Promise<StartupDependencyUpgradeResult> {
+    await this.ensurePythonEnvironment(onOutput);
     const maibotRoot = this.paths.maibotRoot;
     const requirementsPath = join(maibotRoot, "requirements.txt");
     const pyprojectPath = join(maibotRoot, "pyproject.toml");
@@ -645,7 +732,7 @@ export class PythonDependencyManager {
     }
 
     if (unsatisfied.length === 0) {
-      const output = ["all declared requirements are already satisfied in Python runtime + overrides"];
+      const output = ["all declared requirements are already satisfied in portable Python environment"];
       for (const line of output) {
         onOutput?.(line);
       }
@@ -661,8 +748,6 @@ export class PythonDependencyManager {
       onOutput?.(`dependency needs install: ${item.reason}`);
     }
 
-    const targetDir = this.getOverridesRoot();
-    await mkdir(targetDir, { recursive: true });
     const sourceArgs = unsatisfied.map((item) => item.requirement);
 
     const baseArgs = [
@@ -682,12 +767,13 @@ export class PythonDependencyManager {
       "--progress-bar",
       "off",
     ];
-    const result = await this.installRequirementsIntoOverlay(
+    const result = await this.installRequirementsIntoEnvironment(
       baseArgs,
       sourceArgs,
       signal,
       onOutput,
     );
+    await this.cleanupLegacyPythonOverridesRoot(onOutput);
 
     return {
       sourceFile,
@@ -696,6 +782,23 @@ export class PythonDependencyManager {
       output: result.output,
       installedAt: Date.now(),
     };
+  }
+
+  private async installRequirementsIntoEnvironment(
+    baseArgs: string[],
+    requirements: string[],
+    signal?: AbortSignal,
+    onOutput?: PythonOutputHandler,
+  ): Promise<PipInstallAttemptResult> {
+    await this.ensurePythonEnvironment(onOutput);
+    const result = await this.runPipInstallWithFallback(
+      baseArgs,
+      requirements,
+      signal,
+      onOutput,
+    );
+    await this.assertOverlayIntegrity(this.getActiveOverridesRoot());
+    return result;
   }
 
   private async installRequirementsIntoOverlay(
@@ -839,6 +942,25 @@ export class PythonDependencyManager {
     if (failed.length > 0) {
       onOutput?.(`legacy python-overrides cleanup incomplete: ${failed.slice(0, 5).join("; ")}`);
     }
+  }
+
+  private async cleanupLegacyPythonOverridesRoot(onOutput?: PythonOutputHandler): Promise<void> {
+    const root = this.paths.pythonOverridesRoot;
+    if (!root || isSamePath(root, this.getPythonEnvRoot())) {
+      return;
+    }
+    if (!/(^|[/\\])python-overrides$/iu.test(root)) {
+      return;
+    }
+    if (!isSameOrChildPath(this.paths.userDataRoot, root) && !isSameOrChildPath(this.paths.defaultResourceRoot, root)) {
+      return;
+    }
+    if (!existsSync(root)) {
+      return;
+    }
+
+    await rm(root, { recursive: true, force: true });
+    onOutput?.(`removed legacy python-overrides root: ${root}`);
   }
 
   private async assertOverlayIntegrity(root: string): Promise<void> {
@@ -1031,7 +1153,7 @@ print(json.dumps(missing, ensure_ascii=False))
 `;
 
     try {
-      const output = await this.runPython(["-c", script, requirementsPath], undefined, undefined, this.buildPythonPathEnv());
+      const output = await this.runPython(["-c", script, requirementsPath]);
       return this.parseUnsatisfiedDependencies(output);
     } catch (error) {
       throw new Error(`检查 MaiBot requirements.txt 失败: ${toDetail(error)}`);
@@ -1089,7 +1211,7 @@ print(json.dumps(missing, ensure_ascii=False))
 `;
 
     try {
-      const output = await this.runPython(["-c", script, JSON.stringify(dependencies)], undefined, undefined, this.buildPythonPathEnv());
+      const output = await this.runPython(["-c", script, JSON.stringify(dependencies)]);
       return this.parseUnsatisfiedDependencies(output);
     } catch (error) {
       throw new Error(`检查 MaiBot pyproject.toml 依赖失败: ${toDetail(error)}`);
@@ -1107,7 +1229,7 @@ import sys
 from packaging.requirements import Requirement
 
 dependencies = json.loads(sys.argv[1])
-overlay_root = pathlib.Path(sys.argv[2]).resolve()
+env_root = pathlib.Path(sys.argv[2]).resolve()
 corrupt = []
 
 def is_inside(root, path):
@@ -1130,7 +1252,7 @@ for line in dependencies:
         continue
 
     metadata_path = pathlib.Path(str(getattr(distribution, "_path", "")))
-    if not metadata_path or not is_inside(overlay_root, metadata_path):
+    if not metadata_path or not is_inside(env_root, metadata_path):
         continue
 
     record_text = distribution.read_text("RECORD")
@@ -1145,7 +1267,7 @@ for line in dependencies:
         if not file:
             continue
         path = pathlib.Path(distribution.locate_file(file))
-        if is_inside(overlay_root, path) and not path.exists():
+        if is_inside(env_root, path) and not path.exists():
             missing.append(file)
             if len(missing) >= 3:
                 break
@@ -1160,9 +1282,6 @@ print(json.dumps(corrupt, ensure_ascii=False))
 
     const output = await this.runPython(
       ["-c", script, JSON.stringify(dependencies), this.getActiveOverridesRoot()],
-      undefined,
-      undefined,
-      this.buildPythonPathEnv(),
     );
     const raw = output.find((line) => line.trim().startsWith("[")) ?? "[]";
     const parsed = JSON.parse(raw) as unknown;
@@ -1299,7 +1418,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
 
     return new Promise((resolve, reject) => {
       execFile(
-        this.initManager.getPythonPath(),
+        this.getPythonPath(),
         args,
         {
           cwd: this.paths.installRoot,
@@ -1307,12 +1426,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
           windowsHide: true,
           maxBuffer: 8 * 1024 * 1024,
           signal,
-          env: {
-            ...process.env,
-            ...extraEnv,
-            PYTHONIOENCODING: "utf-8",
-            PYTHONUTF8: "1",
-          },
+          env: this.buildPythonProcessEnv(extraEnv),
         },
         (error, stdout, stderr) => {
           const output = splitOutput(`${stdout}${stderr}`);
@@ -1335,16 +1449,11 @@ print(json.dumps(corrupt, ensure_ascii=False))
   ): Promise<string[]> {
     return new Promise((resolve, reject) => {
       const output: string[] = [];
-      const child = spawn(this.initManager.getPythonPath(), args, {
+      const child = spawn(this.getPythonPath(), args, {
         cwd: this.paths.installRoot,
         windowsHide: true,
         signal,
-        env: {
-          ...process.env,
-          ...extraEnv,
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUTF8: "1",
-        },
+        env: this.buildPythonProcessEnv(extraEnv),
       });
       this.startupUpgradeChild = child;
       let settled = false;
@@ -1419,5 +1528,17 @@ print(json.dumps(corrupt, ensure_ascii=False))
       });
     });
   }
-}
 
+  private buildPythonProcessEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...extraEnv,
+      PYTHONIOENCODING: "utf-8",
+      PYTHONUTF8: "1",
+      PYTHONNOUSERSITE: "1",
+    };
+    delete env.PYTHONHOME;
+    delete env.PYTHONPATH;
+    return env;
+  }
+}

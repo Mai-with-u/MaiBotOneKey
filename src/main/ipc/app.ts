@@ -174,7 +174,7 @@ const LAUNCHER_SETTING_FILES = [
   "app-icon-settings.json",
   "qq-component-upgrade-state.json",
 ];
-const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-overrides", "logs"];
+const LAUNCHER_RUNTIME_DIRECTORIES = ["modules", "python-env", "python-overrides", "logs"];
 const RETIRED_ENTRY_DIRECTORY = ".reset-pending-delete";
 const REMOVE_RETRY_OPTIONS = {
   recursive: true,
@@ -2141,7 +2141,7 @@ export function registerAppIpc({
     }
 
     const dashboardVersion = await readPythonDistInfoVersion(
-      pythonDependencyManager.getOverridesRoot(),
+      pythonDependencyManager.getActiveOverridesRoot(),
       "maibot-dashboard",
     );
     if (dashboardVersion) {
