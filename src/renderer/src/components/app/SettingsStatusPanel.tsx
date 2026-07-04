@@ -2830,11 +2830,9 @@ export function SettingsStatusPanel({
                     </div>
                   ) : null}
                 </div>
-                <PathField label="日志目录" onOpen={openPath} value={snapshot.paths.logsRoot} />
                 <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
                 <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
                 <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
-                <PathField label="内置 modules" onOpen={openPath} value={snapshot.paths.bundledModulesRoot} />
               </TabsContent>
 
               <TabsContent className="settings-content" value="debug">

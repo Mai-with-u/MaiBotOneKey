@@ -110,6 +110,13 @@ const fallbackSnapshot: DesktopSnapshot = {
       defaultValue: "开发预览/modules/napcat",
       customized: false,
     },
+    {
+      key: "snowluma",
+      label: "SnowLuma路径",
+      value: "开发预览/modules/SnowLuma",
+      defaultValue: "开发预览/modules/SnowLuma",
+      customized: false,
+    },
   ],
   terminalSettings: {
     useEmbeddedTerminal: true,

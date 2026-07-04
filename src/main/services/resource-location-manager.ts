@@ -37,8 +37,8 @@ interface StoredResourcePathsFile {
 }
 
 const RESOURCE_LOCK_FILE = "resource.lock";
-const RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat"];
-const EDITABLE_RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat"];
+const RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat", "snowluma"];
+const EDITABLE_RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat", "snowluma"];
 
 function normalizePathForCompare(path: string): string {
   const resolved = resolve(path);
@@ -87,6 +87,8 @@ function labelForKey(key: RuntimeResourcePathKey): string {
       return "MaiBot路径";
     case "napcat":
       return "NapCat路径";
+    case "snowluma":
+      return "SnowLuma路径";
   }
 }
 
@@ -219,7 +221,7 @@ export class ResourceLocationManager {
     }
 
     if (isPathNestedEitherWay(this.paths.bundledModulesRoot, targetPath)) {
-      throw new Error("MaiBot 与 NapCat 路径不能放在一键包内置 modules 模板目录中");
+      throw new Error("实例路径不能放在一键包内置 modules 模板目录中");
     }
   }
 
@@ -260,6 +262,7 @@ export class ResourceLocationManager {
     return {
       maibot: this.paths.maibotRoot,
       napcat: this.paths.napcatRoot,
+      snowluma: this.paths.snowlumaRoot,
     };
   }
 
@@ -273,6 +276,8 @@ export class ResourceLocationManager {
         return this.paths.defaultMaibotRoot;
       case "napcat":
         return this.paths.defaultNapcatRoot;
+      case "snowluma":
+        return this.paths.defaultSnowlumaRoot;
     }
   }
 

@@ -100,7 +100,7 @@ export interface RuntimePathUpdate {
   value: string;
 }
 
-export type RuntimeResourcePathKey = "maibot" | "napcat";
+export type RuntimeResourcePathKey = "maibot" | "napcat" | "snowluma";
 
 export interface RuntimeResourcePathConfig {
   key: RuntimeResourcePathKey;

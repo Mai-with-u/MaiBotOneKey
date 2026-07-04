@@ -40,6 +40,7 @@ function defaultResourcePaths(defaultResourceRoot: string): RuntimeResourcePathM
   return {
     maibot: join(defaultResourceRoot, "modules", "MaiBot"),
     napcat: join(defaultResourceRoot, "modules", "napcat"),
+    snowluma: join(defaultResourceRoot, "modules", "SnowLuma"),
   };
 }
 
@@ -51,6 +52,7 @@ function readStoredResourcePaths(userDataRoot: string): Partial<RuntimeResourceP
       return {
         maibot: normalizePath(raw.paths?.maibot),
         napcat: normalizePath(raw.paths?.napcat),
+        snowluma: normalizePath(raw.paths?.snowluma),
       };
     } catch {
       return {};
@@ -78,6 +80,9 @@ export function applyRuntimeResourcePaths(paths: RuntimePaths, updates: Partial<
   if (updates.napcat) {
     paths.napcatRoot = updates.napcat;
   }
+  if (updates.snowluma) {
+    paths.snowlumaRoot = updates.snowluma;
+  }
   paths.resourceRoot = paths.defaultResourceRoot;
   paths.modulesRoot = join(paths.defaultResourceRoot, "modules");
 }
@@ -104,8 +109,8 @@ export function configureRuntimePaths(): RuntimePaths {
     maibotRoot: defaults.maibot,
     defaultNapcatRoot: defaults.napcat,
     napcatRoot: defaults.napcat,
-    defaultSnowlumaRoot: join(defaultResourceRoot, "modules", "SnowLuma"),
-    snowlumaRoot: join(defaultResourceRoot, "modules", "SnowLuma"),
+    defaultSnowlumaRoot: defaults.snowluma,
+    snowlumaRoot: defaults.snowluma,
     bundledModulesRoot,
     runtimeRoot: join(payloadRoot, "runtime"),
     opencodePluginInstructionsPath: app.isPackaged
