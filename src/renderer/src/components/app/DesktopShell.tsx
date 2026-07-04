@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import type {
   CodexPetOption,
   DesktopSnapshot,
+  LogEntry,
   LocalChatConnectionState,
   LocalChatEvent,
   LocalChatMessageEvent,
@@ -39,6 +40,7 @@ import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -122,6 +124,143 @@ function opencodeLaunchEnv(snapshot: DesktopSnapshot): Record<string, string> {
 
   env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
   return env;
+}
+
+function isDependencyPreparationLog(entry: LogEntry): boolean {
+  return (
+    entry.source === "maibot" &&
+    entry.stream === "system" &&
+    (
+      entry.message.includes("startup dependency upgrade") ||
+      entry.message.includes("portable Python") ||
+      entry.message.includes("python-env") ||
+      entry.message.includes("pip install") ||
+      entry.message.includes("dependency needs install") ||
+      entry.message.includes("removed legacy python-overrides")
+    )
+  );
+}
+
+function dependencyPreparationProgress(
+  service: ServiceDescriptor | undefined,
+  logs: LogEntry[],
+): number {
+  if (service?.status === "error") {
+    return 100;
+  }
+  if (service?.status === "running" && service.health === "ready") {
+    return 100;
+  }
+  if (service?.status === "running") {
+    return 92;
+  }
+
+  const messages = logs.map((entry) => entry.message).join("\n");
+  if (/dependency upgrade completed|依赖检查完成/iu.test(messages) || service?.detail?.includes("依赖检查完成")) {
+    return 86;
+  }
+  if (/Installing collected packages|pip is writing|pip install using/iu.test(messages)) {
+    return 68;
+  }
+  if (/dependency needs install|checking MaiBot dependencies|检查 MaiBot/iu.test(messages)) {
+    return 46;
+  }
+  if (/copying bundled Python|portable Python ready|python-env/iu.test(messages)) {
+    return 28;
+  }
+  return service?.status === "starting" ? 18 : 0;
+}
+
+function dependencyPreparationTitle(service: ServiceDescriptor | undefined): string {
+  if (service?.status === "error") {
+    return "MaiBot 依赖准备失败";
+  }
+  if (service?.status === "running") {
+    return "MaiBot 依赖准备完成";
+  }
+  return "正在准备 MaiBot Python 环境";
+}
+
+function DependencyMigrationCard({
+  logs,
+  service,
+}: {
+  logs: LogEntry[];
+  service: ServiceDescriptor | undefined;
+}): React.JSX.Element | null {
+  const runStartedAt = service?.startedAt ?? (service?.status === "starting" ? Date.now() - 5 * 60 * 1000 : undefined);
+  const scopedLogs = runStartedAt === undefined
+    ? logs
+    : logs.filter((entry) => entry.timestamp >= runStartedAt - 1000);
+  const visible =
+    service?.status === "starting" &&
+    (
+      service.detail?.includes("依赖") ||
+      scopedLogs.length > 0
+    );
+  const failed = service?.status === "error" && (
+    service.error?.includes("依赖") ||
+    service.detail?.includes("依赖") ||
+    scopedLogs.length > 0
+  );
+  if (!visible && !failed) {
+    return null;
+  }
+
+  const progress = dependencyPreparationProgress(service, scopedLogs);
+  const detail = service?.error ?? service?.detail ?? scopedLogs.at(-1)?.message ?? "正在准备可写 Python 环境";
+  const recentLogs = scopedLogs.slice(-6);
+
+  return (
+    <section
+      aria-live="polite"
+      className={cn(
+        "fixed bottom-4 right-4 z-40 w-[min(420px,calc(100vw-2rem))] rounded-lg border bg-popover p-4 text-popover-foreground shadow-xl shadow-black/15",
+        failed ? "border-destructive/45" : "border-border",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={cn(
+            "mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border",
+            failed ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-primary/20 bg-primary/10 text-primary",
+          )}
+        >
+          <Loader2 className={cn("size-4", !failed && "animate-spin")} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="truncate text-sm font-semibold">
+              {dependencyPreparationTitle(service)}
+            </h2>
+            <span className="font-mono text-xs text-muted-foreground">
+              {Math.round(progress)}%
+            </span>
+          </div>
+          <Progress
+            className={cn("mt-2", failed && "[&_[data-slot=progress-indicator]]:bg-destructive")}
+            value={progress}
+          />
+          <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+            {detail}
+          </p>
+          <div className="mt-3 max-h-28 space-y-1 overflow-auto rounded-md border border-border/70 bg-muted/30 p-2">
+            {recentLogs.length > 0 ? (
+              recentLogs.map((entry) => (
+                <p className="font-mono text-[11px] leading-relaxed text-muted-foreground" key={entry.id}>
+                  {entry.message}
+                </p>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                正在创建 python-env，随后会安装缺失依赖。
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 interface WebviewEntryTarget {
@@ -1400,6 +1539,10 @@ export function DesktopShell(): React.JSX.Element {
     [services],
   );
   const maibotService = serviceById.get("maibot");
+  const dependencyMigrationLogs = useMemo(
+    () => (snapshot?.recentLogs ?? []).filter(isDependencyPreparationLog).slice(-12),
+    [snapshot?.recentLogs],
+  );
   const maibotWebviewReady = maibotService?.status === "running" && maibotService.health === "ready";
   const maibotChatWebviewTarget = useMemo(
     () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
@@ -2260,6 +2403,7 @@ export function DesktopShell(): React.JSX.Element {
             snapshot={snapshot}
           />
         ) : null}
+          <DependencyMigrationCard logs={dependencyMigrationLogs} service={maibotService} />
           <HomeEntryGuide open={showHomeEntryGuide} onConfirm={confirmHomeEntryGuide} />
           <Toaster />
         </div>
