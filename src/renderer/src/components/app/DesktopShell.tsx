@@ -12,8 +12,9 @@
   Settings,
   Square,
   TerminalSquare,
+  Unplug,
 } from "lucide-react";
-import { type CSSProperties, type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
@@ -52,7 +53,6 @@ import { Toaster } from "@/components/ui/sonner";
 import maiMascotImage from "@/assets/mai2.png";
 import { HomePanel } from "./HomePanel";
 import { InitializationWizard } from "./InitializationWizard";
-import { PluginMarketPanel } from "./PluginMarketPanel";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
 import { TerminalPanel } from "./TerminalPanel";
@@ -214,15 +214,13 @@ function DependencyMigrationCard({
   return (
     <section
       aria-live="polite"
-      className={cn(
-        "fixed bottom-4 right-4 z-40 w-[min(420px,calc(100vw-2rem))] rounded-lg border bg-popover p-4 text-popover-foreground shadow-xl shadow-black/15",
-        failed ? "border-destructive/45" : "border-border",
-      )}
+      data-failed={failed ? "true" : undefined}
+      className="dependency-migration-card fixed bottom-4 right-4 z-40 w-[min(420px,calc(100vw-2rem))] overflow-hidden p-4 text-popover-foreground"
     >
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            "mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border",
+            "dependency-migration-icon mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border",
             failed ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-primary/20 bg-primary/10 text-primary",
           )}
         >
@@ -244,7 +242,7 @@ function DependencyMigrationCard({
           <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
             {detail}
           </p>
-          <div className="mt-3 max-h-28 space-y-1 overflow-auto rounded-md border border-border/70 bg-muted/30 p-2">
+          <div className="dependency-migration-log mt-3 max-h-28 space-y-1 overflow-auto rounded-md border p-2">
             {recentLogs.length > 0 ? (
               recentLogs.map((entry) => (
                 <p className="font-mono text-[11px] leading-relaxed text-muted-foreground" key={entry.id}>
@@ -272,6 +270,11 @@ type PluginPanelMode = "market" | "manage";
 
 function pluginWebuiPathForMode(mode: PluginPanelMode): string {
   return mode === "market" ? "/plugins/embed" : "/plugin-config/embed";
+}
+
+function pluginConfigWebuiPath(pluginId: string): string {
+  const params = new URLSearchParams({ plugin: pluginId });
+  return `/plugin-config/embed?${params.toString()}`;
 }
 
 function pluginWebviewTitle(path: string, mode: PluginPanelMode): string {
@@ -469,6 +472,8 @@ function WindowResizeHandles(): React.JSX.Element {
 }
 
 function MaiBotOfflineIllustration({ waiting }: { waiting: boolean }): React.JSX.Element {
+  const screenGradientId = `maibot-offline-screen-${useId().replace(/:/gu, "")}`;
+
   return (
     <svg
       aria-hidden
@@ -477,7 +482,7 @@ function MaiBotOfflineIllustration({ waiting }: { waiting: boolean }): React.JSX
       viewBox="0 0 320 220"
     >
       <defs>
-        <linearGradient id="maibot-offline-screen" x1="76" x2="244" y1="46" y2="128" gradientUnits="userSpaceOnUse">
+        <linearGradient id={screenGradientId} x1="76" x2="244" y1="46" y2="128" gradientUnits="userSpaceOnUse">
           <stop stopColor="var(--retro-ink, currentColor)" stopOpacity=".98" />
           <stop offset="1" stopColor="var(--retro-ink, currentColor)" stopOpacity=".88" />
         </linearGradient>
@@ -494,7 +499,7 @@ function MaiBotOfflineIllustration({ waiting }: { waiting: boolean }): React.JSX
         y="18"
       />
       <rect
-        fill="url(#maibot-offline-screen)"
+        fill={`url(#${screenGradientId})`}
         height="130"
         rx="5"
         width="216"
@@ -542,6 +547,20 @@ function MaiBotOfflineIllustration({ waiting }: { waiting: boolean }): React.JSX
       <circle cx="241" cy="194" fill="currentColor" r="4.2" />
       <circle fill="var(--retro-rust, var(--primary))" cx="263" cy="194" r="7.5" />
     </svg>
+  );
+}
+
+function PluginOfflineIllustration({ waiting }: { waiting: boolean }): React.JSX.Element {
+  return (
+    <div
+      aria-hidden
+      className="mx-auto grid aspect-[320/220] w-[min(385px,52vw)] place-items-center text-[var(--retro-ink,var(--foreground))]"
+    >
+      <Unplug
+        className={cn("size-40", waiting && "animate-pulse")}
+        strokeWidth={1.4}
+      />
+    </div>
   );
 }
 
@@ -634,7 +653,11 @@ function MaiBotWebuiStatusPanel({
   return (
     <section className="relative grid h-full min-h-0 place-items-center overflow-hidden bg-transparent p-6 text-[var(--retro-ink,var(--foreground))]">
       <div className="relative z-10 flex w-full max-w-[530px] flex-col items-center text-center">
-        {retro ? <MaiBotOfflineIllustration waiting={waiting} /> : null}
+        {retro
+          ? pluginContext
+            ? <PluginOfflineIllustration waiting={waiting} />
+            : <MaiBotOfflineIllustration waiting={waiting} />
+          : null}
 
         <h3 className={cn(retro ? "mt-4" : "mt-0", "text-[34px] font-black leading-tight tracking-[0.02em] text-[var(--retro-ink,var(--foreground))]")}>
           {title}
@@ -1435,13 +1458,12 @@ export function DesktopShell(): React.JSX.Element {
     userName: window.localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined,
   }));
   const [pluginMode, setPluginModeState] = useState<PluginPanelMode>("manage");
+  const [pluginManageWebviewPath, setPluginManageWebviewPath] = useState(() => pluginWebuiPathForMode("manage"));
   const [pluginMarketWebviewPath, setPluginMarketWebviewPath] = useState(() => pluginWebuiPathForMode("market"));
   const [pluginMarketWebviewVisited, setPluginMarketWebviewVisited] = useState(false);
   const [pluginBuilderMode, setPluginBuilderModeState] = useState<PluginBuilderMode>(() => readPluginBuilderMode());
   const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
-  const [requestedConfigPluginId, setRequestedConfigPluginId] = useState<string | null>(null);
-  const [requestedDetailPluginId, setRequestedDetailPluginId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [floatingMode, setFloatingMode] = useState(false);
@@ -1548,9 +1570,17 @@ export function DesktopShell(): React.JSX.Element {
     () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
     [maibotService?.url],
   );
+  const maibotPluginManageWebviewTarget = useMemo(
+    () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginManageWebviewPath),
+    [maibotService?.url, pluginManageWebviewPath],
+  );
   const maibotPluginMarketWebviewTarget = useMemo(
     () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginMarketWebviewPath),
     [maibotService?.url, pluginMarketWebviewPath],
+  );
+  const maibotPluginManageWebviewTitle = useMemo(
+    () => pluginWebviewTitle(pluginManageWebviewPath, "manage"),
+    [pluginManageWebviewPath],
   );
   const maibotPluginMarketWebviewTitle = useMemo(
     () => pluginWebviewTitle(pluginMarketWebviewPath, "market"),
@@ -1768,7 +1798,7 @@ export function DesktopShell(): React.JSX.Element {
 
   const openPluginConfig = useCallback((pluginId: string) => {
     setPluginMode("manage");
-    setRequestedConfigPluginId(pluginId);
+    setPluginManageWebviewPath(pluginConfigWebuiPath(pluginId));
     setActiveTab("plugins");
   }, [setPluginMode]);
 
@@ -1776,7 +1806,6 @@ export function DesktopShell(): React.JSX.Element {
     void pluginId;
     setPluginMode("market");
     setPluginMarketWebviewPath(pluginWebuiPathForMode("market"));
-    setRequestedDetailPluginId(null);
     setActiveTab("plugins");
   }, [setPluginMode]);
 
@@ -1889,7 +1918,7 @@ export function DesktopShell(): React.JSX.Element {
   const webviewToolbarActive =
     activeTab === "maibot" ||
     activeTab === "localchat" ||
-    (activeTab === "plugins" && pluginMode === "market");
+    activeTab === "plugins";
 
   if (floatingMode) {
     return (
@@ -2322,7 +2351,7 @@ export function DesktopShell(): React.JSX.Element {
               value="plugins"
               className="min-h-0 flex-1 overflow-hidden outline-none data-[state=inactive]:hidden"
             >
-              {pluginMode === "market" && !maibotWebviewReady ? (
+              {!maibotWebviewReady ? (
                 <MaiBotWebuiStatusPanel
                   busy={actionBusy?.startsWith("maibot:") ?? false}
                   context="plugins"
@@ -2332,6 +2361,23 @@ export function DesktopShell(): React.JSX.Element {
                 />
               ) : (
                 <div className="relative h-full min-h-0">
+                  {maibotWebviewReady && pluginMode === "manage" ? (
+                    <div
+                      className="absolute inset-0"
+                    >
+                      <WebviewPanel
+                        active={activeTab === "plugins" && pluginMode === "manage"}
+                        emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件管理页面。"
+                        onWebuiIdentity={rememberWebuiIdentity}
+                        postAuthTargetUrl={maibotPluginManageWebviewTarget.postAuthTargetUrl}
+                        title={maibotPluginManageWebviewTitle}
+                        toolbarPlacement="external"
+                        toolbarTarget={webviewToolbarHost}
+                        reloadTrigger={maibotWebviewReloadTrigger}
+                        url={maibotPluginManageWebviewTarget.entryUrl}
+                      />
+                    </div>
+                  ) : null}
                   {maibotWebviewReady && pluginMode === "market" ? (
                     <div className="absolute inset-0">
                     {pluginMarketWebviewVisited ? (
@@ -2350,19 +2396,6 @@ export function DesktopShell(): React.JSX.Element {
                       </div>
                     ) : null}
                     </div>
-                  ) : null}
-                  {pluginMode === "manage" ? (
-                    <PluginMarketPanel
-                      maibotService={maibotService}
-                      maibotVersion={snapshot?.moduleVersions.maibotLocal}
-                      mode="manage"
-                      onOpenTerminalSession={openTerminalSession}
-                      onRequestedDetailHandled={() => setRequestedDetailPluginId(null)}
-                      onRequestedConfigHandled={() => setRequestedConfigPluginId(null)}
-                      retro={useRetroChrome}
-                      requestedConfigPluginId={requestedConfigPluginId}
-                      requestedDetailPluginId={requestedDetailPluginId}
-                    />
                   ) : null}
                 </div>
               )}

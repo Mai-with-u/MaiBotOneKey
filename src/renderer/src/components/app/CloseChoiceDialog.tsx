@@ -57,7 +57,7 @@ export function CloseChoiceDialog(): React.JSX.Element | null {
           title={"\u5173\u95ed\u6216\u6700\u5c0f\u5316\u5230\u6258\u76d8\uff1f"}
           tone="danger"
         />
-        <label className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+        <label className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm">
           <Checkbox
             checked={remember}
             onCheckedChange={(checked) => setRemember(checked === true)}
@@ -69,7 +69,7 @@ export function CloseChoiceDialog(): React.JSX.Element | null {
             {"\u53d6\u6d88"}
           </Button>
           <Button onClick={minimize} size="sm" variant="outline">
-            {"\u6700\u5c0f\u5316\u5230\u6258\u76d8"}
+            {"\u6700\u5c0f\u5316"}
           </Button>
           <Button onClick={quit} size="sm" variant="destructive">
             {"\u5173\u95ed\u5e94\u7528"}

@@ -351,34 +351,16 @@
   --retro-recessed-strong: rgb(73 48 22 / 0.085);
   --retro-shadow: rgb(73 48 22 / 0.14);
   --retro-density-space: 1;
-  --retro-plugin-card-min-height: 286px;
-  --retro-plugin-card-gap-x: 1.35rem;
-  --retro-plugin-card-gap-y: 1.65rem;
-  --retro-plugin-card-padding-x: 1.35rem;
-  --retro-plugin-card-padding-y: 1.3rem;
-  --retro-plugin-action-height: 40px;
   --retro-paper-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05' numOctaves='4' seed='11'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 .18 0 0 0 0 .11 0 0 0 0 .04 0 0 0 .22 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23noise)'/%3E%3Cg opacity='.12' fill='%23c24d24'%3E%3Ccircle cx='12' cy='21' r='.7'/%3E%3Ccircle cx='67' cy='43' r='.55'/%3E%3Ccircle cx='139' cy='16' r='.65'/%3E%3Ccircle cx='158' cy='107' r='.6'/%3E%3Ccircle cx='41' cy='151' r='.55'/%3E%3C/g%3E%3C/svg%3E");
   --retro-paper-texture-layer: linear-gradient(var(--retro-paper-lift), var(--retro-paper-lift)), var(--retro-paper-texture);
 }
 
 :root[data-appearance-mode="future-retro"][data-scale="compact"] {
   --retro-density-space: 0.82;
-  --retro-plugin-card-min-height: 254px;
-  --retro-plugin-card-gap-x: 0.9rem;
-  --retro-plugin-card-gap-y: 1rem;
-  --retro-plugin-card-padding-x: 1rem;
-  --retro-plugin-card-padding-y: 1rem;
-  --retro-plugin-action-height: 36px;
 }
 
 :root[data-appearance-mode="future-retro"][data-scale="comfortable"] {
   --retro-density-space: 1.18;
-  --retro-plugin-card-min-height: 326px;
-  --retro-plugin-card-gap-x: 1.8rem;
-  --retro-plugin-card-gap-y: 2.1rem;
-  --retro-plugin-card-padding-x: 1.65rem;
-  --retro-plugin-card-padding-y: 1.55rem;
-  --retro-plugin-action-height: 44px;
 }
 
 :root.dark[data-appearance-mode="future-retro"],
@@ -441,6 +423,96 @@
 
 :root[data-retro-paper-texture="false"] .retro-shell {
   background-image: none;
+}
+
+.dependency-migration-card {
+  isolation: isolate;
+  background: color-mix(in oklab, var(--popover) 68%, transparent);
+  box-shadow: 0 18px 44px color-mix(in oklab, var(--foreground) 16%, transparent);
+  backdrop-filter: blur(22px) saturate(1.28);
+  -webkit-backdrop-filter: blur(22px) saturate(1.28);
+}
+
+.dependency-migration-card[data-failed="true"] {
+  background: color-mix(in oklab, var(--popover) 76%, var(--destructive) 8%);
+}
+
+.dependency-migration-icon {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.42),
+    0 7px 18px color-mix(in oklab, var(--foreground) 8%, transparent);
+  backdrop-filter: blur(10px) saturate(1.16);
+  -webkit-backdrop-filter: blur(10px) saturate(1.16);
+}
+
+.dependency-migration-log {
+  border-color: color-mix(in oklab, var(--border) 58%, transparent);
+  background: color-mix(in oklab, var(--muted) 42%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    inset 0 8px 22px color-mix(in oklab, var(--foreground) 4%, transparent);
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
+}
+
+.dark .dependency-migration-card {
+  background: color-mix(in oklab, var(--popover) 62%, transparent);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.34);
+}
+
+:root[data-appearance-mode="future-retro"] .dependency-migration-card {
+  background-color: rgb(246 232 211 / 0.62);
+  background-image: var(--retro-paper-texture-layer);
+  background-size: 165px 165px;
+  box-shadow: 0 18px 42px var(--retro-shadow);
+  backdrop-filter: blur(20px) saturate(1.18);
+  -webkit-backdrop-filter: blur(20px) saturate(1.18);
+}
+
+:root[data-appearance-mode="future-retro"] .dependency-migration-log {
+  border-color: color-mix(in oklab, var(--retro-line) 72%, transparent);
+  background: rgb(243 227 204 / 0.36);
+  box-shadow:
+    inset 0 1px 0 rgb(255 248 226 / 0.42),
+    inset 0 9px 24px rgb(73 48 22 / 0.045);
+}
+
+:root.dark[data-appearance-mode="future-retro"] .dependency-migration-card {
+  background-color: rgb(43 33 28 / 0.62);
+  background-image: var(--retro-paper-texture-layer);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.34);
+}
+
+:root.dark[data-appearance-mode="future-retro"] .dependency-migration-log {
+  border-color: var(--retro-line);
+  background: rgb(17 9 6 / 0.34);
+  box-shadow:
+    inset 0 1px 0 rgb(255 229 190 / 0.08),
+    inset 0 9px 24px rgb(0 0 0 / 0.14);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dependency-migration-card {
+    background: var(--popover);
+  }
+
+  .dependency-migration-log {
+    background: var(--muted);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .dependency-migration-card {
+    background: color-mix(in oklab, var(--popover) 96%, transparent);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .dependency-migration-log,
+  .dependency-migration-icon {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .retro-shell::before {

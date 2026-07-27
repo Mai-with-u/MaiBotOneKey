@@ -413,6 +413,15 @@ function messageFromError(error: unknown): string {
   return localChatErrorMessage(error);
 }
 
+function isLikelyNetworkError(error: unknown): boolean {
+  const message = messageFromError(error);
+  return (
+    /(?:fetch failed|network|网络|连接|timeout|timed out|abort|socket|proxy|代理)/iu.test(message)
+    || /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)/iu.test(message)
+    || /HTTP (?:408|429|5\d\d)\b/iu.test(message)
+  );
+}
+
 function localChatText(event: LocalChatMessageEvent): string {
   if (event.content.trim()) {
     return event.content.trim();
@@ -788,7 +797,7 @@ function ServiceSummary({
             <p className={cn("flex min-w-0 items-baseline gap-2", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>
               <span className="min-w-0 truncate">{title ?? service?.name ?? "未知服务"}</span>
               {showStoppedStatusAfterTitle ? (
-                <span className="shrink-0 text-[inherit] font-extrabold italic leading-[inherit] text-destructive">
+                <span className="shrink-0 text-2xl font-extrabold not-italic leading-[inherit] text-destructive">
                   未启动
                 </span>
               ) : null}
@@ -2299,6 +2308,7 @@ export function HomePanel({
   const [error, setError] = useState<string | null>(null);
   const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
   const [launcherDownloadProgress, setLauncherDownloadProgress] = useState<LauncherUpdateDownloadProgress | null>(null);
+  const [launcherNetworkFailed, setLauncherNetworkFailed] = useState(false);
   const [launcherQuitPromptOpen, setLauncherQuitPromptOpen] = useState(false);
   const [maibotUpdateInfo, setMaibotUpdateInfo] = useState<MaiBotUpdateInfo | null>(null);
   const [maibotUpdateInfoLoading, setMaibotUpdateInfoLoading] = useState(false);
@@ -2695,6 +2705,7 @@ export function HomePanel({
   const openLauncherUpdate = useCallback(() => {
     setError(null);
     setLauncherDownloadProgress(null);
+    setLauncherNetworkFailed(false);
     setUpdateDialog("launcher");
   }, []);
 
@@ -2729,6 +2740,7 @@ export function HomePanel({
   }, [maibotUpdateInfo?.releaseUrl, selectedMaiBotTarget]);
 
   const checkLauncherUpdate = useCallback(async () => {
+    setLauncherNetworkFailed(false);
     if (!window.maibotDesktop?.launcher) {
       setError("桌面桥未就绪，无法检查启动器更新");
       return;
@@ -2751,12 +2763,14 @@ export function HomePanel({
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
+      setLauncherNetworkFailed(isLikelyNetworkError(nextError));
     } finally {
       setBusy(null);
     }
   }, [refreshSnapshot]);
 
   const installLauncherUpdate = useCallback(async () => {
+    setLauncherNetworkFailed(false);
     if (!window.maibotDesktop?.launcher) {
       setError("桌面桥未就绪，无法安装启动器更新");
       return;
@@ -2788,6 +2802,7 @@ export function HomePanel({
       }
     } catch (nextError) {
       setError(messageFromError(nextError));
+      setLauncherNetworkFailed(isLikelyNetworkError(nextError));
       setLauncherDownloadProgress(null);
       setBusy(null);
     }
@@ -3723,8 +3738,6 @@ export function HomePanel({
       >
         <DialogContent onInteractOutside={(event) => event.preventDefault()} size="lg">
           <DialogHeader
-            description="检查 MaiBot OneKey 的最新安装包，并在确认后下载打开。"
-            icon={<PackageCheck className="size-4" />}
             title="更新一键包"
             tone="primary"
           />
@@ -3732,6 +3745,28 @@ export function HomePanel({
             {error && updateDialog === "launcher" ? (
               <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
                 {error}
+              </div>
+            ) : null}
+            {launcherNetworkFailed ? (
+              <div className={cn(
+                "grid gap-3 border border-warning/40 bg-warning/15 px-3 py-3 text-xs",
+                useRetroHome ? "rounded-sm" : "rounded-lg",
+              )}>
+                <div className="grid gap-1">
+                  <p className="font-medium text-warning-foreground">自动更新未完成</p>
+                  <p className="text-muted-foreground">
+                    可能是网络连接问题。你可以前往 GitHub Releases 手动下载安装包完成更新。
+                  </p>
+                </div>
+                <Button
+                  className="justify-self-start"
+                  onClick={openLauncherRelease}
+                  size="sm"
+                  variant="secondary"
+                >
+                  <ExternalLink />
+                  前往发布页
+                </Button>
               </div>
             ) : null}
             <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
