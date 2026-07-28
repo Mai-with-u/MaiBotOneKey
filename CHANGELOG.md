@@ -4,7 +4,7 @@
 
 - 插件管理和插件市场统一使用 MaiBot WebUI 页面。
 - 优化一键包更新网络失败提示，并提供 GitHub 发布页入口。
-- 更新内置 Maibot 版本到 1.1.1
+- 更新内置 Maibot 版本到 1.1.2
 - 内置 SnowLuma 预置包更新到官方 v1.12.10 Windows x64 完整包。
 - 内置 OpenCode CLI 更新到官方 v1.18.9 Windows x64 包。
 
