@@ -1189,6 +1189,25 @@ export interface ModuleUpdateResult {
   plugins?: ModuleUpdateResult[];
 }
 
+export type MaiBotModuleUpdatePhase =
+  | "preparing"
+  | "connecting"
+  | "fetching"
+  | "checking-out"
+  | "syncing"
+  | "completed"
+  | "failed";
+
+export interface MaiBotModuleUpdateProgress {
+  phase: MaiBotModuleUpdatePhase;
+  percent: number;
+  label: string;
+  detail?: string;
+  /** 适合追加到前端更新记录中的单条阶段日志。 */
+  log?: string;
+  updatedAt: number;
+}
+
 export interface ModuleTagOption {
   name: string;
   isPrerelease: boolean;
@@ -1419,6 +1438,7 @@ export interface DesktopBridge {
     refreshVersions: () => Promise<DesktopSnapshot>;
     checkMaiBotUpdate: (target: ModuleUpdateTarget) => Promise<MaiBotUpdateInfo>;
     updateMaiBot: (target?: ModuleUpdateTarget) => Promise<ModuleUpdateResult>;
+    onMaiBotUpdateProgress: (callback: (progress: MaiBotModuleUpdateProgress) => void) => () => void;
     listMaiBotBranches: () => Promise<ModuleBranchOption[]>;
     listMaiBotTags: () => Promise<ModuleTagOption[]>;
     getSourceConfig: () => Promise<ModuleSourceConfig>;

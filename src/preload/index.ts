@@ -57,6 +57,7 @@ import type {
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   MaiBotUpdateInfo,
+  MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
   ModuleBranchOption,
   ModuleUpdateTarget,
@@ -185,6 +186,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("modules:checkMaibotUpdate", target) as Promise<MaiBotUpdateInfo>,
     updateMaiBot: (target?: ModuleUpdateTarget) =>
       ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
+    onMaiBotUpdateProgress: (callback: (progress: MaiBotModuleUpdateProgress) => void) =>
+      onIpc("modules:maibot-update-progress", callback),
     listMaiBotBranches: () => ipcRenderer.invoke("modules:listMaibotBranches") as Promise<ModuleBranchOption[]>,
     listMaiBotTags: () => ipcRenderer.invoke("modules:listMaibotTags") as Promise<ModuleTagOption[]>,
     getSourceConfig: () => ipcRenderer.invoke("modules:getSourceConfig") as Promise<ModuleSourceConfig>,

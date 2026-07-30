@@ -4,6 +4,7 @@ import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
   ManagedSourceEntry,
+  MaiBotModuleUpdateProgress,
   ModuleSourceConfig,
   ModuleSourceOption,
   ModuleSourcePreset,
@@ -40,6 +41,7 @@ interface RepoUpdateSpec {
   runSubmodule: boolean;
   targetTag?: string;
   targetBranch?: string;
+  onProgress?: (progress: MaiBotModuleUpdateProgress) => void;
 }
 
 interface MaibotRemoteCandidate {
@@ -185,53 +187,133 @@ export class ModuleUpdater {
     );
   }
 
-  async updateMaiBot(target?: ModuleUpdateTarget): Promise<ModuleUpdateResult> {
+  async updateMaiBot(
+    target?: ModuleUpdateTarget,
+    onProgress?: (progress: MaiBotModuleUpdateProgress) => void,
+  ): Promise<ModuleUpdateResult> {
     const gitPath = this.initManager.getGitPath();
     if (!existsSync(gitPath)) {
       throw new Error(`未找到可用 Git: ${gitPath}`);
     }
 
-    return this.runWithMaibotRemoteFallback(
-      "update MaiBot",
-      async (candidate, failedAttempts) => {
-        const mainResult = await this.updateGitRepository(gitPath, {
-          moduleId: "maibot",
-          moduleName: "MaiBot",
-          cwd: this.paths.maibotRoot,
-          bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
-          remoteUrl: candidate.maibotUrl,
-          defaultBranch: "main",
-          throwOnFailure: true,
-          runSubmodule: true,
-          targetTag: target?.type === "tag" ? target.name.trim() || undefined : undefined,
-          targetBranch: target?.type === "branch" ? target.name.trim() || undefined : undefined,
-        });
-        if (failedAttempts.length > 0) {
-          mainResult.output.unshift(
-            ...failedAttempts.map((attempt) => `[MaiBot] 更新源 ${attempt.label} 失败，已尝试下一个源: ${attempt.error}`),
-            `[MaiBot] 使用更新源 ${candidate.label}: ${candidate.maibotUrl}`,
-          );
-          mainResult.warning = [
-            mainResult.warning,
-            `前 ${failedAttempts.length} 个更新源不可用，已自动切换到 ${candidate.label}。`,
-          ].filter(Boolean).join("\n");
-        }
-        return mainResult;
-      },
+    let lastPercent = 0;
+    const emitProgress = (progress: MaiBotModuleUpdateProgress): void => {
+      lastPercent = progress.percent;
+      onProgress?.(progress);
+    };
+    const emit = (
+      phase: MaiBotModuleUpdateProgress["phase"],
+      percent: number,
+      label: string,
+      detail?: string,
+      log?: string,
+    ): void => {
+      emitProgress({
+        phase,
+        percent: Math.max(0, Math.min(100, percent)),
+        label,
+        detail,
+        log,
+        updatedAt: Date.now(),
+      });
+    };
+
+    emit(
+      "preparing",
+      4,
+      "准备更新 MaiBot",
+      target ? `目标：${target.type === "tag" ? "Tag" : "分支"} ${target.name}` : "正在确定更新目标。",
+      "开始检查本地仓库和更新目标。",
     );
+
+    try {
+      const result = await this.runWithMaibotRemoteFallback(
+        "update MaiBot",
+        async (candidate, failedAttempts, candidateIndex, candidateCount) => {
+          const switchingSource = failedAttempts.length > 0;
+          const previousFailure = failedAttempts.at(-1);
+          if (previousFailure) {
+            emit(
+              "connecting",
+              7,
+              `更新源 ${candidateIndex}/${candidateCount} 不可用`,
+              `${previousFailure.label}：${previousFailure.error}`,
+              `${previousFailure.label} 连接失败，准备切换更新源。`,
+            );
+          }
+          emit(
+            "connecting",
+            switchingSource ? 12 : 8,
+            `尝试更新源 ${candidateIndex + 1}/${candidateCount}`,
+            `${candidate.label}：${candidate.maibotUrl}`,
+            switchingSource
+              ? `正在改用 ${candidate.label}。`
+              : `正在尝试 ${candidate.label}。`,
+          );
+          const mainResult = await this.updateGitRepository(gitPath, {
+            moduleId: "maibot",
+            moduleName: "MaiBot",
+            cwd: this.paths.maibotRoot,
+            bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
+            remoteUrl: candidate.maibotUrl,
+            defaultBranch: "main",
+            throwOnFailure: true,
+            runSubmodule: true,
+            targetTag: target?.type === "tag" ? target.name.trim() || undefined : undefined,
+            targetBranch: target?.type === "branch" ? target.name.trim() || undefined : undefined,
+            onProgress: emitProgress,
+          });
+          if (failedAttempts.length > 0) {
+            mainResult.output.unshift(
+              ...failedAttempts.map((attempt) => `[MaiBot] 更新源 ${attempt.label} 失败，已尝试下一个源: ${attempt.error}`),
+              `[MaiBot] 使用更新源 ${candidate.label}: ${candidate.maibotUrl}`,
+            );
+            mainResult.warning = [
+              mainResult.warning,
+              `前 ${failedAttempts.length} 个更新源不可用，已自动切换到 ${candidate.label}。`,
+            ].filter(Boolean).join("\n");
+          }
+          return mainResult;
+        },
+      );
+      emit(
+        "completed",
+        100,
+        "MaiBot 更新完成",
+        result.changed
+          ? `${result.before ?? "未知版本"} → ${result.after ?? "最新版本"}`
+          : `当前代码已是目标版本 ${result.after ?? ""}`.trim(),
+        "更新流程已完成，可以重新启动 MaiBot Core。",
+      );
+      return result;
+    } catch (error) {
+      emit(
+        "failed",
+        lastPercent,
+        "MaiBot 更新失败",
+        toDetail(error),
+        "更新未完成，仓库会尽量恢复到更新前状态。",
+      );
+      throw error;
+    }
   }
 
   private async runWithMaibotRemoteFallback<T>(
     operation: string,
-    run: (candidate: MaibotRemoteCandidate, failedAttempts: Array<{ label: string; url: string; error: string }>) => Promise<T>,
+    run: (
+      candidate: MaibotRemoteCandidate,
+      failedAttempts: Array<{ label: string; url: string; error: string }>,
+      candidateIndex: number,
+      candidateCount: number,
+    ) => Promise<T>,
   ): Promise<T> {
     const candidates = await this.getMaibotRemoteCandidates();
     const failedAttempts: Array<{ label: string; url: string; error: string }> = [];
     let lastError: unknown;
 
-    for (const candidate of candidates) {
+    for (const [candidateIndex, candidate] of candidates.entries()) {
       try {
-        return await run(candidate, failedAttempts);
+        return await run(candidate, failedAttempts, candidateIndex, candidates.length);
       } catch (error) {
         lastError = error;
         failedAttempts.push({
@@ -346,6 +428,75 @@ export class ModuleUpdater {
     spec: RepoUpdateSpec,
   ): Promise<ModuleUpdateResult> {
     const { cwd, bundledDir, remoteUrl, defaultBranch, moduleId, moduleName } = spec;
+    const emit = (
+      phase: MaiBotModuleUpdateProgress["phase"],
+      percent: number,
+      label: string,
+      detail?: string,
+      log?: string,
+    ): void => {
+      spec.onProgress?.({
+        phase,
+        percent: Math.max(0, Math.min(100, percent)),
+        label,
+        detail,
+        log,
+        updatedAt: Date.now(),
+      });
+    };
+    const forwardGitProgress = (
+      phase: MaiBotModuleUpdateProgress["phase"],
+      basePercent: number,
+      span: number,
+      label: string,
+    ) => {
+      let lastValue = -1;
+      let lastDetail = "";
+      return (chunk: string): void => {
+        const normalized = chunk.replace(/\r/gu, "\n");
+        const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+        const detail = lines.at(-1);
+        if (!detail) {
+          return;
+        }
+        const matches = [...normalized.matchAll(
+          /(Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files|Checking out files):\s*(\d{1,3})%/giu,
+        )];
+        const match = matches.at(-1);
+        const gitPercent = Number(match?.[2]);
+        const fraction = Number.isFinite(gitPercent)
+          ? Math.max(0, Math.min(100, gitPercent)) / 100
+          : 0;
+        const operation = match?.[1]?.toLowerCase();
+        const operationLabel = operation === "counting objects"
+          ? "统计远端对象"
+          : operation === "compressing objects"
+            ? "压缩远端对象"
+            : operation === "receiving objects"
+              ? "接收仓库对象"
+              : operation === "resolving deltas"
+                ? "解析代码增量"
+                : operation === "updating files" || operation === "checking out files"
+                  ? "写入仓库文件"
+                  : label;
+        const stageFraction = operation === "counting objects"
+          ? fraction * 0.05
+          : operation === "compressing objects"
+            ? 0.05 + fraction * 0.1
+            : operation === "receiving objects"
+              ? 0.15 + fraction * 0.65
+              : operation === "resolving deltas"
+                ? 0.8 + fraction * 0.2
+                : fraction;
+        const value = basePercent + stageFraction * span;
+        if (Math.abs(value - lastValue) < 0.1 && detail === lastDetail) {
+          return;
+        }
+        lastValue = value;
+        lastDetail = detail;
+        emit(phase, value, operationLabel, detail);
+      };
+    };
 
     if (!existsSync(cwd)) {
       // 模块目录不存在：若 bundled 里有，则尝试从 bundled 复制 .git 后再走 reset 流程；
@@ -360,6 +511,7 @@ export class ModuleUpdater {
     };
 
     if (!existsSync(join(cwd, ".git"))) {
+      emit("preparing", 14, "初始化本地仓库", cwd, "本地目录尚未接入 Git，正在初始化。");
       output.push(
         `[${moduleName}] 未发现 .git，正在接入官方 Git 仓库；不会清理 data/logs/config 等用户数据目录。`,
       );
@@ -405,6 +557,13 @@ export class ModuleUpdater {
 
     const before = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
     const branch = await this.readGitValue(gitPath, cwd, ["branch", "--show-current"]);
+    emit(
+      "preparing",
+      16,
+      "检查本地版本",
+      before ? `当前提交 ${before}${branch ? `，分支 ${branch}` : "，Detached HEAD"}` : "正在读取本地提交。",
+      before ? `当前提交：${before}${branch ? ` (${branch})` : ""}` : "未读取到当前提交。",
+    );
     const statusBefore = await this.readGitValue(gitPath, cwd, ["status", "--short"]);
     if (statusBefore) {
       output.push(
@@ -417,6 +576,13 @@ export class ModuleUpdater {
     let upstream: string;
 
     try {
+      emit(
+        "fetching",
+        20,
+        "拉取远端代码",
+        "Git 正在获取提交、Tag 和文件对象，网络较慢时会停留较久。",
+        "执行 git fetch origin --prune --tags --force。",
+      );
       append(
         `[${moduleName}] fetch origin --prune --tags --force --progress (timeout ${Math.round(FETCH_ORIGIN_TIMEOUT_MS / 1000)}s)`,
         (
@@ -425,11 +591,19 @@ export class ModuleUpdater {
             cwd,
             ["fetch", "origin", "--prune", "--tags", "--force", "--progress"],
             FETCH_ORIGIN_TIMEOUT_MS,
+            forwardGitProgress("fetching", 22, 52, "拉取远端代码"),
           )
         ).output,
       );
       if (spec.targetBranch) {
         upstream = `origin/${spec.targetBranch}`;
+        emit(
+          "checking-out",
+          78,
+          "切换目标分支",
+          upstream,
+          `正在切换到分支 ${spec.targetBranch}。`,
+        );
         append(
           `[${moduleName}] checkout --force -B ${spec.targetBranch} ${upstream}`,
           (await this.runGit(gitPath, cwd, ["checkout", "--force", "-B", spec.targetBranch, upstream])).output,
@@ -440,6 +614,13 @@ export class ModuleUpdater {
         );
       } else if (spec.targetTag) {
         upstream = `refs/tags/${spec.targetTag}`;
+        emit(
+          "checking-out",
+          78,
+          "切换目标版本",
+          upstream,
+          `正在切换到 Tag ${spec.targetTag}。`,
+        );
         append(
           `[${moduleName}] checkout --force --detach ${upstream}`,
           (await this.runGit(gitPath, cwd, ["checkout", "--force", "--detach", upstream])).output,
@@ -447,6 +628,13 @@ export class ModuleUpdater {
       } else {
         upstream = await this.resolveUpstream(gitPath, cwd, branch ?? defaultBranch);
       }
+      emit(
+        "checking-out",
+        85,
+        "应用目标代码",
+        upstream,
+        "正在将工作区同步到目标提交。",
+      );
       append(
         `[${moduleName}] reset --hard ${upstream}`,
         (await this.runGit(gitPath, cwd, ["reset", "--hard", upstream])).output,
@@ -491,9 +679,24 @@ export class ModuleUpdater {
 
     if (spec.runSubmodule) {
       try {
+        emit(
+          "syncing",
+          90,
+          "同步子模块",
+          "正在更新 MaiBot 引用的附属仓库。",
+          "执行 git submodule update --init --recursive --force。",
+        );
         append(
           `[${moduleName}] submodule update --init --recursive --force`,
-          (await this.runGit(gitPath, cwd, ["submodule", "update", "--init", "--recursive", "--force"])).output,
+          (
+            await this.runGit(
+              gitPath,
+              cwd,
+              ["submodule", "update", "--init", "--recursive", "--force"],
+              UPDATE_TIMEOUT_MS,
+              forwardGitProgress("syncing", 90, 8, "同步子模块"),
+            )
+          ).output,
         );
       } catch (subErr) {
         if (spec.throwOnFailure) {
@@ -675,9 +878,10 @@ export class ModuleUpdater {
     cwd: string,
     args: string[],
     timeoutMs = UPDATE_TIMEOUT_MS,
+    onOutput?: (chunk: string) => void,
   ): Promise<GitRunResult> {
     return new Promise((resolve, reject) => {
-      execFile(
+      const child = execFile(
         gitPath,
         args,
         {
@@ -703,6 +907,10 @@ export class ModuleUpdater {
           resolve({ output });
         },
       );
+      if (onOutput) {
+        child.stdout?.on("data", (chunk: string | Buffer) => onOutput(String(chunk)));
+        child.stderr?.on("data", (chunk: string | Buffer) => onOutput(String(chunk)));
+      }
     });
   }
 }

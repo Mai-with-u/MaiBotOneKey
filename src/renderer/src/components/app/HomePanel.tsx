@@ -45,6 +45,7 @@ import type {
   LocalChatEvent,
   LocalChatMessageEvent,
   MaiBotStatisticSummary,
+  MaiBotModuleUpdateProgress,
   MaiBotUpdateInfo,
   ModuleBranchOption,
   ModuleSourceConfig,
@@ -2313,6 +2314,9 @@ export function HomePanel({
   const [maibotUpdateInfo, setMaibotUpdateInfo] = useState<MaiBotUpdateInfo | null>(null);
   const [maibotUpdateInfoLoading, setMaibotUpdateInfoLoading] = useState(false);
   const [maibotUpdateInfoError, setMaibotUpdateInfoError] = useState<string | null>(null);
+  const [maibotModuleUpdateProgress, setMaibotModuleUpdateProgress] =
+    useState<MaiBotModuleUpdateProgress | null>(null);
+  const [maibotModuleUpdateLogs, setMaibotModuleUpdateLogs] = useState<string[]>([]);
   const [messagePlatformDialogOpen, setMessagePlatformDialogOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const [mascotIntroOpen, setMascotIntroOpen] = useState(false);
@@ -2441,6 +2445,20 @@ export function HomePanel({
   useEffect(() => {
     return window.maibotDesktop?.launcher?.onDownloadProgress((progress) => {
       setLauncherDownloadProgress(progress);
+    });
+  }, []);
+
+  useEffect(() => {
+    return window.maibotDesktop?.modules?.onMaiBotUpdateProgress((progress) => {
+      setMaibotModuleUpdateProgress(progress);
+      const log = progress.log;
+      if (log) {
+        setMaibotModuleUpdateLogs((current) => (
+          current.at(-1) === log
+            ? current
+            : [...current, log].slice(-20)
+        ));
+      }
     });
   }, []);
 
@@ -2678,6 +2696,8 @@ export function HomePanel({
     setMaibotUpdateInfoError(null);
     setMaibotUpdateInfoLoading(false);
     setMaibotVersionFetchProgress(null);
+    setMaibotModuleUpdateProgress(null);
+    setMaibotModuleUpdateLogs([]);
     setModuleSourceExpanded(false);
     setMaibotChannel(snapshot.moduleVersions.maibotLatestStableTag ? "stable" : "other");
     setMaibotOtherTargetMode("tag");
@@ -2907,14 +2927,37 @@ export function HomePanel({
 
     setBusy("maibot:update");
     setError(null);
+    setMaibotModuleUpdateLogs(["正在保存更新源设置。"]);
+    setMaibotModuleUpdateProgress({
+      phase: "preparing",
+      percent: 2,
+      label: "准备更新 MaiBot",
+      detail: "正在保存更新源设置。",
+      updatedAt: Date.now(),
+    });
     try {
       await saveModuleSourceConfig();
       await window.maibotDesktop.modules.updateMaiBot(target);
       toast.success("MaiBot 更新完成");
-      setUpdateDialog(null);
       await refreshSnapshot();
     } catch (nextError) {
-      setError(messageFromError(nextError));
+      const message = messageFromError(nextError);
+      setError(message);
+      setMaibotModuleUpdateLogs((current) => (
+        current.at(-1) === "更新未完成，请根据错误信息检查网络或更新源。"
+          ? current
+          : [...current, "更新未完成，请根据错误信息检查网络或更新源。"].slice(-20)
+      ));
+      setMaibotModuleUpdateProgress((current) => current?.phase === "failed"
+        ? current
+        : {
+            phase: "failed",
+            percent: current?.percent ?? 0,
+            label: "MaiBot 更新失败",
+            detail: message,
+            log: "更新未完成，请根据错误信息检查网络或更新源。",
+            updatedAt: Date.now(),
+          });
     } finally {
       setBusy(null);
     }
@@ -3916,6 +3959,8 @@ export function HomePanel({
               <ChoiceSwitch
                 value={maibotChannel}
                 onChange={(value) => {
+                  setMaibotModuleUpdateProgress(null);
+                  setMaibotModuleUpdateLogs([]);
                   setMaibotChannel(value);
                   if (value === "other" && !maibotRefsLoading && maibotBranches.length === 0 && maibotTags.length === 0) {
                     void loadMaiBotRefs();
@@ -3929,8 +3974,69 @@ export function HomePanel({
                 retro={useRetroHome}
               />
             </div>
-            <div className="h-20">
-              {maibotVersionFetchProgress ? (
+            <div className={cn("transition-[height] duration-200 motion-reduce:transition-none", maibotModuleUpdateProgress ? "h-40" : "h-20")}>
+              {maibotModuleUpdateProgress ? (
+                <div
+                  aria-live="polite"
+                  className={cn(
+                    "grid h-full min-h-0 grid-rows-[auto_auto_auto_minmax(0,1fr)] gap-2 border px-3 py-2 text-xs",
+                    useRetroHome ? "retro-control rounded-sm" : "rounded-lg",
+                    maibotModuleUpdateProgress.phase === "failed"
+                      ? "border-destructive/30 bg-destructive/10"
+                      : maibotModuleUpdateProgress.phase === "completed"
+                        ? "border-success/30 bg-success/10"
+                        : "border-border bg-muted/40",
+                  )}
+                  role="status"
+                >
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <span className="flex min-w-0 items-center gap-2 font-medium">
+                      {maibotModuleUpdateProgress.phase === "completed" ? (
+                        <CheckCircle2 className="size-3.5 shrink-0 text-success-foreground" />
+                      ) : maibotModuleUpdateProgress.phase === "failed" ? (
+                        <CircleAlert className="size-3.5 shrink-0 text-destructive" />
+                      ) : (
+                        <Loader2 className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
+                      )}
+                      <span className="truncate">{maibotModuleUpdateProgress.label}</span>
+                    </span>
+                    <span className="shrink-0 font-mono tabular-nums">
+                      {Math.round(maibotModuleUpdateProgress.percent)}%
+                    </span>
+                  </div>
+                  <Progress
+                    className={cn(
+                      "h-1.5",
+                      maibotModuleUpdateProgress.phase === "failed"
+                        && "[&_[data-slot=progress-indicator]]:bg-destructive",
+                    )}
+                    value={maibotModuleUpdateProgress.percent}
+                  />
+                  <p
+                    className={cn(
+                      "truncate",
+                      maibotModuleUpdateProgress.phase === "failed"
+                        ? "text-destructive"
+                        : "text-muted-foreground",
+                    )}
+                    title={maibotModuleUpdateProgress.detail}
+                  >
+                    {maibotModuleUpdateProgress.detail ?? "正在执行更新任务。"}
+                  </p>
+                  <div className="min-h-0 overflow-auto border-t border-border/60 pt-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+                    {maibotModuleUpdateLogs.length > 0 ? (
+                      maibotModuleUpdateLogs.slice(-5).map((line, index) => (
+                        <p className="break-words" key={`${index}-${line}`}>
+                          <span aria-hidden="true" className="mr-1 text-primary">›</span>
+                          {line}
+                        </p>
+                      ))
+                    ) : (
+                      <p>等待 Git 返回进度...</p>
+                    )}
+                  </div>
+                </div>
+              ) : maibotVersionFetchProgress ? (
                 <div
                   className={cn(
                     "grid h-full gap-2 border px-3 py-2 text-xs",
@@ -3987,6 +4093,8 @@ export function HomePanel({
                             disabled={disabled}
                             key={option.value}
                             onClick={() => {
+                              setMaibotModuleUpdateProgress(null);
+                              setMaibotModuleUpdateLogs([]);
                               setMaibotOtherTargetMode(option.value);
                               if (option.value === "dev") {
                                 setSelectedMaiBotTag("");
@@ -4013,7 +4121,11 @@ export function HomePanel({
                     <select
                       className={cn("h-9 border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60", useRetroHome ? "rounded-sm" : "rounded-md")}
                       disabled={maibotChannel !== "other" || busy !== null || maibotRefsLoading || maibotOtherTargetMode !== "tag"}
-                      onChange={(event) => setSelectedMaiBotTag(event.target.value)}
+                      onChange={(event) => {
+                        setMaibotModuleUpdateProgress(null);
+                        setMaibotModuleUpdateLogs([]);
+                        setSelectedMaiBotTag(event.target.value);
+                      }}
                       tabIndex={maibotChannel === "other" && maibotOtherTargetMode === "tag" ? undefined : -1}
                       value={selectedMaiBotHistoryTag ?? ""}
                     >
@@ -4099,7 +4211,11 @@ export function HomePanel({
                 size="sm"
               >
                 {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-                {maibotTargetIsCurrent ? "已是当前版本" : "开始更新"}
+                {busy === "maibot:update"
+                  ? "更新中"
+                  : maibotTargetIsCurrent
+                    ? "已是当前版本"
+                    : "开始更新"}
               </Button>
             </div>
             </div>

@@ -88,6 +88,7 @@ import type {
   MaiBotPluginVoteResult,
   MaiBotStatisticSummary,
   MaiBotUpdateInfo,
+  MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
   ModuleBranchOption,
   ModuleRuntimeVersions,
@@ -2866,7 +2867,7 @@ export function registerAppIpc({
   ipcMain.handle(
     "modules:updateMaibot",
     async (
-      _event,
+      event,
       target?: ModuleUpdateTarget,
     ): Promise<ModuleUpdateResult> => {
       const maibot = serviceManager
@@ -2882,7 +2883,12 @@ export function registerAppIpc({
       }
 
       logStore.append("desktop", "system", "Updating MaiBot module from Git.");
-      const result = await moduleUpdater.updateMaiBot(target);
+      const sendProgress = (progress: MaiBotModuleUpdateProgress): void => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("modules:maibot-update-progress", progress);
+        }
+      };
+      const result = await moduleUpdater.updateMaiBot(target, sendProgress);
       if (target) {
         await writeMaiBotUpdateSelection(
           target.type === "tag" &&

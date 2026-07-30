@@ -2361,9 +2361,12 @@ export function DesktopShell(): React.JSX.Element {
                 />
               ) : (
                 <div className="relative h-full min-h-0">
-                  {maibotWebviewReady && pluginMode === "manage" ? (
+                  {maibotWebviewReady ? (
                     <div
-                      className="absolute inset-0"
+                      className={cn(
+                        "absolute inset-0",
+                        pluginMode !== "manage" && "invisible pointer-events-none",
+                      )}
                     >
                       <WebviewPanel
                         active={activeTab === "plugins" && pluginMode === "manage"}
@@ -2378,23 +2381,24 @@ export function DesktopShell(): React.JSX.Element {
                       />
                     </div>
                   ) : null}
-                  {maibotWebviewReady && pluginMode === "market" ? (
-                    <div className="absolute inset-0">
-                    {pluginMarketWebviewVisited ? (
-                      <div className="absolute inset-0">
-                        <WebviewPanel
-                          active={activeTab === "plugins" && pluginMode === "market"}
-                          emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件市场页面。"
-                          onWebuiIdentity={rememberWebuiIdentity}
-                          postAuthTargetUrl={maibotPluginMarketWebviewTarget.postAuthTargetUrl}
-                          title={maibotPluginMarketWebviewTitle}
-                          toolbarPlacement="external"
-                          toolbarTarget={webviewToolbarHost}
-                          reloadTrigger={maibotWebviewReloadTrigger}
-                          url={maibotPluginMarketWebviewTarget.entryUrl}
-                        />
-                      </div>
-                    ) : null}
+                  {maibotWebviewReady && pluginMarketWebviewVisited ? (
+                    <div
+                      className={cn(
+                        "absolute inset-0",
+                        pluginMode !== "market" && "invisible pointer-events-none",
+                      )}
+                    >
+                      <WebviewPanel
+                        active={activeTab === "plugins" && pluginMode === "market"}
+                        emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件市场页面。"
+                        onWebuiIdentity={rememberWebuiIdentity}
+                        postAuthTargetUrl={maibotPluginMarketWebviewTarget.postAuthTargetUrl}
+                        title={maibotPluginMarketWebviewTitle}
+                        toolbarPlacement="external"
+                        toolbarTarget={webviewToolbarHost}
+                        reloadTrigger={maibotWebviewReloadTrigger}
+                        url={maibotPluginMarketWebviewTarget.entryUrl}
+                      />
                     </div>
                   ) : null}
                 </div>
