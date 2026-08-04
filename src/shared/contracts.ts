@@ -1166,6 +1166,11 @@ export interface QqAccountSetupRequest {
   resetInvalidAdapterConfigs?: boolean;
 }
 
+export interface BotPlatformAccountSetupRequest {
+  platform: string;
+  account: string;
+}
+
 export interface ModuleUpdateResult {
   moduleId: "maibot" | "napcat-adapter";
   moduleName: string;
@@ -1427,6 +1432,9 @@ export interface DesktopBridge {
     resetSnowLuma: () => Promise<SnowLumaResetResult>;
     upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
     getBotAccountConfigState: () => Promise<BotAccountConfigState>;
+    setBotPlatformAccount: (
+      request: BotPlatformAccountSetupRequest,
+    ) => Promise<BotAccountConfigState>;
     setQqBackend: (backend: QqBackend, options?: InitRepairOptions) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
   };

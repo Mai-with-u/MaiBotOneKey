@@ -1359,6 +1359,21 @@ samp {
   margin-top: 0 !important;
 }
 
+.settings-pair-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
+  align-items: start;
+  gap: 1rem;
+}
+
+.settings-pair-grid > .settings-section {
+  height: 100%;
+}
+
+.settings-pair-grid > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .settings-section {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -1418,6 +1433,22 @@ samp {
 
 :root[data-appearance-mode="future-retro"] .settings-content {
   gap: 0 !important;
+}
+
+:root[data-appearance-mode="future-retro"] .settings-pair-grid {
+  gap: 0;
+}
+
+:root[data-appearance-mode="future-retro"] .settings-pair-grid > .settings-section {
+  padding-block: 1rem !important;
+}
+
+@media (min-width: 1040px) {
+  :root[data-appearance-mode="future-retro"]
+    .settings-pair-grid
+    > .settings-section:nth-child(even) {
+    border-left: 2px solid var(--retro-line, var(--border)) !important;
+  }
 }
 
 :root[data-appearance-mode="future-retro"] .settings-content > .settings-section {

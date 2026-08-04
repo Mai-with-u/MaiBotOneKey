@@ -2,7 +2,6 @@ export type HomeContentCardType =
   | "maibot-overview"
   | "local-chat"
   | "message-platform"
-  | "launcher-update"
   | "official-docs"
   | "stats"
   | "quick-actions"
@@ -54,7 +53,6 @@ export const HOME_CONTENT_CARD_OPTIONS: HomeContentCardOption[] = [
   { type: "maibot-overview", label: "MaiBot Core", description: "显示核心服务状态和 MaiBot 更新入口。" },
   { type: "local-chat", label: "聊聊", description: "首页快速试聊入口。" },
   { type: "message-platform", label: "消息平台", description: "显示 QQ 协议端连接、WebUI 和配置入口。" },
-  { type: "launcher-update", label: "一键包信息", description: "显示启动器版本和更新入口。" },
   { type: "official-docs", label: "官方文档", description: "打开 MaiBot 官方文档入口。" },
   { type: "stats", label: "统计信息", description: "显示服务与 MaiBot 统计概览。" },
   { type: "quick-actions", label: "快捷操作", description: "路径、数据库和配置导入等快捷入口。" },
@@ -71,7 +69,6 @@ export const DEFAULT_HOME_CONTENT_LAYOUT: HomeContentEntry[] = [
   { id: "maibot-overview", type: "maibot-overview", area: "main", width: "full" },
   { id: "local-chat", type: "local-chat", area: "main", width: "full" },
   { id: "message-platform", type: "message-platform", area: "main", width: "full" },
-  { id: "launcher-update", type: "launcher-update", area: "main", width: "full" },
   { id: "official-docs", type: "official-docs", area: "side", width: "full" },
   { id: "stats", type: "stats", area: "side", width: "full" },
   { id: "quick-actions", type: "quick-actions", area: "side", width: "full" },

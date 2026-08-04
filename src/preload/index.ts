@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   BotAccountConfigState,
+  BotPlatformAccountSetupRequest,
   CloseAction,
   AppIconId,
   AppIconSettings,
@@ -170,6 +171,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("init:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
     getBotAccountConfigState: () =>
       ipcRenderer.invoke("init:getBotAccountConfigState") as Promise<BotAccountConfigState>,
+    setBotPlatformAccount: (request: BotPlatformAccountSetupRequest) =>
+      ipcRenderer.invoke("init:setBotPlatformAccount", request) as Promise<BotAccountConfigState>,
     setQqBackend: (backend: QqBackend, options?: InitRepairOptions) =>
       ipcRenderer.invoke("init:setQqBackend", backend, options) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>

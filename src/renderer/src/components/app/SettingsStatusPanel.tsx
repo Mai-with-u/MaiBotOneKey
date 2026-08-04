@@ -403,6 +403,7 @@ const CODEX_PET_PREVIEW_WIDTH = 38;
 const CODEX_PET_PREVIEW_HEIGHT = 42;
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
+const DEVELOPER_MODE_STORAGE_KEY = "maibot-developer-mode-enabled";
 
 const storageCleanupLabel: Record<MaiBotStorageCleanupTarget, string> = {
   images: "清理图片",
@@ -1062,6 +1063,10 @@ export function SettingsStatusPanel({
   }));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeSettingsTab, setActiveSettingsTab] = useState("general");
+  const [developerModeEnabled, setDeveloperModeEnabled] = useState(
+    () => localStorage.getItem(DEVELOPER_MODE_STORAGE_KEY) === "true",
+  );
   const [adapterResetRequest, setAdapterResetRequest] =
     useState<AdapterConfigResetRequest | null>(null);
   const [adapterResetAction, setAdapterResetAction] = useState<"repair" | "qq" | null>(null);
@@ -1084,6 +1089,7 @@ export function SettingsStatusPanel({
   };
   const services = snapshot.services ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
+  const qqBackendService = services.find((service) => service.id === "napcat");
   const serviceCommands = snapshot.serviceCommands ?? [];
   const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
@@ -1118,7 +1124,14 @@ export function SettingsStatusPanel({
       maibotService?.status === "running" ||
       maibotService?.status === "stopping",
   );
-  const qqBackendSwitchBlocked = services.some(
+  const qqBackendSwitchBlocked = Boolean(
+    qqBackendService && (
+      qqBackendService.status === "starting" ||
+      qqBackendService.status === "running" ||
+      qqBackendService.status === "stopping"
+    ),
+  );
+  const qqComponentsChangeBlocked = services.some(
     (service) =>
       service.status === "starting" ||
       service.status === "running" ||
@@ -1221,6 +1234,14 @@ export function SettingsStatusPanel({
     void window.maibotDesktop?.openPath(path);
   }, []);
 
+  const updateDeveloperMode = useCallback((enabled: boolean) => {
+    localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, String(enabled));
+    setDeveloperModeEnabled(enabled);
+    if (!enabled) {
+      setActiveSettingsTab("general");
+    }
+  }, []);
+
   const openExternal = useCallback((url: string) => {
     void window.maibotDesktop?.openExternal(url);
   }, []);
@@ -1276,7 +1297,7 @@ export function SettingsStatusPanel({
 
   const saveQqBackend = useCallback(async (resetInvalidAdapterConfigs = false) => {
     if (qqBackend !== initState.qqBackend && qqBackendSwitchBlocked) {
-      setError("MaiBot Core 或 QQ 后端正在运行时不能切换 NapCat / SnowLuma，请先停止全部服务。");
+      setError("QQ 后端正在运行，请先停止后再切换 NapCat / SnowLuma。");
       return;
     }
     setBusy("qq");
@@ -1305,7 +1326,7 @@ export function SettingsStatusPanel({
   }, [initState.qqBackend, onOpenPluginConfig, qqBackend, qqBackendSwitchBlocked, refreshSnapshot]);
 
   const upgradeQqComponents = useCallback(async () => {
-    if (qqBackendSwitchBlocked) {
+    if (qqComponentsChangeBlocked) {
       setError("请先停止 MaiBot Core 和 QQ 后端，再重新安装 NapCat / SnowLuma。");
       return;
     }
@@ -1323,7 +1344,7 @@ export function SettingsStatusPanel({
     } finally {
       setBusy(null);
     }
-  }, [qqBackendSwitchBlocked, refreshSnapshot]);
+  }, [qqComponentsChangeBlocked, refreshSnapshot]);
 
   const resetLocalStartupState = useCallback(() => {
     try {
@@ -1795,7 +1816,7 @@ export function SettingsStatusPanel({
   const canSaveQqBackend =
     busy === null &&
     qqBackend !== initState.qqBackend &&
-    (qqBackend === initState.qqBackend || !qqBackendSwitchBlocked);
+    !qqBackendSwitchBlocked;
   useShortcut("Mod+Enter", () => void saveQqBackend(), { enabled: canSaveQqBackend, allowInEditable: true });
   useShortcut("Mod+Shift+R", () => void repair(), { enabled: busy === null });
 
@@ -1973,7 +1994,11 @@ export function SettingsStatusPanel({
               </div>
             ) : null}
 
-            <Tabs className="space-y-4" defaultValue="general">
+            <Tabs
+              className="space-y-4"
+              onValueChange={setActiveSettingsTab}
+              value={activeSettingsTab}
+            >
               <TabsList className="settings-negative-tabs flex h-auto flex-wrap">
                 <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="general">
                   <Settings className="size-3" />
@@ -1991,10 +2016,12 @@ export function SettingsStatusPanel({
                   <ShieldCheck className="size-3" />
                   实例路径
                 </TabsTrigger>
-                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="debug">
-                  <Wrench className="size-3" />
-                  调试
-                </TabsTrigger>
+                {developerModeEnabled ? (
+                  <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="debug">
+                    <Wrench className="size-3" />
+                    调试
+                  </TabsTrigger>
+                ) : null}
                 <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="data">
                   <Database className="size-3" />
                   数据
@@ -2006,6 +2033,7 @@ export function SettingsStatusPanel({
               </TabsList>
 
               <TabsContent className="settings-content" value="general">
+                <div className="settings-pair-grid">
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2085,6 +2113,28 @@ export function SettingsStatusPanel({
                       px
                     </label>
                   </div>
+                </div>
+                </div>
+
+                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                      <Wrench className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">开发者模式</p>
+                      <p className="text-xs text-muted-foreground">
+                        启用后显示调试页，用于本地开发和更新链路排查。
+                      </p>
+                    </div>
+                  </div>
+                  <label className="flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
+                    <Checkbox
+                      checked={developerModeEnabled}
+                      onCheckedChange={(checked) => updateDeveloperMode(checked === true)}
+                    />
+                    启用开发者模式
+                  </label>
                 </div>
 
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
@@ -2291,6 +2341,7 @@ export function SettingsStatusPanel({
                   )}
                 </div>
 
+                <div className="settings-pair-grid">
                 <div className="settings-section grid gap-3 bg-destructive/5 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
@@ -2370,6 +2421,7 @@ export function SettingsStatusPanel({
                       完全还原初始状态
                     </Button>
                   </div>
+                </div>
                 </div>
 
                 {environmentServicesPanel}
@@ -2544,6 +2596,7 @@ export function SettingsStatusPanel({
                   ) : null}
                 </div>
 
+                <div className="settings-pair-grid">
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2605,6 +2658,7 @@ export function SettingsStatusPanel({
                       </label>
                     ))}
                   </RadioGroup>
+                </div>
                 </div>
 
                 {appearance.mode === "future-retro" ? (
@@ -2677,7 +2731,7 @@ export function SettingsStatusPanel({
 
               <TabsContent className="settings-content" value="account">
                 <p className="text-xs text-muted-foreground">
-                  选择当前使用的 QQ 后端。MaiBot Core 或 QQ 后端运行中不能切换。
+                  选择当前使用的 QQ 后端。MaiBot Core 运行时会热切换适配器；QQ 后端需先停止。
                 </p>
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="min-w-0 flex-1">
@@ -2766,7 +2820,7 @@ export function SettingsStatusPanel({
                 </div>
                 {qqBackendSwitchBlocked ? (
                   <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
-                    MaiBot Core 或 QQ 后端运行中，暂不能切换 NapCat / SnowLuma。请先停止全部服务。
+                    QQ 后端正在运行，暂不能切换 NapCat / SnowLuma。请先停止当前 QQ 后端。
                   </div>
                 ) : null}
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
@@ -2777,7 +2831,7 @@ export function SettingsStatusPanel({
                     </p>
                   </div>
                   <Button
-                    disabled={busy !== null || qqBackendSwitchBlocked}
+                    disabled={busy !== null || qqComponentsChangeBlocked}
                     onClick={() => setConfirmQqComponentsUpgradeOpen(true)}
                     variant="secondary"
                   >
@@ -2830,11 +2884,14 @@ export function SettingsStatusPanel({
                     </div>
                   ) : null}
                 </div>
-                <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
-                <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
-                <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
+                <div className="settings-pair-grid">
+                  <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
+                  <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
+                  <PathField label="python基础环境" onOpen={openPath} value={snapshot.paths.runtimeRoot} />
+                </div>
               </TabsContent>
 
+              {developerModeEnabled ? (
               <TabsContent className="settings-content" value="debug">
                 <p className="text-xs text-muted-foreground">
                   调试配置用于本地开发和排查更新链路；修改后会影响之后启动的服务或 Git 操作。
@@ -2889,7 +2946,7 @@ export function SettingsStatusPanel({
                   </label>
                 </div>
 
-                <div className="grid gap-2">
+                <div className="settings-pair-grid">
                   {editableRuntimePathConfigs.map((config) => (
                     <RuntimePathEditor
                       busy={busy === `path:${config.key}`}
@@ -2902,6 +2959,7 @@ export function SettingsStatusPanel({
                   ))}
                 </div>
               </TabsContent>
+              ) : null}
 
               <TabsContent className="settings-content" value="data">
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
@@ -2959,36 +3017,6 @@ export function SettingsStatusPanel({
                   </div>
                 ) : null}
 
-                <div className="settings-section grid gap-3 bg-destructive/5 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
-                        <Trash2 className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">彻底重置 data 目录</p>
-                        <p className="text-xs text-muted-foreground">
-                          清空数据库、记忆、WebUI 偏好和所有 data 内容。该操作不可恢复。
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      disabled={busy !== null || maibotDataBlocked}
-                      onClick={() => setConfirmMaiBotDataResetFirstOpen(true)}
-                      size="sm"
-                      variant="destructive"
-                    >
-                      <Trash2 className="size-4" />
-                      重置 data
-                    </Button>
-                  </div>
-                  {lastMaiBotDataReset ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 p-3 text-[12px] text-foreground">
-                      最近一次重置移除 {lastMaiBotDataReset.removedEntries.length} 项，
-                      时间 {formatTime(lastMaiBotDataReset.clearedAt)}
-                    </div>
-                  ) : null}
-                </div>
               </TabsContent>
 
               <TabsContent className="settings-content" value="logs">
@@ -3256,7 +3284,7 @@ export function SettingsStatusPanel({
         <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
           配置、数据和日志会被保留；执行前请确认 MaiBot Core 与 QQ 后端都已停止。
         </div>
-        {qqBackendSwitchBlocked ? (
+        {qqComponentsChangeBlocked ? (
           <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
             MaiBot Core 或 QQ 后端仍在运行，请先停止全部服务。
           </div>
@@ -3267,7 +3295,7 @@ export function SettingsStatusPanel({
           取消
         </Button>
         <Button
-          disabled={busy === "qq-components:upgrade" || qqBackendSwitchBlocked}
+          disabled={busy === "qq-components:upgrade" || qqComponentsChangeBlocked}
           onClick={upgradeQqComponents}
           size="sm"
           variant="secondary"

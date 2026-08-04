@@ -911,60 +911,6 @@ function MessagePlatformConnectCard({
   );
 }
 
-function LauncherUpdateCard({
-  appVersion,
-  latestTag,
-  updateBusy,
-  onUpdate,
-  retro,
-}: {
-  appVersion: string;
-  latestTag?: string;
-  updateBusy?: boolean;
-  onUpdate: () => void;
-  retro: boolean;
-}): React.JSX.Element {
-  const currentTag = versionAsTag(appVersion);
-  const updateAvailable = latestTag ? compareVersionText(latestTag, currentTag) > 0 : false;
-
-  return (
-    <section className={cn(retro ? "retro-panel p-3.5 pl-5" : "rounded-lg border border-border bg-card p-3.5")}>
-      <p className={cn("mb-3 text-foreground", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>一键包信息</p>
-      <div
-        className={cn(
-          "grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end",
-          retro ? "retro-control p-3 text-xs" : "rounded-md border border-border bg-muted/30 p-3 text-xs",
-        )}
-      >
-        <div className="grid min-w-0 gap-2">
-          <DetailRow label="本地版本" value={currentTag} retro={retro} />
-          <DetailRow label="最新版本" value={latestTag} retro={retro} />
-        </div>
-        <Button
-          aria-label="更新一键包"
-          className={cn("relative justify-self-end", retro ? "size-10 px-0" : "h-7 px-2.5 text-[11px]")}
-          disabled={updateBusy}
-          onClick={onUpdate}
-          size={retro ? "icon" : "sm"}
-          variant="secondary"
-        >
-          {updateAvailable ? (
-            <span
-              className={cn(
-                "absolute bg-warning",
-                retro
-                  ? "right-[var(--retro-stroke)] top-[var(--retro-stroke)] size-2 rounded-none"
-                  : "right-1 top-1 size-2 rounded-full",
-              )}
-            />
-          ) : null}
-          {updateBusy ? <Loader2 className="animate-spin" /> : <SolidUpgradeIcon />}
-        </Button>
-      </div>
-    </section>
-  );
-}
-
 function SolidUpgradeIcon(): React.JSX.Element {
   return (
     <svg aria-hidden className="size-5" fill="none" viewBox="0 0 24 24">
@@ -2304,7 +2250,7 @@ export function HomePanel({
     userName?: string;
   };
 }): React.JSX.Element {
-  const [updateDialog, setUpdateDialog] = useState<"launcher" | "maibot" | "dashboard" | null>(null);
+  const [updateDialog, setUpdateDialog] = useState<"launcher" | "maibot" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [launcherUpdateInfo, setLauncherUpdateInfo] = useState<LauncherUpdateInfo | null>(null);
@@ -2385,6 +2331,10 @@ export function HomePanel({
   );
   const launcherUpdateAvailable =
     launcherUpdateInfo?.available ?? (compareVersionText(launcherLatestTag, launcherCurrentTag) > 0);
+  const maibotUpdateAvailable = compareVersionText(
+    snapshot.moduleVersions.maibotLatestStableTag,
+    snapshot.moduleVersions.maibotLocal,
+  ) > 0;
   const maibotSelectedTarget = formatMaiBotSelectedTarget(snapshot);
   const availableMaiBotBranches = useMemo(
     () => new Set(maibotBranches.map((branch) => branch.name)),
@@ -2420,8 +2370,6 @@ export function HomePanel({
     other: maibotOtherTargetMode === "dev" ? "Dev 最新内容" : selectedMaiBotHistoryTag,
   };
   const maibotDevBranchAvailable = maibotBranches.length === 0 || availableMaiBotBranches.has("dev");
-  const dashboardTarget = snapshot.moduleVersions.dashboardLatestStablePypi ?? snapshot.moduleVersions.dashboardLatestPypi;
-
   useEffect(() => {
     if (!maibotRefsLoading) {
       return undefined;
@@ -2968,30 +2916,6 @@ export function HomePanel({
     selectedMaiBotTarget,
   ]);
 
-  const updateDashboard = useCallback(async () => {
-    const target = dashboardTarget;
-    if (!window.maibotDesktop?.pythonDeps || !target) {
-      setError("没有可用的目标版本");
-      return;
-    }
-
-    setBusy("dashboard:update");
-    setError(null);
-    try {
-      await window.maibotDesktop.pythonDeps.installVersion({
-        packageName: "maibot-dashboard",
-        version: target,
-      });
-      toast.success("WebUI 更新完成");
-      await refreshSnapshot();
-      setUpdateDialog(null);
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [dashboardTarget, refreshSnapshot]);
-
   const renderHomeContentCard = useCallback((entry: HomeContentEntry): React.ReactNode => {
     switch (entry.type) {
       case "maibot-overview":
@@ -3052,16 +2976,6 @@ export function HomePanel({
         ) : (
           <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroHome} />
         );
-      case "launcher-update":
-        return (
-          <LauncherUpdateCard
-            appVersion={snapshot.appVersion}
-            latestTag={launcherLatestTag}
-            onUpdate={openLauncherUpdate}
-            retro={useRetroHome}
-            updateBusy={busy === "launcher:check" || busy === "launcher:update"}
-          />
-        );
       case "official-docs":
         return <OfficialDocsCard retro={useRetroHome} />;
       case "stats":
@@ -3100,7 +3014,6 @@ export function HomePanel({
     adapterName,
     adapterPluginId,
     busy,
-    launcherLatestTag,
     maibot,
     messagePlatformConfigured,
     napcat,
@@ -3110,7 +3023,6 @@ export function HomePanel({
     onOpenTab,
     onStartService,
     onStopService,
-    openLauncherUpdate,
     openMaiBotUpdate,
     openNapcatWebui,
     qqWebuiPort,
@@ -3774,107 +3686,6 @@ export function HomePanel({
       </Dialog>
 
       <Dialog
-        open={updateDialog === "launcher"}
-        onOpenChange={(next) => {
-          if (!next && busy !== "launcher:check" && busy !== "launcher:update") setUpdateDialog(null);
-        }}
-      >
-        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="lg">
-          <DialogHeader
-            title="更新一键包"
-            tone="primary"
-          />
-          <DialogBody className="space-y-4">
-            {error && updateDialog === "launcher" ? (
-              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
-                {error}
-              </div>
-            ) : null}
-            {launcherNetworkFailed ? (
-              <div className={cn(
-                "grid gap-3 border border-warning/40 bg-warning/15 px-3 py-3 text-xs",
-                useRetroHome ? "rounded-sm" : "rounded-lg",
-              )}>
-                <div className="grid gap-1">
-                  <p className="font-medium text-warning-foreground">自动更新未完成</p>
-                  <p className="text-muted-foreground">
-                    可能是网络连接问题。你可以前往 GitHub Releases 手动下载安装包完成更新。
-                  </p>
-                </div>
-                <Button
-                  className="justify-self-start"
-                  onClick={openLauncherRelease}
-                  size="sm"
-                  variant="secondary"
-                >
-                  <ExternalLink />
-                  前往发布页
-                </Button>
-              </div>
-            ) : null}
-            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
-              <DetailRow label="本地版本" value={launcherCurrentTag} retro={useRetroHome} />
-              <DetailRow label="最新版本" value={launcherLatestTag} retro={useRetroHome} />
-              {launcherUsesFallbackAsset ? (
-                <DetailRow label="可用版本" value={launcherDownloadTag} retro={useRetroHome} />
-              ) : null}
-              <div className="my-1 border-t border-border/70" />
-              <DetailRow label="发布版本" value={launcherUpdateInfo?.releaseName ?? launcherLatestTag} retro={useRetroHome} />
-              <DetailRow label="安装包" value={launcherUpdateInfo?.assetName} retro={useRetroHome} />
-              <DetailRow label="大小" value={formatFileSize(launcherUpdateInfo?.assetSize)} retro={useRetroHome} />
-              <DetailRow label="更新源" value={launcherUpdateInfo?.source ?? snapshot.appLatestSource} retro={useRetroHome} />
-            </div>
-            {launcherUsesFallbackAsset ? (
-              <div className={cn(useRetroHome ? "retro-control grid gap-1 p-3 text-xs" : "grid gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-100")}>
-                <p className="font-medium">最新版本暂不可下载</p>
-                <p>
-                  最新版本是 {launcherLatestTag}，{launcherLatestTag} 版本暂无可用内容，是否下载可用最新版本 {launcherDownloadTag}？
-                </p>
-              </div>
-            ) : null}
-            {launcherDownloadProgress ? (
-              <LauncherDownloadProgressDetails progress={launcherDownloadProgress} retro={useRetroHome} />
-            ) : null}
-            {launcherUpdateInfo?.releaseNotes ? (
-              <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3")}>
-                <p className="text-xs font-medium">更新说明</p>
-                <MarkdownRenderer
-                  className="max-h-48 overflow-auto break-words pr-1 text-xs"
-                  content={launcherUpdateInfo.releaseNotes}
-                />
-              </div>
-            ) : null}
-          </DialogBody>
-          <DialogFooter>
-            <Button
-              disabled={busy === "launcher:check" || busy === "launcher:update"}
-              onClick={() => setUpdateDialog(null)}
-              size="sm"
-              variant="ghost"
-            >
-              取消
-            </Button>
-            <Button disabled={busy !== null} onClick={() => void checkLauncherUpdate()} size="sm" variant="secondary">
-              {busy === "launcher:check" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              检查更新
-            </Button>
-            <Button disabled={busy !== null} onClick={openLauncherRelease} size="sm" variant="secondary">
-              <ExternalLink />
-              查看更新
-            </Button>
-            <Button
-              disabled={busy !== null || !launcherUpdateAvailable || launcherUpdateBlocked}
-              onClick={() => void installLauncherUpdate()}
-              size="sm"
-            >
-              {busy === "launcher:update" ? <Loader2 className="animate-spin" /> : <Download />}
-              {launcherUsesFallbackAsset ? "下载可用版本" : "下载并打开"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
         open={launcherQuitPromptOpen}
         onOpenChange={(next) => {
           if (busy !== "launcher:quit") setLauncherQuitPromptOpen(next);
@@ -3917,16 +3728,184 @@ export function HomePanel({
       </Dialog>
 
       <Dialog
-        open={updateDialog === "maibot"}
+        open={updateDialog !== null}
         onOpenChange={(next) => {
-          if (!next && busy !== "maibot:update") setUpdateDialog(null);
+          if (
+            !next
+            && busy !== "maibot:update"
+            && busy !== "launcher:check"
+            && busy !== "launcher:update"
+          ) {
+            setUpdateDialog(null);
+          }
         }}
       >
-        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="xl">
-          <DialogHeader
-            title="更新 MaiBot"
-            tone="primary"
-          />
+        <DialogContent
+          onInteractOutside={(event) => event.preventDefault()}
+          showCloseButton={false}
+          size="xl"
+        >
+          <div>
+            <button
+              aria-label="关闭更新窗口"
+              className="absolute right-3 top-5 z-10 grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+              disabled={busy !== null}
+              onClick={() => setUpdateDialog(null)}
+              type="button"
+            >
+              <X className="size-4" />
+            </button>
+            <div className="grid gap-2 bg-muted/20 py-5 pl-5 pr-14 sm:grid-cols-2">
+              <button
+                aria-pressed={updateDialog === "maibot"}
+                className={cn(
+                  "flex min-w-0 items-center justify-between gap-3 border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  useRetroHome ? "rounded-sm" : "rounded-lg",
+                  updateDialog === "maibot"
+                    ? "border-primary bg-primary/10 text-foreground shadow-sm"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50",
+                )}
+                disabled={busy !== null}
+                onClick={openMaiBotUpdate}
+                type="button"
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="grid size-8 shrink-0 place-items-center bg-primary/10 text-primary">
+                    <Radar className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">MaiBot 更新</span>
+                    <span className="mt-0.5 block truncate font-mono text-[10px] opacity-70">
+                      {valueOrFallback(snapshot.moduleVersions.maibotLocal)} → {valueOrFallback(snapshot.moduleVersions.maibotLatestStableTag)}
+                    </span>
+                  </span>
+                </span>
+                {maibotUpdateAvailable ? (
+                  <span className={cn("shrink-0 bg-warning px-1.5 py-1 text-[10px] font-semibold leading-none text-warning-foreground", useRetroHome ? "rounded-none" : "rounded-sm")}>
+                    有更新
+                  </span>
+                ) : null}
+              </button>
+              <button
+                aria-pressed={updateDialog === "launcher"}
+                className={cn(
+                  "flex min-w-0 items-center justify-between gap-3 border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  useRetroHome ? "rounded-sm" : "rounded-lg",
+                  updateDialog === "launcher"
+                    ? "border-primary bg-primary/10 text-foreground shadow-sm"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50",
+                )}
+                disabled={busy !== null}
+                onClick={openLauncherUpdate}
+                type="button"
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="grid size-8 shrink-0 place-items-center bg-primary/10 text-primary">
+                    <PackageCheck className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">启动器更新</span>
+                    <span className="mt-0.5 block truncate font-mono text-[10px] opacity-70">
+                      {valueOrFallback(launcherCurrentTag)} → {valueOrFallback(launcherLatestTag)}
+                    </span>
+                  </span>
+                </span>
+                {launcherUpdateAvailable ? (
+                  <span className={cn("shrink-0 bg-warning px-1.5 py-1 text-[10px] font-semibold leading-none text-warning-foreground", useRetroHome ? "rounded-none" : "rounded-sm")}>
+                    有更新
+                  </span>
+                ) : null}
+              </button>
+            </div>
+            <DialogHeader
+              className="border-t border-border"
+              title={updateDialog === "launcher" ? "更新启动器" : "更新 MaiBot"}
+              tone="primary"
+            />
+          </div>
+          {updateDialog === "launcher" ? (
+            <>
+              <DialogBody className="space-y-4">
+                {error ? (
+                  <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
+                    {error}
+                  </div>
+                ) : null}
+                {launcherNetworkFailed ? (
+                  <div className={cn(
+                    "grid gap-3 border border-warning/40 bg-warning/15 px-3 py-3 text-xs",
+                    useRetroHome ? "rounded-sm" : "rounded-lg",
+                  )}>
+                    <div className="grid gap-1">
+                      <p className="font-medium text-warning-foreground">自动更新未完成</p>
+                      <p className="text-muted-foreground">
+                        可能是网络连接问题。你可以前往 GitHub Releases 手动下载安装包完成更新。
+                      </p>
+                    </div>
+                    <Button className="justify-self-start" onClick={openLauncherRelease} size="sm" variant="secondary">
+                      <ExternalLink />
+                      前往发布页
+                    </Button>
+                  </div>
+                ) : null}
+                <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+                  <DetailRow label="本地版本" value={launcherCurrentTag} retro={useRetroHome} />
+                  <DetailRow label="最新版本" value={launcherLatestTag} retro={useRetroHome} />
+                  {launcherUsesFallbackAsset ? (
+                    <DetailRow label="可用版本" value={launcherDownloadTag} retro={useRetroHome} />
+                  ) : null}
+                  <div className="my-1 border-t border-border/70" />
+                  <DetailRow label="发布版本" value={launcherUpdateInfo?.releaseName ?? launcherLatestTag} retro={useRetroHome} />
+                  <DetailRow label="安装包" value={launcherUpdateInfo?.assetName} retro={useRetroHome} />
+                  <DetailRow label="大小" value={formatFileSize(launcherUpdateInfo?.assetSize)} retro={useRetroHome} />
+                  <DetailRow label="更新源" value={launcherUpdateInfo?.source ?? snapshot.appLatestSource} retro={useRetroHome} />
+                </div>
+                {launcherUsesFallbackAsset ? (
+                  <div className={cn(useRetroHome ? "retro-control grid gap-1 p-3 text-xs" : "grid gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-100")}>
+                    <p className="font-medium">最新版本暂不可下载</p>
+                    <p>
+                      最新版本是 {launcherLatestTag}，{launcherLatestTag} 版本暂无可用内容，是否下载可用最新版本 {launcherDownloadTag}？
+                    </p>
+                  </div>
+                ) : null}
+                {launcherDownloadProgress ? (
+                  <LauncherDownloadProgressDetails progress={launcherDownloadProgress} retro={useRetroHome} />
+                ) : null}
+                {launcherUpdateInfo?.releaseNotes ? (
+                  <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3")}>
+                    <p className="text-xs font-medium">更新说明</p>
+                    <MarkdownRenderer className="max-h-48 overflow-auto break-words pr-1 text-xs" content={launcherUpdateInfo.releaseNotes} />
+                  </div>
+                ) : null}
+              </DialogBody>
+              <DialogFooter>
+                <Button
+                  disabled={busy === "launcher:check" || busy === "launcher:update"}
+                  onClick={() => setUpdateDialog(null)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  取消
+                </Button>
+                <Button disabled={busy !== null} onClick={() => void checkLauncherUpdate()} size="sm" variant="secondary">
+                  {busy === "launcher:check" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  检查更新
+                </Button>
+                <Button disabled={busy !== null} onClick={openLauncherRelease} size="sm" variant="secondary">
+                  <ExternalLink />
+                  查看更新
+                </Button>
+                <Button
+                  disabled={busy !== null || !launcherUpdateAvailable || launcherUpdateBlocked}
+                  onClick={() => void installLauncherUpdate()}
+                  size="sm"
+                >
+                  {busy === "launcher:update" ? <Loader2 className="animate-spin" /> : <Download />}
+                  {launcherUsesFallbackAsset ? "下载可用版本" : "下载并打开"}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
           <DialogBody className="grid h-[min(70vh,640px)] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
             <div className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-3">
               <div className="grid min-h-0 gap-4 overflow-auto pr-1">
@@ -4238,52 +4217,7 @@ export function HomePanel({
               </div>
             </div>
           </DialogBody>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={updateDialog === "dashboard"}
-        onOpenChange={(next) => {
-          if (!next && busy !== "dashboard:update") setUpdateDialog(null);
-        }}
-      >
-        <DialogContent onInteractOutside={(event) => event.preventDefault()} size="lg">
-          <DialogHeader
-            description="选择 WebUI 版本并安装到 Python 覆盖层；MaiBot Core 启动时会优先加载这里的版本。"
-            icon={<PackageCheck className="size-4" />}
-            title="更新 WebUI"
-            tone="primary"
-          />
-          <DialogBody className="space-y-4">
-            {error && updateDialog === "dashboard" ? (
-              <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroHome ? "rounded-sm" : "rounded-lg")}>
-                {error}
-              </div>
-            ) : null}
-            <div className={cn(useRetroHome ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
-              <DetailRow label="已安装版本" value={snapshot.moduleVersions.dashboardPythonEnv} retro={useRetroHome} />
-              <div className="my-1 border-t border-border/70" />
-              <DetailRow label="最新正式版" value={dashboardTarget} retro={useRetroHome} />
-            </div>
-            {maibotUpdateBlocked ? (
-              <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroHome ? "rounded-sm" : "rounded-lg")}>
-                请先停止 MaiBot Core，再更新 WebUI Python 环境依赖。
-              </div>
-            ) : null}
-          </DialogBody>
-          <DialogFooter>
-            <Button disabled={busy === "dashboard:update"} onClick={() => setUpdateDialog(null)} size="sm" variant="ghost">
-              取消
-            </Button>
-            <Button
-              disabled={busy !== null || maibotUpdateBlocked || !dashboardTarget}
-              onClick={() => void updateDashboard()}
-              size="sm"
-            >
-              {busy === "dashboard:update" ? <Loader2 className="animate-spin" /> : <Download />}
-              安装选中版本
-            </Button>
-          </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -4298,7 +4232,6 @@ export function HomePanel({
           <DialogBody className="overflow-hidden p-0">
             <WebviewPanel
               active={napcatWebuiOpen}
-              emptyText={`${napcat?.name ?? "QQ 后端"} 启动后会在这里打开它自己的 WebUI。`}
               title={`${napcat?.name ?? "QQ 后端"} WebUI`}
               url={currentQqWebuiUrl}
             />

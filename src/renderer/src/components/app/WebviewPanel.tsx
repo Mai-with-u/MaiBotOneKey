@@ -1,32 +1,25 @@
 import {
-  AlertTriangle,
   ExternalLink,
-  Globe,
   Loader2,
-  PlugZap,
   RotateCw,
-  Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/use-shortcut";
 
 interface WebviewPanelProps {
   title: string;
   url: string;
-  emptyText: string;
   /** When false, this panel is hidden and shortcuts are disabled. */
   active?: boolean;
   /** Changing to a truthy value forces the webview to remount. */
   reloadTrigger?: string | number | boolean | null;
-  /** After an auth entry URL lands on the WebUI root, navigate to this route. */
-  postAuthTargetUrl?: string;
   toolbarPlacement?: "internal" | "external";
   toolbarTarget?: HTMLElement | null;
+  showExternalToolbarMetadata?: boolean;
   onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
 }
 
@@ -42,7 +35,6 @@ type WebviewElement = HTMLElement & {
 
 type DidFailLoadEvent = Event & {
   errorCode?: number;
-  errorDescription?: string;
   validatedURL?: string;
   isMainFrame?: boolean;
 };
@@ -52,8 +44,6 @@ type WebviewNavigationEvent = Event & {
   isMainFrame?: boolean;
 };
 
-const LOAD_TIMEOUT_MS = 12_000;
-const AUTO_RETRY_SECONDS = 8;
 const CACHE_BUST_PARAM = "__maibot_webview_cache";
 
 function isDisplayableUrl(value: string | undefined): value is string {
@@ -79,68 +69,26 @@ function withCacheBust(value: string, token: number): string {
   }
 }
 
-function rootPathname(value: URL): string {
-  return value.pathname.replace(/\/+$/u, "") || "/";
-}
-
-function shouldNavigateToPostAuthTarget(current: string, target: string): boolean {
-  try {
-    const currentUrl = new URL(current);
-    const targetUrl = new URL(target);
-    if (currentUrl.origin !== targetUrl.origin) {
-      return false;
-    }
-    const currentPath = rootPathname(currentUrl);
-    const targetPath = rootPathname(targetUrl);
-    return currentPath === "/" && targetPath !== "/";
-  } catch {
-    return false;
-  }
-}
-
-function describeError(message: string | null): string {
-  if (!message) {
-    return "WebUI 暂时不可访问";
-  }
-  if (/ERR_CONNECTION_REFUSED/i.test(message)) {
-    return "服务端口拒绝连接，可能进程还未启动或已退出。";
-  }
-  if (/ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE/i.test(message)) {
-    return "无法解析或访问目标地址。";
-  }
-  if (/ERR_TIMED_OUT/i.test(message)) {
-    return "等待 WebUI 响应超时。";
-  }
-  if (/ERR_CONNECTION_RESET/i.test(message)) {
-    return "连接被重置，对端可能正在重启。";
-  }
-  return message;
-}
-
 export function WebviewPanel({
   title,
   url,
-  emptyText,
   active = true,
   reloadTrigger = null,
-  postAuthTargetUrl,
   toolbarPlacement = "internal",
   toolbarTarget = null,
+  showExternalToolbarMetadata = true,
   onWebuiIdentity,
 }: WebviewPanelProps): React.JSX.Element {
   const webviewRef = useRef<WebviewElement | null>(null);
   const domReadyRef = useRef(false);
   const failedRef = useRef(false);
   const hasRenderedPageRef = useRef(false);
-  const postAuthNavigationRef = useRef<string | null>(null);
   const reloadTriggerRef = useRef<WebviewPanelProps["reloadTrigger"]>(reloadTrigger);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [hasRenderedPage, setHasRenderedPage] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState(url);
   const [reloadKey, setReloadKey] = useState(0);
   const [cacheBustToken, setCacheBustToken] = useState(() => Date.now());
-  const [retryIn, setRetryIn] = useState<number | null>(null);
   const webviewUrl = withCacheBust(url, cacheBustToken);
 
   const readLiveWebviewUrl = useCallback(() => {
@@ -163,7 +111,6 @@ export function WebviewPanel({
   const remountWebview = useCallback(() => {
     domReadyRef.current = false;
     setLoadState("loading");
-    setErrorMessage(null);
     setCacheBustToken(Date.now());
     setReloadKey((current) => current + 1);
   }, []);
@@ -172,50 +119,19 @@ export function WebviewPanel({
     await window.maibotDesktop?.clearWebviewCache?.();
   }, []);
 
-  const handleLoadUrlFailure = useCallback((error: unknown) => {
+  const handleLoadUrlFailure = useCallback(() => {
     if (hasRenderedPageRef.current) {
       setLoadState("ready");
-      setErrorMessage(null);
       return;
     }
 
     failedRef.current = true;
     domReadyRef.current = false;
     setLoadState("error");
-    setErrorMessage(error instanceof Error ? error.message : String(error));
   }, []);
-
-  const navigateAfterAuth = useCallback((eventUrl?: string) => {
-    if (!postAuthTargetUrl || postAuthNavigationRef.current === postAuthTargetUrl) {
-      return;
-    }
-
-    const liveUrl = readLiveWebviewUrl();
-    const current = isDisplayableUrl(liveUrl) ? liveUrl : isDisplayableUrl(eventUrl) ? eventUrl : undefined;
-    if (!current || !shouldNavigateToPostAuthTarget(current, postAuthTargetUrl)) {
-      return;
-    }
-
-    const webview = webviewRef.current;
-    if (!webview?.loadURL) {
-      return;
-    }
-
-    postAuthNavigationRef.current = postAuthTargetUrl;
-    try {
-      const navigation = webview.loadURL(withCacheBust(postAuthTargetUrl, Date.now()));
-      if (navigation && typeof navigation.catch === "function") {
-        void navigation.catch(handleLoadUrlFailure);
-      }
-    } catch (error) {
-      handleLoadUrlFailure(error);
-    }
-  }, [handleLoadUrlFailure, postAuthTargetUrl, readLiveWebviewUrl]);
 
   const refresh = useCallback(async () => {
     setLoadState("loading");
-    setErrorMessage(null);
-    postAuthNavigationRef.current = null;
     await clearWebviewCache().catch(() => undefined);
 
     const webview = webviewRef.current;
@@ -264,20 +180,17 @@ export function WebviewPanel({
   }, [clearWebviewCache, reloadTrigger, remountWebview]);
 
   // Reset state when URL or remount key changes.
-  useEffect(() => {
+  useLayoutEffect(() => {
     domReadyRef.current = false;
     failedRef.current = false;
     hasRenderedPageRef.current = false;
-    postAuthNavigationRef.current = null;
     setHasRenderedPage(false);
     setLoadState("loading");
-    setErrorMessage(null);
     setCurrentUrl(url);
-    setRetryIn(null);
-  }, [postAuthTargetUrl, url, reloadKey, webviewUrl]);
+  }, [url, reloadKey, webviewUrl]);
 
   // Wire webview events.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const webview = webviewRef.current;
     if (!webview) {
       return;
@@ -289,7 +202,6 @@ export function WebviewPanel({
       failedRef.current = false;
       syncCurrentUrl();
       setLoadState(hasRenderedPageRef.current ? "ready" : "loading");
-      setErrorMessage(null);
     };
     const handleReady = (event: Event): void => {
       // Chromium also fires dom-ready / did-finish-load for its built-in
@@ -304,9 +216,6 @@ export function WebviewPanel({
       hasRenderedPageRef.current = true;
       setHasRenderedPage(true);
       setLoadState("ready");
-      setErrorMessage(null);
-      setRetryIn(null);
-      navigateAfterAuth();
       if (onWebuiIdentity && webview.executeJavaScript) {
         void webview.executeJavaScript(
           `(() => {
@@ -345,14 +254,12 @@ export function WebviewPanel({
       }
       if (hasRenderedPageRef.current) {
         setLoadState("ready");
-        setErrorMessage(null);
         return;
       }
 
       failedRef.current = true;
       domReadyRef.current = false;
       setLoadState("error");
-      setErrorMessage(failEvent.errorDescription ?? null);
     };
     const handleNavigation = (event: Event): void => {
       const navigationEvent = event as WebviewNavigationEvent;
@@ -360,7 +267,6 @@ export function WebviewPanel({
         return;
       }
       syncCurrentUrl(navigationEvent.url);
-      navigateAfterAuth(navigationEvent.url);
     };
 
     webview.addEventListener("did-start-loading", handleStart);
@@ -384,55 +290,17 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [navigateAfterAuth, onWebuiIdentity, reloadKey, syncCurrentUrl, url]);
+  }, [onWebuiIdentity, reloadKey, syncCurrentUrl, url]);
 
-  // Loading watchdog: if it stays in "loading" too long without ready/fail,
-  // flip to error so the user gets the default panel instead of a white screen.
-  useEffect(() => {
-    if (loadState !== "loading") {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setLoadState("error");
-      setErrorMessage("等待 WebUI 响应超时");
-    }, LOAD_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [loadState, reloadKey]);
-
-  // Auto-retry countdown while in error state and panel is active.
-  useEffect(() => {
-    if (loadState !== "error" || !active) {
-      setRetryIn(null);
-      return;
-    }
-    setRetryIn(AUTO_RETRY_SECONDS);
-    const interval = window.setInterval(() => {
-      setRetryIn((current) => {
-        if (current === null) return null;
-        if (current <= 1) {
-          window.clearInterval(interval);
-          remountWebview();
-          return null;
-        }
-        return current - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [loadState, active, remountWebview]);
-
-  const cancelAutoRetry = useCallback(() => {
-    setRetryIn(null);
-  }, []);
-
-  const friendlyError = describeError(errorMessage);
-  const showOverlay = !hasRenderedPage && loadState !== "ready";
-  const showWebview = hasRenderedPage || loadState === "ready";
+  const showLoading = !hasRenderedPage && (loadState === "idle" || loadState === "loading");
+  const showWebview = hasRenderedPage || loadState === "ready" || loadState === "error";
   const toolbar = (
     <WebviewToolbar
       embedded={toolbarPlacement === "external"}
       loadState={loadState}
       onOpenExternal={openExternal}
       onRefresh={refresh}
+      showMetadata={showExternalToolbarMetadata}
       title={title}
       url={currentUrl}
     />
@@ -504,8 +372,7 @@ export function WebviewPanel({
 
       <div className="relative min-h-0 flex-1">
         <webview
-          // Keep webview in DOM but invisible until ready, so the default panel
-          // covers the white page instead of flashing it through.
+          // Keep webview in DOM while its first document loads.
           className={`absolute inset-0 size-full bg-white transition-opacity duration-200 ${
             showWebview ? "opacity-100" : "opacity-0"
           }`}
@@ -516,18 +383,15 @@ export function WebviewPanel({
           webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
         />
 
-        {showOverlay ? (
-          <DefaultWebviewPanel
-            emptyText={emptyText}
-            errorMessage={loadState === "error" ? friendlyError : null}
-            loadState={loadState}
-            onCancelAutoRetry={cancelAutoRetry}
-            onOpenExternal={openExternal}
-            onRetry={loadState === "error" ? remountWebview : refresh}
-            retryIn={retryIn}
-            title={title}
-            url={currentUrl}
-          />
+        {showLoading ? (
+          <div
+            aria-label={`正在载入 ${title}`}
+            aria-live="polite"
+            className="absolute inset-0 grid place-items-center bg-background"
+            role="status"
+          >
+            <Loader2 className="size-6 animate-spin text-primary" />
+          </div>
         ) : null}
       </div>
       </section>
@@ -540,6 +404,7 @@ function WebviewToolbar({
   loadState,
   onOpenExternal,
   onRefresh,
+  showMetadata,
   title,
   url,
 }: {
@@ -547,49 +412,53 @@ function WebviewToolbar({
   loadState: LoadState;
   onOpenExternal: () => void;
   onRefresh: () => void;
+  showMetadata: boolean;
   title: string;
   url: string;
 }): React.JSX.Element {
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center justify-between gap-3",
+        "flex min-w-0 items-center gap-3",
+        showMetadata ? "justify-between" : "justify-end",
         embedded ? "h-full flex-1" : "h-9 shrink-0 border-b border-border bg-card px-3",
       )}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <h2 className="shrink-0 text-[12px] font-semibold">{title}</h2>
-        <Badge
-          dot
-          variant={
-            loadState === "ready"
-              ? "success"
+      {showMetadata ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="shrink-0 text-[12px] font-semibold">{title}</h2>
+          <Badge
+            dot
+            variant={
+              loadState === "ready"
+                ? "success"
+                : loadState === "error"
+                  ? "danger"
+                  : loadState === "loading"
+                    ? "warning"
+                    : "secondary"
+            }
+          >
+            {loadState === "ready"
+              ? "已载入"
               : loadState === "error"
-                ? "danger"
+                ? "未连接"
                 : loadState === "loading"
-                  ? "warning"
-                  : "secondary"
-          }
-        >
-          {loadState === "ready"
-            ? "已载入"
-            : loadState === "error"
-              ? "未连接"
-              : loadState === "loading"
-                ? "载入中"
-                : "待载入"}
-        </Badge>
-        <span className="hidden h-3 w-px bg-border sm:block" />
-        <code
-          className={cn(
-            "hidden min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block",
-            embedded ? "max-w-[28vw] 2xl:max-w-[420px]" : "max-w-[420px]",
-          )}
-          title={url}
-        >
-          {url}
-        </code>
-      </div>
+                  ? "载入中"
+                  : "待载入"}
+          </Badge>
+          <span className="hidden h-3 w-px bg-border sm:block" />
+          <code
+            className={cn(
+              "hidden min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:block",
+              embedded ? "max-w-[28vw] 2xl:max-w-[420px]" : "max-w-[420px]",
+            )}
+            title={url}
+          >
+            {url}
+          </code>
+        </div>
+      ) : null}
       <div className="flex shrink-0 items-center gap-1">
         <Button
           aria-label="刷新"
@@ -611,113 +480,6 @@ function WebviewToolbar({
         >
           <ExternalLink />
         </Button>
-      </div>
-    </div>
-  );
-}
-
-function DefaultWebviewPanel({
-  emptyText,
-  errorMessage,
-  loadState,
-  onCancelAutoRetry,
-  onOpenExternal,
-  onRetry,
-  retryIn,
-  title,
-  url,
-}: {
-  emptyText: string;
-  errorMessage: string | null;
-  loadState: LoadState;
-  onCancelAutoRetry: () => void;
-  onOpenExternal: () => void;
-  onRetry: () => void;
-  retryIn: number | null;
-  title: string;
-  url: string;
-}): React.JSX.Element {
-  const isError = loadState === "error";
-  const Icon = isError ? AlertTriangle : loadState === "loading" ? PlugZap : Globe;
-  const tone = isError
-    ? "border-destructive/30 bg-destructive/15 text-destructive"
-    : "border-primary/25 bg-primary/12 text-primary";
-
-  const headline = isError
-    ? `连不上 ${title}`
-    : loadState === "loading"
-      ? `正在连接 ${title}…`
-      : `准备连接 ${title}`;
-  const description = isError
-    ? errorMessage ?? "WebUI 暂时不可访问"
-    : emptyText;
-
-  return (
-    <div
-      aria-live="polite"
-      className="absolute inset-0 grid place-items-center overflow-auto bg-background/95 p-6 "
-    >
-      <div className="retro-panel retro-panel-bare w-full max-w-[520px] p-6">
-        <div className="flex items-start gap-3">
-          <span className={`grid size-10 shrink-0 place-items-center rounded-sm border ${tone}`}>
-            <Icon className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-[15px] font-semibold">{headline}</h3>
-              <Badge variant={isError ? "danger" : "secondary"}>
-                {isError ? "未连接" : loadState === "loading" ? "载入中" : "待载入"}
-              </Badge>
-            </div>
-            <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
-            <code
-              className="mt-3 block min-w-0 break-all rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/80"
-              title={url}
-            >
-              {url}
-            </code>
-          </div>
-        </div>
-
-        {isError ? (
-          <ul className="retro-control mt-5 space-y-1.5 p-3 text-[12px] leading-relaxed text-muted-foreground">
-            <li className="flex items-start gap-2">
-              <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
-              先在「设置状态」里确认对应服务正在运行。
-            </li>
-            <li className="flex items-start gap-2">
-              <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
-              端口冲突时把占用进程结束，或修改服务端口。
-            </li>
-            <li className="flex items-start gap-2">
-              <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
-              首次启动需要等待 WebUI 完成加载，可手动重试。
-            </li>
-          </ul>
-        ) : (
-          <div className="mt-5 flex items-center gap-2 text-[12px] text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin text-primary" />
-            正在与 WebUI 建立连接，请稍候…
-          </div>
-        )}
-
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-          {isError && retryIn !== null ? (
-            <Button onClick={onCancelAutoRetry} size="sm" variant="ghost">
-              {retryIn}s 后自动重试 · 暂停
-            </Button>
-          ) : null}
-          <Button onClick={onOpenExternal} size="sm" variant="outline">
-            <ExternalLink />
-            外部打开
-            <Kbd className="ml-1" keys="Mod+Shift+O" size="xs" tone="muted" />
-          </Button>
-          <Button onClick={onRetry} size="sm">
-            <RotateCw />
-            {isError ? "立即重试" : "重新载入"}
-            <Kbd className="ml-1" keys="Mod+R" size="xs" tone="inverse" />
-          </Button>
-        </div>
       </div>
     </div>
   );

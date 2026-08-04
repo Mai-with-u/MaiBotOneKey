@@ -1,4 +1,5 @@
 ﻿import {
+  ArrowRight,
   CheckCircle2,
   Loader2,
   MessageSquare,
@@ -51,6 +52,7 @@ const BOT_ACCOUNT_READY_POLL_MS = 250;
 type WizardStep =
   | "core"
   | "profile"
+  | "platform"
   | "webui"
   | "localchat"
   | "message-platform";
@@ -175,6 +177,8 @@ export function InitializationWizard({
   const [sourceSaving, setSourceSaving] = useState(false);
   const [downloadRestarting, setDownloadRestarting] = useState(false);
   const [localUserName, setLocalUserName] = useState(readLocalUserName);
+  const [botPlatform, setBotPlatform] = useState("qq");
+  const [botAccount, setBotAccount] = useState("");
   const [step, setStep] = useState<WizardStep>("core");
   const [adapterResetRequest, setAdapterResetRequest] =
     useState<AdapterConfigResetRequest | null>(null);
@@ -369,6 +373,16 @@ export function InitializationWizard({
     setError(null);
   }, []);
 
+  const updateBotPlatform = useCallback((value: string) => {
+    setBotPlatform(value);
+    setError(null);
+  }, []);
+
+  const updateBotAccount = useCallback((value: string) => {
+    setBotAccount(value);
+    setError(null);
+  }, []);
+
   useEffect(() => {
     if (!open) {
       return;
@@ -431,10 +445,41 @@ export function InitializationWizard({
       return;
     }
     saveLocalUserName(userName);
-    onOpenTab("maibot");
     setError(null);
-    setStep("webui");
-  }, [localUserName, onOpenTab]);
+    setStep("platform");
+  }, [localUserName]);
+
+  const finishBotPlatform = useCallback(async () => {
+    const platform = botPlatform.trim().toLowerCase();
+    const account = botAccount.trim();
+    if (!platform) {
+      setError("请填写 Bot 平台。");
+      return;
+    }
+    if (!/^\d+$/u.test(account) || account === "0") {
+      setError("请填写有效的账号 ID。");
+      return;
+    }
+    if (!window.maibotDesktop) {
+      setError("桌面桥未就绪，无法保存 Bot 平台配置。");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      await window.maibotDesktop.init.setBotPlatformAccount({
+        platform,
+        account,
+      });
+      onOpenTab("maibot");
+      setStep("webui");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }, [botAccount, botPlatform, onOpenTab]);
 
   const finishWebUiConfig = useCallback(async () => {
     setBusy(true);
@@ -522,6 +567,13 @@ export function InitializationWizard({
   return (
     <Dialog open={open} onOpenChange={ignoreWizardOpenChange}>
       <DialogContent
+        className={
+          step === "profile"
+            ? "h-56 transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+            : step === "platform"
+              ? "h-[22rem] transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+              : undefined
+        }
         onEscapeKeyDown={preventWizardDismiss}
         onFocusOutside={preventWizardDismiss}
         onInteractOutside={preventWizardDismiss}
@@ -668,7 +720,7 @@ export function InitializationWizard({
               </section>
             </>
           ) : step === "profile" ? (
-            <section className="px-4 py-2">
+            <section className="animate-in fade-in-0 slide-in-from-top-1 px-4 py-2 duration-300 motion-reduce:animate-none">
               <div className="min-w-0">
                 <p className="text-sm font-semibold">麦麦如何称呼你？</p>
               </div>
@@ -687,6 +739,48 @@ export function InitializationWizard({
                   style={{ color: "var(--retro-paper, var(--background))" }}
                 >
                   完成
+                </Button>
+              </div>
+            </section>
+          ) : step === "platform" ? (
+            <section
+              className="animate-in fade-in-0 slide-in-from-bottom-2 px-4 py-2 duration-500 motion-reduce:animate-none"
+              style={{ animationDelay: "100ms", animationFillMode: "both" }}
+            >
+              <p className="text-sm font-semibold">填写 Bot 平台和账号</p>
+              <div className="mt-4 grid gap-3">
+                <label className="grid gap-1.5 text-xs font-medium">
+                  平台
+                  <Input
+                    className="bg-transparent"
+                    disabled={busy}
+                    onChange={(event) => updateBotPlatform(event.target.value)}
+                    value={botPlatform}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs font-medium">
+                  账号
+                  <Input
+                    autoFocus
+                    className="bg-transparent"
+                    disabled={busy}
+                    inputMode="numeric"
+                    monospace
+                    onChange={(event) => updateBotAccount(event.target.value)}
+                    value={botAccount}
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <Button
+                  className="font-sans font-bold"
+                  disabled={busy}
+                  onClick={() => void finishBotPlatform()}
+                  size="sm"
+                  style={{ color: "var(--retro-paper, var(--background))" }}
+                >
+                  {busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}
+                  下一步
                 </Button>
               </div>
             </section>

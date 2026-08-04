@@ -1181,10 +1181,15 @@ function ensureBotPlatformConfig(
   content: string,
   options: { platform?: string; qqAccount?: string },
 ): string {
+  const serializedQqAccount = options.qqAccount
+    ? JSON.stringify(options.qqAccount)
+    : undefined;
   const botSectionMatch = content.match(/(^|\r?\n)(\s*\[bot\]\s*(?:#.*)?)(?:\r?\n|$)/u);
   if (!botSectionMatch) {
     const platformLine = options.platform ? `platform = "${options.platform}"\n` : "";
-    const qqAccountLine = options.qqAccount ? `qq_account = ${options.qqAccount}\n` : "";
+    const qqAccountLine = serializedQqAccount
+      ? `qq_account = ${serializedQqAccount}\n`
+      : "";
     return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}`;
   }
 
@@ -1210,14 +1215,14 @@ function ensureBotPlatformConfig(
     }
   }
 
-  if (options.qqAccount) {
+  if (serializedQqAccount) {
     if (/^\s*qq_account\s*=/mu.test(nextBotSection)) {
       nextBotSection = nextBotSection.replace(
         QQ_ACCOUNT_ASSIGNMENT_PATTERN,
-        `$1${options.qqAccount}$2`,
+        `$1${serializedQqAccount}$2`,
       );
     } else {
-      nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${options.qqAccount}\n`;
+      nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${serializedQqAccount}\n`;
     }
   }
 
@@ -3060,6 +3065,33 @@ export class InitManager {
     };
   }
 
+  async setBotPlatformAccount(
+    platform: string,
+    account: string,
+  ): Promise<{ configured: boolean; qqAccount?: string }> {
+    const normalizedPlatform = platform.trim().toLowerCase();
+    const normalizedAccount = account.trim();
+    if (!/^[a-z0-9][a-z0-9_-]*$/u.test(normalizedPlatform)) {
+      throw new Error("平台只能包含字母、数字、下划线和短横线");
+    }
+    if (!isDigits(normalizedAccount) || UNCONFIGURED_QQ_ACCOUNTS.has(normalizedAccount)) {
+      throw new Error("账号必须是有效的纯数字 ID");
+    }
+
+    const botConfigPath = this.botConfigPath();
+    const content = await this.readOrCreateBotConfigContent();
+    const updated = ensureBotPlatformConfig(content, {
+      platform: normalizedPlatform,
+      qqAccount: normalizedAccount,
+    });
+    if (updated !== content || !existsSync(botConfigPath)) {
+      await mkdir(dirname(botConfigPath), { recursive: true });
+      await writeFile(botConfigPath, updated, "utf8");
+    }
+
+    return this.getBotAccountConfigState();
+  }
+
   private async readConfiguredQqAccount(): Promise<string | undefined> {
     const qqAccount = await this.readQqAccount();
     if (qqAccount) {
@@ -3725,7 +3757,10 @@ export class InitManager {
     }
 
     const content = await readFile(botConfigPath, "utf8");
-    const repaired = ensureInnerVersion(content, maibotInitialConfigVersion(await this.readMaiBotConfigVersion()));
+    const repaired = ensureInnerVersion(
+      content,
+      maibotInitialConfigVersion(await this.readMaiBotConfigVersion()),
+    );
     if (repaired === content) {
       return undefined;
     }

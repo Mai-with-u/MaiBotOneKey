@@ -92,6 +92,25 @@ const toolbarMenuItemClassName =
   "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const retroTopActionIconClassName =
   "[&_svg]:!size-6 [&_svg]:fill-none [&_svg]:stroke-[3] [&_svg]:[stroke-linecap:square] [&_svg]:[stroke-linejoin:miter]";
+const tabPageTransitionClassName =
+  "absolute inset-0 min-h-0 overflow-hidden outline-none transition-transform duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none";
+
+function tabPageTransitionStyle(
+  tab: string,
+  activeTab: string,
+  tabOrder: string[],
+): CSSProperties {
+  const tabIndex = tabOrder.indexOf(tab);
+  const activeTabIndex = tabOrder.indexOf(activeTab);
+  const offset = tabIndex < activeTabIndex ? -100 : tabIndex > activeTabIndex ? 100 : 0;
+  const active = tab === activeTab;
+
+  return {
+    pointerEvents: active ? "auto" : "none",
+    transform: `translate3d(${offset}%, 0, 0)`,
+    zIndex: active ? 1 : 0,
+  };
+}
 
 function createOpenCodeSessionId(): string {
   const randomId =
@@ -263,7 +282,6 @@ function DependencyMigrationCard({
 
 interface WebviewEntryTarget {
   entryUrl: string;
-  postAuthTargetUrl?: string;
 }
 
 type PluginPanelMode = "market" | "manage";
@@ -296,9 +314,15 @@ function createMaibotWebviewTarget(url: string, targetPath: string): WebviewEntr
     const entryPath = entryUrl.pathname.replace(/\/+$/u, "") || "/";
     const isAuthEntry = entryPath === "/auth" && entryUrl.searchParams.has("token");
 
+    if (isAuthEntry) {
+      entryUrl.searchParams.set(
+        "redirect",
+        `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`,
+      );
+    }
+
     return {
       entryUrl: isAuthEntry ? entryUrl.toString() : targetUrl.toString(),
-      postAuthTargetUrl: isAuthEntry ? targetUrl.toString() : undefined,
     };
   } catch {
     return { entryUrl: url };
@@ -1565,7 +1589,10 @@ export function DesktopShell(): React.JSX.Element {
     () => (snapshot?.recentLogs ?? []).filter(isDependencyPreparationLog).slice(-12),
     [snapshot?.recentLogs],
   );
-  const maibotWebviewReady = maibotService?.status === "running" && maibotService.health === "ready";
+  // Keep webviews mounted while health is being checked. A confirmed
+  // unreachable WebUI is represented by the launcher's shared status page.
+  const maibotWebviewAvailable =
+    maibotService?.status === "running" && maibotService.health !== "unreachable";
   const maibotChatWebviewTarget = useMemo(
     () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
     [maibotService?.url],
@@ -1587,7 +1614,7 @@ export function DesktopShell(): React.JSX.Element {
     [pluginMarketWebviewPath],
   );
   const maibotWebviewReloadTrigger =
-    maibotWebviewReady
+    maibotWebviewAvailable
       ? maibotService.url
       : null;
   const localChatWebviewReloadTrigger = localChatWebviewReloadRequest > 0
@@ -1604,6 +1631,17 @@ export function DesktopShell(): React.JSX.Element {
     snapshot?.initState.messagePlatformConfigured && snapshot.initState.qqAccount?.trim(),
   );
   const showTerminalTab = snapshot?.terminalSettings.useEmbeddedTerminal === true;
+  const tabPageOrder = useMemo(
+    () => [
+      "home",
+      "maibot",
+      "localchat",
+      ...(showTerminalTab ? ["terminal"] : []),
+      "plugins",
+      "settings",
+    ],
+    [showTerminalTab],
+  );
   const showTopPluginBuilderEntry =
     activeTab === "plugins" &&
     pluginBuilderMode !== "disabled";
@@ -2249,7 +2287,14 @@ export function DesktopShell(): React.JSX.Element {
               </div>
             </div>
 
-            <TabsContent value="home" className="min-h-0 flex-1 outline-none">
+            <div className="relative min-h-0 flex-1 overflow-hidden">
+            <TabsContent
+              forceMount
+              inert={activeTab !== "home"}
+              value="home"
+              className={tabPageTransitionClassName}
+              style={tabPageTransitionStyle("home", activeTab, tabPageOrder)}
+            >
               {snapshot ? (
                 <HomePanel
                   active={activeTab === "home"}
@@ -2277,13 +2322,14 @@ export function DesktopShell(): React.JSX.Element {
 
             <TabsContent
               forceMount
+              inert={activeTab !== "maibot"}
               value="maibot"
-              className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+              className={tabPageTransitionClassName}
+              style={tabPageTransitionStyle("maibot", activeTab, tabPageOrder)}
             >
-              {maibotWebviewReady ? (
+              {maibotWebviewAvailable ? (
                 <WebviewPanel
                   active={activeTab === "maibot"}
-                  emptyText="MaiBot Core 启动后会在这里载入官方 WebUI。"
                   onWebuiIdentity={rememberWebuiIdentity}
                   title="MaiBot WebUI"
                   toolbarPlacement="external"
@@ -2303,15 +2349,15 @@ export function DesktopShell(): React.JSX.Element {
 
             <TabsContent
               forceMount
+              inert={activeTab !== "localchat"}
               value="localchat"
-              className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+              className={tabPageTransitionClassName}
+              style={tabPageTransitionStyle("localchat", activeTab, tabPageOrder)}
             >
-              {maibotWebviewReady ? (
+              {maibotWebviewAvailable ? (
                 <WebviewPanel
                   active={activeTab === "localchat"}
-                  emptyText="MaiBot Core 启动后会在这里载入 WebUI 聊聊页面。"
                   onWebuiIdentity={rememberWebuiIdentity}
-                  postAuthTargetUrl={maibotChatWebviewTarget.postAuthTargetUrl}
                   title="MaiBot WebUI 聊聊"
                   toolbarPlacement="external"
                   toolbarTarget={webviewToolbarHost}
@@ -2331,8 +2377,10 @@ export function DesktopShell(): React.JSX.Element {
             {showTerminalTab ? (
               <TabsContent
                 forceMount
+                inert={activeTab !== "terminal"}
                 value="terminal"
-                className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+                className={tabPageTransitionClassName}
+                style={tabPageTransitionStyle("terminal", activeTab, tabPageOrder)}
               >
                 <TerminalPanel
                   active={activeTab === "terminal"}
@@ -2348,10 +2396,12 @@ export function DesktopShell(): React.JSX.Element {
 
             <TabsContent
               forceMount
+              inert={activeTab !== "plugins"}
               value="plugins"
-              className="min-h-0 flex-1 overflow-hidden outline-none data-[state=inactive]:hidden"
+              className={tabPageTransitionClassName}
+              style={tabPageTransitionStyle("plugins", activeTab, tabPageOrder)}
             >
-              {!maibotWebviewReady ? (
+              {!maibotWebviewAvailable ? (
                 <MaiBotWebuiStatusPanel
                   busy={actionBusy?.startsWith("maibot:") ?? false}
                   context="plugins"
@@ -2361,7 +2411,7 @@ export function DesktopShell(): React.JSX.Element {
                 />
               ) : (
                 <div className="relative h-full min-h-0">
-                  {maibotWebviewReady ? (
+                  {maibotWebviewAvailable ? (
                     <div
                       className={cn(
                         "absolute inset-0",
@@ -2370,18 +2420,17 @@ export function DesktopShell(): React.JSX.Element {
                     >
                       <WebviewPanel
                         active={activeTab === "plugins" && pluginMode === "manage"}
-                        emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件管理页面。"
                         onWebuiIdentity={rememberWebuiIdentity}
-                        postAuthTargetUrl={maibotPluginManageWebviewTarget.postAuthTargetUrl}
                         title={maibotPluginManageWebviewTitle}
                         toolbarPlacement="external"
                         toolbarTarget={webviewToolbarHost}
                         reloadTrigger={maibotWebviewReloadTrigger}
+                        showExternalToolbarMetadata={false}
                         url={maibotPluginManageWebviewTarget.entryUrl}
                       />
                     </div>
                   ) : null}
-                  {maibotWebviewReady && pluginMarketWebviewVisited ? (
+                  {maibotWebviewAvailable && pluginMarketWebviewVisited ? (
                     <div
                       className={cn(
                         "absolute inset-0",
@@ -2390,13 +2439,12 @@ export function DesktopShell(): React.JSX.Element {
                     >
                       <WebviewPanel
                         active={activeTab === "plugins" && pluginMode === "market"}
-                        emptyText="MaiBot Core 启动后会在这里载入 WebUI 插件市场页面。"
                         onWebuiIdentity={rememberWebuiIdentity}
-                        postAuthTargetUrl={maibotPluginMarketWebviewTarget.postAuthTargetUrl}
                         title={maibotPluginMarketWebviewTitle}
                         toolbarPlacement="external"
                         toolbarTarget={webviewToolbarHost}
                         reloadTrigger={maibotWebviewReloadTrigger}
+                        showExternalToolbarMetadata={false}
                         url={maibotPluginMarketWebviewTarget.entryUrl}
                       />
                     </div>
@@ -2406,8 +2454,11 @@ export function DesktopShell(): React.JSX.Element {
             </TabsContent>
 
             <TabsContent
+              forceMount
+              inert={activeTab !== "settings"}
               value="settings"
-              className="settings-scroll-scope min-h-0 flex-1 overflow-hidden outline-none"
+              className={cn(tabPageTransitionClassName, "settings-scroll-scope")}
+              style={tabPageTransitionStyle("settings", activeTab, tabPageOrder)}
             >
               {snapshot ? (
                 <SettingsStatusPanel
@@ -2426,6 +2477,7 @@ export function DesktopShell(): React.JSX.Element {
                 </div>
               )}
             </TabsContent>
+            </div>
           </Tabs>
         </main>
 

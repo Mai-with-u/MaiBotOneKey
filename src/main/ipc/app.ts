@@ -31,6 +31,7 @@ import {
 } from "node:path";
 import type {
   BotAccountConfigState,
+  BotPlatformAccountSetupRequest,
   CloseAction,
   AppIconId,
   AppIconSettings,
@@ -991,6 +992,36 @@ async function fetchMaiBotReleases(): Promise<GitHubReleasePayload[]> {
   }
 }
 
+async function fetchMaiBotReleaseByTag(
+  tag: string,
+): Promise<GitHubReleasePayload | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const url = `https://api.github.com/repos/Mai-with-u/MaiBot/releases/tags/${encodeURIComponent(tag)}`;
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (response.status === 404) {
+      return undefined;
+    }
+    if (!response.ok) {
+      throw new Error(`GitHub Release returned HTTP ${response.status}`);
+    }
+
+    const release = (await response.json()) as unknown;
+    return release &&
+      typeof release === "object" &&
+      (release as GitHubReleasePayload).draft !== true &&
+      typeof (release as GitHubReleasePayload).tag_name === "string"
+      ? (release as GitHubReleasePayload)
+      : undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchOneKeyReleases(): Promise<GitHubReleasePayload[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -1152,11 +1183,17 @@ async function fetchMaiBotUpdateInfo(
 
   const targetTag = targetName;
   const releases = await fetchMaiBotReleases();
-  const targetRelease = releases.find(
+  const listedTargetRelease = releases.find(
     (release) => String(release.tag_name) === targetTag,
   );
+  const targetRelease =
+    listedTargetRelease ?? (await fetchMaiBotReleaseByTag(targetTag));
+  const releasesWithTarget =
+    targetRelease && !listedTargetRelease
+      ? [...releases, targetRelease]
+      : releases;
   const releaseNotes =
-    releaseNotesInRange(releases, currentTag, targetTag) ??
+    releaseNotesInRange(releasesWithTarget, currentTag, targetTag) ??
     (targetRelease ? releaseBody(targetRelease) : undefined);
 
   return {
@@ -2513,6 +2550,49 @@ export function registerAppIpc({
       remoteSourceManager,
     });
   let maibotPluginClient = createMaibotPluginClient();
+
+  const mutateQqBackendSafely = async <T>(
+    requestedBackend: QqBackend,
+    operation: () => Promise<T>,
+    rollbackOptions: InitRepairOptions = {},
+  ): Promise<T> => {
+    const currentInitState = await initManager.getState();
+    const switchingBackend = requestedBackend !== currentInitState.qqBackend;
+    await serviceManager.refresh();
+    const runtimeServices = serviceManager.snapshot();
+    const qqBackendService = runtimeServices.find((service) => service.id === "napcat");
+
+    if (switchingBackend && qqBackendService && isRuntimeBusy(qqBackendService)) {
+      throw new Error("请先停止当前 QQ 后端，再切换 NapCat / SnowLuma。");
+    }
+
+    let operationCompleted = false;
+    try {
+      const result = await operation();
+      operationCompleted = true;
+      serviceManager.reloadRuntimePaths();
+      return result;
+    } catch (error) {
+      if (switchingBackend && !operationCompleted) {
+        try {
+          await initManager.setQqBackend(currentInitState.qqBackend, {
+            syncAdapters: currentInitState.messagePlatformConfigured,
+            resetInvalidAdapterConfigs: rollbackOptions.resetInvalidAdapterConfigs,
+          });
+          serviceManager.reloadRuntimePaths();
+        } catch (rollbackError) {
+          logStore.append(
+            "desktop",
+            "stderr",
+            `QQ 后端切换失败后回滚未完成: ${String(rollbackError)}`,
+          );
+        }
+      }
+      await broadcastSnapshot();
+      throw error;
+    }
+  };
+
   const pluginBuilderLibrary = new PluginBuilderLibrary(
     paths.pluginBuilderRoot,
   );
@@ -2762,20 +2842,14 @@ export function registerAppIpc({
   ipcMain.handle(
     "init:setQqBackend",
     async (_event, backend: QqBackend, options?: InitRepairOptions): Promise<InitState> => {
-      const currentInitState = await initManager.getState();
       if (backend !== "napcat" && backend !== "snowluma") {
         throw new Error("Unsupported QQ backend.");
       }
-      if (
-        backend !== currentInitState.qqBackend &&
-        serviceManager.snapshot().some(isRuntimeBusy)
-      ) {
-        throw new Error(
-          "Stop MaiBot Core and QQ backend before switching QQ backend.",
-        );
-      }
-      await initManager.setQqBackend(backend, options);
-      serviceManager.reloadRuntimePaths();
+      await mutateQqBackendSafely(
+        backend,
+        () => initManager.setQqBackend(backend, options),
+        options,
+      );
       const state = await initManager.getState();
       logStore.append(
         "desktop",
@@ -2795,26 +2869,41 @@ export function registerAppIpc({
   );
 
   ipcMain.handle(
+    "init:setBotPlatformAccount",
+    async (
+      _event,
+      request: BotPlatformAccountSetupRequest,
+    ): Promise<BotAccountConfigState> => {
+      const state = await initManager.setBotPlatformAccount(
+        request.platform,
+        request.account,
+      );
+      logStore.append(
+        "desktop",
+        "system",
+        `Bot 主账号已配置: ${request.platform}:${request.account}`,
+      );
+      await broadcastSnapshot();
+      return state;
+    },
+  );
+
+  ipcMain.handle(
     "init:setQqAccount",
     async (_event, request: QqAccountSetupRequest): Promise<InitState> => {
       const currentInitState = await initManager.getState();
       const requestedBackend = request.qqBackend ?? currentInitState.qqBackend;
-      if (
-        requestedBackend !== currentInitState.qqBackend &&
-        serviceManager.snapshot().some(isRuntimeBusy)
-      ) {
-        throw new Error(
-          "Stop MaiBot Core and QQ backend before switching QQ backend.",
-        );
-      }
-      const state = await initManager.setQqAccount(
-        request.qqAccount,
-        request.websocketToken,
-        request.chat,
-        request.qqBackend,
+      const state = await mutateQqBackendSafely(
+        requestedBackend,
+        () => initManager.setQqAccount(
+          request.qqAccount,
+          request.websocketToken,
+          request.chat,
+          request.qqBackend,
+          { resetInvalidAdapterConfigs: request.resetInvalidAdapterConfigs },
+        ),
         { resetInvalidAdapterConfigs: request.resetInvalidAdapterConfigs },
       );
-      serviceManager.reloadRuntimePaths();
       logStore.append(
         "desktop",
         "system",
