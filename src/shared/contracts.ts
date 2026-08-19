@@ -128,10 +128,6 @@ export interface ServiceStartupSettings {
   useLocalDashboard: boolean;
 }
 
-export interface OpenCodeSettings {
-  useBundledPluginInstructions: boolean;
-}
-
 export type FloatingMascotMode = "maibot" | "codex-pet";
 export type TopStartActionMode = "ask" | "maibot-only" | "with-qq-backend";
 
@@ -166,8 +162,6 @@ export interface CodexPetSettings {
   options: CodexPetOption[];
 }
 
-export type PluginBuilderMode = "agent" | "disabled";
-
 export interface NetworkProxySettings {
   enabled: boolean;
   port: number;
@@ -187,7 +181,6 @@ export interface RuntimePaths {
   snowlumaRoot: string;
   bundledModulesRoot: string;
   runtimeRoot: string;
-  opencodePluginInstructionsPath: string;
   pythonEnvRoot: string;
   pluginBuilderRoot: string;
   logsRoot: string;
@@ -316,7 +309,6 @@ export interface DesktopSnapshot {
   runtimeResourcePathConfigs: RuntimeResourcePathConfig[];
   terminalSettings: TerminalSettings;
   serviceStartupSettings: ServiceStartupSettings;
-  openCodeSettings: OpenCodeSettings;
   launcherUiSettings: LauncherUiSettings;
   appIconSettings: AppIconSettings;
   codexPetSettings: CodexPetSettings;
@@ -1465,7 +1457,6 @@ export interface DesktopBridge {
   };
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) => Promise<NetworkProxySettings>;
-    saveOpenCodeSettings: (settings: OpenCodeSettings) => Promise<OpenCodeSettings>;
     saveUiSettings: (settings: LauncherUiSettings) => Promise<LauncherUiSettings>;
     getSourceSettings: () => Promise<SourceSettings>;
     saveSourceSettings: (settings: SourceSettingsUpdate) => Promise<SourceSettings>;

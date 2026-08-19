@@ -64,7 +64,6 @@ import type {
   ModuleUpdateTarget,
   ModuleUpdateResult,
   NetworkProxySettings,
-  OpenCodeSettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -223,8 +222,6 @@ const desktopBridge: DesktopBridge = {
   launcher: {
     saveNetworkProxySettings: (settings: NetworkProxySettings) =>
       ipcRenderer.invoke("launcher:saveNetworkProxySettings", settings) as Promise<NetworkProxySettings>,
-    saveOpenCodeSettings: (settings: OpenCodeSettings) =>
-      ipcRenderer.invoke("launcher:saveOpenCodeSettings", settings) as Promise<OpenCodeSettings>,
     saveUiSettings: (settings: LauncherUiSettings) =>
       ipcRenderer.invoke("launcher:saveUiSettings", settings) as Promise<LauncherUiSettings>,
     getSourceSettings: () =>

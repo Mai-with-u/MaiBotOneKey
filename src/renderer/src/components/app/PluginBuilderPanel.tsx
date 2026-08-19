@@ -497,15 +497,7 @@ function createNewBuilderBlueprint(library: MaiBotPluginBuilderLibraryListResult
   );
 }
 
-export function PluginBuilderPanel({
-  isStartingOpenCode = false,
-  onStartOpenCode,
-  openCodePath,
-}: {
-  isStartingOpenCode?: boolean;
-  onStartOpenCode?: () => void;
-  openCodePath?: string;
-} = {}): React.JSX.Element {
+export function PluginBuilderPanel(): React.JSX.Element {
   const [blueprint, setBlueprintState] = useState<MaiBotPluginBlueprint>(() => createDefaultBlueprint());
   const [blueprintPast, setBlueprintPast] = useState<MaiBotPluginBlueprint[]>([]);
   const [blueprintFuture, setBlueprintFuture] = useState<MaiBotPluginBlueprint[]>([]);
@@ -1113,9 +1105,7 @@ export function PluginBuilderPanel({
           canGenerate={canSave}
           hasGeneratedPlugin={Boolean(lastResult)}
           isFilePreviewOpen={isFilePreviewOpen}
-          isStartingOpenCode={isStartingOpenCode}
           libraryBusy={libraryBusy}
-          openCodePath={openCodePath}
           pluginId={blueprint.manifest.pluginId}
           saving={saving}
           saveButtonText={saveButtonText}
@@ -1132,7 +1122,6 @@ export function PluginBuilderPanel({
           onImport={() => void importBuilderBlueprintFile()}
           onOpenDocs={openDocs}
           onOpenLastDirectory={openLastDirectory}
-          onStartOpenCode={onStartOpenCode}
           onRedo={redoBlueprint}
           onSave={() => void saveToBuilderLibrary()}
           onSelectBuilderPlugin={(pluginId) => void loadFromBuilderLibrary(pluginId)}
@@ -1244,10 +1233,8 @@ function PluginBuilderProjectBar({
   canUndo,
   hasGeneratedPlugin,
   isFilePreviewOpen,
-  isStartingOpenCode,
   issues,
   libraryBusy,
-  openCodePath,
   pluginId,
   saving,
   saveButtonText,
@@ -1260,7 +1247,6 @@ function PluginBuilderProjectBar({
   onImport,
   onOpenDocs,
   onOpenLastDirectory,
-  onStartOpenCode,
   onRedo,
   onSave,
   onSelectBuilderPlugin,
@@ -1275,10 +1261,8 @@ function PluginBuilderProjectBar({
   canUndo: boolean;
   hasGeneratedPlugin: boolean;
   isFilePreviewOpen: boolean;
-  isStartingOpenCode: boolean;
   issues: BlueprintIssue[];
   libraryBusy: boolean;
-  openCodePath?: string;
   pluginId: string;
   saving: boolean;
   saveButtonText: string;
@@ -1291,7 +1275,6 @@ function PluginBuilderProjectBar({
   onImport: () => void;
   onOpenDocs: () => void;
   onOpenLastDirectory: () => void;
-  onStartOpenCode?: () => void;
   onRedo: () => void;
   onSave: () => void;
   onSelectBuilderPlugin: (pluginId: string) => void;
@@ -1360,12 +1343,6 @@ function PluginBuilderProjectBar({
             <Braces />
             SDK 文档
           </Button>
-          {onStartOpenCode ? (
-            <Button disabled={isStartingOpenCode} onClick={onStartOpenCode} size="sm" title={openCodePath} type="button" variant="secondary">
-              {isStartingOpenCode ? <Loader2 className="animate-spin" /> : <TerminalSquare />}
-              OpenCode
-            </Button>
-          ) : null}
           {hasGeneratedPlugin ? (
             <Button onClick={onOpenLastDirectory} size="sm" type="button" variant="secondary">
               <FolderOpen />

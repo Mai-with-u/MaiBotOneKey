@@ -1,5 +1,4 @@
 ﻿import {
-  ArrowRight,
   CheckCircle2,
   Loader2,
   MessageSquare,
@@ -47,12 +46,9 @@ const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY =
 const AUTO_START_DELAY_MS = 2000;
 const WEBUI_READY_TIMEOUT_MS = 90_000;
 const WEBUI_READY_POLL_MS = 1000;
-const BOT_ACCOUNT_READY_TIMEOUT_MS = 2500;
-const BOT_ACCOUNT_READY_POLL_MS = 250;
 type WizardStep =
   | "core"
   | "profile"
-  | "platform"
   | "webui"
   | "localchat"
   | "message-platform";
@@ -153,9 +149,9 @@ function wizardServiceDetail(
     return "等待 MaiCore 启动中";
   }
   if (service?.status === "starting") {
-    return service.detail ?? "正在启动 MaiCore";
+    return "正在复制文件和下载必须文件";
   }
-  return busy ? "正在准备 MaiCore 启动环境" : "正在读取依赖源并准备自动初始化";
+  return busy ? "正在复制文件和下载必须文件" : "正在读取依赖源并准备自动初始化";
 }
 
 function delay(ms: number): Promise<void> {
@@ -176,10 +172,11 @@ export function InitializationWizard({
   );
   const [sourceSaving, setSourceSaving] = useState(false);
   const [downloadRestarting, setDownloadRestarting] = useState(false);
-  const [localUserName, setLocalUserName] = useState(readLocalUserName);
-  const [botPlatform, setBotPlatform] = useState("qq");
-  const [botAccount, setBotAccount] = useState("");
+  const [localUserName, setLocalUserName] = useState(
+    () => readLocalUserName() || "人类",
+  );
   const [step, setStep] = useState<WizardStep>("core");
+  const [statusEllipsis, setStatusEllipsis] = useState("");
   const [adapterResetRequest, setAdapterResetRequest] =
     useState<AdapterConfigResetRequest | null>(null);
   const autoStartRequested = useRef(false);
@@ -194,9 +191,25 @@ export function InitializationWizard({
   const running = service?.status === "running";
   const ready = running && service?.health === "ready";
   const starting = service?.status === "starting";
+  const statusAnimating = busy || starting || (running && !ready);
   const open = !agreementPending && !seen;
   const progress = serviceProgress(service, busy);
   const restartDownloadVisible = step === "core" && starting && !running;
+
+  useEffect(() => {
+    if (step !== "core" || !statusAnimating) {
+      setStatusEllipsis("");
+      return;
+    }
+
+    let count = 0;
+    const timer = window.setInterval(() => {
+      count = (count + 1) % 4;
+      setStatusEllipsis(".".repeat(count));
+    }, 450);
+
+    return () => window.clearInterval(timer);
+  }, [statusAnimating, step]);
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await window.maibotDesktop?.getSnapshot();
@@ -230,20 +243,6 @@ export function InitializationWizard({
       "MaiBot WebUI startup timed out; check the terminal page logs",
     );
   }, [refreshSnapshot]);
-
-  const waitForBotAccountConfig = useCallback(async (): Promise<boolean> => {
-    const startedAt = Date.now();
-    do {
-      const botAccountState =
-        await window.maibotDesktop?.init.getBotAccountConfigState();
-      if (botAccountState?.configured) {
-        return true;
-      }
-      await delay(BOT_ACCOUNT_READY_POLL_MS);
-    } while (Date.now() - startedAt < BOT_ACCOUNT_READY_TIMEOUT_MS);
-
-    return false;
-  }, []);
 
   const close = useCallback(() => {
     markStartupWizardSeen();
@@ -373,16 +372,6 @@ export function InitializationWizard({
     setError(null);
   }, []);
 
-  const updateBotPlatform = useCallback((value: string) => {
-    setBotPlatform(value);
-    setError(null);
-  }, []);
-
-  const updateBotAccount = useCallback((value: string) => {
-    setBotAccount(value);
-    setError(null);
-  }, []);
-
   useEffect(() => {
     if (!open) {
       return;
@@ -446,51 +435,15 @@ export function InitializationWizard({
     }
     saveLocalUserName(userName);
     setError(null);
-    setStep("platform");
-  }, [localUserName]);
-
-  const finishBotPlatform = useCallback(async () => {
-    const platform = botPlatform.trim().toLowerCase();
-    const account = botAccount.trim();
-    if (!platform) {
-      setError("请填写 Bot 平台。");
-      return;
-    }
-    if (!/^\d+$/u.test(account) || account === "0") {
-      setError("请填写有效的账号 ID。");
-      return;
-    }
-    if (!window.maibotDesktop) {
-      setError("桌面桥未就绪，无法保存 Bot 平台配置。");
-      return;
-    }
-
-    setBusy(true);
-    setError(null);
-    try {
-      await window.maibotDesktop.init.setBotPlatformAccount({
-        platform,
-        account,
-      });
-      onOpenTab("maibot");
-      setStep("webui");
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(false);
-    }
-  }, [botAccount, botPlatform, onOpenTab]);
+    onOpenTab("maibot");
+    setStep("webui");
+  }, [localUserName, onOpenTab]);
 
   const finishWebUiConfig = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
       await waitForMaiBotWebUi();
-      const botAccountConfigured = await waitForBotAccountConfig();
-      if (!botAccountConfigured) {
-        setError("请先在首页中配置平台账号，保存后再继续。");
-        return;
-      }
       onOpenTab("localchat");
       onRefreshLocalChat();
       setStep("localchat");
@@ -499,7 +452,7 @@ export function InitializationWizard({
     } finally {
       setBusy(false);
     }
-  }, [onOpenTab, onRefreshLocalChat, waitForBotAccountConfig, waitForMaiBotWebUi]);
+  }, [onOpenTab, onRefreshLocalChat, waitForMaiBotWebUi]);
 
   const finishLocalChatGuide = useCallback(() => {
     onOpenTab("home");
@@ -570,9 +523,7 @@ export function InitializationWizard({
         className={
           step === "profile"
             ? "h-56 transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-            : step === "platform"
-              ? "h-[22rem] transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-              : undefined
+            : undefined
         }
         onEscapeKeyDown={preventWizardDismiss}
         onFocusOutside={preventWizardDismiss}
@@ -594,13 +545,15 @@ export function InitializationWizard({
               <section className="rounded-lg border border-border bg-muted/40 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold">MaiBot Core</p>
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                       首次启动会检查运行目录、同步基础文件，并按需安装 Python
                       覆盖依赖。
                     </p>
                   </div>
                   <Badge
+                    className={`min-w-[7rem] justify-center rounded-md px-4 py-2 text-sm font-bold tracking-wide shadow-md ring-2 ${
+                      ready ? "ring-primary/30" : "ring-warning/40"
+                    }`}
                     dot
                     variant={
                       ready
@@ -616,7 +569,7 @@ export function InitializationWizard({
                         ? "等待 WebUI"
                         : starting || busy
                           ? "初始化中"
-                          : "即将开始"}
+                          : "准备中"}
                   </Badge>
                 </div>
 
@@ -688,6 +641,7 @@ export function InitializationWizard({
                   <Progress value={progress} />
                   <p className="text-xs text-muted-foreground">
                     {wizardServiceDetail(service, busy)}
+                    {statusAnimating ? statusEllipsis : ""}
                   </p>
                 </div>
               </section>
@@ -701,7 +655,7 @@ export function InitializationWizard({
                   )}
                   依赖安装进度
                 </div>
-                <div className="mt-3 max-h-36 space-y-1 overflow-auto rounded-md border border-border p-3">
+                <div className="mt-3 max-h-48 space-y-1 overflow-auto rounded-md border border-border p-3">
                   {logs.length > 0 ? (
                     logs.map((entry) => (
                       <p
@@ -729,7 +683,7 @@ export function InitializationWizard({
                   autoFocus
                   className="bg-transparent"
                   onChange={(event) => updateLocalUserName(event.target.value)}
-                  placeholder="例如 小明"
+                  placeholder="人类"
                   value={localUserName}
                 />
                 <Button
@@ -739,48 +693,6 @@ export function InitializationWizard({
                   style={{ color: "var(--retro-paper, var(--background))" }}
                 >
                   完成
-                </Button>
-              </div>
-            </section>
-          ) : step === "platform" ? (
-            <section
-              className="animate-in fade-in-0 slide-in-from-bottom-2 px-4 py-2 duration-500 motion-reduce:animate-none"
-              style={{ animationDelay: "100ms", animationFillMode: "both" }}
-            >
-              <p className="text-sm font-semibold">填写 Bot 平台和账号</p>
-              <div className="mt-4 grid gap-3">
-                <label className="grid gap-1.5 text-xs font-medium">
-                  平台
-                  <Input
-                    className="bg-transparent"
-                    disabled={busy}
-                    onChange={(event) => updateBotPlatform(event.target.value)}
-                    value={botPlatform}
-                  />
-                </label>
-                <label className="grid gap-1.5 text-xs font-medium">
-                  账号
-                  <Input
-                    autoFocus
-                    className="bg-transparent"
-                    disabled={busy}
-                    inputMode="numeric"
-                    monospace
-                    onChange={(event) => updateBotAccount(event.target.value)}
-                    value={botAccount}
-                  />
-                </label>
-              </div>
-              <div className="mt-4 flex justify-end">
-                <Button
-                  className="font-sans font-bold"
-                  disabled={busy}
-                  onClick={() => void finishBotPlatform()}
-                  size="sm"
-                  style={{ color: "var(--retro-paper, var(--background))" }}
-                >
-                  {busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}
-                  下一步
                 </Button>
               </div>
             </section>

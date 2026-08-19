@@ -1,5 +1,4 @@
 ﻿import {
-  CheckCircle2,
   ChevronDown,
   Fish,
   FolderOpen,
@@ -8,7 +7,6 @@
   Loader2,
   MessageSquare,
   Play,
-  Puzzle,
   Settings,
   Square,
   TerminalSquare,
@@ -24,7 +22,6 @@ import type {
   LocalChatConnectionState,
   LocalChatEvent,
   LocalChatMessageEvent,
-  PluginBuilderMode,
   ServiceDescriptor,
   ServiceId,
   ServiceStatus,
@@ -71,10 +68,6 @@ function isServiceProcessActive(service: ServiceDescriptor): boolean {
   return service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping";
 }
 
-const PLUGIN_BUILDER_MODE_STORAGE_KEY = "maibot-onekey.plugin-builder-mode";
-const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
-const HOME_ENTRY_GUIDE_KEY = "maibot-onekey.home-entry-guide-seen.v2";
-const OPENCODE_TERMINAL_SESSION_PREFIX = "user-terminal:opencode:";
 const MAIBOT_DEFAULT_WEBUI_URL = "http://127.0.0.1:8001";
 const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
 const CODEX_PET_ATLAS_COLUMNS = 8;
@@ -110,39 +103,6 @@ function tabPageTransitionStyle(
     transform: `translate3d(${offset}%, 0, 0)`,
     zIndex: active ? 1 : 0,
   };
-}
-
-function createOpenCodeSessionId(): string {
-  const randomId =
-    globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  return `${OPENCODE_TERMINAL_SESSION_PREFIX}${randomId}`;
-}
-
-function joinDesktopPath(platform: NodeJS.Platform | undefined, root: string, ...segments: string[]): string {
-  const separator = platform === "win32" || root.includes("\\") ? "\\" : "/";
-  const cleanRoot = root.replace(/[\\/]+$/u, "");
-  const cleanSegments = segments.map((segment) => segment.replace(/^[\\/]+|[\\/]+$/gu, ""));
-  return [cleanRoot, ...cleanSegments].filter(Boolean).join(separator);
-}
-
-function opencodeExecutablePath(snapshot: DesktopSnapshot | null): string {
-  const platform = snapshot?.platform;
-  const filename = platform === "win32" ? "opencode.exe" : "opencode";
-  return joinDesktopPath(platform, snapshot?.paths.runtimeRoot ?? "runtime", "opencode", filename);
-}
-
-function opencodeLaunchEnv(snapshot: DesktopSnapshot): Record<string, string> {
-  const useBundledPluginInstructions = snapshot.openCodeSettings.useBundledPluginInstructions !== false;
-  const config: { autoupdate: false; instructions?: string[] } = { autoupdate: false };
-  const env: Record<string, string> = {};
-
-  if (useBundledPluginInstructions) {
-    config.instructions = [snapshot.paths.opencodePluginInstructionsPath];
-    env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
-  }
-
-  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
-  return env;
 }
 
 function isDependencyPreparationLog(entry: LogEntry): boolean {
@@ -282,24 +242,12 @@ function DependencyMigrationCard({
 
 interface WebviewEntryTarget {
   entryUrl: string;
-}
-
-type PluginPanelMode = "market" | "manage";
-
-function pluginWebuiPathForMode(mode: PluginPanelMode): string {
-  return mode === "market" ? "/plugins/embed" : "/plugin-config/embed";
+  targetUrl: string;
 }
 
 function pluginConfigWebuiPath(pluginId: string): string {
   const params = new URLSearchParams({ plugin: pluginId });
-  return `/plugin-config/embed?${params.toString()}`;
-}
-
-function pluginWebviewTitle(path: string, mode: PluginPanelMode): string {
-  if (path.startsWith("/plugin-config")) {
-    return "MaiBot WebUI 插件管理";
-  }
-  return mode === "market" ? "MaiBot WebUI 插件市场" : "MaiBot WebUI 插件管理";
+  return `/plugin-config?${params.toString()}`;
 }
 
 function createMaibotWebviewTarget(url: string, targetPath: string): WebviewEntryTarget {
@@ -323,9 +271,10 @@ function createMaibotWebviewTarget(url: string, targetPath: string): WebviewEntr
 
     return {
       entryUrl: isAuthEntry ? entryUrl.toString() : targetUrl.toString(),
+      targetUrl: targetUrl.toString(),
     };
   } catch {
-    return { entryUrl: url };
+    return { entryUrl: url, targetUrl: url };
   }
 }
 
@@ -392,33 +341,6 @@ function CodexPetSprite({
       />
     </span>
   );
-}
-
-function readPluginBuilderMode(): PluginBuilderMode {
-  if (typeof window === "undefined") {
-    return "agent";
-  }
-  const mode = window.localStorage.getItem(PLUGIN_BUILDER_MODE_STORAGE_KEY);
-  return mode === "disabled" ? "disabled" : "agent";
-}
-
-function readStorageFlag(key: string): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  try {
-    return window.localStorage.getItem(key) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeStorageFlag(key: string): void {
-  try {
-    window.localStorage.setItem(key, "1");
-  } catch {
-    // Local storage can be unavailable in isolated previews.
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -1288,191 +1210,6 @@ function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | nul
   list.style.setProperty("--retro-tab-indicator-opacity", "1");
 }
 
-function HomeEntryGuide({
-  open,
-  onConfirm,
-}: {
-  open: boolean;
-  onConfirm: () => void;
-}): React.JSX.Element | null {
-  const [confirmed, setConfirmed] = useState({ localchat: false, messagePlatform: false });
-  const [targets, setTargets] = useState<{
-    localchat: DOMRect | null;
-    messagePlatform: DOMRect | null;
-  }>({ localchat: null, messagePlatform: null });
-
-  useEffect(() => {
-    if (!open) {
-      setConfirmed({ localchat: false, messagePlatform: false });
-      return;
-    }
-
-    const updateTargets = () => {
-      const localchat = document.querySelector<HTMLElement>("[data-home-guide-target='localchat']");
-      const messagePlatform = document.querySelector<HTMLElement>("[data-home-guide-target='message-platform']");
-      setTargets({
-        localchat: localchat?.getBoundingClientRect() ?? null,
-        messagePlatform: messagePlatform?.getBoundingClientRect() ?? null,
-      });
-    };
-
-    updateTargets();
-    const frame = window.requestAnimationFrame(updateTargets);
-    window.addEventListener("resize", updateTargets);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("resize", updateTargets);
-    };
-  }, [open]);
-
-  const confirmLocalchat = useCallback(() => {
-    setConfirmed((current) => {
-      const next = { ...current, localchat: true };
-      if (next.messagePlatform) {
-        window.setTimeout(onConfirm, 0);
-      }
-      return next;
-    });
-  }, [onConfirm]);
-
-  const confirmMessagePlatform = useCallback(() => {
-    setConfirmed((current) => {
-      const next = { ...current, messagePlatform: true };
-      if (next.localchat) {
-        window.setTimeout(onConfirm, 0);
-      }
-      return next;
-    });
-  }, [onConfirm]);
-
-  if (!open) {
-    return null;
-  }
-
-  const localchatRect = targets.localchat;
-  const messagePlatformRect = targets.messagePlatform;
-  const messagePlatformBubbleTop = messagePlatformRect ? Math.max(64, messagePlatformRect.top - 150) : 300;
-  const messagePlatformBubbleLeft = messagePlatformRect ? Math.max(16, messagePlatformRect.left + 24) : 24;
-  const messagePlatformBubbleWidth = messagePlatformRect ? Math.min(420, messagePlatformRect.width - 48) : 420;
-  const spotlightRects = [
-    localchatRect
-      ? {
-          height: localchatRect.height + 10,
-          rx: 8,
-          x: localchatRect.left - 5,
-          y: localchatRect.top - 5,
-          width: localchatRect.width + 10,
-        }
-      : null,
-    messagePlatformRect
-      ? {
-          height: messagePlatformRect.height + 12,
-          rx: 12,
-          x: messagePlatformRect.left - 6,
-          y: messagePlatformRect.top - 6,
-          width: messagePlatformRect.width + 12,
-        }
-      : null,
-  ].filter((rect): rect is { height: number; rx: number; width: number; x: number; y: number } => Boolean(rect));
-  const viewportWidth = typeof window === "undefined" ? 0 : window.innerWidth;
-  const viewportHeight = typeof window === "undefined" ? 0 : window.innerHeight;
-  const overlayPath = [
-    `M0 0H${viewportWidth}V${viewportHeight}H0Z`,
-    ...spotlightRects.map((rect) => (
-      `M${rect.x + rect.rx} ${rect.y}` +
-      `H${rect.x + rect.width - rect.rx}` +
-      `Q${rect.x + rect.width} ${rect.y} ${rect.x + rect.width} ${rect.y + rect.rx}` +
-      `V${rect.y + rect.height - rect.rx}` +
-      `Q${rect.x + rect.width} ${rect.y + rect.height} ${rect.x + rect.width - rect.rx} ${rect.y + rect.height}` +
-      `H${rect.x + rect.rx}` +
-      `Q${rect.x} ${rect.y + rect.height} ${rect.x} ${rect.y + rect.height - rect.rx}` +
-      `V${rect.y + rect.rx}` +
-      `Q${rect.x} ${rect.y} ${rect.x + rect.rx} ${rect.y}` +
-      "Z"
-    )),
-  ].join("");
-
-  return (
-    <div className="fixed inset-0 z-[95]">
-      <svg aria-hidden className="pointer-events-none absolute inset-0 size-full">
-        <path d={overlayPath} fill="rgba(18,16,13,0.62)" fillRule="evenodd" />
-      </svg>
-      {spotlightRects.map((rect, index) => (
-        <div
-          className="pointer-events-none absolute border-2 border-primary shadow-[0_0_0_1px_rgb(255_255_255_/_0.25),0_12px_28px_rgb(0_0_0_/_0.18)]"
-          key={index}
-          style={{
-            borderRadius: rect.rx,
-            height: rect.height,
-            left: rect.x,
-            top: rect.y,
-            width: rect.width,
-          }}
-        />
-      ))}
-
-      <section
-        className="absolute w-[min(420px,calc(100vw-2rem))] rounded-md border border-border px-4 py-3 text-card-foreground shadow-2xl"
-        style={{
-          backgroundColor: "var(--retro-paper, var(--card))",
-          backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
-          backgroundSize: "165px 165px",
-          left: localchatRect ? Math.max(16, localchatRect.left - 64) : 188,
-          top: localchatRect ? localchatRect.bottom + 20 : 96,
-        }}
-      >
-        <span
-          className="absolute -top-3 left-20 size-5 rotate-45 border-l border-t border-border"
-          style={{
-            backgroundColor: "var(--retro-paper, var(--card))",
-            backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
-            backgroundSize: "165px 165px",
-          }}
-        />
-        <p className="text-sm font-semibold leading-relaxed text-foreground">
-          可以在聊聊页面进行本地聊天。
-        </p>
-        <div className="mt-3 flex justify-end">
-          <Button disabled={confirmed.localchat} onClick={confirmLocalchat} size="sm">
-            <CheckCircle2 />
-            {confirmed.localchat ? "已确定" : "确定"}
-          </Button>
-        </div>
-      </section>
-
-      <section
-        className="absolute rounded-md border border-border px-4 py-3 text-card-foreground shadow-2xl"
-        style={{
-          backgroundColor: "var(--retro-paper, var(--card))",
-          backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
-          backgroundSize: "165px 165px",
-          left: messagePlatformBubbleLeft,
-          top: messagePlatformBubbleTop,
-          width: `min(${messagePlatformBubbleWidth}px, calc(100vw - 2rem))`,
-        }}
-      >
-          <span
-            className="absolute -bottom-3 left-16 size-5 rotate-45 border-b border-r border-border"
-            style={{
-              backgroundColor: "var(--retro-paper, var(--card))",
-              backgroundImage: "var(--retro-paper-texture-layer, var(--retro-paper-texture, none))",
-              backgroundSize: "165px 165px",
-            }}
-          />
-          <p className="text-sm font-semibold leading-relaxed text-foreground">
-            可以在此处配置 NapCat 来和 QQ 进行连接。只有在这里配置之后，你才可以让麦麦连接 QQ。
-          </p>
-          <div className="mt-3 flex justify-end">
-            <Button disabled={confirmed.messagePlatform} onClick={confirmMessagePlatform} size="sm">
-              <CheckCircle2 />
-              {confirmed.messagePlatform ? "已确定" : "确定"}
-            </Button>
-          </div>
-      </section>
-    </div>
-  );
-}
-
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("home");
@@ -1481,34 +1218,16 @@ export function DesktopShell(): React.JSX.Element {
     userId: window.localStorage.getItem(WEBUI_CHAT_USER_ID_STORAGE_KEY) ?? undefined,
     userName: window.localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined,
   }));
-  const [pluginMode, setPluginModeState] = useState<PluginPanelMode>("manage");
-  const [pluginManageWebviewPath, setPluginManageWebviewPath] = useState(() => pluginWebuiPathForMode("manage"));
-  const [pluginMarketWebviewPath, setPluginMarketWebviewPath] = useState(() => pluginWebuiPathForMode("market"));
-  const [pluginMarketWebviewVisited, setPluginMarketWebviewVisited] = useState(false);
-  const [pluginBuilderMode, setPluginBuilderModeState] = useState<PluginBuilderMode>(() => readPluginBuilderMode());
-  const [isStartingOpenCode, setIsStartingOpenCode] = useState(false);
+  const [maibotWebviewPath, setMaibotWebviewPath] = useState<string | null>(null);
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [floatingMode, setFloatingMode] = useState(false);
   const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
-  const [homeEntryGuideSeen, setHomeEntryGuideSeen] = useState(() => readStorageFlag(HOME_ENTRY_GUIDE_KEY));
   const [localChatWebviewReloadRequest, setLocalChatWebviewReloadRequest] = useState(0);
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const useRetroChrome = appearance.mode === "future-retro";
-
-  const setPluginBuilderMode = useCallback((mode: PluginBuilderMode) => {
-    setPluginBuilderModeState(mode);
-    window.localStorage.setItem(PLUGIN_BUILDER_MODE_STORAGE_KEY, mode);
-  }, []);
-
-  const setPluginMode = useCallback((mode: PluginPanelMode) => {
-    setPluginModeState(mode);
-    if (mode === "market") {
-      setPluginMarketWebviewVisited(true);
-    }
-  }, []);
 
   const rememberWebuiIdentity = useCallback((identity: { userId?: string; userName?: string }) => {
     if (!identity.userId && !identity.userName) {
@@ -1597,21 +1316,11 @@ export function DesktopShell(): React.JSX.Element {
     () => createMaibotChatWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL),
     [maibotService?.url],
   );
-  const maibotPluginManageWebviewTarget = useMemo(
-    () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginManageWebviewPath),
-    [maibotService?.url, pluginManageWebviewPath],
-  );
-  const maibotPluginMarketWebviewTarget = useMemo(
-    () => createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, pluginMarketWebviewPath),
-    [maibotService?.url, pluginMarketWebviewPath],
-  );
-  const maibotPluginManageWebviewTitle = useMemo(
-    () => pluginWebviewTitle(pluginManageWebviewPath, "manage"),
-    [pluginManageWebviewPath],
-  );
-  const maibotPluginMarketWebviewTitle = useMemo(
-    () => pluginWebviewTitle(pluginMarketWebviewPath, "market"),
-    [pluginMarketWebviewPath],
+  const maibotWebviewTarget = useMemo(
+    () => maibotWebviewPath
+      ? createMaibotWebviewTarget(maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL, maibotWebviewPath)
+      : { entryUrl: maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL },
+    [maibotService?.url, maibotWebviewPath],
   );
   const maibotWebviewReloadTrigger =
     maibotWebviewAvailable
@@ -1637,25 +1346,14 @@ export function DesktopShell(): React.JSX.Element {
       "maibot",
       "localchat",
       ...(showTerminalTab ? ["terminal"] : []),
-      "plugins",
       "settings",
     ],
     [showTerminalTab],
   );
-  const showTopPluginBuilderEntry =
-    activeTab === "plugins" &&
-    pluginBuilderMode !== "disabled";
-  const openCodePath = useMemo(() => opencodeExecutablePath(snapshot), [snapshot]);
   const primaryServiceActionTransitioning =
     actionBusy !== null ||
     services.some((service) => service.status === "starting" || service.status === "stopping");
   const hasActiveServiceProcess = services.some(isServiceProcessActive);
-  const showHomeEntryGuide =
-    activeTab === "home" &&
-    Boolean(snapshot?.startupAgreement.isConfirmed) &&
-    readStorageFlag(STARTUP_WIZARD_KEY) &&
-    !homeEntryGuideSeen;
-
   const openMaiBotRoot = useCallback(() => {
     const maibotRoot = snapshot?.paths.maibotRoot;
     if (!maibotRoot) {
@@ -1754,11 +1452,6 @@ export function DesktopShell(): React.JSX.Element {
     });
   }, []);
 
-  const confirmHomeEntryGuide = useCallback(() => {
-    writeStorageFlag(HOME_ENTRY_GUIDE_KEY);
-    setHomeEntryGuideSeen(true);
-  }, []);
-
   const syncWindowState = useCallback((state: WindowState) => {
     setFloatingMode(state.isFloating === true);
     setFloatingEdge(state.floatingEdge ?? null);
@@ -1770,17 +1463,17 @@ export function DesktopShell(): React.JSX.Element {
       return;
     }
     if (value === "pluginmarket") {
-      setPluginMode("market");
-      setActiveTab("plugins");
+      setMaibotWebviewPath("/plugins");
+      setActiveTab("maibot");
       return;
     }
     if (value === "pluginmanage") {
-      setPluginMode("manage");
-      setActiveTab("plugins");
+      setMaibotWebviewPath("/plugin-config");
+      setActiveTab("maibot");
       return;
     }
     setActiveTab(value);
-  }, [setPluginMode, showTerminalTab]);
+  }, [showTerminalTab]);
 
   const syncRetroTabIndicator = useCallback((value: string) => {
     const list = retroTabsRef.current;
@@ -1835,17 +1528,15 @@ export function DesktopShell(): React.JSX.Element {
   }, [activeTab, syncRetroTabIndicator]);
 
   const openPluginConfig = useCallback((pluginId: string) => {
-    setPluginMode("manage");
-    setPluginManageWebviewPath(pluginConfigWebuiPath(pluginId));
-    setActiveTab("plugins");
-  }, [setPluginMode]);
+    setMaibotWebviewPath(pluginConfigWebuiPath(pluginId));
+    setActiveTab("maibot");
+  }, []);
 
   const openPluginDetail = useCallback((pluginId: string) => {
     void pluginId;
-    setPluginMode("market");
-    setPluginMarketWebviewPath(pluginWebuiPathForMode("market"));
-    setActiveTab("plugins");
-  }, [setPluginMode]);
+    setMaibotWebviewPath("/plugins");
+    setActiveTab("maibot");
+  }, []);
 
   const openTerminalSession = useCallback((sessionId: string) => {
     if (!showTerminalTab) {
@@ -1856,40 +1547,6 @@ export function DesktopShell(): React.JSX.Element {
     setTerminalFocusSessionId(null);
     window.setTimeout(() => setTerminalFocusSessionId(sessionId), 0);
   }, [showTerminalTab]);
-
-  const startOpenCode = useCallback(async () => {
-    const bridge = window.maibotDesktop;
-    if (!bridge?.pty) {
-      toast.error("Electron 终端桥接未连接");
-      return;
-    }
-    if (!snapshot) {
-      toast.error("桌面状态还没有准备好");
-      return;
-    }
-    if (snapshot.terminalSettings.useEmbeddedTerminal !== true) {
-      toast.error("请先在设置中启用内嵌终端");
-      return;
-    }
-
-    setIsStartingOpenCode(true);
-    try {
-      const session = await bridge.pty.start({
-        id: createOpenCodeSessionId(),
-        title: "OpenCode 编写器",
-        cwd: snapshot.paths.maibotRoot,
-        command: [openCodePath, snapshot.paths.maibotRoot],
-        encoding: "utf8",
-        env: opencodeLaunchEnv(snapshot),
-      });
-      openTerminalSession(session.id);
-      toast.success("OpenCode 已在终端中启动");
-    } catch (error) {
-      toast.error(`OpenCode 启动失败：${errorMessage(error)}`);
-    } finally {
-      setIsStartingOpenCode(false);
-    }
-  }, [openCodePath, openTerminalSession, snapshot]);
 
   useEffect(() => {
     if (activeTab === "terminal" && !showTerminalTab) {
@@ -1955,8 +1612,7 @@ export function DesktopShell(): React.JSX.Element {
 
   const webviewToolbarActive =
     activeTab === "maibot" ||
-    activeTab === "localchat" ||
-    activeTab === "plugins";
+    activeTab === "localchat";
 
   if (floatingMode) {
     return (
@@ -2045,7 +1701,6 @@ export function DesktopShell(): React.JSX.Element {
                     MaiBot
                   </TabsTrigger>
                   <TabsTrigger
-                    data-home-guide-target="localchat"
                     data-retro-active={useRetroChrome && activeTab === "localchat" ? "true" : undefined}
                     data-retro-tab-item={useRetroChrome ? "true" : undefined}
                     data-retro-tab-value={useRetroChrome ? "localchat" : undefined}
@@ -2067,16 +1722,6 @@ export function DesktopShell(): React.JSX.Element {
                       终端
                     </TabsTrigger>
                   ) : null}
-                  <TabsTrigger
-                    data-retro-active={useRetroChrome && activeTab === "plugins" ? "true" : undefined}
-                    data-retro-tab-item={useRetroChrome ? "true" : undefined}
-                    data-retro-tab-value={useRetroChrome ? "plugins" : undefined}
-                    value="plugins"
-                    className={cn("gap-1.5", useRetroChrome && "px-5")}
-                  >
-                    <Puzzle />
-                    插件
-                  </TabsTrigger>
                 </TabsList>
                 <div
                   className={cn(
@@ -2094,67 +1739,6 @@ export function DesktopShell(): React.JSX.Element {
                     useRetroChrome && "py-1",
                   )}
                 >
-                {activeTab === "plugins" ? (
-                  <>
-                    {showTopPluginBuilderEntry ? (
-                      <Button
-                        className={cn(
-                          "mr-1 h-8 gap-1.5 px-2.5 text-[11px]",
-                          useRetroChrome && "h-9 rounded-sm border-[var(--retro-line,var(--border))]",
-                        )}
-                        disabled={isStartingOpenCode}
-                        onClick={startOpenCode}
-                        size="sm"
-                        title="在终端中启动 OpenCode 插件编写器"
-                        variant="default"
-                      >
-                        {isStartingOpenCode ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalSquare className="size-3.5" />}
-                        启动编写器
-                      </Button>
-                    ) : null}
-                    <div
-                      className={cn(
-                        "mr-1 flex h-8 shrink-0 items-end gap-1 bg-transparent px-1",
-                        useRetroChrome && "h-9 px-1.5",
-                      )}
-                    >
-                      <Button
-                        className={cn(
-                          "relative h-8 rounded-none bg-transparent px-2.5 pb-1.5 pt-1 text-[12px] font-semibold text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground",
-                          "after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent after:content-['']",
-                          pluginMode === "manage" && "text-primary hover:text-primary after:bg-primary",
-                          useRetroChrome && [
-                            "h-9 px-3 text-sm text-[var(--retro-ink-soft,var(--muted-foreground))]",
-                            "after:h-[3px] after:rounded-none",
-                            pluginMode === "manage" && "text-[var(--retro-rust,var(--primary))] after:bg-[var(--retro-rust,var(--primary))]",
-                          ],
-                        )}
-                        onClick={() => setPluginMode("manage")}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        插件管理
-                      </Button>
-                      <Button
-                        className={cn(
-                          "relative h-8 rounded-none bg-transparent px-2.5 pb-1.5 pt-1 text-[12px] font-semibold text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground",
-                          "after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent after:content-['']",
-                          pluginMode === "market" && "text-primary hover:text-primary after:bg-primary",
-                          useRetroChrome && [
-                            "h-9 px-3 text-sm text-[var(--retro-ink-soft,var(--muted-foreground))]",
-                            "after:h-[3px] after:rounded-none",
-                            pluginMode === "market" && "text-[var(--retro-rust,var(--primary))] after:bg-[var(--retro-rust,var(--primary))]",
-                          ],
-                        )}
-                        onClick={() => setPluginMode("market")}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        插件市场
-                      </Button>
-                    </div>
-                  </>
-                ) : null}
                 <Button
                   aria-label="设置"
                   className={cn(
@@ -2335,7 +1919,7 @@ export function DesktopShell(): React.JSX.Element {
                   toolbarPlacement="external"
                   toolbarTarget={webviewToolbarHost}
                   reloadTrigger={maibotWebviewReloadTrigger}
-                  url={maibotService?.url ?? MAIBOT_DEFAULT_WEBUI_URL}
+                  url={maibotWebviewTarget.entryUrl}
                 />
               ) : (
                 <MaiBotWebuiStatusPanel
@@ -2361,6 +1945,7 @@ export function DesktopShell(): React.JSX.Element {
                   title="MaiBot WebUI 聊聊"
                   toolbarPlacement="external"
                   toolbarTarget={webviewToolbarHost}
+                  navigationTargetUrl={maibotChatWebviewTarget.targetUrl}
                   reloadTrigger={localChatWebviewReloadTrigger}
                   url={maibotChatWebviewTarget.entryUrl}
                 />
@@ -2396,65 +1981,6 @@ export function DesktopShell(): React.JSX.Element {
 
             <TabsContent
               forceMount
-              inert={activeTab !== "plugins"}
-              value="plugins"
-              className={tabPageTransitionClassName}
-              style={tabPageTransitionStyle("plugins", activeTab, tabPageOrder)}
-            >
-              {!maibotWebviewAvailable ? (
-                <MaiBotWebuiStatusPanel
-                  busy={actionBusy?.startsWith("maibot:") ?? false}
-                  context="plugins"
-                  onStart={startService}
-                  retro={useRetroChrome}
-                  service={maibotService}
-                />
-              ) : (
-                <div className="relative h-full min-h-0">
-                  {maibotWebviewAvailable ? (
-                    <div
-                      className={cn(
-                        "absolute inset-0",
-                        pluginMode !== "manage" && "invisible pointer-events-none",
-                      )}
-                    >
-                      <WebviewPanel
-                        active={activeTab === "plugins" && pluginMode === "manage"}
-                        onWebuiIdentity={rememberWebuiIdentity}
-                        title={maibotPluginManageWebviewTitle}
-                        toolbarPlacement="external"
-                        toolbarTarget={webviewToolbarHost}
-                        reloadTrigger={maibotWebviewReloadTrigger}
-                        showExternalToolbarMetadata={false}
-                        url={maibotPluginManageWebviewTarget.entryUrl}
-                      />
-                    </div>
-                  ) : null}
-                  {maibotWebviewAvailable && pluginMarketWebviewVisited ? (
-                    <div
-                      className={cn(
-                        "absolute inset-0",
-                        pluginMode !== "market" && "invisible pointer-events-none",
-                      )}
-                    >
-                      <WebviewPanel
-                        active={activeTab === "plugins" && pluginMode === "market"}
-                        onWebuiIdentity={rememberWebuiIdentity}
-                        title={maibotPluginMarketWebviewTitle}
-                        toolbarPlacement="external"
-                        toolbarTarget={webviewToolbarHost}
-                        reloadTrigger={maibotWebviewReloadTrigger}
-                        showExternalToolbarMetadata={false}
-                        url={maibotPluginMarketWebviewTarget.entryUrl}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </TabsContent>
-
-            <TabsContent
-              forceMount
               inert={activeTab !== "settings"}
               value="settings"
               className={cn(tabPageTransitionClassName, "settings-scroll-scope")}
@@ -2464,8 +1990,6 @@ export function DesktopShell(): React.JSX.Element {
                 <SettingsStatusPanel
                   onOpenPluginConfig={openPluginConfig}
                   onSnapshot={setSnapshot}
-                  onPluginBuilderModeChange={setPluginBuilderMode}
-                  pluginBuilderMode={pluginBuilderMode}
                   snapshot={snapshot}
                 />
               ) : (
@@ -2493,7 +2017,6 @@ export function DesktopShell(): React.JSX.Element {
           />
         ) : null}
           <DependencyMigrationCard logs={dependencyMigrationLogs} service={maibotService} />
-          <HomeEntryGuide open={showHomeEntryGuide} onConfirm={confirmHomeEntryGuide} />
           <Toaster />
         </div>
       </div>

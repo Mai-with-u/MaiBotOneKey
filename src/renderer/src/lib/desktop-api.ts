@@ -26,7 +26,6 @@ const fallbackSnapshot: DesktopSnapshot = {
     snowlumaRoot: "开发预览/modules/SnowLuma",
     bundledModulesRoot: "开发预览/modules",
     runtimeRoot: "开发预览/runtime",
-    opencodePluginInstructionsPath: "开发预览/resources/opencode/plugin_code.md",
     pythonEnvRoot: "开发预览/python-env",
     pluginBuilderRoot: "开发预览/plugin-builder/plugins",
     logsRoot: "开发预览/logs",
@@ -125,9 +124,6 @@ const fallbackSnapshot: DesktopSnapshot = {
   serviceStartupSettings: {
     useLocalDashboard: false,
   },
-  openCodeSettings: {
-    useBundledPluginInstructions: true,
-  },
   launcherUiSettings: {
     floatingMascotMode: "maibot",
     topStartActionMode: "ask",
@@ -203,7 +199,6 @@ export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): De
     runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
     terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
     serviceStartupSettings: snapshot.serviceStartupSettings ?? fallbackSnapshot.serviceStartupSettings,
-    openCodeSettings: snapshot.openCodeSettings ?? fallbackSnapshot.openCodeSettings,
     launcherUiSettings: {
       ...fallbackSnapshot.launcherUiSettings,
       ...snapshot.launcherUiSettings,

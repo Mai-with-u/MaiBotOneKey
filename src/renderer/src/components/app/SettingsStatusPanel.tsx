@@ -39,8 +39,6 @@ import type {
   MaiBotStorageStats,
   LauncherUiSettings,
   NetworkProxySettings,
-  OpenCodeSettings,
-  PluginBuilderMode,
   QqBackend,
   RuntimePathConfig,
   RuntimePathKey,
@@ -114,8 +112,6 @@ interface SettingsStatusPanelProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenPluginConfig: (pluginId: string) => void;
-  pluginBuilderMode: PluginBuilderMode;
-  onPluginBuilderModeChange: (mode: PluginBuilderMode) => void;
 }
 
 const statusText: Record<ServiceStatus, string> = {
@@ -387,10 +383,6 @@ const qqBackendOptions: Array<{ value: QqBackend; label: string; description: st
 const defaultNetworkProxySettings: NetworkProxySettings = {
   enabled: false,
   port: 7890,
-};
-
-const defaultOpenCodeSettings: OpenCodeSettings = {
-  useBundledPluginInstructions: true,
 };
 
 const defaultLauncherUiSettings: LauncherUiSettings = {
@@ -1051,8 +1043,6 @@ export function SettingsStatusPanel({
   snapshot,
   onSnapshot,
   onOpenPluginConfig,
-  pluginBuilderMode,
-  onPluginBuilderModeChange,
 }: SettingsStatusPanelProps): React.JSX.Element {
   const theme = useTheme();
   const appearance = useAppearance();
@@ -1076,7 +1066,6 @@ export function SettingsStatusPanel({
   const [confirmMaiBotDataResetFirstOpen, setConfirmMaiBotDataResetFirstOpen] = useState(false);
   const [confirmMaiBotDataResetSecondOpen, setConfirmMaiBotDataResetSecondOpen] = useState(false);
   const [confirmStorageCleanupTarget, setConfirmStorageCleanupTarget] = useState<MaiBotStorageCleanupTarget | null>(null);
-  const [confirmPluginBuilderEnableOpen, setConfirmPluginBuilderEnableOpen] = useState(false);
   const [environmentServicesExpanded, setEnvironmentServicesExpanded] = useState(false);
   const [lastMaiBotDataReset, setLastMaiBotDataReset] = useState<MaiBotDataResetResult | null>(null);
   const [storageStats, setStorageStats] = useState<MaiBotStorageStats | null>(null);
@@ -1097,9 +1086,7 @@ export function SettingsStatusPanel({
   const editableRuntimePathConfigs = runtimePathConfigs.filter((config) => config.key !== "python");
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };
-  const openCodeSettings = snapshot.openCodeSettings ?? defaultOpenCodeSettings;
   const launcherUiSettings = { ...defaultLauncherUiSettings, ...snapshot.launcherUiSettings };
-  const pluginBuilderEnabled = pluginBuilderMode !== "disabled";
   const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
   const codexPetOptions = snapshot.codexPetSettings?.options ?? [];
   const selectedCodexPet =
@@ -1251,27 +1238,6 @@ export function SettingsStatusPanel({
     setClosePreferenceState(preference);
     toast.success(`关闭行为已设为：${closePreferenceText[preference]}`);
   }, []);
-
-  const requestPluginBuilderEnabledChange = useCallback(
-    (enabled: boolean) => {
-      if (enabled) {
-        if (pluginBuilderMode === "disabled") {
-          setConfirmPluginBuilderEnableOpen(true);
-        }
-        return;
-      }
-
-      onPluginBuilderModeChange("disabled");
-      toast.success("插件管理页的编写器入口已隐藏");
-    },
-    [onPluginBuilderModeChange, pluginBuilderMode],
-  );
-
-  const confirmPluginBuilderEnable = useCallback(() => {
-    onPluginBuilderModeChange("agent");
-    setConfirmPluginBuilderEnableOpen(false);
-    toast.success("插件管理页的编写器入口已显示");
-  }, [onPluginBuilderModeChange]);
 
   const repair = useCallback(async (resetInvalidAdapterConfigs = false) => {
     setBusy("repair");
@@ -1674,25 +1640,6 @@ export function SettingsStatusPanel({
   const updateSourceGroup = useCallback((group: SourceSettingsGroup, entries: ManagedSourceEntry[]) => {
     setSourceSettingsDraft((current) => current ? { ...current, [group]: entries } : current);
   }, []);
-
-  const saveOpenCodeSettings = useCallback(
-    async (settings: OpenCodeSettings) => {
-      setBusy("opencode-settings");
-      setError(null);
-      try {
-        const nextOpenCodeSettings = await window.maibotDesktop?.launcher.saveOpenCodeSettings(settings);
-        if (nextOpenCodeSettings) {
-          onSnapshot({ ...snapshot, openCodeSettings: nextOpenCodeSettings });
-        }
-        await refreshSnapshot();
-      } catch (nextError) {
-        setError(messageFromError(nextError));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [onSnapshot, refreshSnapshot, snapshot],
-  );
 
   const saveLauncherUiSettings = useCallback(
     async (settings: LauncherUiSettings) => {
@@ -2135,89 +2082,6 @@ export function SettingsStatusPanel({
                     />
                     启用开发者模式
                   </label>
-                </div>
-
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <Code2 className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">插件编写器</p>
-                        <p className="text-xs text-muted-foreground">
-                          {pluginBuilderEnabled
-                            ? "插件管理页会显示“启动编写器”按钮。"
-                            : "插件管理页不显示“启动编写器”按钮。"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      <Badge variant={pluginBuilderEnabled ? "success" : "outline"}>
-                        {pluginBuilderEnabled ? "已打开" : "已关闭"}
-                      </Badge>
-                      <Badge variant={openCodeSettings.useBundledPluginInstructions ? "secondary" : "outline"}>
-                        {openCodeSettings.useBundledPluginInstructions ? "内置说明" : "项目默认"}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  <div className="settings-option-list grid gap-0">
-                    <label
-                      className={cn(
-                        "settings-choice flex min-w-0 cursor-pointer items-start gap-3 p-3 transition-colors",
-                        pluginBuilderEnabled
-                          ? "settings-choice-selected bg-primary/10 text-foreground"
-                          : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                      )}
-                    >
-                      <Checkbox
-                        checked={pluginBuilderEnabled}
-                        disabled={busy !== null}
-                        onCheckedChange={(checked) => requestPluginBuilderEnabledChange(checked === true)}
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium">显示插件管理页入口</span>
-                        <span className="mt-1 block text-xs leading-relaxed">
-                          开启后可在插件管理页点击“启动编写器”，进入内置 Coding Agent 工作区。
-                        </span>
-                      </span>
-                    </label>
-
-                    <div className="grid gap-2 bg-card p-3">
-                      <label className="flex min-w-0 cursor-pointer items-start gap-3">
-                        <Checkbox
-                          checked={openCodeSettings.useBundledPluginInstructions}
-                          disabled={busy !== null}
-                          onCheckedChange={(checked) =>
-                            void saveOpenCodeSettings({
-                              ...openCodeSettings,
-                              useBundledPluginInstructions: checked === true,
-                            })
-                          }
-                        />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium">使用内置插件编写说明</span>
-                          <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                            {openCodeSettings.useBundledPluginInstructions
-                              ? "启动 OpenCode 时使用内置 plugin_code.md，并跳过 MaiBot 自带 AGENTS.md。"
-                              : "按 OpenCode 默认规则读取项目内 AGENTS.md。"}
-                          </span>
-                        </span>
-                      </label>
-                      <div className="flex min-w-0 flex-wrap items-center gap-2">
-                        <p
-                          className="min-w-[260px] flex-1 truncate rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] text-muted-foreground"
-                          title={snapshot.paths.opencodePluginInstructionsPath}
-                        >
-                          {snapshot.paths.opencodePluginInstructionsPath}
-                        </p>
-                        {busy === "opencode-settings" ? (
-                          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
                 </div>
 
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
@@ -3040,37 +2904,6 @@ export function SettingsStatusPanel({
         </Card>
       </div>
     </section>
-    <Dialog
-      open={confirmPluginBuilderEnableOpen}
-      onOpenChange={(next) => {
-        if (!next) setConfirmPluginBuilderEnableOpen(false);
-      }}
-    >
-      <DialogContent size="md">
-        <DialogHeader
-          description="OpenCode 这类 AI Agent CLI 会在 MaiBot 工作目录中运行，并可能读取、创建、修改文件或执行命令。"
-          icon={<AlertTriangle className="size-4" />}
-          title="确认显示插件编写器入口？"
-          tone="warning"
-        />
-        <DialogBody className="space-y-3 text-sm">
-          <div className="rounded-md border border-warning/40 bg-warning/15 p-3 text-xs leading-relaxed text-warning-foreground">
-            只在你信任当前工作区、理解操作影响，并准备好查看 AI Agent 执行内容时打开。建议避免输入敏感密钥、账号密码或私人文件路径。
-          </div>
-          <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-            该设置只会在插件管理页显示“启动编写器”按钮；真正启动 OpenCode 后，终端会切到对应会话，你仍需要关注它的命令输出和文件改动。
-          </div>
-        </DialogBody>
-        <DialogFooter>
-          <Button onClick={() => setConfirmPluginBuilderEnableOpen(false)} size="sm" variant="ghost">
-            取消
-          </Button>
-          <Button onClick={confirmPluginBuilderEnable} size="sm" variant="default">
-            我已了解，显示入口
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
       <Dialog
         open={confirmStorageCleanupTarget !== null}
         onOpenChange={(next) => {

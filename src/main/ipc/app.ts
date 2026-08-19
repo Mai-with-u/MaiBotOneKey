@@ -95,7 +95,6 @@ import type {
   ModuleRuntimeVersions,
   ModuleUpdateResult,
   NetworkProxySettings,
-  OpenCodeSettings,
   ModuleSourceConfig,
   ModuleSourceUpdate,
   ModuleTagOption,
@@ -143,7 +142,6 @@ import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-clean
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { NetworkProxyManager } from "../services/network-proxy-manager";
-import { OpenCodeSettingsManager } from "../services/opencode-settings-manager";
 import { PluginBuilderLibrary } from "../services/plugin-builder-library";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { RemoteSourceManager } from "../services/remote-source-manager";
@@ -172,7 +170,6 @@ const LAUNCHER_SETTING_FILES = [
   "source-settings.json",
   "network-proxy.json",
   "launcher-ui-settings.json",
-  "opencode-settings.json",
   "app-icon-settings.json",
   "qq-component-upgrade-state.json",
 ];
@@ -185,7 +182,7 @@ const REMOVE_RETRY_OPTIONS = {
   retryDelay: 250,
 } as const;
 const NORMAL_MINIMUM_SIZE = { width: 1000, height: 680 };
-const NORMAL_DEFAULT_SIZE = { width: 1180, height: 760 };
+const NORMAL_DEFAULT_SIZE = { width: 1100, height: 720 };
 const NORMAL_RESTORE_MARGIN = 48;
 const FLOATING_BALL_SIZE = { width: 96, height: 96 };
 const FLOATING_GLASS_SIZE = { width: 80, height: 86 };
@@ -278,7 +275,6 @@ interface RegisterAppIpcOptions {
   remoteSourceManager: RemoteSourceManager;
   networkProxyManager: NetworkProxyManager;
   launcherUiSettingsManager: LauncherUiSettingsManager;
-  openCodeSettingsManager: OpenCodeSettingsManager;
   pythonDependencyManager: PythonDependencyManager;
   sourceSettingsManager: SourceSettingsManager;
   resourceLocationManager: ResourceLocationManager;
@@ -1697,7 +1693,6 @@ export function registerAppIpc({
   remoteSourceManager,
   networkProxyManager,
   launcherUiSettingsManager,
-  openCodeSettingsManager,
   pythonDependencyManager,
   sourceSettingsManager,
   resourceLocationManager,
@@ -2144,7 +2139,7 @@ export function registerAppIpc({
       restoreNormalWindowChrome(window);
       if (shouldRestoreBounds) {
         window.setBounds(
-          normalBounds ?? { x: 80, y: 80, width: 1180, height: 760 },
+          normalBounds ?? { x: 80, y: 80, ...NORMAL_DEFAULT_SIZE },
           true,
         );
       }
@@ -2460,7 +2455,6 @@ export function registerAppIpc({
     runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
     terminalSettings: serviceManager.getTerminalSettings(),
     serviceStartupSettings: serviceManager.getStartupSettings(),
-    openCodeSettings: openCodeSettingsManager.getSettings(),
     launcherUiSettings: launcherUiSettingsManager.getSettings(),
     appIconSettings: appIconManager.getSettings(),
     codexPetSettings: await codexPetManager.getSettings(),
@@ -2643,7 +2637,6 @@ export function registerAppIpc({
     await serviceManager.saveStartupSettings({ useLocalDashboard: false });
     await networkProxyManager.resetSettings();
     await launcherUiSettingsManager.resetSettings();
-    await openCodeSettingsManager.resetSettings();
     appIconManager.reset();
     applyAppIcon();
 
@@ -3382,22 +3375,6 @@ export function registerAppIpc({
         result.enabled
           ? `\u7f51\u7edc\u4ee3\u7406\u5df2\u542f\u7528: 127.0.0.1:${result.port}`
           : "\u7f51\u7edc\u4ee3\u7406\u5df2\u5173\u95ed",
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
-  ipcMain.handle(
-    "launcher:saveOpenCodeSettings",
-    async (_event, settings: OpenCodeSettings): Promise<OpenCodeSettings> => {
-      const result = await openCodeSettingsManager.saveSettings(settings);
-      logStore.append(
-        "desktop",
-        "system",
-        result.useBundledPluginInstructions
-          ? "OpenCode 已启用内置插件编写说明"
-          : "OpenCode 已恢复项目默认说明",
       );
       await broadcastSnapshot();
       return result;

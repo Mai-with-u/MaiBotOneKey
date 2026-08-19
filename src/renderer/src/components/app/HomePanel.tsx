@@ -878,7 +878,6 @@ function MessagePlatformConnectCard({
 }): React.JSX.Element {
   return (
     <button
-      data-home-guide-target="message-platform"
       className={cn(
         "grid w-full min-w-0 gap-3 text-left transition-colors hover:border-primary",
         retro
@@ -1264,8 +1263,8 @@ function StatsInfoCard({ snapshot, retro }: { snapshot: DesktopSnapshot; retro: 
 
 function QuickActionsCard({ onOpenQuickActions, retro }: { onOpenQuickActions: () => void; retro: boolean }): React.JSX.Element {
   return (
-    <section className={cn(retro ? "retro-panel retro-panel-action min-h-[72px] p-0 pl-[88px] pr-4" : "rounded-lg border border-border bg-card p-3.5")}>
-      <div className={cn("flex items-center justify-between gap-3", retro && "min-h-[72px]")}>
+    <section className={cn("box-border h-full", retro ? "retro-panel retro-panel-action min-h-24 p-0 pl-[88px] pr-4" : "rounded-lg border border-border bg-card p-3.5")}>
+      <div className="flex h-full items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {!retro ? (
             <span className="grid size-8 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1845,10 +1844,12 @@ function ElasticMascot({
   onLongPress,
   onSecretTap,
   placement = "fixed",
+  className,
 }: {
   onLongPress: () => void;
   onSecretTap: () => void;
   placement?: "fixed" | "retro-column";
+  className?: string;
 }): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -2162,6 +2163,7 @@ function ElasticMascot({
       className={cn(
         "z-20 hidden h-28 w-32 overflow-hidden md:block",
         placement === "retro-column" ? "retro-mascot-frame relative self-start" : "fixed",
+        className,
       )}
       data-mascot-stage="true"
       onClick={onClick}
@@ -3188,6 +3190,7 @@ export function HomePanel({
     areaEntries: Array<HomeContentEntry & { content: React.ReactNode }>,
     area: HomeContentArea,
     index: number,
+    fillHeight = false,
   ): React.JSX.Element => {
     const effectiveWidth = entry.width ?? "full";
     const dragStyle = draggingHomeEntryId === entry.id && homeDragOffset
@@ -3199,6 +3202,7 @@ export function HomePanel({
     <div
       className={cn(
         "group/home-card relative min-w-0 transition-[opacity,transform,grid-column,max-width]",
+        fillHeight && "h-full",
         area === "main" && (effectiveWidth === "half" ? "md:col-span-1" : "md:col-span-2"),
         homeLayoutEditing && "rounded-md outline outline-1 outline-dashed outline-primary/35",
         draggingHomeEntryId === entry.id && "pointer-events-none z-50 opacity-80 shadow-2xl transition-none",
@@ -3325,8 +3329,8 @@ export function HomePanel({
           </span>
         </button>
       ) : null}
-      <div className="relative">
-        <div className={cn(homeLayoutEditing && "pointer-events-none select-none blur-[1.5px] opacity-70 transition-[filter,opacity]")}>
+      <div className={cn("relative", fillHeight && "h-full")}>
+        <div className={cn(fillHeight && "h-full", homeLayoutEditing && "pointer-events-none select-none blur-[1.5px] opacity-70 transition-[filter,opacity]")}>
           {entry.content}
         </div>
         {homeLayoutEditing ? (
@@ -3409,45 +3413,88 @@ export function HomePanel({
               className={cn("grid min-w-0 content-start", useRetroHome ? "gap-4" : "gap-3")}
               data-home-drop-area="side"
             >
-              {sideHomeContentCards.map((entry, index) => renderHomeEditableCard(entry, sideHomeContentCards, "side", index))}
-              {useRetroHome ? (
-                <div className="group/home-edit relative w-fit overflow-visible pr-30">
+              {sideHomeContentCards.map((entry, index) => {
+                if (useRetroHome && entry.type === "quick-actions") {
+                  return (
+                    <div className="grid min-h-24 grid-cols-[minmax(0,1fr)_104px] items-stretch gap-4" key={`quick-actions-mascot-${entry.id}`}>
+                      {renderHomeEditableCard(entry, sideHomeContentCards, "side", index, true)}
+                      <div className="group/home-edit relative h-24 w-[104px] overflow-visible">
+                        <ElasticMascot
+                          className="!h-24 !w-[104px]"
+                          onLongPress={onEnterFloatingMode}
+                          onSecretTap={handleMascotSecretTap}
+                          placement="retro-column"
+                        />
+                        <div
+                          className={cn(
+                            "absolute left-1/2 top-full z-30 mt-1 flex -translate-x-1/2 -translate-y-1 items-center gap-1 opacity-0 transition-[opacity,transform] duration-150",
+                            homeLayoutEditing
+                              ? "pointer-events-auto translate-y-0 opacity-100"
+                              : "pointer-events-none group-hover/home-edit:pointer-events-auto group-hover/home-edit:translate-y-0 group-hover/home-edit:opacity-100",
+                          )}
+                        >
+                          <Button
+                            aria-label={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                            className="size-8 shrink-0 rounded-sm border border-border bg-card p-0 text-primary shadow-sm hover:bg-accent hover:text-primary [&_svg]:!size-4"
+                            onClick={() => setHomeLayoutEditing((current) => !current)}
+                            size="icon"
+                            title={homeLayoutEditing ? "完成首页调整" : "调整首页"}
+                            variant="secondary"
+                          >
+                            {homeLayoutEditing ? <SharpSaveIcon /> : <Settings />}
+                          </Button>
+                          <Button
+                            aria-label="恢复默认首页布局"
+                            className="size-8 shrink-0 rounded-sm border border-border bg-card p-0 text-muted-foreground shadow-sm hover:bg-accent hover:text-primary [&_svg]:!size-4"
+                            onClick={resetHomeContentLayoutToDefault}
+                            size="icon"
+                            title="恢复默认首页布局"
+                            variant="secondary"
+                          >
+                            <RefreshCw />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                return renderHomeEditableCard(entry, sideHomeContentCards, "side", index);
+              })}
+              {useRetroHome && !sideHomeContentCards.some((entry) => entry.type === "quick-actions") ? (
+                <div className="group/home-edit relative w-fit overflow-visible">
                   <ElasticMascot
                     onLongPress={onEnterFloatingMode}
                     onSecretTap={handleMascotSecretTap}
                     placement="retro-column"
                   />
-                  <div className="absolute left-full top-0 h-full w-40" />
                   <div
                     className={cn(
-                      "absolute right-0 top-1/2 z-30 flex -translate-y-1/2 translate-x-full items-center gap-1 opacity-0 transition-[opacity,transform] duration-150",
+                      "absolute left-1/2 top-full z-30 mt-1 flex -translate-x-1/2 -translate-y-1 items-center gap-1 opacity-0 transition-[opacity,transform] duration-150",
                       homeLayoutEditing
-                        ? "pointer-events-auto translate-x-[calc(100%-4rem)] opacity-100"
-                        : "pointer-events-none group-hover/home-edit:pointer-events-auto group-hover/home-edit:translate-x-[calc(100%+0.75rem)] group-hover/home-edit:opacity-100",
+                        ? "pointer-events-auto translate-y-0 opacity-100"
+                        : "pointer-events-none group-hover/home-edit:pointer-events-auto group-hover/home-edit:translate-y-0 group-hover/home-edit:opacity-100",
                     )}
                   >
                     <Button
                       aria-label={homeLayoutEditing ? "完成首页调整" : "调整首页"}
-                      className="size-20 shrink-0 !border-0 !bg-transparent text-primary !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-12"
+                      className="size-8 shrink-0 rounded-sm border border-border bg-card p-0 text-primary shadow-sm hover:bg-accent hover:text-primary [&_svg]:!size-4"
                       onClick={() => setHomeLayoutEditing((current) => !current)}
                       size="icon"
                       title={homeLayoutEditing ? "完成首页调整" : "调整首页"}
-                      variant="ghost"
+                      variant="secondary"
                     >
-                      {homeLayoutEditing ? <SharpSaveIcon /> : <SolidEditLayoutIcon />}
+                      {homeLayoutEditing ? <SharpSaveIcon /> : <Settings />}
                     </Button>
-                    {homeLayoutEditing ? (
-                      <Button
-                        aria-label="恢复默认首页布局"
-                        className="size-20 shrink-0 !border-0 !bg-transparent text-muted-foreground !shadow-none outline-none ring-0 hover:!bg-transparent hover:text-primary active:!bg-transparent [&_svg]:!size-12"
-                        onClick={resetHomeContentLayoutToDefault}
-                        size="icon"
-                        title="恢复默认首页布局"
-                        variant="ghost"
-                      >
-                        <RefreshCw className="!size-12" />
-                      </Button>
-                    ) : null}
+                    <Button
+                      aria-label="恢复默认首页布局"
+                      className="size-8 shrink-0 rounded-sm border border-border bg-card p-0 text-muted-foreground shadow-sm hover:bg-accent hover:text-primary [&_svg]:!size-4"
+                      onClick={resetHomeContentLayoutToDefault}
+                      size="icon"
+                      title="恢复默认首页布局"
+                      variant="secondary"
+                    >
+                      <RefreshCw />
+                    </Button>
                   </div>
                 </div>
               ) : null}

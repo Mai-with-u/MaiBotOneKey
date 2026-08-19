@@ -113,9 +113,6 @@ export function configureRuntimePaths(): RuntimePaths {
     snowlumaRoot: defaults.snowluma,
     bundledModulesRoot,
     runtimeRoot: join(payloadRoot, "runtime"),
-    opencodePluginInstructionsPath: app.isPackaged
-      ? join(payloadRoot, "runtime", "opencode", "plugin_code.md")
-      : join(installRoot, "resources", "opencode", "plugin_code.md"),
     pythonEnvRoot: join(defaultResourceRoot, "python-env"),
     pluginBuilderRoot: join(userDataRoot, "plugin-builder", "plugins"),
     logsRoot: join(userDataRoot, "logs"),

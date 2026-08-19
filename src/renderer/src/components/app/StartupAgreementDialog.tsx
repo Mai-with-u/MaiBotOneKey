@@ -1,4 +1,4 @@
-import { BookOpenCheck, Loader2, Power, ShieldCheck } from "lucide-react";
+import { Loader2, Power, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { DesktopSnapshot } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
@@ -111,7 +111,6 @@ export function StartupAgreementDialog({
       >
         <DialogHeader
           description="首次启动前需要阅读并同意 MaiBot 的协议文件，下拉以阅读。"
-          icon={<BookOpenCheck className="size-4" />}
           title="MaiBot 协议确认"
           tone="primary"
         />

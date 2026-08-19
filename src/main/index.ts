@@ -31,7 +31,6 @@ import { LogStore } from "./services/log-store";
 import { LauncherUiSettingsManager } from "./services/launcher-ui-settings-manager";
 import { ModuleUpdater } from "./services/module-updater";
 import { NetworkProxyManager } from "./services/network-proxy-manager";
-import { OpenCodeSettingsManager } from "./services/opencode-settings-manager";
 import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
 import { RemoteSourceManager } from "./services/remote-source-manager";
@@ -53,7 +52,6 @@ const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
 const networkProxyManager = new NetworkProxyManager(runtimePaths);
 const launcherUiSettingsManager = new LauncherUiSettingsManager(runtimePaths);
-const openCodeSettingsManager = new OpenCodeSettingsManager(runtimePaths);
 const sourceSettingsManager = new SourceSettingsManager(runtimePaths);
 const moduleUpdater = new ModuleUpdater(
   runtimePaths,
@@ -327,8 +325,8 @@ function broadcastWindowState(window: BrowserWindow): void {
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     title: "MaiBot OneKey",
-    width: 1180,
-    height: 760,
+    width: 1100,
+    height: 720,
     minWidth: 1000,
     minHeight: 680,
     resizable: false,
@@ -534,7 +532,6 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       remoteSourceManager,
       networkProxyManager,
       launcherUiSettingsManager,
-      openCodeSettingsManager,
       pythonDependencyManager,
       sourceSettingsManager,
       resourceLocationManager,

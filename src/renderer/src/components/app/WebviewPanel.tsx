@@ -20,6 +20,8 @@ interface WebviewPanelProps {
   toolbarPlacement?: "internal" | "external";
   toolbarTarget?: HTMLElement | null;
   showExternalToolbarMetadata?: boolean;
+  /** After authentication lands on the WebUI home page, continue to this URL. */
+  navigationTargetUrl?: string;
   onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
 }
 
@@ -77,6 +79,7 @@ export function WebviewPanel({
   toolbarPlacement = "internal",
   toolbarTarget = null,
   showExternalToolbarMetadata = true,
+  navigationTargetUrl,
   onWebuiIdentity,
 }: WebviewPanelProps): React.JSX.Element {
   const webviewRef = useRef<WebviewElement | null>(null);
@@ -84,6 +87,7 @@ export function WebviewPanel({
   const failedRef = useRef(false);
   const hasRenderedPageRef = useRef(false);
   const reloadTriggerRef = useRef<WebviewPanelProps["reloadTrigger"]>(reloadTrigger);
+  const navigationTargetAttemptedRef = useRef(false);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [hasRenderedPage, setHasRenderedPage] = useState(false);
   const [currentUrl, setCurrentUrl] = useState(url);
@@ -137,7 +141,9 @@ export function WebviewPanel({
     const webview = webviewRef.current;
     if (domReadyRef.current && webview?.loadURL) {
       try {
-        const nextUrl = withCacheBust(url, Date.now());
+        // A dedicated embedded panel should refresh its actual destination,
+        // not replay the one-time token authentication entry page.
+        const nextUrl = withCacheBust(navigationTargetUrl ?? url, Date.now());
         const navigation = webview.loadURL(nextUrl);
         if (navigation && typeof navigation.catch === "function") {
           void navigation.catch(handleLoadUrlFailure);
@@ -157,7 +163,7 @@ export function WebviewPanel({
     }
 
     remountWebview();
-  }, [clearWebviewCache, handleLoadUrlFailure, remountWebview, url]);
+  }, [clearWebviewCache, handleLoadUrlFailure, navigationTargetUrl, remountWebview, url]);
 
   const openExternal = useCallback(() => {
     externalOpen(currentUrl);
@@ -184,10 +190,11 @@ export function WebviewPanel({
     domReadyRef.current = false;
     failedRef.current = false;
     hasRenderedPageRef.current = false;
+    navigationTargetAttemptedRef.current = false;
     setHasRenderedPage(false);
     setLoadState("loading");
     setCurrentUrl(url);
-  }, [url, reloadKey, webviewUrl]);
+  }, [navigationTargetUrl, url, reloadKey, webviewUrl]);
 
   // Wire webview events.
   useLayoutEffect(() => {
@@ -203,6 +210,38 @@ export function WebviewPanel({
       syncCurrentUrl();
       setLoadState(hasRenderedPageRef.current ? "ready" : "loading");
     };
+    const continueToNavigationTarget = (candidateUrl?: string): boolean => {
+      if (
+        !navigationTargetUrl ||
+        !isDisplayableUrl(candidateUrl) ||
+        navigationTargetAttemptedRef.current
+      ) {
+        return false;
+      }
+
+      try {
+        const current = new URL(candidateUrl);
+        const target = new URL(navigationTargetUrl);
+        const landedOnHome = current.origin === target.origin && current.pathname === "/";
+        const targetIsDifferent =
+          current.pathname !== target.pathname ||
+          current.search !== target.search ||
+          current.hash !== target.hash;
+        if (!landedOnHome || !targetIsDifferent) {
+          return false;
+        }
+
+        navigationTargetAttemptedRef.current = true;
+        setLoadState("loading");
+        const navigation = webview.loadURL?.(navigationTargetUrl);
+        if (navigation && typeof navigation.catch === "function") {
+          void navigation.catch(handleLoadUrlFailure);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    };
     const handleReady = (event: Event): void => {
       // Chromium also fires dom-ready / did-finish-load for its built-in
       // error page; ignore those so the overlay stays visible.
@@ -211,6 +250,10 @@ export function WebviewPanel({
       }
       if (event.type === "dom-ready") {
         domReadyRef.current = true;
+      }
+      const liveUrl = readLiveWebviewUrl();
+      if (continueToNavigationTarget(liveUrl)) {
+        return;
       }
       syncCurrentUrl();
       hasRenderedPageRef.current = true;
@@ -266,6 +309,12 @@ export function WebviewPanel({
       if (navigationEvent.isMainFrame === false) {
         return;
       }
+      // TanStack Router changes /auth to / without loading a new document, so
+      // dom-ready/did-finish-load never fire for the home URL. Catch that SPA
+      // navigation here and continue to the dedicated embedded route.
+      if (continueToNavigationTarget(navigationEvent.url ?? readLiveWebviewUrl())) {
+        return;
+      }
       syncCurrentUrl(navigationEvent.url);
     };
 
@@ -290,7 +339,7 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [onWebuiIdentity, reloadKey, syncCurrentUrl, url]);
+  }, [handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, readLiveWebviewUrl, reloadKey, syncCurrentUrl, url]);
 
   const showLoading = !hasRenderedPage && (loadState === "idle" || loadState === "loading");
   const showWebview = hasRenderedPage || loadState === "ready" || loadState === "error";
