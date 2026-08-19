@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.4.21",
+  "version": "0.5.0",
   "description": "Electron shell for MaiBot OK.",
   "author": "![1779700604525](image/package/1779700604525.png)MotricSeven",
   "license": "GPL-3.0-only",
@@ -94,15 +94,12 @@
         "to": "runtime",
         "filter": [
           "**/*",
+          "!opencode/**",
           "!python/Doc/**",
           "!**/.git/**",
           "!**/__pycache__/**",
           "!**/*.pyc"
         ]
-      },
-      {
-        "from": "resources/opencode/plugin_code.md",
-        "to": "runtime/opencode/plugin_code.md"
       },
       {
         "from": "modules",
