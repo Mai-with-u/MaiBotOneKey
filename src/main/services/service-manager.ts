@@ -272,14 +272,6 @@ function createServiceEnv(extraEnv: Record<string, string> | undefined): NodeJS.
   return env;
 }
 
-function isDevRuntime(): boolean {
-  return (
-    process.env.NODE_ENV === "development" ||
-    Boolean(process.env.ELECTRON_RENDERER_URL) ||
-    Boolean(process.env.VITE_DEV_SERVER_URL)
-  );
-}
-
 function createServiceSpecificEnv(
   serviceId: ServiceId,
   startupSettings: ServiceStartupSettings,
@@ -519,10 +511,10 @@ class ServiceStartupSettingsStore {
     try {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredServiceStartupSettingsFile;
       return {
-        useLocalDashboard: raw.useLocalDashboard ?? isDevRuntime(),
+        useLocalDashboard: raw.useLocalDashboard ?? false,
       };
     } catch {
-      return { useLocalDashboard: isDevRuntime() };
+      return { useLocalDashboard: false };
     }
   }
 }
