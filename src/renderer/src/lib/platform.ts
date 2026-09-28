@@ -6,7 +6,7 @@ export type Platform = "darwin" | "win32" | "linux";
 let cachedPlatform: Platform | null = null;
 const subscribers = new Set<(p: Platform) => void>();
 
-function detectPlatformSync(): Platform {
+export function detectPlatformSync(): Platform {
   if (typeof navigator === "undefined") return "linux";
   const ua = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
   if (/Mac|iPhone|iPad|iPod/i.test(ua)) return "darwin";

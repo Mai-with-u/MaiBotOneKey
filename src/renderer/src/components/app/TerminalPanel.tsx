@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { detectPlatformSync } from "@/lib/platform";
 import { useShortcut } from "@/lib/use-shortcut";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +42,7 @@ const serviceTerminals: Array<{ serviceId: ServiceId; sessionId: string; title: 
 ];
 
 const USER_TERMINAL_SESSION_PREFIX = "user-terminal:";
+const IS_WINDOWS_PLATFORM = detectPlatformSync() === "win32";
 const MIN_VISIBLE_TERMINAL_WIDTH = 240;
 const MIN_VISIBLE_TERMINAL_HEIGHT = 120;
 const TERMINAL_LINK_PATTERN = /\b(?:https?:\/\/[^\s<>"'，。；）\])]+|logs\/[^\s<>"'，。；）\])]+\.(?:html|txt|json|log))/giu;
@@ -382,6 +384,7 @@ export function TerminalPanel({
         rescaleOverlappingGlyphs: true,
         scrollback: 100_000,
         tabStopWidth: 8,
+        ...(IS_WINDOWS_PLATFORM ? { windowsPty: { backend: "conpty" as const } } : {}),
         theme: XTERM_THEME,
       });
       const fitAddon = new FitAddon();
@@ -611,6 +614,20 @@ export function TerminalPanel({
         sessionsRef.current.set(snapshot.id, snapshot);
         upsertUserTerminal(snapshot);
         void loadSessionBuffer(snapshot.id);
+
+        // PTY 由主进程按固定尺寸创建（service-manager 的 SERVICE_TERMINAL_COLS/ROWS）。
+        // 此时 xterm 通常已按面板尺寸 fit 完毕，尺寸不会再变化，terminal.onResize
+        // 也就不会触发，PTY 会长期停留在主进程的默认尺寸上：子进程按错误宽度排版，
+        // 依赖行数的相对光标移动（tqdm/rich 等进度条重绘）会算错行，画面被覆盖。
+        // 快照是在 spawn 之后、子进程尚未输出时发出的，在这里同步一次真实尺寸最干净。
+        const snapshotInstance = terminalsRef.current.get(snapshot.id);
+        if (snapshotInstance?.opened) {
+          const { cols, rows } = snapshotInstance.terminal;
+          if (cols > 0 && rows > 0 && (snapshot.cols !== cols || snapshot.rows !== rows)) {
+            void bridge.pty.resize({ sessionId: snapshot.id, cols, rows }).catch(() => undefined);
+          }
+        }
+
         notifySessionsChanged();
       }),
       bridge.logs.onEntry((entry) => {
