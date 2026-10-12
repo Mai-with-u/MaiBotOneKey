@@ -114,7 +114,6 @@ export function configureRuntimePaths(): RuntimePaths {
     bundledModulesRoot,
     runtimeRoot: join(payloadRoot, "runtime"),
     pythonEnvRoot: join(defaultResourceRoot, "python-env"),
-    pluginBuilderRoot: join(userDataRoot, "plugin-builder", "plugins"),
     logsRoot: join(userDataRoot, "logs"),
   };
   applyRuntimeResourcePaths(paths, stored);

@@ -15,7 +15,6 @@ import type {
   PythonPackageVersionList,
   RuntimePaths,
 } from "../../shared/contracts";
-import { InitManager } from "./init-manager";
 import { SourceSettingsManager } from "./source-settings-manager";
 
 const PYTHON_SOURCE_FILE = "python-dependency-source.json";
@@ -379,7 +378,6 @@ export class PythonDependencyManager {
 
   constructor(
     private readonly paths: RuntimePaths,
-    private readonly initManager: InitManager,
     private readonly sourceSettingsManager?: SourceSettingsManager,
   ) {}
 

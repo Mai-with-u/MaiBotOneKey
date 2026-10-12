@@ -477,7 +477,7 @@ class TarGzipWriter {
   private readonly output: ReturnType<typeof createWriteStream>;
   private streamError: Error | null = null;
 
-  constructor(private readonly targetPath: string, private readonly signal?: AbortSignal) {
+  constructor(targetPath: string, private readonly signal?: AbortSignal) {
     this.output = createWriteStream(targetPath);
     this.output.on("error", (error) => {
       this.streamError = normalizeMaiBotBackupIoError(error);

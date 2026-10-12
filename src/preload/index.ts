@@ -31,17 +31,6 @@ import type {
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
   MaiBotInstalledPlugin,
-  MaiBotPluginBlueprintCreateRequest,
-  MaiBotPluginBlueprintCreateResult,
-  MaiBotPluginBlueprintParseResult,
-  MaiBotPluginBuilderBlueprintExportRequest,
-  MaiBotPluginBuilderBlueprintExportResult,
-  MaiBotPluginBuilderBlueprintImportResult,
-  MaiBotPluginBuilderLibraryDeleteResult,
-  MaiBotPluginBuilderLibraryListResult,
-  MaiBotPluginBuilderLibraryLoadResult,
-  MaiBotPluginBuilderLibrarySaveRequest,
-  MaiBotPluginBuilderLibrarySaveResult,
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
@@ -264,24 +253,6 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
     uninstall: (pluginId: string) =>
       ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
-    createFromBlueprint: (request: MaiBotPluginBlueprintCreateRequest) =>
-      ipcRenderer.invoke("plugins:createFromBlueprint", request) as Promise<MaiBotPluginBlueprintCreateResult>,
-    parseToBlueprint: (pluginId: string) =>
-      ipcRenderer.invoke("plugins:parseToBlueprint", pluginId) as Promise<MaiBotPluginBlueprintParseResult>,
-    listBuilderLibrary: () =>
-      ipcRenderer.invoke("plugins:listBuilderLibrary") as Promise<MaiBotPluginBuilderLibraryListResult>,
-    saveBuilderLibrary: (request: MaiBotPluginBuilderLibrarySaveRequest) =>
-      ipcRenderer.invoke("plugins:saveBuilderLibrary", request) as Promise<MaiBotPluginBuilderLibrarySaveResult>,
-    loadBuilderLibrary: (pluginId: string) =>
-      ipcRenderer.invoke("plugins:loadBuilderLibrary", pluginId) as Promise<MaiBotPluginBuilderLibraryLoadResult>,
-    deleteBuilderLibrary: (pluginId: string) =>
-      ipcRenderer.invoke("plugins:deleteBuilderLibrary", pluginId) as Promise<MaiBotPluginBuilderLibraryDeleteResult>,
-    exportBuilderBlueprint: (request: MaiBotPluginBuilderBlueprintExportRequest) =>
-      ipcRenderer.invoke("plugins:exportBuilderBlueprint", request) as Promise<MaiBotPluginBuilderBlueprintExportResult | null>,
-    importBuilderBlueprint: (sourcePath?: string) =>
-      ipcRenderer.invoke("plugins:importBuilderBlueprint", sourcePath) as Promise<MaiBotPluginBuilderBlueprintImportResult | null>,
-    openBuilderLibrary: () =>
-      ipcRenderer.invoke("plugins:openBuilderLibrary") as Promise<void>,
     getConfig: (pluginId: string, serviceUrl?: string) =>
       ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
     saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>

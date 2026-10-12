@@ -24,7 +24,6 @@ import type {
   LocalChatMessageEvent,
   ServiceDescriptor,
   ServiceId,
-  ServiceStatus,
   WindowState,
   WindowResizeEdge,
 } from "@shared/contracts";
@@ -55,14 +54,6 @@ import { StartupAgreementDialog } from "./StartupAgreementDialog";
 import { TerminalPanel } from "./TerminalPanel";
 import { Titlebar } from "./Titlebar";
 import { WebviewPanel } from "./WebviewPanel";
-
-const statusColor: Record<ServiceStatus, string> = {
-  stopped: "var(--retro-ink, var(--muted-foreground))",
-  starting: "var(--warning)",
-  running: "var(--retro-rust, var(--success))",
-  stopping: "var(--warning)",
-  error: "var(--destructive)",
-};
 
 function isServiceProcessActive(service: ServiceDescriptor): boolean {
   return service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping";
@@ -1926,7 +1917,6 @@ export function DesktopShell(): React.JSX.Element {
             >
               {snapshot ? (
                 <SettingsStatusPanel
-                  onOpenPluginConfig={openPluginConfig}
                   onSnapshot={setSnapshot}
                   snapshot={snapshot}
                 />

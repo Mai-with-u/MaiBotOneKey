@@ -1492,14 +1492,6 @@ export class ServiceManager extends EventEmitter {
     return definition;
   }
 
-  private getRuntimePath(key: RuntimePathKey): string {
-    const definition = this.getRuntimePathDefinition(key);
-    if (key === "python") {
-      return definition.defaultValue;
-    }
-    return this.runtimePathStore.get(key) ?? definition.defaultValue;
-  }
-
   private toRuntimePathConfig(definition: RuntimePathDefinition): RuntimePathConfig {
     if (definition.key === "python") {
       return {

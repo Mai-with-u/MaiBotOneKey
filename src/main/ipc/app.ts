@@ -61,18 +61,6 @@ import type {
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
   MaiBotInstalledPlugin,
-  MaiBotPluginBlueprint,
-  MaiBotPluginBlueprintCreateRequest,
-  MaiBotPluginBlueprintCreateResult,
-  MaiBotPluginBlueprintParseResult,
-  MaiBotPluginBuilderBlueprintExportRequest,
-  MaiBotPluginBuilderBlueprintExportResult,
-  MaiBotPluginBuilderBlueprintImportResult,
-  MaiBotPluginBuilderLibraryDeleteResult,
-  MaiBotPluginBuilderLibraryListResult,
-  MaiBotPluginBuilderLibraryLoadResult,
-  MaiBotPluginBuilderLibrarySaveRequest,
-  MaiBotPluginBuilderLibrarySaveResult,
   MaiBotPluginConfigSaveResult,
   MaiBotPluginConfigState,
   MaiBotPluginConfigValue,
@@ -128,11 +116,6 @@ import type {
   WindowResizeEdge,
   WindowState,
 } from "../../shared/contracts";
-import {
-  buildMaiBotPluginBlueprintFiles,
-  defaultMaiBotPluginFolderName,
-  validateMaiBotPluginBlueprint,
-} from "../../shared/plugin-blueprint";
 import { InitManager } from "../services/init-manager";
 import type { AppIconManager } from "../services/app-icon-manager";
 import type { CodexPetManager } from "../services/codex-pet-manager";
@@ -143,7 +126,6 @@ import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-clean
 import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { NetworkProxyManager } from "../services/network-proxy-manager";
-import { PluginBuilderLibrary } from "../services/plugin-builder-library";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { RemoteSourceManager } from "../services/remote-source-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
@@ -2632,9 +2614,6 @@ export function registerAppIpc({
     }
   };
 
-  const pluginBuilderLibrary = new PluginBuilderLibrary(
-    paths.pluginBuilderRoot,
-  );
   const localChatAdapter = new LocalChatAdapter(paths, initManager);
 
   const assertServicesStoppedForResourceMove = (): void => {
@@ -3716,233 +3695,6 @@ export function registerAppIpc({
       return result;
     },
   );
-
-  ipcMain.handle(
-    "plugins:createFromBlueprint",
-    async (
-      _event,
-      request: MaiBotPluginBlueprintCreateRequest,
-    ): Promise<MaiBotPluginBlueprintCreateResult> => {
-      if (!request?.blueprint) {
-        throw new Error("Plugin blueprint is required.");
-      }
-      const result = await maibotPluginClient.createFromBlueprint(
-        request.blueprint,
-        request.overwrite === true,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin generated from blueprint: ${result.pluginId}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:parseToBlueprint",
-    async (
-      _event,
-      pluginId: string,
-    ): Promise<MaiBotPluginBlueprintParseResult> => {
-      if (!pluginId) {
-        throw new Error("Plugin id is required.");
-      }
-      return maibotPluginClient.parseToBlueprint(pluginId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:listBuilderLibrary",
-    async (): Promise<MaiBotPluginBuilderLibraryListResult> => {
-      return pluginBuilderLibrary.list();
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:saveBuilderLibrary",
-    async (
-      _event,
-      request: MaiBotPluginBuilderLibrarySaveRequest,
-    ): Promise<MaiBotPluginBuilderLibrarySaveResult> => {
-      if (!request?.blueprint) {
-        throw new Error("Plugin blueprint is required.");
-      }
-      const result = await pluginBuilderLibrary.save(
-        request.blueprint,
-        request.overwrite !== false,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `Builder plugin saved: ${result.item.pluginId}`,
-      );
-      return result;
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:loadBuilderLibrary",
-    async (
-      _event,
-      pluginId: string,
-    ): Promise<MaiBotPluginBuilderLibraryLoadResult> => {
-      if (!pluginId) {
-        throw new Error("Plugin id is required.");
-      }
-      return pluginBuilderLibrary.load(pluginId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:deleteBuilderLibrary",
-    async (
-      _event,
-      pluginId: string,
-    ): Promise<MaiBotPluginBuilderLibraryDeleteResult> => {
-      if (!pluginId) {
-        throw new Error("Plugin id is required.");
-      }
-      const result = await pluginBuilderLibrary.delete(pluginId);
-      logStore.append(
-        "desktop",
-        "system",
-        `Builder plugin deleted: ${result.pluginId}`,
-      );
-      return result;
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:exportBuilderBlueprint",
-    async (
-      _event,
-      request: MaiBotPluginBuilderBlueprintExportRequest,
-    ): Promise<MaiBotPluginBuilderBlueprintExportResult | null> => {
-      if (!request?.blueprint) {
-        throw new Error("Plugin blueprint is required.");
-      }
-      const errors = validateMaiBotPluginBlueprint(request.blueprint);
-      if (errors.length > 0) {
-        throw new Error(errors.join("\n"));
-      }
-
-      const pluginId = request.blueprint.manifest.pluginId.trim();
-      const defaultPath = join(
-        pluginBuilderLibrary.getRoot(),
-        `${defaultMaiBotPluginFolderName(pluginId)}.maibot-plugin-blueprint.json`,
-      );
-      const mainWindow = getMainWindow();
-      const dialogOptions: Electron.SaveDialogOptions = {
-        title: "Export plugin blueprint",
-        defaultPath,
-        filters: [
-          {
-            name: "MaiBot 插件蓝图",
-            extensions: ["maibot-plugin-blueprint.json", "json"],
-          },
-          { name: "JSON", extensions: ["json"] },
-        ],
-      };
-      const result = mainWindow
-        ? await dialog.showSaveDialog(mainWindow, dialogOptions)
-        : await dialog.showSaveDialog(dialogOptions);
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-
-      const exportedAt = Date.now();
-      const payload = {
-        version: 1,
-        exportedAt,
-        blueprint: request.blueprint,
-        files: buildMaiBotPluginBlueprintFiles(request.blueprint),
-      };
-      await mkdir(dirname(result.filePath), { recursive: true });
-      await writeFile(
-        result.filePath,
-        `${JSON.stringify(payload, null, 2)}\n`,
-        "utf8",
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `Builder blueprint exported: ${pluginId} -> ${result.filePath}`,
-      );
-      return {
-        pluginId,
-        filePath: result.filePath,
-        exportedAt,
-      };
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:importBuilderBlueprint",
-    async (
-      _event,
-      sourcePath?: string,
-    ): Promise<MaiBotPluginBuilderBlueprintImportResult | null> => {
-      let nextSourcePath = sourcePath?.trim().replace(/^["']|["']$/gu, "");
-      if (!nextSourcePath) {
-        const mainWindow = getMainWindow();
-        const dialogOptions: Electron.OpenDialogOptions = {
-          title: "Import plugin blueprint",
-          properties: ["openFile"],
-          filters: [
-            { name: "MaiBot 插件蓝图", extensions: ["json"] },
-            { name: "全部文件", extensions: ["*"] },
-          ],
-        };
-        const result = mainWindow
-          ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-          : await dialog.showOpenDialog(dialogOptions);
-        if (result.canceled || result.filePaths.length === 0) {
-          return null;
-        }
-        nextSourcePath = result.filePaths[0];
-      }
-
-      const source = resolve(nextSourcePath);
-      const raw = JSON.parse(await readFile(source, "utf8")) as {
-        blueprint?: MaiBotPluginBlueprint;
-        version?: number;
-      } & Partial<MaiBotPluginBlueprint>;
-      const blueprint =
-        raw.blueprint ??
-        (raw.manifest && raw.components && raw.configFields
-          ? (raw as MaiBotPluginBlueprint)
-          : null);
-      if (!blueprint?.manifest?.pluginId) {
-        throw new Error("Not a valid MaiBot plugin blueprint file.");
-      }
-      const errors = validateMaiBotPluginBlueprint(blueprint);
-      if (errors.length > 0) {
-        throw new Error(errors.join("\n"));
-      }
-
-      const saveResult = await pluginBuilderLibrary.save(blueprint, true);
-      logStore.append(
-        "desktop",
-        "system",
-        `Builder blueprint imported: ${source} -> ${saveResult.item.pluginId}`,
-      );
-      return {
-        item: saveResult.item,
-        blueprint,
-        files: saveResult.files,
-        sourcePath: source,
-        overwritten: saveResult.overwritten,
-        importedAt: saveResult.savedAt,
-      };
-    },
-  );
-
-  ipcMain.handle("plugins:openBuilderLibrary", async (): Promise<void> => {
-    await mkdir(pluginBuilderLibrary.getRoot(), { recursive: true });
-    await shell.openPath(pluginBuilderLibrary.getRoot());
-  });
 
   ipcMain.handle(
     "plugins:getConfig",

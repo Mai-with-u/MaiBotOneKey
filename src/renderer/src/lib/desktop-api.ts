@@ -27,7 +27,6 @@ const fallbackSnapshot: DesktopSnapshot = {
     bundledModulesRoot: "开发预览/modules",
     runtimeRoot: "开发预览/runtime",
     pythonEnvRoot: "开发预览/python-env",
-    pluginBuilderRoot: "开发预览/plugin-builder/plugins",
     logsRoot: "开发预览/logs",
   },
   services: [

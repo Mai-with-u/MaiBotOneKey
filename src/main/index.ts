@@ -11,7 +11,7 @@ import {
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AppIconId, RuntimePaths } from "../shared/contracts";
+import type { AppIconId } from "../shared/contracts";
 import { registerAppIpc } from "./ipc/app";
 import { registerPtyIpc } from "./ipc/pty";
 import { PtySessionManager } from "./pty/pty-session-manager";
@@ -61,7 +61,6 @@ const moduleUpdater = new ModuleUpdater(
 const remoteSourceManager = new RemoteSourceManager({ sourceSettingsManager });
 const pythonDependencyManager = new PythonDependencyManager(
   runtimePaths,
-  initManager,
   sourceSettingsManager,
 );
 const ptySessionManager = new PtySessionManager();

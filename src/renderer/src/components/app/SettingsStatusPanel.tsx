@@ -5,7 +5,6 @@ import {
   CircleAlert,
   ClipboardCheck,
   Code2,
-  Database,
   Download,
   FolderOpen,
   GripVertical,
@@ -93,7 +92,6 @@ import { settingsLogMessage, settingsLogs } from "@/lib/settings-logs";
 interface SettingsStatusPanelProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
-  onOpenPluginConfig: (pluginId: string) => void;
 }
 
 const statusText: Record<ServiceStatus, string> = {
@@ -413,19 +411,6 @@ function formatTime(timestamp?: number): string {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  }).format(timestamp);
-}
-
-function formatDateTime(timestamp?: number): string {
-  if (!timestamp) {
-    return "未记录";
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
   }).format(timestamp);
 }
 
@@ -932,7 +917,6 @@ function LogLine({ entry }: { entry: LogEntry }): React.JSX.Element {
 
 export function SettingsStatusPanel({
   snapshot,
-  onOpenPluginConfig,
   onSnapshot,
 }: SettingsStatusPanelProps): React.JSX.Element {
   const theme = useTheme();
