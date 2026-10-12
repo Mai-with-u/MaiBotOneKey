@@ -1,11 +1,10 @@
+import { applyRuntimeResourcePaths, LEGACY_RESOURCE_LOCATION_FILE, RESOURCE_PATHS_FILE } from "./runtime-resource-paths";
+export { applyRuntimeResourcePaths, LEGACY_RESOURCE_LOCATION_FILE, RESOURCE_PATHS_FILE } from "./runtime-resource-paths";
 import { app } from "electron";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { RuntimePaths, RuntimeResourcePathKey } from "../../shared/contracts";
-
-export const RESOURCE_PATHS_FILE = "resource-paths.json";
-export const LEGACY_RESOURCE_LOCATION_FILE = "resource-location.json";
 
 type RuntimeResourcePathMap = Record<RuntimeResourcePathKey, string>;
 
@@ -71,20 +70,6 @@ function readStoredResourcePaths(userDataRoot: string): Partial<RuntimeResourceP
   } catch {
     return {};
   }
-}
-
-export function applyRuntimeResourcePaths(paths: RuntimePaths, updates: Partial<RuntimeResourcePathMap>): void {
-  if (updates.maibot) {
-    paths.maibotRoot = updates.maibot;
-  }
-  if (updates.napcat) {
-    paths.napcatRoot = updates.napcat;
-  }
-  if (updates.snowluma) {
-    paths.snowlumaRoot = updates.snowluma;
-  }
-  paths.resourceRoot = paths.defaultResourceRoot;
-  paths.modulesRoot = join(paths.defaultResourceRoot, "modules");
 }
 
 export function configureRuntimePaths(): RuntimePaths {

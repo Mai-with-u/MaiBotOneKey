@@ -1,3 +1,4 @@
+import { useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
   CheckCircle2,
   FileCog,
@@ -5,7 +6,7 @@ import {
   FolderOpen,
   Loader2,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,7 +67,6 @@ function DetailRow({
 }
 
 export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
-  const [selectingMaiBotPath, setSelectingMaiBotPath] = useState(false);
   const [lastMaiBotPathChange, setLastMaiBotPathChange] =
     useState<RuntimeResourcePathChangeResult | null>(null);
   const [importingConfig, setImportingConfig] = useState<MaiBotConfigFileName | null>(null);
@@ -74,28 +74,9 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
     Partial<Record<MaiBotConfigFileName, MaiBotConfigImportResult>>
   >({});
 
-  const handleSelectMaiBotPath = async (): Promise<void> => {
-    if (!window.maibotDesktop?.resources) {
-      toast.error("当前环境不支持该操作");
-      return;
-    }
-    setSelectingMaiBotPath(true);
-    try {
-      const result = await window.maibotDesktop.resources.selectPath("maibot");
-      if (!result) {
-        toast.info("已取消选择");
-        return;
-      }
-      setLastMaiBotPathChange(result);
-      toast.success("MaiBot 路径已切换", { description: result.path });
-    } catch (error) {
-      toast.error("切换 MaiBot 路径失败", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setSelectingMaiBotPath(false);
-    }
-  };
+  const onPathChanged = useCallback(async (result: RuntimeResourcePathChangeResult) => { setLastMaiBotPathChange(result); }, []);
+  const resourceWorkflow = useResourcePathWorkflow(onPathChanged);
+  const selectingMaiBotPath = resourceWorkflow.busyKey !== null;
 
   const handleImportConfig = async (fileName: MaiBotConfigFileName): Promise<void> => {
     if (!window.maibotDesktop?.data) {
@@ -127,6 +108,7 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
           <h2 className="text-base font-semibold">快捷操作</h2>
         </div>
 
+        {resourceWorkflow.dialogs}
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
@@ -143,7 +125,7 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Button disabled={selectingMaiBotPath} onClick={handleSelectMaiBotPath} size="sm">
+              <Button disabled={selectingMaiBotPath} onClick={() => void resourceWorkflow.prepare("maibot", "existing")} size="sm">
                 {selectingMaiBotPath ? <Loader2 className="animate-spin" /> : <FolderOpen />}
                 选择 MaiBot 目录
               </Button>

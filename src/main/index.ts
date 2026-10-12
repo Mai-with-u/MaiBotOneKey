@@ -1,3 +1,4 @@
+import { RuntimeOperationLock } from "./services/runtime-operation-lock";
 import {
   app,
   BrowserWindow,
@@ -41,9 +42,15 @@ import { isWindowVisuallyMaximized } from "./window-state";
 
 const runtimePaths = configureRuntimePaths();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
+const runtimeOperationLock = new RuntimeOperationLock();
 const resourceLocationManager = new ResourceLocationManager(
   runtimePaths,
   app.isPackaged,
+  runtimeOperationLock,
+  () => {
+    const active = serviceManager.snapshot().filter((service) => service.managed || ["starting", "running", "stopping"].includes(service.status));
+    if (active.length) throw new Error(`请先停止所有服务，再操作组件目录：${active.map((service) => service.name).join("、")}`);
+  },
 );
 const resourceLock = instanceLock.acquired
   ? resourceLocationManager.acquireInitialLock()
@@ -71,6 +78,7 @@ const serviceManager = new ServiceManager(
   logStore,
   ptySessionManager,
   pythonDependencyManager,
+  runtimeOperationLock,
 );
 const appIconManager = new AppIconManager(runtimePaths, app.isPackaged);
 const codexPetManager = new CodexPetManager();
@@ -430,6 +438,7 @@ function requestQuit(): void {
   );
   void (async () => {
     try {
+      await resourceLocationManager.finishBeforeQuit();
       await serviceManager.shutdownAll();
     } catch (error: unknown) {
       logStore.append(

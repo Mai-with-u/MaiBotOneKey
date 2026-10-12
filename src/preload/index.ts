@@ -76,6 +76,9 @@ import type {
   RuntimePathUpdate,
   RuntimeResourcePathChangeResult,
   RuntimeResourcePathKey,
+  ResourcePathMode,
+  ResourcePathPlan,
+  ResourcePathProgress,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -330,14 +333,12 @@ const desktopBridge: DesktopBridge = {
       onIpc("services:snapshot", callback),
   },
   resources: {
-    migratePath: (key: RuntimeResourcePathKey) =>
-      ipcRenderer.invoke("resources:migratePath", key) as Promise<RuntimeResourcePathChangeResult | null>,
-    selectPath: (key: RuntimeResourcePathKey) =>
-      ipcRenderer.invoke("resources:selectPath", key) as Promise<RuntimeResourcePathChangeResult | null>,
-    savePath: (key: RuntimeResourcePathKey, path: string) =>
-      ipcRenderer.invoke("resources:savePath", key, path) as Promise<RuntimeResourcePathChangeResult>,
-    resetPath: (key: RuntimeResourcePathKey) =>
-      ipcRenderer.invoke("resources:resetPath", key) as Promise<RuntimeResourcePathChangeResult>,
+    choosePath: (key: RuntimeResourcePathKey, mode: ResourcePathMode) => ipcRenderer.invoke("resources:choosePath", key, mode) as Promise<string | null>,
+    inspectPath: (key: RuntimeResourcePathKey, path: string, mode: ResourcePathMode) => ipcRenderer.invoke("resources:inspectPath", key, path, mode) as Promise<ResourcePathPlan>,
+    applyPath: (plan: ResourcePathPlan) => ipcRenderer.invoke("resources:applyPath", plan) as Promise<RuntimeResourcePathChangeResult>,
+    cancelOperation: (operationId: string) => ipcRenderer.invoke("resources:cancelOperation", operationId) as Promise<boolean>,
+    getProgress: () => ipcRenderer.invoke("resources:getProgress") as Promise<ResourcePathProgress | null>,
+    onProgress: (callback: (progress: ResourcePathProgress) => void) => onIpc("resources:progress", callback),
   },
   logs: {
     list: () => ipcRenderer.invoke("logs:list") as Promise<LogEntry[]>,

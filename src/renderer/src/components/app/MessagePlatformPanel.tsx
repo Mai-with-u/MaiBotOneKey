@@ -1239,7 +1239,7 @@ export function MessagePlatformPanel({
   const currentQqWebuiUrl = qqWebuiUrl(napcat?.url, qqBackend, qqWebuiPort);
   const messagePlatformConfigured =
     snapshot.initState.messagePlatformConfigured;
-  const qqBackendBusy =
+  const qqBackendBusy = Boolean(snapshot.runtimeOperation) ||
     napcat?.status === "starting" || napcat?.status === "running" || napcat?.status === "stopping" || Boolean(napcat?.managed);
   const maibotUpdateBlocked =
     maibot?.managed || maibot?.status === "starting" || maibot?.status === "running" || maibot?.status === "stopping";
@@ -2054,7 +2054,7 @@ export function MessagePlatformPanel({
               {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
               保存协议端
             </Button>
-            {qqBackendBusy ? <p className="w-full text-xs text-muted-foreground">请先停止当前 QQ 协议端，再切换。</p> : null}
+            {qqBackendBusy ? <p className="w-full text-xs text-muted-foreground">{snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请稍候。` : "请先停止当前 QQ 协议端，再切换。"}</p> : null}
             {error && !messagePlatformDialogOpen ? <p className="w-full text-xs text-destructive">{error}</p> : null}
           </section>
           <div className="mt-4 flex justify-end">

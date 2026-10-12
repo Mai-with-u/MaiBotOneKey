@@ -2,6 +2,7 @@ import type { DesktopSnapshot } from "@shared/contracts";
 
 export function createPreviewSnapshot(): DesktopSnapshot {
   return {
+  runtimeOperation: null,
   appVersion: "0.1.0",
   appLatestTag: undefined,
   appLatestSource: undefined,

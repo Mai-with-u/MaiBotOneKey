@@ -111,12 +111,38 @@ export interface RuntimeResourcePathConfig {
   customized: boolean;
 }
 
+export type ResourcePathMode = "existing" | "copy";
+export interface ResourcePathPlan {
+  key: RuntimeResourcePathKey;
+  mode: ResourcePathMode;
+  sourcePath: string;
+  targetPath: string;
+  fileCount: number;
+  totalBytes: number;
+  availableBytes?: number;
+  unchanged: boolean;
+  sourceFingerprint?: string;
+}
+export interface ResourcePathProgress {
+  operationId: string;
+  key: RuntimeResourcePathKey;
+  stage: "checking" | "copying" | "committing" | "rolling-back" | "completed" | "cancelled" | "failed";
+  copiedFiles: number;
+  copiedBytes: number;
+  totalFiles: number;
+  totalBytes: number;
+  currentFile?: string;
+  error?: string;
+}
+
 export interface RuntimeResourcePathChangeResult {
   key: RuntimeResourcePathKey;
   previousPath: string;
   path: string;
   defaultPath: string;
   copiedEntries: string[];
+  copiedFiles: number;
+  copiedBytes: number;
   changedAt: number;
 }
 
@@ -303,6 +329,7 @@ export interface ModuleRuntimeVersions {
 
 export interface DesktopSnapshot {
   paths: RuntimePaths;
+  runtimeOperation: string | null;
   services: ServiceDescriptor[];
   serviceCommands: ServiceCommandConfig[];
   runtimePathConfigs: RuntimePathConfig[];
@@ -1352,10 +1379,12 @@ export interface DesktopBridge {
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;
   };
   resources: {
-    migratePath: (key: RuntimeResourcePathKey) => Promise<RuntimeResourcePathChangeResult | null>;
-    selectPath: (key: RuntimeResourcePathKey) => Promise<RuntimeResourcePathChangeResult | null>;
-    savePath: (key: RuntimeResourcePathKey, path: string) => Promise<RuntimeResourcePathChangeResult>;
-    resetPath: (key: RuntimeResourcePathKey) => Promise<RuntimeResourcePathChangeResult>;
+    choosePath: (key: RuntimeResourcePathKey, mode: ResourcePathMode) => Promise<string | null>;
+    inspectPath: (key: RuntimeResourcePathKey, path: string, mode: ResourcePathMode) => Promise<ResourcePathPlan>;
+    applyPath: (plan: ResourcePathPlan) => Promise<RuntimeResourcePathChangeResult>;
+    cancelOperation: (operationId: string) => Promise<boolean>;
+    getProgress: () => Promise<ResourcePathProgress | null>;
+    onProgress: (callback: (progress: ResourcePathProgress) => void) => () => void;
   };
   logs: {
     list: () => Promise<LogEntry[]>;

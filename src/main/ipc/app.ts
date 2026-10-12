@@ -100,6 +100,9 @@ import type {
   RuntimePathUpdate,
   RuntimeResourcePathChangeResult,
   RuntimeResourcePathKey,
+  ResourcePathMode,
+  ResourcePathPlan,
+  ResourcePathProgress,
   ServiceCommandUpdate,
   ServiceDescriptor,
   ServiceId,
@@ -2470,10 +2473,15 @@ export function registerAppIpc({
     return update;
   };
 
+  const handleRuntimeMutation: typeof ipcMain.handle = (channel, listener) => {
+    ipcMain.handle(channel, (event, ...args) => resourceLocationManager.withRuntimeActivity(async () => listener(event, ...args)));
+  };
+
   const buildSnapshot = async (
     options: { refreshDependencies?: boolean } = {},
   ): Promise<DesktopSnapshot> => ({
     paths,
+    runtimeOperation: resourceLocationManager.getOperationLabel(),
     services: serviceManager.snapshot(),
     serviceCommands: await serviceManager.getCommandConfigs(),
     runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
@@ -2631,20 +2639,18 @@ export function registerAppIpc({
     }
   };
 
-  const applyResourceMigrationResult = async (
-    result: RuntimeResourcePathChangeResult,
-  ): Promise<RuntimeResourcePathChangeResult> => {
+  resourceLocationManager.setApplyHandler(async () => {
     initManager.clearDependencyCache();
     serviceManager.reloadRuntimePaths();
     maibotPluginClient = createMaibotPluginClient();
-    logStore.append(
-      "desktop",
-      "system",
-      `运行时资源路径已更新: ${result.previousPath} -> ${result.path}`,
-    );
-    await broadcastSnapshot();
-    return result;
+  });
+  const onResourceOperation = (): void => { void broadcastSnapshot().catch((error) => logStore.append("desktop", "system", `目录操作状态刷新失败: ${String(error)}`)); };
+  const onResourceProgress = (progress: ResourcePathProgress): void => {
+    const window = getMainWindow();
+    if (window && !window.isDestroyed()) window.webContents.send("resources:progress", progress);
   };
+  resourceLocationManager.on("operation-change", onResourceOperation);
+  resourceLocationManager.on("progress", onResourceProgress);
 
   const resetLauncherStores = async (): Promise<void> => {
     for (const service of serviceManager.snapshot()) {
@@ -2662,7 +2668,7 @@ export function registerAppIpc({
     appIconManager.reset();
     applyAppIcon();
 
-    for (const key of ["maibot", "napcat"] as const) {
+    for (const key of ["maibot", "napcat", "snowluma"] as const) {
       const config = resourceLocationManager
         .getPathConfigs()
         .find((item) => item.key === key);
@@ -2793,7 +2799,7 @@ export function registerAppIpc({
     return initManager.getState({ refreshDependencies: true });
   });
 
-  ipcMain.handle("init:syncQqConnections", async (): Promise<InitRepairResult> => {
+  handleRuntimeMutation("init:syncQqConnections", async (): Promise<InitRepairResult> => {
     await serviceManager.refresh();
     if (serviceManager.snapshot().some(isRuntimeBusy)) {
       throw new Error("请先停止 MaiBot Core 和 QQ 协议端，再同步连接配置。");
@@ -2804,7 +2810,7 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
+  handleRuntimeMutation("init:repair", async (): Promise<InitRepairResult> => {
     const result = await initManager.repair();
     logStore.append(
       "desktop",
@@ -2815,7 +2821,7 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "init:resetSnowLuma",
     async (): Promise<SnowLumaResetResult> => {
       await serviceManager.refresh();
@@ -2837,7 +2843,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "init:upgradeQqComponents",
     async (): Promise<QqComponentUpgradeResult> => {
       await serviceManager.refresh();
@@ -2865,7 +2871,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle("init:setQqProtocol", async (_event, protocol: "napcat" | "snowluma" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
+  handleRuntimeMutation("init:setQqProtocol", async (_event, protocol: "napcat" | "snowluma" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
     if (!["napcat", "snowluma", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
     await serviceManager.refresh();
     const backendService = serviceManager.snapshot().find((service) => service.id === "napcat");
@@ -2917,7 +2923,7 @@ export function registerAppIpc({
     };
   });
 
-  ipcMain.handle("init:saveQqBackendAccount", async (_event, backend: QqBackend, account: string) => {
+  handleRuntimeMutation("init:saveQqBackendAccount", async (_event, backend: QqBackend, account: string) => {
     await serviceManager.refresh();
     const service = serviceManager.snapshot().find((item) => item.id === "napcat");
     if (backend === initManager.getQqBackendSync() && service && isRuntimeBusy(service)) {
@@ -2927,12 +2933,12 @@ export function registerAppIpc({
     await broadcastSnapshot();
   });
 
-  ipcMain.handle("init:saveSnowLumaWebuiPassword", async (_event, password: string) => {
+  handleRuntimeMutation("init:saveSnowLumaWebuiPassword", async (_event, password: string) => {
     await serviceManager.saveSnowLumaWebuiPassword(password);
     await broadcastSnapshot();
   });
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "init:setQqBackend",
     async (_event, backend: QqBackend, options?: InitRepairOptions): Promise<InitState> => {
       if (backend !== "napcat" && backend !== "snowluma") {
@@ -2954,7 +2960,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "init:setQqAccount",
     async (_event, request: QqAccountSetupRequest): Promise<InitState> => {
       const currentInitState = await initManager.getState();
@@ -3019,7 +3025,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "modules:updateMaibot",
     async (
       event,
@@ -3098,7 +3104,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "modules:saveSourceConfig",
     async (_event, config: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
       const result = await moduleUpdater.saveSourceConfig(config);
@@ -3122,7 +3128,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "data:exportMaibotBackup",
     async (event): Promise<MaiBotBackupExportResult | null> => {
       const sendProgress = (progress: MaiBotBackupProgress): void => {
@@ -3195,7 +3201,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "data:importMaibotBackup",
     async (event): Promise<MaiBotBackupImportResult | null> => {
       const sendProgress = (progress: MaiBotBackupProgress): void => {
@@ -3267,7 +3273,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "data:importMaibotDb",
     async (): Promise<MaiBotDataImportResult | null> => {
       const maibot = serviceManager
@@ -3311,7 +3317,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "data:importMaibotConfig",
     async (
       _event,
@@ -3370,7 +3376,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "data:cleanupMaibotStorage",
     async (
       _event,
@@ -3399,7 +3405,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "data:resetMaibotData",
     async (): Promise<MaiBotDataResetResult> => {
       const maibot = serviceManager
@@ -3428,14 +3434,14 @@ export function registerAppIpc({
   ipcMain.handle(
     "launcher:resetSettings",
     async (): Promise<LauncherResetResult> => {
-      return resetLauncherSettings();
+      return resourceLocationManager.withPathOperation(() => resetLauncherSettings());
     },
   );
 
   ipcMain.handle(
     "launcher:resetAll",
     async (): Promise<LauncherResetResult> => {
-      return resetLauncherAll();
+      return resourceLocationManager.withPathOperation(() => resetLauncherAll());
     },
   );
 
@@ -3612,7 +3618,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "plugins:install",
     async (
       _event,
@@ -3636,7 +3642,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "plugins:update",
     async (
       _event,
@@ -3661,7 +3667,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "plugins:uninstall",
     async (_event, pluginId: string): Promise<MaiBotPluginOperationResult> => {
       if (!pluginId) {
@@ -3688,7 +3694,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "plugins:saveConfig",
     async (
       _event,
@@ -3711,7 +3717,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "plugins:saveConfigRaw",
     async (
       _event,
@@ -3734,7 +3740,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleRuntimeMutation(
     "plugins:resetConfig",
     async (
       _event,
@@ -4076,91 +4082,29 @@ export function registerAppIpc({
     },
   );
 
-  const chooseResourcePath = async (
-    title: string,
-  ): Promise<string | undefined> => {
-    const mainWindow = getMainWindow();
-    const dialogOptions: Electron.OpenDialogOptions = {
-      title,
-      properties: ["openDirectory", "createDirectory"],
-    };
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-    return result.canceled || result.filePaths.length === 0
-      ? undefined
-      : result.filePaths[0];
-  };
-
-  ipcMain.handle(
-    "resources:migratePath",
-    async (
-      _event,
-      key: RuntimeResourcePathKey,
-    ): Promise<RuntimeResourcePathChangeResult | null> => {
+  ipcMain.handle("resources:choosePath", async (_event, key: RuntimeResourcePathKey, mode: ResourcePathMode): Promise<string | null> => {
+    if (!["maibot", "napcat", "snowluma"].includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
+    return resourceLocationManager.withPathOperation(async () => {
       assertServicesStoppedForResourceMove();
-      const targetPath = await chooseResourcePath(
-        "Select migration target directory",
-      );
-      if (!targetPath) {
-        return null;
-      }
-
-      const migration = await resourceLocationManager.migratePath(
-        key,
-        targetPath,
-      );
-      return applyResourceMigrationResult(migration);
-    },
-  );
-
-  ipcMain.handle(
-    "resources:selectPath",
-    async (
-      _event,
-      key: RuntimeResourcePathKey,
-    ): Promise<RuntimeResourcePathChangeResult | null> => {
-      assertServicesStoppedForResourceMove();
-      const targetPath = await chooseResourcePath("Select existing directory");
-      if (!targetPath) {
-        return null;
-      }
-
-      const selection = await resourceLocationManager.selectPath(
-        key,
-        targetPath,
-      );
-      return applyResourceMigrationResult(selection);
-    },
-  );
-
-  ipcMain.handle(
-    "resources:savePath",
-    async (
-      _event,
-      key: RuntimeResourcePathKey,
-      targetPath: string,
-    ): Promise<RuntimeResourcePathChangeResult> => {
-      assertServicesStoppedForResourceMove();
-      const selection = await resourceLocationManager.selectPath(
-        key,
-        targetPath,
-      );
-      return applyResourceMigrationResult(selection);
-    },
-  );
-
-  ipcMain.handle(
-    "resources:resetPath",
-    async (
-      _event,
-      key: RuntimeResourcePathKey,
-    ): Promise<RuntimeResourcePathChangeResult> => {
-      assertServicesStoppedForResourceMove();
-      const migration = await resourceLocationManager.resetPath(key);
-      return applyResourceMigrationResult(migration);
-    },
-  );
+      const window = getMainWindow();
+      const label = resourceLocationManager.getPathConfigs().find((config) => config.key === key)!.label;
+      const options: Electron.OpenDialogOptions = {
+        title: mode === "copy" ? `${label}：选择空目录作为复制目标（保留原目录）` : `${label}：选择已有组件目录`,
+        properties: mode === "copy" ? ["openDirectory", "createDirectory"] : ["openDirectory"],
+      };
+      const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    });
+  });
+  ipcMain.handle("resources:inspectPath", (_event, key: RuntimeResourcePathKey, path: string, mode: ResourcePathMode): Promise<ResourcePathPlan> => resourceLocationManager.inspectPath(key, path, mode));
+  ipcMain.handle("resources:applyPath", async (_event, plan: ResourcePathPlan): Promise<RuntimeResourcePathChangeResult> => {
+    const result = await resourceLocationManager.applyPlan(plan);
+    logStore.append("desktop", "system", `组件目录已${plan.mode === "copy" ? "复制并切换" : "切换"}: ${result.previousPath} -> ${result.path}`);
+    await broadcastSnapshot().catch((error) => logStore.append("desktop", "system", `目录已切换，界面刷新失败: ${String(error)}`));
+    return result;
+  });
+  ipcMain.handle("resources:cancelOperation", (_event, operationId: string): boolean => resourceLocationManager.cancelOperation(operationId));
+  ipcMain.handle("resources:getProgress", (): ResourcePathProgress | null => resourceLocationManager.getProgress());
 
   ipcMain.handle("logs:list", (): LogEntry[] => logStore.list());
 
@@ -4308,6 +4252,8 @@ export function registerAppIpc({
   return {
     localChatAdapter,
     dispose: () => {
+      resourceLocationManager.off("operation-change", onResourceOperation);
+      resourceLocationManager.off("progress", onResourceProgress);
       localChatAdapter.dispose();
     },
   };

@@ -13,6 +13,7 @@ export function validateDesktopSnapshot(value: unknown): DesktopSnapshot {
     if (!Array.isArray(snapshot[key])) throw new Error(`桌面状态缺失或无效: ${key}`);
   }
   if (typeof snapshot.appVersion !== "string" || typeof snapshot.platform !== "string") throw new Error("桌面版本或平台信息缺失");
+  if (snapshot.runtimeOperation !== null && typeof snapshot.runtimeOperation !== "string") throw new Error("桌面接口版本不一致，请完全退出并重新打开启动器。");
   const init = snapshot.initState as Record<string, unknown>;
   const agreement = snapshot.startupAgreement as Record<string, unknown>;
   if (typeof init.isReady !== "boolean" || typeof init.messagePlatformConfigured !== "boolean" || !Array.isArray(init.checks)) throw new Error("初始化状态格式错误");

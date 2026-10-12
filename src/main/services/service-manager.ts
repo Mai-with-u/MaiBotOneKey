@@ -1,3 +1,4 @@
+import { RuntimeOperationLock } from "./runtime-operation-lock";
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -539,7 +540,7 @@ export class ServiceManager extends EventEmitter {
   private readonly startupSettingsStore: ServiceStartupSettingsStore;
   private readonly externalProcesses = new Map<ServiceId, ChildProcess>();
   private readonly logLineBuffers = new Map<ServiceId, string>();
-  private readonly snowLumaWebuiAuth: SnowLumaWebuiAuth;
+  private snowLumaWebuiAuth: SnowLumaWebuiAuth;
   private snowLumaPasswordSaveInProgress = false;
 
   constructor(
@@ -548,6 +549,7 @@ export class ServiceManager extends EventEmitter {
     private readonly logs: LogStore,
     private readonly pty: PtySessionManager,
     private readonly pythonDependencyManager?: PythonDependencyManager,
+    private readonly operationLock = new RuntimeOperationLock(),
   ) {
     super();
     this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(paths.snowlumaRoot, paths.userDataRoot);
@@ -587,6 +589,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async startAll(): Promise<ServiceDescriptor[]> {
+    this.operationLock.assertCanStart();
     if (this.requestMissingQqAccount()) return [];
     await this.initManager.assertAgreementsConfirmed();
     const serviceIds: ServiceId[] = this.initManager.getQqProtocolSync() === "official" ? ["maibot"] : ["napcat", "maibot"];
@@ -635,7 +638,11 @@ export class ServiceManager extends EventEmitter {
     return this.start(serviceId);
   }
 
-  async start(serviceId: ServiceId, resetRestartAttempts = true): Promise<ServiceDescriptor> {
+  start(serviceId: ServiceId, resetRestartAttempts = true): Promise<ServiceDescriptor> {
+    return this.operationLock.serviceStart(() => this.startUnlocked(serviceId, resetRestartAttempts));
+  }
+
+  private async startUnlocked(serviceId: ServiceId, resetRestartAttempts: boolean): Promise<ServiceDescriptor> {
     if (serviceId === "napcat" && this.snowLumaPasswordSaveInProgress) {
       throw new Error("正在保存 SnowLuma WebUI 密码，请稍后再启动 QQ 后端。");
     }
@@ -1091,6 +1098,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   reloadRuntimePaths(): void {
+    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(this.paths.snowlumaRoot, this.paths.userDataRoot);
     this.definitions = this.createDefinitions();
     this.emit("snapshot", this.snapshot());
   }

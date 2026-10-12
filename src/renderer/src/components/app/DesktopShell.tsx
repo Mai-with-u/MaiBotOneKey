@@ -1302,7 +1302,7 @@ export function DesktopShell(): React.JSX.Element {
     [showTerminalTab],
   );
   const primaryServiceActionTransitioning =
-    actionBusy !== null ||
+    actionBusy !== null || Boolean(snapshot?.runtimeOperation) ||
     services.some((service) => service.status === "starting" || service.status === "stopping");
   const hasActiveServiceProcess = services.some(isServiceProcessActive);
   const openMaiBotRoot = useCallback(() => {
@@ -1373,7 +1373,7 @@ export function DesktopShell(): React.JSX.Element {
     }
     startAll();
   }, [hasActiveServiceProcess, primaryServiceActionTransitioning, startAll, stopAll]);
-  const primaryServiceActionLabel = primaryServiceActionTransitioning
+  const primaryServiceActionLabel = snapshot?.runtimeOperation ? `正在${snapshot.runtimeOperation}` : primaryServiceActionTransitioning
     ? actionBusy?.includes(":stop") || actionBusy === "all:stop" || services.some((service) => service.status === "stopping")
       ? "正在停止服务"
       : "正在启动服务"

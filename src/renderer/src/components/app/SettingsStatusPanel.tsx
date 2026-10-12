@@ -1,3 +1,5 @@
+import { ResourcePathEditor } from "./ResourcePathEditor";
+import { RESOURCE_SCOPE_NOTE, useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
   AlertTriangle,
   ChevronDown,
@@ -14,7 +16,6 @@ import {
   Network,
   Palette,
   Plus,
-  RefreshCw,
   RotateCcw,
   Save,
   Settings,
@@ -39,8 +40,6 @@ import type {
   RuntimePathConfig,
   RuntimePathKey,
   RuntimePathUpdate,
-  RuntimeResourcePathConfig,
-  RuntimeResourcePathKey,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -675,87 +674,6 @@ function RuntimePathEditor({
   );
 }
 
-function RuntimeResourcePathEditor({
-  config,
-  busy,
-  blocked,
-  onOpenPath,
-  onMigrate,
-  onReset,
-  onSave,
-  onSelect,
-}: {
-  config: RuntimeResourcePathConfig;
-  busy: boolean;
-  blocked: boolean;
-  onOpenPath: (path: string) => void;
-  onMigrate: (key: RuntimeResourcePathKey) => void;
-  onReset: (key: RuntimeResourcePathKey) => void;
-  onSave: (key: RuntimeResourcePathKey, path: string) => void;
-  onSelect: (key: RuntimeResourcePathKey) => void;
-}): React.JSX.Element {
-  const [value, setValue] = useState(config.value);
-
-  useEffect(() => {
-    setValue(config.value);
-  }, [config.value]);
-
-  const trimmedValue = value.trim();
-  const dirty = trimmedValue !== config.value;
-
-  return (
-    <div className="grid gap-2">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">{config.label}</span>
-            <Badge variant={config.customized ? "warning" : "secondary"}>
-              {config.customized ? "自定义" : "默认"}
-            </Badge>
-          </div>
-        </div>
-        <Button aria-label={`打开 ${config.label}`} onClick={() => onOpenPath(trimmedValue || config.value)} size="icon" variant="ghost">
-          <FolderOpen />
-        </Button>
-      </div>
-      <Input
-        aria-label={`${config.label} 当前路径`}
-        className="h-8"
-        monospace
-        onChange={(event) => setValue(event.target.value)}
-        value={value}
-      />
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button disabled={busy || blocked} onClick={() => onSelect(config.key)} size="sm" variant="ghost">
-          {busy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
-          选择已有目录
-        </Button>
-        <Button
-          disabled={busy || blocked || !dirty || trimmedValue.length === 0}
-          onClick={() => onSave(config.key, trimmedValue)}
-          size="sm"
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <Save />}
-          保存路径
-        </Button>
-        <Button disabled={busy || blocked} onClick={() => onMigrate(config.key)} size="sm" variant="secondary">
-          {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          迁移到新目录
-        </Button>
-        <Button
-          disabled={busy || blocked || !config.customized}
-          onClick={() => onReset(config.key)}
-          size="sm"
-          variant="ghost"
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-          恢复默认
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function ServiceDetail({
   service,
   commandConfig,
@@ -987,7 +905,7 @@ export function SettingsStatusPanel({
   const [closePreference, setClosePreferenceState] = useState<ClosePreference>(() => getClosePreference());
   const environmentServicesContentId = useId();
   const recentLogEntries = snapshot.recentLogs ?? [];
-  const resourceMoveBlocked = services.some(
+  const resourceMoveBlocked = Boolean(snapshot.runtimeOperation) || services.some(
     (service) =>
       service.managed ||
       service.status === "starting" ||
@@ -1407,82 +1325,7 @@ export function SettingsStatusPanel({
     [appIconSettings.selectedIconId, onSnapshot, snapshot],
   );
 
-  const migrateRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
-    setBusy(`resource:migrate:${key}`);
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.resources) {
-        throw new Error("桌面桥未就绪，无法迁移资源路径");
-      }
-
-      const result = await window.maibotDesktop.resources.migratePath(key);
-      if (result) {
-        toast.success("资源路径已迁移");
-        await refreshSnapshot();
-      }
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot]);
-
-  const selectRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
-    setBusy(`resource:select:${key}`);
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.resources) {
-        throw new Error("桌面桥未就绪，无法选择资源路径");
-      }
-
-      const result = await window.maibotDesktop.resources.selectPath(key);
-      if (result) {
-        toast.success("资源路径已切换");
-        await refreshSnapshot();
-      }
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot]);
-
-  const saveRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey, path: string) => {
-    setBusy(`resource:save:${key}`);
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.resources) {
-        throw new Error("桌面桥未就绪，无法保存资源路径");
-      }
-
-      await window.maibotDesktop.resources.savePath(key, path);
-      toast.success("资源路径已保存");
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot]);
-
-  const resetRuntimeResourcePath = useCallback(async (key: RuntimeResourcePathKey) => {
-    setBusy(`resource:reset:${key}`);
-    setError(null);
-    try {
-      if (!window.maibotDesktop?.resources) {
-        throw new Error("桌面桥未就绪，无法恢复资源路径");
-      }
-
-      await window.maibotDesktop.resources.resetPath(key);
-      toast.success("资源路径已恢复默认");
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshSnapshot]);
-
+  const resourceWorkflow = useResourcePathWorkflow(refreshSnapshot);
 
   const environmentServicesPanel = (
     <>
@@ -2237,27 +2080,23 @@ export function SettingsStatusPanel({
                       <div className="min-w-0">
                         <p className="text-sm font-medium">实例管理</p>
                         <p className="text-xs text-muted-foreground">
-                          迁移会复制当前目录内容；选择已有目录只切换指向，不复制数据。
+                          使用已有目录只切换指向；复制迁移要求空目标目录，成功后保留原目录。
                         </p>
                       </div>
                     </div>
                     <Badge variant="secondary">唯一实例</Badge>
                   </div>
                   <div className="grid gap-2">
+                    <p className="rounded-md bg-muted p-3 text-xs leading-relaxed text-muted-foreground">{RESOURCE_SCOPE_NOTE}</p>
                     {editableRuntimeResourcePathConfigs.map((config) => (
                       <div className="settings-section grid gap-3 bg-card p-3" key={config.key}>
-                      <RuntimeResourcePathEditor
-                        blocked={
-                          resourceMoveBlocked ||
-                          (busy !== null && !(busy.startsWith("resource:") && busy.endsWith(`:${config.key}`)))
-                        }
-                        busy={busy?.startsWith(`resource:`) === true && busy.endsWith(`:${config.key}`)}
+                      <ResourcePathEditor
+                        blocked={resourceMoveBlocked || busy !== null || resourceWorkflow.busyKey !== null}
+                        busy={resourceWorkflow.busyKey === config.key}
                         config={config}
-                        onMigrate={migrateRuntimeResourcePath}
                         onOpenPath={openPath}
-                        onReset={resetRuntimeResourcePath}
-                        onSave={saveRuntimeResourcePath}
-                        onSelect={selectRuntimeResourcePath}
+                        onBrowse={resourceWorkflow.browse}
+                        onPrepare={resourceWorkflow.prepare}
                       />
                         {services.filter((service) => service.id === "maibot"
                           ? config.key === "maibot"
@@ -2277,7 +2116,7 @@ export function SettingsStatusPanel({
                   </div>
                   {resourceMoveBlocked ? (
                     <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      请先停止所有服务，再调整实例路径。
+                      {snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请完成或取消后再操作。` : "请先停止所有服务，再操作组件目录。"}
                     </div>
                   ) : null}
                 </div>
@@ -2546,6 +2385,7 @@ export function SettingsStatusPanel({
       </DialogFooter>
       </DialogContent>
     </Dialog>
+    {resourceWorkflow.dialogs}
     </>
   );
 }
