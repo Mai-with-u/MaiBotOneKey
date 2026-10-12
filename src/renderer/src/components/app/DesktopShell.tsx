@@ -1419,8 +1419,7 @@ export function DesktopShell(): React.JSX.Element {
 
   const selectTab = useCallback((value: string) => {
     if (value === "maibot") {
-      setMaibotWebviewPath("/");
-      setMaibotWebviewNavigationRequest((request) => request + 1);
+      // Returning to the tab must preserve the guest's current document and route.
       setActiveTab("maibot");
       return;
     }
