@@ -1,248 +1,29 @@
 import type { DesktopSnapshot } from "@shared/contracts";
+import { createPreviewSnapshot } from "./desktop-preview";
 
-const fallbackSnapshot: DesktopSnapshot = {
-  appVersion: "0.1.0",
-  appLatestTag: undefined,
-  appLatestSource: undefined,
-  moduleVersions: {},
-  platform:
-    typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
-      ? "darwin"
-      : typeof navigator !== "undefined" && /Win/i.test(navigator.platform)
-        ? "win32"
-        : "linux",
-  windowState: { isMaximized: false, isFullScreen: false, isFocused: true },
-  paths: {
-    installRoot: "开发预览",
-    userDataRoot: "开发预览",
-    defaultResourceRoot: "开发预览",
-    resourceRoot: "开发预览",
-    modulesRoot: "开发预览/modules",
-    defaultMaibotRoot: "开发预览/modules/MaiBot",
-    maibotRoot: "开发预览/modules/MaiBot",
-    defaultNapcatRoot: "开发预览/modules/napcat",
-    napcatRoot: "开发预览/modules/napcat",
-    defaultSnowlumaRoot: "开发预览/modules/SnowLuma",
-    snowlumaRoot: "开发预览/modules/SnowLuma",
-    bundledModulesRoot: "开发预览/modules",
-    runtimeRoot: "开发预览/runtime",
-    pythonEnvRoot: "开发预览/python-env",
-    logsRoot: "开发预览/logs",
-  },
-  services: [
-    {
-      id: "maibot",
-      name: "MaiBot Core",
-      port: 8001,
-      ports: [8001],
-      url: "http://127.0.0.1:8001",
-      status: "stopped",
-      health: "unknown",
-      managed: false,
-      desired: false,
-      detail: "等待接入 Electron 启动流程",
-    },
-    {
-      id: "napcat",
-      name: "NapCat",
-      port: 6099,
-      ports: [6099],
-      url: "http://127.0.0.1:6099/webui",
-      status: "stopped",
-      health: "unknown",
-      managed: false,
-      desired: false,
-      detail: "等待接入 Electron 启动流程",
-    },
-  ],
-  serviceCommands: [
-    {
-      serviceId: "maibot",
-      serviceName: "MaiBot Core",
-      cwd: "开发预览/modules/MaiBot",
-      commandLine: "python bot.py",
-      defaultCwd: "开发预览/modules/MaiBot",
-      defaultCommandLine: "python bot.py",
-      customized: false,
-    },
-    {
-      serviceId: "napcat",
-      serviceName: "NapCat",
-      cwd: "开发预览/modules/napcat",
-      commandLine: "NapCatWinBootMain.exe <QQ>",
-      defaultCwd: "开发预览/modules/napcat",
-      defaultCommandLine: "NapCatWinBootMain.exe <QQ>",
-      customized: false,
-    },
-  ],
-  runtimePathConfigs: [
-    {
-      key: "python",
-      label: "Python",
-      kind: "file",
-      value: "开发预览/runtime/python/python.exe",
-      defaultValue: "开发预览/runtime/python/python.exe",
-      customized: false,
-    },
-    {
-      key: "git",
-      label: "Git",
-      kind: "file",
-      value: "开发预览/runtime/git/bin/git.exe",
-      defaultValue: "开发预览/runtime/git/bin/git.exe",
-      customized: false,
-    },
-  ],
-  runtimeResourcePathConfigs: [
-    {
-      key: "maibot",
-      label: "MaiBot路径",
-      value: "开发预览/modules/MaiBot",
-      defaultValue: "开发预览/modules/MaiBot",
-      customized: false,
-    },
-    {
-      key: "napcat",
-      label: "NapCat路径",
-      value: "开发预览/modules/napcat",
-      defaultValue: "开发预览/modules/napcat",
-      customized: false,
-    },
-    {
-      key: "snowluma",
-      label: "SnowLuma路径",
-      value: "开发预览/modules/SnowLuma",
-      defaultValue: "开发预览/modules/SnowLuma",
-      customized: false,
-    },
-  ],
-  terminalSettings: {
-    useEmbeddedTerminal: true,
-    fontSize: 12,
-  },
-  serviceStartupSettings: {
-    useLocalDashboard: false,
-  },
-  launcherUiSettings: {
-    floatingMascotMode: "maibot",
-    topStartActionMode: "ask",
-  },
-  appIconSettings: {
-    selectedIconId: "sprout",
-    options: [
-      {
-        id: "soft",
-        label: "圆角头像",
-        description: "使用新的柔和圆角麦麦头像。",
-      },
-      {
-        id: "sprout",
-        label: "小芽头像",
-        description: "使用带小芽和圆滚滚脸型的麦麦头像。",
-      },
-      {
-        id: "bean",
-        label: "橙团小芽",
-        description: "使用更近景、更圆润的橙团小芽头像。",
-      },
-    ],
-  },
-  codexPetSettings: {
-    options: [],
-  },
-  networkProxySettings: {
-    enabled: false,
-    port: 7890,
-  },
-  initState: {
-    isReady: false,
-    qqBackend: "napcat",
-    messagePlatformConfigured: false,
-    checks: [
-      {
-        id: "preview",
-        label: "Electron bridge",
-        status: "warning",
-        detail: "当前处于浏览器预览模式",
-      },
-    ],
-  },
-  startupAgreement: {
-    isConfirmed: true,
-    documents: [],
-  },
-  recentLogs: [],
-};
-
-export function normalizeDesktopSnapshot(snapshot: Partial<DesktopSnapshot>): DesktopSnapshot {
-  return {
-    ...fallbackSnapshot,
-    ...snapshot,
-    paths: {
-      ...fallbackSnapshot.paths,
-      ...snapshot.paths,
-    },
-    windowState: {
-      ...fallbackSnapshot.windowState,
-      ...snapshot.windowState,
-    },
-    initState: {
-      ...fallbackSnapshot.initState,
-      ...snapshot.initState,
-      checks: snapshot.initState?.checks ?? fallbackSnapshot.initState.checks,
-    },
-    startupAgreement: snapshot.startupAgreement ?? fallbackSnapshot.startupAgreement,
-    services: snapshot.services ?? fallbackSnapshot.services,
-    serviceCommands: snapshot.serviceCommands ?? fallbackSnapshot.serviceCommands,
-    runtimePathConfigs: snapshot.runtimePathConfigs ?? fallbackSnapshot.runtimePathConfigs,
-    runtimeResourcePathConfigs: snapshot.runtimeResourcePathConfigs ?? fallbackSnapshot.runtimeResourcePathConfigs,
-    terminalSettings: snapshot.terminalSettings ?? fallbackSnapshot.terminalSettings,
-    serviceStartupSettings: snapshot.serviceStartupSettings ?? fallbackSnapshot.serviceStartupSettings,
-    launcherUiSettings: {
-      ...fallbackSnapshot.launcherUiSettings,
-      ...snapshot.launcherUiSettings,
-    },
-    appIconSettings: snapshot.appIconSettings ?? fallbackSnapshot.appIconSettings,
-    codexPetSettings: snapshot.codexPetSettings ?? fallbackSnapshot.codexPetSettings,
-    networkProxySettings: snapshot.networkProxySettings ?? fallbackSnapshot.networkProxySettings,
-    moduleVersions: {
-      ...fallbackSnapshot.moduleVersions,
-      ...snapshot.moduleVersions,
-    },
-    recentLogs: snapshot.recentLogs ?? fallbackSnapshot.recentLogs,
-  };
+export function validateDesktopSnapshot(value: unknown): DesktopSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("桌面状态格式错误");
+  const snapshot = value as Record<string, unknown>;
+  const records = ["paths", "windowState", "initState", "startupAgreement", "terminalSettings", "serviceStartupSettings", "launcherUiSettings", "appIconSettings", "codexPetSettings", "networkProxySettings", "moduleVersions"];
+  const arrays = ["services", "serviceCommands", "runtimePathConfigs", "runtimeResourcePathConfigs", "recentLogs"];
+  for (const key of records) {
+    if (!snapshot[key] || typeof snapshot[key] !== "object" || Array.isArray(snapshot[key])) throw new Error(`桌面状态缺失或无效: ${key}`);
+  }
+  for (const key of arrays) {
+    if (!Array.isArray(snapshot[key])) throw new Error(`桌面状态缺失或无效: ${key}`);
+  }
+  if (typeof snapshot.appVersion !== "string" || typeof snapshot.platform !== "string") throw new Error("桌面版本或平台信息缺失");
+  const init = snapshot.initState as Record<string, unknown>;
+  const agreement = snapshot.startupAgreement as Record<string, unknown>;
+  if (typeof init.isReady !== "boolean" || typeof init.messagePlatformConfigured !== "boolean" || !Array.isArray(init.checks)) throw new Error("初始化状态格式错误");
+  if (typeof agreement.isConfirmed !== "boolean" || !Array.isArray(agreement.documents)) throw new Error("启动协议状态格式错误");
+  return value as DesktopSnapshot;
 }
 
 export async function getDesktopSnapshot(): Promise<DesktopSnapshot> {
   if (!window.maibotDesktop) {
-    return fallbackSnapshot;
+    if (import.meta.env?.DEV) return createPreviewSnapshot();
+    throw new Error("无法连接启动器，请重新打开应用。");
   }
-
-  try {
-    return normalizeDesktopSnapshot(await window.maibotDesktop.getSnapshot());
-  } catch (error) {
-    console.error("[desktop] failed to read snapshot", error);
-    return normalizeDesktopSnapshot({
-      ...fallbackSnapshot,
-      services: fallbackSnapshot.services.map((service) => ({
-        ...service,
-        status: "error",
-        health: "unreachable",
-        detail: error instanceof Error ? error.message : String(error),
-      })),
-      initState: {
-        isReady: false,
-        qqBackend: fallbackSnapshot.initState.qqBackend,
-        messagePlatformConfigured: false,
-        checks: [
-          {
-            id: "desktop-snapshot",
-            label: "桌面状态",
-            status: "error",
-            detail: error instanceof Error ? error.message : String(error),
-          },
-        ],
-      },
-    });
-  }
+  return validateDesktopSnapshot(await window.maibotDesktop.getSnapshot());
 }

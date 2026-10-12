@@ -33,7 +33,7 @@ import {
   WEBUI_CHAT_USER_ID_STORAGE_KEY,
   WEBUI_CHAT_USER_NAME_STORAGE_KEY,
 } from "@shared/local-chat-defaults";
-import { getDesktopSnapshot, normalizeDesktopSnapshot } from "@/lib/desktop-api";
+import { getDesktopSnapshot, validateDesktopSnapshot } from "@/lib/desktop-api";
 import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance, usesRetroStructure } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
@@ -1219,10 +1219,15 @@ export function DesktopShell(): React.JSX.Element {
     let mounted = true;
     refreshSnapshot().then((next) => {
       if (mounted) setSnapshot(next);
-    });
+    }).catch((error) => { if (mounted) setActionError(errorMessage(error)); });
 
     const offSnapshot = window.maibotDesktop?.onSnapshot((next) => {
-      setSnapshot(normalizeDesktopSnapshot(next));
+      try {
+        setSnapshot(validateDesktopSnapshot(next));
+        setActionError(null);
+      } catch (error) {
+        setActionError(errorMessage(error));
+      }
     });
     const offServices = window.maibotDesktop?.services.onSnapshot((services) => {
       setSnapshot((current) => (current ? { ...current, services } : current));
@@ -1375,11 +1380,12 @@ export function DesktopShell(): React.JSX.Element {
     : hasActiveServiceProcess ? "停止全部服务" : "启动全部服务";
   const primaryServiceActionDisabled = primaryServiceActionTransitioning;
   const startService = useCallback(
-    (id: ServiceId) =>
+    (id: ServiceId) => {
       void runServiceAction(`${id}:start`, async () => {
         if (!window.maibotDesktop) throw new Error("Electron bridge 未连接");
         return window.maibotDesktop.services.start(id);
-      }),
+      });
+    },
     [runServiceAction],
   );
   const stopService = useCallback(
