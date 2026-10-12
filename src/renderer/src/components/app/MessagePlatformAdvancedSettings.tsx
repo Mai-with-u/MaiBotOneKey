@@ -1,3 +1,4 @@
+import { normalizeQqAccount } from "@shared/qq-account";
 import { Download, Loader2, RefreshCw, Save, Settings } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -27,6 +28,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   const [open, setOpen] = useState(false);
   const [loginInfo, setLoginInfo] = useState<MessagePlatformLoginInfo | null>(null);
   const [loginInfoError, setLoginInfoError] = useState<string | null>(null);
+  const [qqAccounts, setQqAccounts] = useState<Record<QqBackend, string>>({ napcat: "", snowluma: "" });
   const [snowLumaPassword, setSnowLumaPassword] = useState("");
   useEffect(() => {
     if (!open) return;
@@ -39,6 +41,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
         if (!info) throw new Error("无法读取登录信息");
         if (!cancelled) {
           setLoginInfo(info);
+          setQqAccounts({ napcat: info.napcat.qqAccount ?? "", snowluma: info.snowluma.qqAccount ?? "" });
           setSnowLumaPassword(info.snowluma.webuiToken ?? "");
         }
       } catch (error) {
@@ -47,22 +50,49 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     };
     void load();
     return () => { cancelled = true; };
-  }, [open, snapshot.initState.qqAccount, snapshot.initState.qqBackend]);
+  }, [open]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
+  const readBackendPort = (backend: QqBackend): string => readQqWebuiPort(backend,
+    backend === snapshot.initState.qqBackend ? snapshot.services.find((service) => service.id === "napcat")?.url : undefined);
   const [qqWebuiPorts, setQqWebuiPorts] = useState<Record<QqBackend, string>>(() => ({
-    napcat: readQqWebuiPort("napcat"), snowluma: readQqWebuiPort("snowluma"),
+    napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma"),
   }));
   const qqComponentsChangeBlocked = snapshot.services.some((service) =>
     service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping",
   );
-  const qqWebuiPortsDirty = qqWebuiPorts.napcat !== readQqWebuiPort("napcat") || qqWebuiPorts.snowluma !== readQqWebuiPort("snowluma");
+  const qqWebuiPortsDirty = qqWebuiPorts.napcat !== readBackendPort("napcat") || qqWebuiPorts.snowluma !== readBackendPort("snowluma");
   const qqWebuiPortsValid = isValidPortText(qqWebuiPorts.napcat) && isValidPortText(qqWebuiPorts.snowluma);
   const snowLumaPasswordDirty = loginInfo !== null && snowLumaPassword !== (loginInfo.snowluma.webuiToken ?? "");
   const snowLumaRunning = snapshot.initState.qqBackend === "snowluma" && snapshot.services.some((service) =>
     service.id === "napcat" && (service.managed || ["starting", "running", "stopping"].includes(service.status)),
   );
+  const qqBackendRunning = snapshot.services.some((service) =>
+    service.id === "napcat" && (service.managed || ["starting", "running", "stopping"].includes(service.status)),
+  );
+  const saveQqAccount = async (backend: QqBackend) => {
+    const account = normalizeQqAccount(qqAccounts[backend]);
+    if (!account) {
+      setError("请输入正确的 QQ 号");
+      return;
+    }
+    setBusy(`${backend}:account`);
+    setError(null);
+    try {
+      const bridge = window.maibotDesktop;
+      if (!bridge) throw new Error("无法连接启动器");
+      await bridge.init.saveQqBackendAccount(backend, account);
+      setLoginInfo((current) => current ? { ...current, [backend]: { ...current[backend], qqAccount: account } } : current);
+      setQqAccounts((current) => ({ ...current, [backend]: account }));
+      await refreshSnapshot();
+      toast.success("QQ 账号已保存，下次启动将使用新账号");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setBusy(null);
+    }
+  };
   const saveSnowLumaPassword = async () => {
     setBusy("snowluma:password");
     setError(null);
@@ -132,7 +162,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   return (
     <>
       <Button disabled={disabled || busy !== null} onClick={() => {
-        setQqWebuiPorts({ napcat: readQqWebuiPort("napcat"), snowluma: readQqWebuiPort("snowluma") });
+        setQqWebuiPorts({ napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma") });
         setError(null);
         setOpen(true);
       }} size="sm" variant="outline">
@@ -225,8 +255,20 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                           ) : null}
                           <label className="grid gap-1.5 text-xs text-muted-foreground">
                             已输入的 QQ 账号
-                            <Input readOnly className="font-mono" value={loginInfo[value].qqAccount ?? ""} placeholder="未设置账号" />
+                            <Input className="font-mono" value={qqAccounts[value]} inputMode="numeric" disabled={busy !== null}
+                              onChange={(event) => setQqAccounts((current) => ({ ...current, [value]: event.target.value }))}
+                              placeholder="输入机器人 QQ 号" />
                           </label>
+                          {qqAccounts[value] !== (loginInfo[value].qqAccount ?? "") ? (
+                            <div className="grid gap-2">
+                              <Button size="sm" disabled={busy !== null || !normalizeQqAccount(qqAccounts[value]) || (value === snapshot.initState.qqBackend && qqBackendRunning)}
+                                onClick={() => void saveQqAccount(value)}>
+                                {busy === `${value}:account` ? <Loader2 className="animate-spin" /> : <Save />}
+                                保存 QQ 账号
+                              </Button>
+                              {value === snapshot.initState.qqBackend && qqBackendRunning ? <p className="text-xs text-warning-foreground">请先停止当前 QQ 协议端，再保存账号。</p> : null}
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>

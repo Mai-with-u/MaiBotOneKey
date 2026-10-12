@@ -1,3 +1,4 @@
+import { requestMessagePlatformGuide } from "@/lib/message-platform-guide";
 import {
   ChevronDown,
   Fish,
@@ -1336,6 +1337,14 @@ export function DesktopShell(): React.JSX.Element {
     },
     [refreshSnapshot],
   );
+
+  useEffect(() => window.maibotDesktop?.onQqAccountSetupRequired((backend) => {
+    setActionError(null);
+    setActiveTab("message-platform");
+    setFloatingMode(false);
+    void window.maibotDesktop?.window.setFloatingMode(false);
+    requestMessagePlatformGuide(backend);
+  }), []);
 
   const startAll = useCallback(() => {
     void runServiceAction(

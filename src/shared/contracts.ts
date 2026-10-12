@@ -435,11 +435,6 @@ export interface InitRepairOptions {
   resetInvalidAdapterConfigs?: boolean;
 }
 
-export interface BotAccountConfigState {
-  configured: boolean;
-  qqAccount?: string;
-}
-
 export interface InitRepairResult {
   state: InitState;
   changedFiles: string[];
@@ -982,11 +977,6 @@ export interface QqAccountSetupRequest {
 
 export type MessagePlatformLoginInfo = Record<QqBackend, { qqAccount?: string; webuiToken?: string }>;
 
-export interface BotPlatformAccountSetupRequest {
-  platform: string;
-  account: string;
-}
-
 export interface ModuleUpdateResult {
   moduleId: "maibot" | "napcat-adapter";
   moduleName: string;
@@ -1226,6 +1216,7 @@ export interface DesktopBridge {
   chooseCloseAction: (action: CloseAction) => Promise<void>;
   onCloseRequest: (callback: () => void) => () => void;
   onSnapshot: (callback: (snapshot: DesktopSnapshot) => void) => () => void;
+  onQqAccountSetupRequired: (callback: (backend: QqBackend) => void) => () => void;
   window: {
     minimize: () => Promise<void>;
     toggleMaximize: () => Promise<WindowState>;
@@ -1245,16 +1236,13 @@ export interface DesktopBridge {
   };
   init: {
     getState: () => Promise<InitState>;
-    repair: (options?: InitRepairOptions) => Promise<InitRepairResult>;
+    repair: () => Promise<InitRepairResult>;
     syncQqConnections: () => Promise<InitRepairResult>;
     resetSnowLuma: () => Promise<SnowLumaResetResult>;
     upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
-    getBotAccountConfigState: () => Promise<BotAccountConfigState>;
     getLoginInfo: () => Promise<MessagePlatformLoginInfo>;
+    saveQqBackendAccount: (backend: QqBackend, account: string) => Promise<void>;
     saveSnowLumaWebuiPassword: (password: string) => Promise<void>;
-    setBotPlatformAccount: (
-      request: BotPlatformAccountSetupRequest,
-    ) => Promise<BotAccountConfigState>;
     setQqBackend: (backend: QqBackend, options?: InitRepairOptions) => Promise<InitState>;
     setQqProtocol: (protocol: QqProtocol, options?: QqProtocolOptions) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;

@@ -21,12 +21,19 @@ export function normalizePortText(value: string, backend: QqBackend): string {
   return isValidPortText(value) ? String(Number(value)) : defaultQqWebuiPort(backend);
 }
 
-export function readQqWebuiPort(backend: QqBackend): string {
+export function readQqWebuiPort(backend: QqBackend, serviceUrl?: string): string {
+  let saved: string | null = null;
   try {
-    return normalizePortText(localStorage.getItem(qqWebuiPortStorageKey(backend)) ?? "", backend);
+    saved = localStorage.getItem(qqWebuiPortStorageKey(backend));
   } catch {
-    return defaultQqWebuiPort(backend);
+    // Browser storage is optional; the running service still supplies its port.
   }
+  if (saved && isValidPortText(saved)) return String(Number(saved));
+  if (serviceUrl) {
+    const url = new URL(serviceUrl);
+    if (isValidPortText(url.port)) return String(Number(url.port));
+  }
+  return defaultQqWebuiPort(backend);
 }
 
 export function saveQqWebuiPort(backend: QqBackend, value: string): string {

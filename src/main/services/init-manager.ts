@@ -1,4 +1,5 @@
-﻿import { execFile } from "node:child_process";
+import { normalizeQqAccount } from "../../shared/qq-account";
+import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -44,9 +45,6 @@ import type {
   StartupAgreementState,
 } from "../../shared/contracts";
 
-const QQ_PATTERN = /qq_account\s*=\s*["']?(\d+)["']?/;
-const QQ_ACCOUNT_ASSIGNMENT_PATTERN = /^(\s*qq_account\s*=\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^#\r\n]*?)(\s*#.*)?$/mu;
-const UNCONFIGURED_QQ_ACCOUNTS = new Set(["0"]);
 const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
 const GIT_RUNTIME_DIR = "git";
@@ -1083,7 +1081,6 @@ interface StoredMessagePlatformFile {
   qqAccount?: string;
   accounts?: Partial<Record<QqBackend, string>>;
   configuredAt?: number;
-  adapterConfigInitialized?: Partial<Record<QqBackend, number>>;
 }
 
 interface BundledComponentUpgradeSpec {
@@ -1097,10 +1094,6 @@ interface WindowsProcessInfo {
   ProcessId?: number;
   ExecutablePath?: string;
   CommandLine?: string;
-}
-
-function isDigits(value: string): boolean {
-  return /^\d+$/.test(value);
 }
 
 function escapeRegExp(value: string): string {
@@ -1141,65 +1134,6 @@ function readTomlTable(content: string, tableName: string): Record<string, unkno
   } catch {
     return undefined;
   }
-}
-
-function ensureBotQqConfig(content: string, account: string): string {
-  return ensureBotPlatformConfig(content, {
-    platform: "qq",
-    qqAccount: account,
-  });
-}
-
-function ensureBotPlatformConfig(
-  content: string,
-  options: { platform?: string; qqAccount?: string },
-): string {
-  const serializedQqAccount = options.qqAccount
-    ? JSON.stringify(options.qqAccount)
-    : undefined;
-  const botSectionMatch = content.match(/(^|\r?\n)(\s*\[bot\]\s*(?:#.*)?)(?:\r?\n|$)/u);
-  if (!botSectionMatch) {
-    const platformLine = options.platform ? `platform = "${options.platform}"\n` : "";
-    const qqAccountLine = serializedQqAccount
-      ? `qq_account = ${serializedQqAccount}\n`
-      : "";
-    return `${content.trimEnd()}\n\n[bot]\n${platformLine}${qqAccountLine}`;
-  }
-
-  const botSectionStart = (botSectionMatch.index ?? 0) + botSectionMatch[0].length;
-  const nextSectionOffset = content
-    .slice(botSectionStart)
-    .search(/\r?\n\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?(?:\r?\n|$)/u);
-  const botSectionEnd =
-    nextSectionOffset === -1 ? content.length : botSectionStart + nextSectionOffset;
-  const beforeBotSection = content.slice(0, botSectionStart);
-  const botSection = content.slice(botSectionStart, botSectionEnd);
-  const afterBotSection = content.slice(botSectionEnd);
-  let nextBotSection = botSection;
-
-  if (options.platform) {
-    if (/^\s*platform\s*=/mu.test(nextBotSection)) {
-      nextBotSection = nextBotSection.replace(
-        /^\s*platform\s*=\s*["'][^"']*["'](\s*#.*)?$/mu,
-        `platform = "${options.platform}"$1`,
-      );
-    } else {
-      nextBotSection = `platform = "${options.platform}"\n${nextBotSection}`;
-    }
-  }
-
-  if (serializedQqAccount) {
-    if (/^\s*qq_account\s*=/mu.test(nextBotSection)) {
-      nextBotSection = nextBotSection.replace(
-        QQ_ACCOUNT_ASSIGNMENT_PATTERN,
-        `$1${serializedQqAccount}$2`,
-      );
-    } else {
-      nextBotSection = `${nextBotSection.trimEnd()}\nqq_account = ${serializedQqAccount}\n`;
-    }
-  }
-
-  return `${beforeBotSection}${nextBotSection}${afterBotSection}`;
 }
 
 function checkFile(path: string, label: string, id: string): InitCheck {
@@ -1447,12 +1381,11 @@ export class InitManager {
   }
 
   hasMessagePlatformConfigured(): boolean {
-    const store = this.readMessagePlatformStore();
-    const qqAccount = store?.qqAccount?.trim();
-    return Boolean(
-      (qqAccount && isDigits(qqAccount)) ||
-      (this.getQqBackendSync() === "snowluma" && store?.backend === "snowluma" && typeof store.configuredAt === "number"),
-    );
+    return Boolean(this.getMessagePlatformQqAccount());
+  }
+
+  getMessagePlatformQqAccount(backend: QqBackend = this.getQqBackendSync()): string | undefined {
+    return normalizeQqAccount(this.readMessagePlatformStore()?.accounts?.[backend]);
   }
 
   async setQqBackend(
@@ -1464,7 +1397,7 @@ export class InitManager {
     const previousBackend = this.getQqBackendSync();
     const previousProtocol = this.getQqProtocolSync();
     const connections = this.readQqBackendConnections();
-    const switching = backend !== previousBackend && this.hasMessagePlatformConfigured();
+    const switching = backend !== previousBackend && (this.hasMessagePlatformConfigured() || Boolean(connections[previousBackend]));
     const configPath = this.snowlumaAdapterConfigPath();
     const previousConfig = await readFile(configPath, "utf8").catch(() => undefined);
     const adapterServer = await this.readAdapterServerFromConfig("snowluma");
@@ -1508,13 +1441,13 @@ export class InitManager {
       );
       await this.ensureServiceReady("napcat");
       if (options.syncAdapters !== false) {
-        const qqAccount = await this.readConfiguredQqAccount();
-        if (qqAccount || (backend === "snowluma" && this.hasMessagePlatformConfigured())) {
+        const qqAccount = this.getMessagePlatformQqAccount();
+        if (qqAccount) {
           const syncedPaths = await this.syncSelectedQqAdapterConfigs({
             resetInvalidConfig: options.resetInvalidAdapterConfigs,
           });
           if (syncedPaths.some((path) => samePath(path, configPath))) {
-            await this.markMessagePlatformConfigured(backend, qqAccount ?? "", backend);
+            await this.markMessagePlatformConfigured(backend, qqAccount);
           }
         }
       }
@@ -1553,10 +1486,8 @@ export class InitManager {
 
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
     const qqBackend = await this.readQqBackend();
-    const qqAccount = qqBackend === "snowluma"
-      ? await this.readSnowLumaTargetQqAccount()
-      : await this.readConfiguredQqAccount();
-    const messagePlatformConfigured = this.hasMessagePlatformConfigured();
+    const qqAccount = this.getMessagePlatformQqAccount(qqBackend);
+    const messagePlatformConfigured = Boolean(qqAccount);
     const dependencyChecks = options.refreshDependencies === false
       ? this.getCachedDependencyChecks()
       : await this.checkDependencies();
@@ -1592,7 +1523,7 @@ export class InitManager {
     return this.checkDependencies();
   }
 
-  async repair(options: InitRepairOptions = {}): Promise<InitRepairResult> {
+  async repair(): Promise<InitRepairResult> {
     const changedFiles = await this.ensureModulesReady();
 
     const state = {
@@ -2611,9 +2542,11 @@ export class InitManager {
     qqBackend: QqBackend = "napcat",
     options: InitRepairOptions = {},
   ): Promise<InitState> {
-    if (!isDigits(qqAccount) || UNCONFIGURED_QQ_ACCOUNTS.has(qqAccount)) {
-      throw new Error("QQ 号必须是纯数字");
+    const normalizedAccount = normalizeQqAccount(qqAccount);
+    if (!normalizedAccount) {
+      throw new Error("QQ 号必须是纯数字且不能为 0");
     }
+    qqAccount = normalizedAccount;
 
     await this.setQqBackend(qqBackend, { ...options, syncAdapters: false });
     await this.ensureServiceReady("maibot");
@@ -2636,7 +2569,7 @@ export class InitManager {
       await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
       await this.ensureNapCatWebUiConfig();
     }
-    const initializedAdapterConfig = await this.ensureQqAdapterConfig(
+    await this.ensureQqAdapterConfig(
       resolvedWebsocketServer,
       chatOverrides,
       { resetInvalidConfig: options.resetInvalidAdapterConfigs },
@@ -2644,7 +2577,6 @@ export class InitManager {
     await this.markMessagePlatformConfigured(
       qqBackend,
       qqAccount,
-      initializedAdapterConfig ? qqBackend : undefined,
       true,
     );
     await this.saveQqProtocolSelection(qqBackend);
@@ -2736,25 +2668,25 @@ export class InitManager {
     websocketServer: NapcatWebsocketServerConfig,
     chatOverrides?: Partial<NapcatAdapterChatConfig>,
     options: AdapterConfigWriteOptions = {},
-  ): Promise<boolean> {
+  ): Promise<void> {
     const configPath = this.snowlumaAdapterConfigPath();
     if (existsSync(configPath)) {
       try {
         parseToml(await readFile(configPath, "utf8"));
-        return false;
+        return;
       } catch (error) {
         if (!options.resetInvalidConfig) {
           throw new AdapterConfigParseError("snowluma", configPath, error);
         }
       }
     }
-    return this.writeSnowLumaAdapterConfigForServer(websocketServer, chatOverrides, options);
+    await this.writeSnowLumaAdapterConfigForServer(websocketServer, chatOverrides, options);
   }
 
   private async syncSelectedQqAdapterConfigs(options: AdapterConfigWriteOptions = {}): Promise<string[]> {
-    const qqAccount = await this.readConfiguredQqAccount();
+    const qqAccount = this.getMessagePlatformQqAccount();
     const qqBackend = await this.readQqBackend();
-    if (!qqAccount && !(qqBackend === "snowluma" && this.hasMessagePlatformConfigured())) {
+    if (!qqAccount) {
       return [];
     }
 
@@ -2772,9 +2704,9 @@ export class InitManager {
       token: adapterServer?.token ?? this.readQqBackendConnections()[qqBackend]?.token ?? websocketServer?.token ?? createWebsocketToken(),
     };
     if (qqBackend === "snowluma") {
-      await this.createSnowLumaConfigs(qqAccount ?? "", websocketServer.token, websocketServer.port);
+      await this.createSnowLumaConfigs(qqAccount, websocketServer.token, websocketServer.port);
     } else {
-      await this.createNapCatConfigs(qqAccount!, websocketServer.token, websocketServer.port);
+      await this.createNapCatConfigs(qqAccount, websocketServer.token, websocketServer.port);
       await this.ensureNapCatWebUiConfig();
     }
 
@@ -3105,89 +3037,47 @@ export class InitManager {
     return launcherPath;
   }
 
-  async readQqAccount(): Promise<string | undefined> {
-    const botConfigPath = this.botConfigPath();
-    if (!existsSync(botConfigPath)) {
-      return undefined;
-    }
-
-    const content = await readFile(botConfigPath, "utf8");
-    const match = content.match(QQ_PATTERN);
-    return match?.[1];
-  }
-
-  async getBotAccountConfigState(): Promise<{ configured: boolean; qqAccount?: string }> {
-    const qqAccount = await this.readQqAccount();
-    return {
-      configured: Boolean(qqAccount && isDigits(qqAccount) && !UNCONFIGURED_QQ_ACCOUNTS.has(qqAccount)),
-      qqAccount,
+  readSnowLumaServicePortsSync(): { webui: number; onebot: number; error?: string } {
+    const errors: string[] = [];
+    const readConfig = (name: string): Record<string, unknown> => {
+      const path = join(this.paths.snowlumaRoot, "config", name);
+      if (!existsSync(path)) return {};
+      try {
+        const config = JSON.parse(readFileSync(path, "utf8"));
+        if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("配置必须是对象");
+        return config;
+      } catch (error) {
+        errors.push(`SnowLuma 配置读取失败: ${path}: ${toDetail(error)}`);
+        return {};
+      }
     };
+    const runtime = readConfig("runtime.json");
+    const account = this.getMessagePlatformQqAccount("snowluma");
+    const accountFile = account ? `onebot_${account}.json` : "onebot.json";
+    const onebot = existsSync(join(this.paths.snowlumaRoot, "config", accountFile)) ? readConfig(accountFile) : readConfig("onebot.json");
+    const networks = onebot.networks as { wsServers?: Array<{ name?: string; port?: number }> } | undefined;
+    const server = Array.isArray(networks?.wsServers) ? networks.wsServers.find((item) => item?.name === "MaiBot Main") : undefined;
+    return { webui: asTcpPort(runtime.webuiPort, SNOWLUMA_WEBUI_PORT), onebot: asTcpPort(server?.port, SNOWLUMA_ONEBOT_PORT), error: errors[0] };
   }
 
-  async readSnowLumaTargetQqAccount(): Promise<string | undefined> {
-    // Prefer the account explicitly entered in message-platform setup over a
-    // previous MaiBot account. Older installations can still use bot config.
-    const account = this.readStoredMessagePlatformQqAccount() ?? await this.readQqAccount();
-    return account && isDigits(account) && !UNCONFIGURED_QQ_ACCOUNTS.has(account) ? account : undefined;
-  }
-
-  async setBotPlatformAccount(
-    platform: string,
-    account: string,
-  ): Promise<{ configured: boolean; qqAccount?: string }> {
-    const normalizedPlatform = platform.trim().toLowerCase();
-    const normalizedAccount = account.trim();
-    if (!/^[a-z0-9][a-z0-9_-]*$/u.test(normalizedPlatform)) {
-      throw new Error("平台只能包含字母、数字、下划线和短横线");
+  async saveQqBackendAccount(backend: QqBackend, account: string): Promise<void> {
+    const normalizedAccount = normalizeQqAccount(account);
+    if (backend !== "napcat" && backend !== "snowluma") throw new Error("不支持的 QQ 协议端");
+    if (!normalizedAccount) {
+      throw new Error("请输入正确的 QQ 号");
     }
-    if (!isDigits(normalizedAccount) || UNCONFIGURED_QQ_ACCOUNTS.has(normalizedAccount)) {
-      throw new Error("账号必须是有效的纯数字 ID");
+    if (backend === this.getQqBackendSync() && this.getQqProtocolSync() !== "official") {
+      await this.setQqAccount(normalizedAccount, undefined, undefined, backend);
+      return;
     }
-
-    const botConfigPath = this.botConfigPath();
-    const content = await this.readOrCreateBotConfigContent();
-    const updated = ensureBotPlatformConfig(content, {
-      platform: normalizedPlatform,
-      qqAccount: normalizedAccount,
-    });
-    if (updated !== content || !existsSync(botConfigPath)) {
-      await mkdir(dirname(botConfigPath), { recursive: true });
-      await writeFile(botConfigPath, updated, "utf8");
-    }
-
-    return this.getBotAccountConfigState();
-  }
-
-  private async readConfiguredQqAccount(): Promise<string | undefined> {
-    const qqAccount = await this.readQqAccount();
-    if (qqAccount) {
-      return qqAccount;
-    }
-
-    return this.readStoredMessagePlatformQqAccount();
-  }
-
-  private readStoredMessagePlatformQqAccount(): string | undefined {
-    const storedQqAccount = this.readMessagePlatformStore()?.qqAccount?.trim();
-    return storedQqAccount && isDigits(storedQqAccount) ? storedQqAccount : undefined;
-  }
-
-  private async repairBotConfigQqAccountFromMessagePlatformStore(): Promise<string | undefined> {
-    const storedQqAccount = this.readStoredMessagePlatformQqAccount();
-    if (!storedQqAccount || await this.readQqAccount()) {
-      return undefined;
-    }
-
-    const botConfigPath = this.botConfigPath();
-    const content = await this.readOrCreateBotConfigContent();
-    const repaired = ensureBotQqConfig(content, storedQqAccount);
-    if (repaired === content) {
-      return undefined;
-    }
-
-    await mkdir(dirname(botConfigPath), { recursive: true });
-    await writeFile(botConfigPath, repaired, "utf8");
-    return botConfigPath;
+    const existing = this.readMessagePlatformStore();
+    await mkdir(this.paths.userDataRoot, { recursive: true });
+    await writeFile(this.messagePlatformPath(), `${JSON.stringify({
+      ...existing,
+      version: 1,
+      accounts: { ...existing?.accounts, [backend]: normalizedAccount },
+      updatedAt: Date.now(),
+    }, null, 2)}\n`, "utf8");
   }
 
   getPythonPath(): string {
@@ -3649,13 +3539,9 @@ export class InitManager {
     try {
       const parsed = JSON.parse(readFileSync(this.messagePlatformPath(), "utf8")) as Partial<StoredMessagePlatformFile>;
       const backend = parsed.backend === "snowluma" ? "snowluma" : parsed.backend === "napcat" ? "napcat" : undefined;
-      const initialized = parsed.adapterConfigInitialized && typeof parsed.adapterConfigInitialized === "object"
-        ? parsed.adapterConfigInitialized
-        : {};
       return {
         version: 1,
         backend,
-        qqAccount: typeof parsed.qqAccount === "string" ? parsed.qqAccount : undefined,
         accounts: {
           napcat: typeof parsed.accounts?.napcat === "string" ? parsed.accounts.napcat
             : !parsed.accounts && backend === "napcat" && typeof parsed.qqAccount === "string" ? parsed.qqAccount : undefined,
@@ -3663,33 +3549,10 @@ export class InitManager {
             : !parsed.accounts && backend === "snowluma" && typeof parsed.qqAccount === "string" ? parsed.qqAccount : undefined,
         },
         configuredAt: typeof parsed.configuredAt === "number" ? parsed.configuredAt : undefined,
-        adapterConfigInitialized: {
-          napcat: typeof initialized.napcat === "number" ? initialized.napcat : undefined,
-          snowluma: typeof initialized.snowluma === "number" ? initialized.snowluma : undefined,
-        },
       };
     } catch {
       return undefined;
     }
-  }
-
-  private hasAdapterConfigInitializedMarker(backend: QqBackend): boolean {
-    return typeof this.readMessagePlatformStore()?.adapterConfigInitialized?.[backend] === "number";
-  }
-
-  private async isAdapterConfigInitialized(backend: QqBackend): Promise<boolean> {
-    const configPath = backend === "snowluma"
-      ? this.snowlumaAdapterConfigPath()
-      : this.napcatAdapterConfigPath();
-    if (!existsSync(configPath)) {
-      return false;
-    }
-
-    if (this.hasAdapterConfigInitializedMarker(backend)) {
-      return true;
-    }
-
-    return hasUsableWebsocketServerConfig(await this.readAdapterServerFromConfig(backend));
   }
 
   private async readAdapterServerFromConfig(backend: QqBackend): Promise<NapcatWebsocketServerConfig | undefined> {
@@ -3724,28 +3587,18 @@ export class InitManager {
   private async markMessagePlatformConfigured(
     backend: QqBackend,
     qqAccount: string,
-    initializedBackend?: QqBackend,
     recordAccount = false,
   ): Promise<void> {
     const existing = this.readMessagePlatformStore();
-    const adapterConfigInitialized = {
-      ...(existing?.adapterConfigInitialized ?? {}),
-    };
-    if (initializedBackend) {
-      adapterConfigInitialized[initializedBackend] = Date.now();
-    }
-
     await mkdir(dirname(this.messagePlatformPath()), { recursive: true });
     await writeFile(
       this.messagePlatformPath(),
       `${JSON.stringify({
         version: 1,
         backend,
-        qqAccount,
         accounts: { ...this.getQqBackendAccounts(), ...(recordAccount ? { [backend]: qqAccount } : {}) },
         configuredAt: existing?.configuredAt ?? Date.now(),
         updatedAt: Date.now(),
-        adapterConfigInitialized,
       }, null, 2)}\n`,
       "utf8",
     );
@@ -3819,17 +3672,6 @@ export class InitManager {
         error: toDetail(error),
       };
     }
-  }
-
-  private async readOrCreateBotConfigContent(): Promise<string> {
-    const botConfigPath = this.botConfigPath();
-    const configVersion = maibotInitialConfigVersion(await this.readMaiBotConfigVersion());
-    if (!existsSync(botConfigPath)) {
-      return `[inner]\nversion = "${configVersion}"\n\n[bot]\nplatform = "qq"\n`;
-    }
-
-    const content = await readFile(botConfigPath, "utf8");
-    return ensureInnerVersion(content, configVersion);
   }
 
   private async repairBotConfigVersionInfo(): Promise<string | undefined> {
@@ -4179,11 +4021,16 @@ export class InitManager {
   ): Promise<void> {
     const configDir = join(this.paths.snowlumaRoot, "config");
     await mkdir(configDir, { recursive: true });
-    await writeFile(
-      join(configDir, "runtime.json"),
-      JSON.stringify({ webuiPort: SNOWLUMA_WEBUI_PORT, hookAutoLoad: false }, null, 2),
-      "utf8",
-    );
+    const runtimePath = join(configDir, "runtime.json");
+    const runtime = existsSync(runtimePath) ? JSON.parse(await readFile(runtimePath, "utf8")) : {};
+    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+      throw new Error("SnowLuma 运行配置格式错误，请修复 runtime.json 后重试。");
+    }
+    await writeFile(runtimePath, JSON.stringify({
+      ...runtime,
+      webuiPort: runtime.webuiPort ?? SNOWLUMA_WEBUI_PORT,
+      hookAutoLoad: false,
+    }, null, 2), "utf8");
     const onebotConfig = {
       networks: {
         httpServers: [],

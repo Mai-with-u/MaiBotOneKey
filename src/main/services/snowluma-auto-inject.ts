@@ -1,11 +1,12 @@
+import { normalizeQqAccount } from "../../shared/qq-account";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 // Keep the generated entry beside the bundle so relative imports and migration
 // workers (which use process.argv[1]) both execute the actual SnowLuma runtime.
-export async function prepareSnowLumaEntry(root: string, targetUin?: string): Promise<string> {
+export async function prepareSnowLumaEntry(root: string, targetUin: string): Promise<string> {
   const original = join(root, "index.mjs");
-  if (!targetUin || targetUin === "0") return original;
+  if (!normalizeQqAccount(targetUin)) throw new Error("Target QQ must contain valid digits");
   const patched = prepareRuntime(await readFile(original, "utf8"), targetUin);
   const entry = join(root, ".maibot-target-runtime.mjs");
   // A fixed generated filename avoids accumulating files after forced stops.
@@ -13,7 +14,9 @@ export async function prepareSnowLumaEntry(root: string, targetUin?: string): Pr
   return entry;
 }
 export function prepareRuntime(source: string, targetUin: string): string {
-  if (!/^\d+$/.test(targetUin)) throw new Error('Target QQ must contain only digits');
+  const account = normalizeQqAccount(targetUin);
+  if (!account) throw new Error("Target QQ must contain valid digits");
+  targetUin = account;
   const autoLoad = 'const autoLoadOnDiscovery = resolveAutoLoad(runtimeConfig.hookAutoLoad);';
   const anchor = 'if (autoLoadOnDiscovery) log.info("hook auto-load enabled: every discovered QQ process will be injected");';
   const shutdown = 'shutdownStarted = true;';

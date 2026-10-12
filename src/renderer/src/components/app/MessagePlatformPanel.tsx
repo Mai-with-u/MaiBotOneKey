@@ -1,3 +1,5 @@
+import { normalizeQqAccount } from "@shared/qq-account";
+import { MESSAGE_PLATFORM_GUIDE_EVENT, MESSAGE_PLATFORM_GUIDE_REQUEST_KEY } from "@/lib/message-platform-guide";
 import {
   AlertTriangle,
   ArrowUp,
@@ -89,7 +91,6 @@ type MaiBotVersionFetchProgress = {
   tone: "loading" | "success" | "error";
 };
 
-const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY = "maibot.messagePlatformGuide.requested";
 const MASCOT_INTRO_TRIGGER_CLICKS = 10;
 
 let mascotIntroShownThisSession = false;
@@ -1215,7 +1216,7 @@ export function MessagePlatformPanel({
     useState<AdapterConfigResetRequest | null>(null);
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
-  const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
+  const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend, snapshot.services.find((service) => service.id === "napcat")?.url));
   const [moduleSourceConfig, setModuleSourceConfig] = useState<ModuleSourceConfig | null>(null);
   const [moduleSourceExpanded, setModuleSourceExpanded] = useState(false);
   const [moduleSourceSaving, setModuleSourceSaving] = useState(false);
@@ -1372,7 +1373,7 @@ export function MessagePlatformPanel({
 
   useEffect(() => {
     const syncQqWebuiPort = (): void => {
-      setQqWebuiPort(readQqWebuiPort(snapshot.initState.qqBackend ?? "napcat"));
+      setQqWebuiPort(readQqWebuiPort(snapshot.initState.qqBackend, snapshot.services.find((service) => service.id === "napcat")?.url));
     };
 
     syncQqWebuiPort();
@@ -1382,7 +1383,7 @@ export function MessagePlatformPanel({
       window.removeEventListener(QQ_WEBUI_PORT_CHANGE_EVENT, syncQqWebuiPort);
       window.removeEventListener("storage", syncQqWebuiPort);
     };
-  }, [snapshot.initState.qqBackend]);
+  }, [snapshot.initState.qqBackend, napcat?.url]);
 
   const loadModuleSourceConfig = useCallback(async () => {
     if (!window.maibotDesktop?.modules) {
@@ -1703,31 +1704,32 @@ export function MessagePlatformPanel({
     }
   }, []);
 
-  const openMessagePlatformDialog = useCallback(() => {
+  const openMessagePlatformDialog = useCallback((backend: QqBackend = snapshot.initState.qqBackend) => {
     setError(null);
     setAdapterResetRequest(null);
-    setMessagePlatformBackend(snapshot.initState.qqBackend ?? "napcat");
-    setMessagePlatformAccount(snapshot.initState.qqAccount ?? "");
+    setMessagePlatformBackend(backend);
+    setMessagePlatformAccount(backend === snapshot.initState.qqBackend ? snapshot.initState.qqAccount ?? "" : "");
     setMessagePlatformDialogOpen(true);
   }, [snapshot.initState.qqAccount, snapshot.initState.qqBackend]);
 
   useEffect(() => {
-    const openRequestedGuide = (): void => {
+    const openRequestedGuide = (event?: Event): void => {
+      let request = (event as CustomEvent<QqBackend> | undefined)?.detail;
       try {
-        if (localStorage.getItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY) !== "1") {
-          return;
-        }
+        const stored = localStorage.getItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY);
+        if (!event && !stored) return;
+        if (!request && (stored === "napcat" || stored === "snowluma")) request = stored;
         localStorage.removeItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY);
       } catch {
-        // Local storage may be unavailable in isolated previews.
+        if (!event) return;
       }
-      openMessagePlatformDialog();
+      openMessagePlatformDialog(request);
     };
 
     openRequestedGuide();
-    window.addEventListener("maibot:open-message-platform-guide", openRequestedGuide);
+    window.addEventListener(MESSAGE_PLATFORM_GUIDE_EVENT, openRequestedGuide);
     return () => {
-      window.removeEventListener("maibot:open-message-platform-guide", openRequestedGuide);
+      window.removeEventListener(MESSAGE_PLATFORM_GUIDE_EVENT, openRequestedGuide);
     };
   }, [openMessagePlatformDialog]);
 
@@ -1769,8 +1771,8 @@ export function MessagePlatformPanel({
       }
       return;
     }
-    const qqAccount = messagePlatformAccount.trim();
-    if (!/^\d+$/u.test(qqAccount) || qqAccount === "0") {
+    const qqAccount = normalizeQqAccount(messagePlatformAccount);
+    if (!qqAccount) {
       setError("请输入正确的 QQ 号");
       return;
     }
@@ -1815,7 +1817,17 @@ export function MessagePlatformPanel({
   }, [messagePlatformAccount, messagePlatformBackend, officialAppId, officialAppSecret, refreshSnapshot]);
 
   const saveProtocolSelection = useCallback(async () => {
-    if (!window.maibotDesktop || qqBackendBusy || selectedProtocol === currentProtocol) return;
+    if (!window.maibotDesktop || qqBackendBusy) return;
+    const savedAccounts = selectedProtocol !== "official" ? await window.maibotDesktop.init.getLoginInfo().catch((error) => {
+      setError(messageFromError(error));
+      return null;
+    }) : null;
+    if (selectedProtocol !== "official" && !savedAccounts) return;
+    const targetAccount = selectedProtocol !== "official"
+      ? normalizeQqAccount(savedAccounts?.[selectedProtocol].qqAccount) ?? ""
+      : "";
+    const targetAccountValid = Boolean(targetAccount);
+    if (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : targetAccountValid)) return;
     if (selectedProtocol === "official" && !snapshot.initState.qqOfficialConfigured) {
       setPendingProtocolSwitch(currentProtocol);
       setMessagePlatformBackend("official");
@@ -1826,10 +1838,10 @@ export function MessagePlatformPanel({
       setMessagePlatformDialogOpen(true);
       return;
     }
-    if (selectedProtocol !== "official" && (!snapshot.initState.messagePlatformConfigured || !/^\d+$/u.test(snapshot.initState.qqAccount?.trim() ?? "") || snapshot.initState.qqAccount?.trim() === "0")) {
+    if (selectedProtocol !== "official" && !targetAccountValid) {
       setPendingProtocolSwitch(currentProtocol);
       setMessagePlatformBackend(selectedProtocol);
-      setMessagePlatformAccount(snapshot.initState.qqAccount ?? "");
+      setMessagePlatformAccount(targetAccount);
       setError(null);
       setAdapterResetRequest(null);
       setMessagePlatformDialogOpen(true);
@@ -1839,7 +1851,7 @@ export function MessagePlatformPanel({
     setError(null);
     try {
       if (selectedProtocol === "snowluma") {
-        await window.maibotDesktop.init.setQqAccount({ qqAccount: snapshot.initState.qqAccount!.trim(), qqBackend: "snowluma" });
+        await window.maibotDesktop.init.setQqAccount({ qqAccount: targetAccount, qqBackend: "snowluma" });
         await window.maibotDesktop.init.repair();
         await window.maibotDesktop.services.start("napcat");
         setQqWebuiPort(readQqWebuiPort("snowluma"));
@@ -1942,7 +1954,7 @@ export function MessagePlatformPanel({
             stoppedStatusAfterTitle
           />
         ) : (
-          <MessagePlatformConnectCard onClick={openMessagePlatformDialog} retro={useRetroStyle} />
+          <MessagePlatformConnectCard onClick={() => openMessagePlatformDialog()} retro={useRetroStyle} />
         );
 
   const maibotUpdateNotesPanel = (
@@ -2038,7 +2050,7 @@ export function MessagePlatformPanel({
                 </button>
               ))}
             </div>
-            <Button disabled={busy !== null || qqBackendBusy || selectedProtocol === currentProtocol} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
+            <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount))))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
               {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
               保存协议端
             </Button>

@@ -1,8 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { MessagePlatformLoginInfo, QqProtocol, QqProtocolOptions } from "../shared/contracts";
 import type {
-  BotAccountConfigState,
-  BotPlatformAccountSetupRequest,
   CloseAction,
   AppIconId,
   AppIconSettings,
@@ -105,6 +103,13 @@ function onIpc<T>(channel: string, callback: (event: T) => void): () => void {
   };
 }
 
+let pendingQqAccountSetup: QqBackend | undefined;
+const qqAccountSetupListeners = new Set<(backend: QqBackend) => void>();
+ipcRenderer.on("desktop:qq-account-setup-required", (_event, backend: QqBackend) => {
+  if (qqAccountSetupListeners.size === 0) pendingQqAccountSetup = backend;
+  else for (const listener of qqAccountSetupListeners) listener(backend);
+});
+
 const desktopBridge: DesktopBridge = {
   getSnapshot: () => ipcRenderer.invoke("desktop:getSnapshot") as Promise<DesktopSnapshot>,
   getSystemPerformance: () =>
@@ -125,6 +130,15 @@ const desktopBridge: DesktopBridge = {
   },
   onSnapshot: (callback: (snapshot: DesktopSnapshot) => void) =>
     onIpc("desktop:snapshot", callback),
+  onQqAccountSetupRequired: (callback) => {
+    qqAccountSetupListeners.add(callback);
+    if (pendingQqAccountSetup) {
+      const backend = pendingQqAccountSetup;
+      pendingQqAccountSetup = undefined;
+      callback(backend);
+    }
+    return () => { qqAccountSetupListeners.delete(callback); };
+  },
   window: {
     setMiniMode: (enabled: boolean) =>
       ipcRenderer.invoke("desktop:window:setMiniMode", enabled) as Promise<WindowState>,
@@ -155,18 +169,15 @@ const desktopBridge: DesktopBridge = {
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
     getLoginInfo: () => ipcRenderer.invoke("init:getLoginInfo") as Promise<MessagePlatformLoginInfo>,
+    saveQqBackendAccount: (backend: QqBackend, account: string) => ipcRenderer.invoke("init:saveQqBackendAccount", backend, account) as Promise<void>,
     saveSnowLumaWebuiPassword: (password: string) => ipcRenderer.invoke("init:saveSnowLumaWebuiPassword", password) as Promise<void>,
-    repair: (options?: InitRepairOptions) =>
-      ipcRenderer.invoke("init:repair", options) as Promise<InitRepairResult>,
+    repair: () =>
+      ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
     syncQqConnections: () => ipcRenderer.invoke("init:syncQqConnections") as Promise<InitRepairResult>,
     resetSnowLuma: () =>
       ipcRenderer.invoke("init:resetSnowLuma") as Promise<SnowLumaResetResult>,
     upgradeQqComponents: () =>
       ipcRenderer.invoke("init:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
-    getBotAccountConfigState: () =>
-      ipcRenderer.invoke("init:getBotAccountConfigState") as Promise<BotAccountConfigState>,
-    setBotPlatformAccount: (request: BotPlatformAccountSetupRequest) =>
-      ipcRenderer.invoke("init:setBotPlatformAccount", request) as Promise<BotAccountConfigState>,
     setQqBackend: (backend: QqBackend, options?: InitRepairOptions) =>
       ipcRenderer.invoke("init:setQqBackend", backend, options) as Promise<InitState>,
     setQqProtocol: (protocol: QqProtocol, options?: QqProtocolOptions) =>

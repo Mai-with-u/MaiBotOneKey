@@ -454,6 +454,15 @@ function requestQuit(): void {
   })();
 }
 
+serviceManager.on("qq-account-setup-required", (backend) => {
+  showMainWindow();
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  const send = (): void => { if (!window.isDestroyed()) window.webContents.send("desktop:qq-account-setup-required", backend); };
+  if (window.webContents.isLoading()) window.webContents.once("did-finish-load", send);
+  else send();
+});
+
 function createTray(): Tray {
   const nextTray = new Tray(createTrayIcon());
 

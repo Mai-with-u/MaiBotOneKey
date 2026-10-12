@@ -1,11 +1,9 @@
+import { requestMessagePlatformGuide } from "@/lib/message-platform-guide";
 import {
   CheckCircle2,
   Loader2,
-  MessageSquare,
-  Plug,
   RotateCcw,
   ShieldAlert,
-  TerminalSquare,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -27,11 +25,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import {
-  adapterBackendLabel,
-  adapterConfigResetRequestFromError,
-  type AdapterConfigResetRequest,
-} from "@/lib/adapter-config-reset";
 
 interface InitializationWizardProps {
   snapshot: DesktopSnapshot;
@@ -40,8 +33,6 @@ interface InitializationWizardProps {
 }
 
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
-const MESSAGE_PLATFORM_GUIDE_REQUEST_KEY =
-  "maibot.messagePlatformGuide.requested";
 const AUTO_START_DELAY_MS = 2000;
 const WEBUI_READY_TIMEOUT_MS = 90_000;
 const WEBUI_READY_POLL_MS = 1000;
@@ -85,15 +76,6 @@ function saveLocalUserName(userName: string): void {
   } catch {
     // Local storage can be unavailable in isolated previews.
   }
-}
-
-function requestMessagePlatformGuide(): void {
-  try {
-    localStorage.setItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY, "1");
-  } catch {
-    // Local storage can be unavailable in isolated previews.
-  }
-  window.dispatchEvent(new Event("maibot:open-message-platform-guide"));
 }
 
 function maibotServiceFrom(
@@ -174,8 +156,6 @@ export function InitializationWizard({
   );
   const [step, setStep] = useState<WizardStep>("core");
   const [statusEllipsis, setStatusEllipsis] = useState("");
-  const [adapterResetRequest, setAdapterResetRequest] =
-    useState<AdapterConfigResetRequest | null>(null);
   const autoStartRequested = useRef(false);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupRunId = useRef(0);
@@ -256,22 +236,17 @@ export function InitializationWizard({
     async ({
       repairFirst,
       startService,
-      resetInvalidAdapterConfigs = false,
     }: {
       repairFirst: boolean;
       startService: () => Promise<void>;
-      resetInvalidAdapterConfigs?: boolean;
     }) => {
       const runId = startupRunId.current + 1;
       startupRunId.current = runId;
       setBusy(true);
       setError(null);
-      setAdapterResetRequest(null);
       try {
         if (repairFirst) {
-          await window.maibotDesktop?.init.repair({
-            resetInvalidAdapterConfigs,
-          });
+          await window.maibotDesktop?.init.repair();
           if (startupRunId.current !== runId) {
             return;
           }
@@ -286,13 +261,7 @@ export function InitializationWizard({
         }
       } catch (nextError) {
         if (startupRunId.current === runId) {
-          const resetRequest = adapterConfigResetRequestFromError(nextError);
-          if (resetRequest) {
-            setAdapterResetRequest(resetRequest);
-            setError(null);
-          } else {
-            setError(messageFromError(nextError));
-          }
+          setError(messageFromError(nextError));
           await refreshSnapshot().catch(() => undefined);
         }
       } finally {
@@ -307,16 +276,6 @@ export function InitializationWizard({
   const startMaiCore = useCallback(async () => {
     await runMaiCoreStartup({
       repairFirst: true,
-      startService: async () => {
-        await window.maibotDesktop?.services.start("maibot");
-      },
-    });
-  }, [runMaiCoreStartup]);
-
-  const resetAdapterConfigAndStartMaiCore = useCallback(async () => {
-    await runMaiCoreStartup({
-      repairFirst: true,
-      resetInvalidAdapterConfigs: true,
       startService: async () => {
         await window.maibotDesktop?.services.start("maibot");
       },
@@ -691,42 +650,7 @@ export function InitializationWizard({
               <span>{error}</span>
             </div>
           ) : null}
-          {adapterResetRequest ? (
-            <section className="rounded-lg border border-warning/40 bg-warning/15 p-4 text-sm">
-              <div className="flex items-start gap-3">
-                <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-warning-foreground">
-                    {adapterBackendLabel(adapterResetRequest.backend)}配置解析失败
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {adapterResetRequest.configPath}
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {adapterResetRequest.detail}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      disabled={busy}
-                      onClick={() => void resetAdapterConfigAndStartMaiCore()}
-                      size="sm"
-                    >
-                      {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-                      重置默认配置
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      onClick={() => setAdapterResetRequest(null)}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      暂不修复
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </section>
-          ) : null}
+
         </DialogBody>
 
         {step === "core" && error && !busy && !starting ? (

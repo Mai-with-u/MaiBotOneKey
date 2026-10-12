@@ -59,9 +59,9 @@ test("installed bundle monitors only the target, retries failures, and stops on 
   expect(source).toContain("const autoLoadOnDiscovery = false;");
 });
 
-test("missing accounts use original entry; incompatible bundles and invalid accounts are rejected", async () => {
-  expect(await prepareSnowLumaEntry("fixture")).toBe(join("fixture", "index.mjs"));
-  expect(await prepareSnowLumaEntry("fixture", "0")).toBe(join("fixture", "index.mjs"));
+test("missing accounts, incompatible bundles and invalid accounts are rejected", async () => {
+  await expect(prepareSnowLumaEntry("fixture", "")).rejects.toThrow("Target QQ");
+  await expect(prepareSnowLumaEntry("fixture", "0")).rejects.toThrow("Target QQ");
   expect(() => prepareRuntime("unknown", "123")).toThrow("Unsupported SnowLuma bundle");
   expect(() => prepareRuntime("unknown", "1';throw 1")).toThrow("Target QQ");
 });

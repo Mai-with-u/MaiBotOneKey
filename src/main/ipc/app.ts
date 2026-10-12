@@ -31,8 +31,6 @@ import {
   sep,
 } from "node:path";
 import type {
-  BotAccountConfigState,
-  BotPlatformAccountSetupRequest,
   CloseAction,
   AppIconId,
   AppIconSettings,
@@ -2806,8 +2804,8 @@ export function registerAppIpc({
     return result;
   });
 
-  ipcMain.handle("init:repair", async (_event, options?: InitRepairOptions): Promise<InitRepairResult> => {
-    const result = await initManager.repair(options);
+  ipcMain.handle("init:repair", async (): Promise<InitRepairResult> => {
+    const result = await initManager.repair();
     logStore.append(
       "desktop",
       "system",
@@ -2919,6 +2917,16 @@ export function registerAppIpc({
     };
   });
 
+  ipcMain.handle("init:saveQqBackendAccount", async (_event, backend: QqBackend, account: string) => {
+    await serviceManager.refresh();
+    const service = serviceManager.snapshot().find((item) => item.id === "napcat");
+    if (backend === initManager.getQqBackendSync() && service && isRuntimeBusy(service)) {
+      throw new Error("请先停止当前 QQ 协议端，再修改 QQ 账号。");
+    }
+    await initManager.saveQqBackendAccount(backend, account);
+    await broadcastSnapshot();
+  });
+
   ipcMain.handle("init:saveSnowLumaWebuiPassword", async (_event, password: string) => {
     await serviceManager.saveSnowLumaWebuiPassword(password);
     await broadcastSnapshot();
@@ -2940,33 +2948,6 @@ export function registerAppIpc({
         "desktop",
         "system",
         `QQ 后端已切换为: ${backend === "snowluma" ? "SnowLuma" : "NapCat"}`,
-      );
-      await broadcastSnapshot();
-      return state;
-    },
-  );
-
-  ipcMain.handle(
-    "init:getBotAccountConfigState",
-    async (): Promise<BotAccountConfigState> => {
-      return initManager.getBotAccountConfigState();
-    },
-  );
-
-  ipcMain.handle(
-    "init:setBotPlatformAccount",
-    async (
-      _event,
-      request: BotPlatformAccountSetupRequest,
-    ): Promise<BotAccountConfigState> => {
-      const state = await initManager.setBotPlatformAccount(
-        request.platform,
-        request.account,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `Bot 主账号已配置: ${request.platform}:${request.account}`,
       );
       await broadcastSnapshot();
       return state;

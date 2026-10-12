@@ -580,14 +580,16 @@ export class ServiceManager extends EventEmitter {
     }, WATCHDOG_INTERVAL_MS);
   }
 
+  private requestMissingQqAccount(): boolean {
+    if (this.initManager.getQqProtocolSync() === "official" || this.initManager.hasMessagePlatformConfigured()) return false;
+    this.emit("qq-account-setup-required", this.initManager.getQqBackendSync());
+    return true;
+  }
+
   async startAll(): Promise<ServiceDescriptor[]> {
+    if (this.requestMissingQqAccount()) return [];
     await this.initManager.assertAgreementsConfirmed();
-    const serviceIds: ServiceId[] = this.initManager.getQqProtocolSync() !== "official" && this.initManager.hasMessagePlatformConfigured()
-      ? ["napcat", "maibot"]
-      : ["maibot"];
-    if (!serviceIds.includes("napcat")) {
-      this.logs.append("napcat", "system", "start all skipped: message platform is not configured");
-    }
+    const serviceIds: ServiceId[] = this.initManager.getQqProtocolSync() === "official" ? ["maibot"] : ["napcat", "maibot"];
     for (const serviceId of serviceIds) {
       await this.start(serviceId);
     }
@@ -649,10 +651,8 @@ export class ServiceManager extends EventEmitter {
     if (serviceId === "napcat" && this.initManager.getQqProtocolSync() === "official") {
       throw new Error("当前选择的是官方 QQ 适配器，请在 MaiBot 中配置并启用。");
     }
-    if (serviceId === "napcat" && !this.initManager.hasMessagePlatformConfigured()) {
-      const message = "请先在消息平台页面完成配置，再启动 NapCat / SnowLuma。";
-      this.logs.append(serviceId, "system", "start blocked: message platform is not configured");
-      throw new Error(message);
+    if (serviceId === "napcat" && this.requestMissingQqAccount()) {
+      return this.toDescriptor(definition, state);
     }
 
     if (state.status === "starting") {
@@ -1132,6 +1132,7 @@ export class ServiceManager extends EventEmitter {
     const maibotWebUi = this.initManager.readMaiBotWebUiEndpointSync();
     const napcatRoot = this.paths.napcatRoot;
     const qqBackend = this.initManager.getQqBackendSync();
+    const snowLumaPorts = qqBackend === "snowluma" ? this.initManager.readSnowLumaServicePortsSync() : { webui: 5099, onebot: 7988 };
     const snowlumaRoot = this.paths.snowlumaRoot;
     const snowlumaNode = join(snowlumaRoot, "node.exe");
     const snowlumaEntry = join(snowlumaRoot, "index.mjs");
@@ -1164,9 +1165,10 @@ export class ServiceManager extends EventEmitter {
       {
         id: "napcat",
         name: qqBackend === "snowluma" ? "SnowLuma" : "NapCat",
-        port: qqBackend === "snowluma" ? 5099 : 6099,
-        ports: qqBackend === "snowluma" ? [5099, 7988] : [6099],
-        url: qqBackend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui",
+        detail: qqBackend === "snowluma" ? snowLumaPorts.error : undefined,
+        port: qqBackend === "snowluma" ? snowLumaPorts.webui : 6099,
+        ports: qqBackend === "snowluma" ? [snowLumaPorts.webui, snowLumaPorts.onebot] : [6099],
+        url: qqBackend === "snowluma" ? `http://127.0.0.1:${snowLumaPorts.webui}` : "http://127.0.0.1:6099/webui",
         cwd: qqBackend === "snowluma" ? snowlumaRoot : napcatRoot,
         defaultRequiredPaths: qqBackend === "snowluma"
           ? [snowlumaRoot, snowlumaEntry]
@@ -1174,8 +1176,8 @@ export class ServiceManager extends EventEmitter {
               napcatRoot,
               ...(process.platform === "darwin" ? [napcatMacLauncher, defaultMacQqExecutable] : []),
             ],
-        conflictPorts: qqBackend === "snowluma" ? [5099, 7988] : [6099],
-        readyPorts: qqBackend === "snowluma" ? [5099] : [6099],
+        conflictPorts: qqBackend === "snowluma" ? [snowLumaPorts.webui, snowLumaPorts.onebot] : [6099],
+        readyPorts: qqBackend === "snowluma" ? [snowLumaPorts.webui] : [6099],
         displayDefaultCommandLine: async () => {
           if (qqBackend === "snowluma") {
             return existsSync(snowlumaNode)
@@ -1192,13 +1194,14 @@ export class ServiceManager extends EventEmitter {
         },
         buildDefaultCommand: async () => {
           if (qqBackend === "snowluma") {
-            const account = await this.initManager.readSnowLumaTargetQqAccount();
+            if (snowLumaPorts.error) throw new Error(snowLumaPorts.error);
+            const account = this.initManager.getMessagePlatformQqAccount();
             if (!account) throw new Error("请先在消息平台配置中填写机器人 QQ 号，再启动 SnowLuma。");
             const entry = await prepareSnowLumaEntry(snowlumaRoot, account);
             this.logs.append("napcat", "system", `SnowLuma 将持续检测并自动注入 QQ ${account}，其他 QQ 不会自动注入。`);
             return [existsSync(snowlumaNode) ? snowlumaNode : "node", entry];
           }
-          const qq = await this.initManager.readQqAccount();
+          const qq = this.initManager.getMessagePlatformQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
           if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
             return qq ? ["/bin/bash", napcatMacLauncher, "-q", qq] : ["/bin/bash", napcatMacLauncher];
@@ -1519,7 +1522,7 @@ export class ServiceManager extends EventEmitter {
       return commandLine;
     }
 
-    const qq = await this.initManager.readQqAccount();
+    const qq = this.initManager.getMessagePlatformQqAccount();
     return commandLine
       .replace(/(["'])<QQ>\1/gu, qq ? quoteCommandPart(qq) : "")
       .replace(/<QQ>/gu, qq ? quoteCommandPart(qq) : "")
