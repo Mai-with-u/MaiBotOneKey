@@ -1,17 +1,9 @@
 import type { GithubSourcePreset } from "../../shared/contracts";
-import { SourceSettingsManager } from "./source-settings-manager";
+import { getDefaultGitSources, SourceSettingsManager } from "./source-settings-manager";
 
 const OFFICIAL_GITHUB_BASE_URL = "https://github.com/";
 const OFFICIAL_RAW_GITHUB_BASE_URL = "https://raw.githubusercontent.com/";
 const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
-const GITHUB_SOURCE_PREFIXES: Partial<Record<GithubSourcePreset, string>> = {
-  "gh-proxy-com": "https://gh-proxy.com/",
-  "v6-gh-proxy-org": "https://v6.gh-proxy.org/",
-  "cdn-gh-proxy-com": "https://cdn.gh-proxy.com/",
-  "gitproxy-mrhjx-cn": "https://gitproxy.mrhjx.cn/",
-  "ghproxy-net": "https://ghproxy.net/",
-  "ghproxy-vip": "https://ghproxy.vip/",
-};
 
 export interface RemoteSourceManagerOptions {
   sourceSettingsManager?: SourceSettingsManager;
@@ -48,7 +40,7 @@ export class RemoteSourceManager {
       candidates.push({ preset, label, url: resolvedUrl });
     };
 
-    const settingsSources = this.sourceSettingsManager?.getGitSources() ?? [];
+    const settingsSources = this.sourceSettingsManager?.getGitSources() ?? getDefaultGitSources();
     if (sourcePreset === "auto") {
       for (const source of settingsSources) {
         const preset = source.id === "official" ? "github" : source.id;
@@ -85,10 +77,8 @@ export class RemoteSourceManager {
       return url;
     }
 
-    const sourceBaseUrl = GITHUB_SOURCE_PREFIXES[sourcePreset] ?? this.sourceSettingsManager
-      ?.getGitSources()
-      .find((source) => source.id === sourcePreset)
-      ?.url;
+    const sourceBaseUrl = (this.sourceSettingsManager?.getGitSources() ?? getDefaultGitSources())
+      .find((source) => source.id === sourcePreset)?.url;
     if (isOfficialGithubBase(sourceBaseUrl)) {
       return normalized;
     }

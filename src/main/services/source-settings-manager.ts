@@ -43,6 +43,10 @@ const DEFAULT_SOURCE_SETTINGS: SourceSettings = {
   ],
 };
 
+export function getDefaultGitSources(): ManagedSourceEntry[] {
+  return DEFAULT_SOURCE_SETTINGS.github.map((source) => ({ ...source }));
+}
+
 export class SourceSettingsManager {
   private readonly settingsPath: string;
 
