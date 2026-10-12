@@ -593,10 +593,19 @@ export class ServiceManager extends EventEmitter {
     if (this.requestMissingQqAccount()) return [];
     await this.initManager.assertAgreementsConfirmed();
     const serviceIds: ServiceId[] = this.initManager.getQqProtocolSync() === "official" ? ["maibot"] : ["napcat", "maibot"];
+    const failures: string[] = [];
     for (const serviceId of serviceIds) {
-      await this.start(serviceId);
+      try {
+        await this.start(serviceId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push(`${this.getDefinition(serviceId).name} 启动失败：${message}`);
+        this.logs.append(serviceId, "system", `start-all failed: ${message}`);
+      }
     }
-    return this.refresh();
+    const services = await this.refresh();
+    if (failures.length > 0) throw new Error(failures.join("；"));
+    return services;
   }
 
   async stopAll(): Promise<ServiceDescriptor[]> {

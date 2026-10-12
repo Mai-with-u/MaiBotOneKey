@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { InitManager } from "../../src/main/services/init-manager";
-import type { InitState, QqBackend, RuntimePaths } from "../../src/shared/contracts";
+import type { InitState, QqBackend, RuntimePaths, ServiceId } from "../../src/shared/contracts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -37,6 +37,43 @@ async function fixture() {
   manager.getState = async () => ({ qqBackend: manager.getQqBackendSync() } as InitState);
   return { paths, manager, adapterPath };
 }
+
+test("start-all continues with MaiBot after a SnowLuma port conflict and reports the failure", async () => {
+  const { paths, manager } = await fixture();
+  await manager.setQqBackend("snowluma", { syncAdapters: false });
+  manager.hasMessagePlatformConfigured = () => true;
+  manager.assertAgreementsConfirmed = async () => {};
+  const pty = Object.assign(new EventEmitter(), { list: () => [] });
+  const services = new ServiceManager(paths, manager, { append() {}, getServiceLogPath: (id: string) => join(paths.logsRoot, `${id}.log`) } as any, pty as any);
+  const attempts: ServiceId[] = [];
+  let refreshed = false;
+  services.start = async (id) => {
+    attempts.push(id);
+    if (id === "napcat") throw new Error("端口 5099 已被占用，请停止占用进程后重试");
+    return services.snapshot().find((service) => service.id === id)!;
+  };
+  services.refresh = async () => { refreshed = true; return services.snapshot(); };
+  try {
+    await expect(services.startAll()).rejects.toThrow("SnowLuma 启动失败：端口 5099 已被占用");
+    expect(attempts).toEqual(["napcat", "maibot"]);
+    expect(refreshed).toBe(true);
+  } finally { services.dispose(); }
+});
+
+test("start-all reports both service failures after attempting both services", async () => {
+  const { paths, manager } = await fixture();
+  manager.hasMessagePlatformConfigured = () => true;
+  manager.assertAgreementsConfirmed = async () => {};
+  const pty = Object.assign(new EventEmitter(), { list: () => [] });
+  const services = new ServiceManager(paths, manager, { append() {}, getServiceLogPath: (id: string) => join(paths.logsRoot, `${id}.log`) } as any, pty as any);
+  const attempts: ServiceId[] = [];
+  services.start = async (id) => { attempts.push(id); throw new Error(`${id} unavailable`); };
+  services.refresh = async () => services.snapshot();
+  try {
+    await expect(services.startAll()).rejects.toThrow("NapCat 启动失败：napcat unavailable；MaiBot Core 启动失败：maibot unavailable");
+    expect(attempts).toEqual(["napcat", "maibot"]);
+  } finally { services.dispose(); }
+});
 
 test("SnowLuma-only payload defaults to SnowLuma and preserves a saved backend", async () => {
   const { paths, manager } = await fixture();

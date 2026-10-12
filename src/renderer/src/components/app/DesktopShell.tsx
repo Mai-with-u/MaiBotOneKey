@@ -12,6 +12,7 @@ import {
   Square,
   TerminalSquare,
   Unplug,
+  X,
 } from "lucide-react";
 import { type CSSProperties, type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
@@ -1224,7 +1225,6 @@ export function DesktopShell(): React.JSX.Element {
     const offSnapshot = window.maibotDesktop?.onSnapshot((next) => {
       try {
         setSnapshot(validateDesktopSnapshot(next));
-        setActionError(null);
       } catch (error) {
         setActionError(errorMessage(error));
       }
@@ -1834,8 +1834,11 @@ export function DesktopShell(): React.JSX.Element {
           />
 
           {actionError ? (
-            <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive">
-              {actionError}
+            <div className="flex shrink-0 items-center gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive" role="alert">
+              <span className="min-w-0 flex-1 break-words">{actionError}</span>
+              <Button aria-label="关闭错误提示" className="size-6" onClick={() => setActionError(null)} size="icon-sm" variant="ghost">
+                <X />
+              </Button>
             </div>
           ) : null}
 

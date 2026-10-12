@@ -3945,9 +3945,11 @@ export function registerAppIpc({
   ipcMain.handle(
     "services:startAll",
     async (): Promise<ServiceDescriptor[]> => {
-      const services = await serviceManager.startAll();
-      await broadcastSnapshot();
-      return services;
+      try {
+        return await serviceManager.startAll();
+      } finally {
+        await broadcastSnapshot();
+      }
     },
   );
 
