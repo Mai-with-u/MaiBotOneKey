@@ -321,6 +321,8 @@
 :root[data-appearance-mode="millennium"] .app-window-controls button,
 :root[data-appearance-mode="millennium"] button[aria-pressed="false"] {
   background-color: var(--mil-key);
+  /* The inset keycap outline sits inside the transparent CSS border. */
+  background-clip: padding-box;
   border-color: transparent;
   box-shadow: var(--mil-keycap);
   color: var(--mil-ink);
