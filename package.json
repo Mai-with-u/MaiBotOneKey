@@ -20,12 +20,12 @@
     "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
     "release:win:standard": "bun run release:win",
     "release:win:snowluma": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts --snowluma-only",
-    "pack:win": "bun run release:win"
+    "pack:win": "bun run release:win",
+    "test": "bun test scripts/tests"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-tabs": "^1.1.13",
-    "@tanstack/react-virtual": "^3.13.24",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/xterm": "^6.0.0",
@@ -33,7 +33,6 @@
     "clsx": "^2.1.1",
     "iconv-lite": "^0.7.2",
     "lucide-react": "^0.468.0",
-    "next-themes": "^0.4.6",
     "node-pty": "^1.1.0",
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
@@ -128,33 +127,20 @@
           "!SnowLuma/data/**",
           "!SnowLuma/logs/**",
           "!napcat/**",
-          "!napcat/*.db",
-          "!napcat/*.db-*",
-          "!napcat/*.log",
-          "!napcat/config/**",
-          "!napcat/cache/**",
-          "!napcat/data/**",
-          "!napcat/logs/**",
-          "!napcat/temp/**",
-          "!napcat/tmp/**",
-          "!napcat/napcat/config/**",
-          "!napcat/napcat/cache/**",
-          "!napcat/napcat/data/**",
-          "!napcat/napcat/logs/**",
-          "!napcat/napcat/temp/**",
-          "!napcat/napcat/tmp/**",
-          "!napcat/versions/**/resources/app/napcat/cache/**",
-          "!napcat/versions/**/resources/app/napcat/config/**",
-          "!napcat/versions/**/resources/app/napcat/data/**",
-          "!napcat/versions/**/resources/app/napcat/logs/**",
-          "!napcat/versions/**/resources/app/napcat/temp/**",
-          "!napcat/versions/**/resources/app/napcat/tmp/**"
+          "!SnowLuma/.maibot-target-runtime.mjs"
         ]
       },
       {
         "from": "resources/bundled-plugins/qq_official_adapter",
         "to": "modules/MaiBot/plugins/qq_official_adapter",
-        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc", "!config.toml", "!data/**", "!logs/**"]
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!config.toml",
+          "!data/**",
+          "!logs/**"
+        ]
       },
       {
         "from": "modules/MaiBot/plugins/snowluma-adapter",
@@ -293,7 +279,7 @@
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false,
       "installerSidebar": "resources/installerSidebar.bmp",
-      "uninstallerSidebar": "resources/uninstallerSidebar.bmp",
+      "uninstallerSidebar": "resources/installerSidebar.bmp",
       "shortcutName": "MaiBot OneKey"
     }
   }
