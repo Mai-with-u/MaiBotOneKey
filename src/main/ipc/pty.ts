@@ -2,6 +2,7 @@ import type { BrowserWindow } from "electron";
 import { ipcMain } from "electron";
 import type {
   PtyInputRequest,
+  PtyBufferSnapshot,
   PtyResizeRequest,
   PtySessionSnapshot,
   PtyStartRequest,
@@ -71,14 +72,14 @@ export function registerPtyIpc({ manager, getMainWindow }: RegisterPtyIpcOptions
     return manager.list();
   });
 
-  ipcMain.handle("pty:getBuffer", (_event, sessionId: string): string => {
+  ipcMain.handle("pty:getBuffer", (_event, sessionId: string): PtyBufferSnapshot | null => {
     try {
       return manager.getBuffer(sessionId);
     } catch (error) {
       if (!isMissingSession(error)) {
         throw error;
       }
-      return "";
+      return null;
     }
   });
 }

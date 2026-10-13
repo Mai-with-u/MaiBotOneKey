@@ -1778,13 +1778,13 @@ samp {
   background: transparent;
 }
 
-/* xterm keeps a dark console surface regardless of app theme. */
-.xterm,
-.xterm * {
+/* Keep typography defaults on the root: xterm's DOM renderer supplies an
+   inherited per-cell spacing correction to its rows, especially at high DPI. */
+.xterm {
   font-feature-settings: normal;
   font-variant-ligatures: none;
   letter-spacing: 0;
-  text-rendering: geometricPrecision;
+  text-rendering: auto;
 }
 
 .xterm-viewport::-webkit-scrollbar-thumb {

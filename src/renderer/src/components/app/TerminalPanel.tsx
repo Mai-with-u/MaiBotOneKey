@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useShortcut } from "@/lib/use-shortcut";
 import { cn } from "@/lib/utils";
+import { TerminalOutput } from "@/lib/terminal-output";
 
 const XTERM_THEME = {
   background: "#0c100e",
@@ -63,6 +64,8 @@ interface TerminalInstance {
   disposables: Disposable[];
   opened: boolean;
   bufferLoaded: boolean;
+  output: TerminalOutput;
+  needsFit: boolean;
 }
 
 interface UserTerminal {
@@ -349,6 +352,11 @@ export function TerminalPanel({
     if (!instance?.opened) {
       return;
     }
+    if (instance.output.busy) {
+      instance.needsFit = true;
+      return;
+    }
+    instance.needsFit = false;
 
     const pane = panesRef.current.get(sessionId);
     const rect = pane?.getBoundingClientRect();
@@ -362,6 +370,12 @@ export function TerminalPanel({
 
     try {
       instance.fitAddon.fit();
+      const { cols, rows } = instance.terminal;
+      const session = sessionsRef.current.get(sessionId);
+      // Fit can be a no-op even though a newly started PTY still has its default size.
+      if (!session || session.cols !== cols || session.rows !== rows) {
+        void bridgeRef.current?.pty.resize({ sessionId, cols, rows }).catch(() => undefined);
+      }
     } catch {
       return;
     }
@@ -385,6 +399,8 @@ export function TerminalPanel({
       }
 
       const terminal = new Terminal({
+        cols: sessionsRef.current.get(sessionId)?.cols ?? 100,
+        rows: sessionsRef.current.get(sessionId)?.rows ?? 32,
         allowProposedApi: true,
         convertEol: false,
         cursorBlink: true,
@@ -404,6 +420,9 @@ export function TerminalPanel({
       terminal.loadAddon(unicode11Addon);
       terminal.unicode.activeVersion = "11";
       terminal.loadAddon(fitAddon);
+      const output = new TerminalOutput(terminal, () => {
+        if (terminalsRef.current.get(sessionId)?.needsFit) scheduleFitTerminal(sessionId);
+      });
 
       const disposables: Disposable[] = [
         terminal.registerLinkProvider(createTerminalLinkProvider(terminal, maibotRoot)),
@@ -417,6 +436,7 @@ export function TerminalPanel({
           });
         }),
         terminal.onResize(({ cols, rows }) => {
+          if (output.applyingSize || output.busy) return;
           const currentSession = sessionsRef.current.get(sessionId);
           if (currentSession?.cols === cols && currentSession.rows === rows) {
             return;
@@ -451,11 +471,11 @@ export function TerminalPanel({
         return true;
       });
 
-      const instance = { terminal, fitAddon, disposables, opened: false, bufferLoaded: false };
+      const instance = { terminal, fitAddon, disposables, opened: false, bufferLoaded: false, output, needsFit: false };
       terminalsRef.current.set(sessionId, instance);
       return instance;
     },
-    [maibotRoot, terminalFontSize],
+    [maibotRoot, terminalFontSize, scheduleFitTerminal],
   );
 
   useEffect(() => {
@@ -534,18 +554,15 @@ export function TerminalPanel({
       }
 
       try {
-        const buffer = await bridge.pty.getBuffer(sessionId);
-        instance.terminal.reset();
-        writeStoredSystemLogs(sessionId);
-        if (buffer) {
-          instance.terminal.write(buffer);
-        }
+        await instance.output.restore(() => bridge.pty.getBuffer(sessionId), () => writeStoredSystemLogs(sessionId));
+        await instance.output.flush();
         instance.bufferLoaded = true;
+        scheduleFitTerminal(sessionId);
       } catch {
         instance.bufferLoaded = false;
       }
     },
-    [getTerminal, writeStoredSystemLogs],
+    [getTerminal, writeStoredSystemLogs, scheduleFitTerminal],
   );
 
   const refreshSessions = useCallback(async () => {
@@ -594,7 +611,7 @@ export function TerminalPanel({
         if (closedSessionIdsRef.current.has(event.sessionId)) {
           return;
         }
-        getTerminal(event.sessionId).terminal.write(event.data);
+        getTerminal(event.sessionId).output.push(event);
       }),
       bridge.pty.onExit((event) => {
         if (closedSessionIdsRef.current.has(event.sessionId)) {
@@ -622,6 +639,10 @@ export function TerminalPanel({
       bridge.pty.onSnapshot((snapshot) => {
         if (closedSessionIdsRef.current.has(snapshot.id)) {
           return;
+        }
+        const previous = sessionsRef.current.get(snapshot.id);
+        if (previous && previous.startedAt !== snapshot.startedAt) {
+          getTerminal(snapshot.id).bufferLoaded = false;
         }
         sessionsRef.current.set(snapshot.id, snapshot);
         upsertUserTerminal(snapshot);

@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import * as nodePty from "node-pty";
 import type {
   PtyDataEvent,
+  PtyBufferSnapshot,
   PtyEncoding,
   PtyErrorEvent,
   PtyExitEvent,
@@ -17,13 +18,13 @@ import type {
   PtyStopRequest,
 } from "../../shared/contracts";
 import { decodePtyData, encodePtyInput, getNodePtyEncoding, getWindowsCodePage } from "./encoding";
+import { PtyOutputHistory } from "./output-history";
 
 const MIN_COLS = 5;
 const MIN_ROWS = 5;
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 32;
 const DEFAULT_FORCE_AFTER_MS = 10_000;
-const BUFFER_LIMIT = 5_000_000;
 const require = createRequire(import.meta.url);
 
 type PtySessionEventMap = {
@@ -217,7 +218,7 @@ function ensureNodePtySpawnHelperExecutable(): void {
 
 class PtySession {
   private ptyProcess: nodePty.IPty | null = null;
-  private outputBuffer = "";
+  private readonly outputHistory = new PtyOutputHistory();
   private stopTimer: NodeJS.Timeout | null = null;
   private readonly createdAt = Date.now();
   private snapshot: PtySessionSnapshot;
@@ -258,8 +259,8 @@ class PtySession {
     return this.snapshot.pid;
   }
 
-  getBuffer(): string {
-    return this.outputBuffer;
+  getBuffer(): PtyBufferSnapshot {
+    return this.outputHistory.snapshot(this.snapshot.cols, this.snapshot.rows, this.createdAt);
   }
 
   start(): PtySessionSnapshot {
@@ -292,10 +293,10 @@ class PtySession {
 
     this.ptyProcess.onData((data) => {
       const decoded = decodePtyData(data as string | Buffer, encoding);
-      this.appendOutput(decoded);
       this.emitEvent("data", {
+        ...this.outputHistory.append(decoded, this.snapshot.cols, this.snapshot.rows),
         sessionId: this.id,
-        data: decoded,
+        startedAt: this.createdAt,
       });
     });
 
@@ -340,6 +341,12 @@ class PtySession {
       rows,
     };
 
+    this.emitEvent("data", {
+      ...this.outputHistory.append("", cols, rows),
+      sessionId: this.id,
+      startedAt: this.createdAt,
+    });
+
     if (this.ptyProcess && this.status === "running") {
       this.ptyProcess.resize(cols, rows);
     }
@@ -348,7 +355,7 @@ class PtySession {
   }
 
   clear(): void {
-    this.outputBuffer = "";
+    this.outputHistory.clear();
     this.ptyProcess?.clear();
   }
 
@@ -403,13 +410,6 @@ class PtySession {
     return { ...this.snapshot };
   }
 
-  private appendOutput(data: string): void {
-    this.outputBuffer += data;
-    if (this.outputBuffer.length > BUFFER_LIMIT) {
-      this.outputBuffer = this.outputBuffer.slice(-BUFFER_LIMIT);
-    }
-  }
-
   private markError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     this.snapshot = {
@@ -449,6 +449,7 @@ class PtySession {
 
 export class PtySessionManager extends EventEmitter {
   private readonly sessions = new Map<string, PtySession>();
+  private readonly preferredSizes = new Map<string, { cols: number; rows: number }>();
 
   start(request: PtyStartRequest): PtySessionSnapshot {
     const session = new PtySession(
@@ -457,6 +458,7 @@ export class PtySessionManager extends EventEmitter {
         rows: DEFAULT_ROWS,
         cwd: process.platform === "win32" ? process.cwd() : homedir(),
         ...request,
+        ...(request.id ? this.preferredSizes.get(request.id) : undefined),
       },
       (event, ...args) => {
         this.emit(event, ...args);
@@ -485,7 +487,9 @@ export class PtySessionManager extends EventEmitter {
   }
 
   resize({ sessionId, cols, rows }: PtyResizeRequest): void {
-    this.getRequired(sessionId).resize({ cols, rows });
+    const size = { cols: clampDimension(cols, DEFAULT_COLS), rows: normalizeRows(rows) };
+    this.preferredSizes.set(sessionId, size);
+    this.sessions.get(sessionId)?.resize(size);
   }
 
   stop({ sessionId, forceAfterMs }: PtyStopRequest): void {
@@ -500,6 +504,7 @@ export class PtySessionManager extends EventEmitter {
     const session = this.getRequired(sessionId);
     session.kill();
     this.sessions.delete(sessionId);
+    this.preferredSizes.delete(sessionId);
   }
 
   clear(sessionId: string): void {
@@ -510,7 +515,7 @@ export class PtySessionManager extends EventEmitter {
     return [...this.sessions.values()].map((session) => session.getSnapshot());
   }
 
-  getBuffer(sessionId: string): string {
+  getBuffer(sessionId: string): PtyBufferSnapshot {
     return this.getRequired(sessionId).getBuffer();
   }
 
@@ -519,6 +524,7 @@ export class PtySessionManager extends EventEmitter {
       session.kill();
     }
     this.sessions.clear();
+    this.preferredSizes.clear();
     this.removeAllListeners();
   }
 
