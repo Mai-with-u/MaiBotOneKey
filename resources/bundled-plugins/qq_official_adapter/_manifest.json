@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "Mai-with-u.qq-adapter",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "name": "QQ 官方机器人适配器",
   "description": "直连 QQ 开放平台官方 API，支持群聊与单聊的文本、@、图片、表情收发，提供禁言、撤回工具。",
   "author": {
@@ -13,6 +13,14 @@
     "repository": "https://github.com/Mai-with-u/MaiBot-QQ-Adapter"
   },
   "plugin_type": "adapter",
+  "display": {
+    "icon": {
+      "type": "local",
+      "value": "assets/icon.svg",
+      "fallback": "plug",
+      "background": "#E5EAEC"
+    }
+  },
   "host_application": {
     "min_version": "1.3.0",
     "max_version": "1.3.99"

@@ -13,7 +13,7 @@
 ```toml
 [plugin]
 enabled = true
-config_version = "0.4.0"
+config_version = "0.4.1"
 
 [qq_official]
 app_id = "你的 AppID"
@@ -25,6 +25,16 @@ reconnect_delay_sec = 5.0
 unified_account_id = ""
 # 可选：允许执行绑定命令的用户（统一 ID 或 OpenID）；留空不限制。
 assign_admin_ids = []
+
+[mute]
+enabled = true
+# 留空时允许所有群使用禁言工具。
+allowed_groups = []
+
+[recall]
+enabled = true
+# 留空时允许所有群使用撤回工具，单聊不受群白名单限制。
+allowed_groups = []
 ```
 
 ## 出站消息
@@ -47,7 +57,7 @@ QQ 官方平台的 OpenID 与真实 QQ 号不互通。为了让消息以真实 Q
 
 ## 禁言工具
 
-提供 `mute` LLM 工具（参数：`msg_id`、`duration`、`reason`；按消息 ID 禁言发送者，所在群从该消息解析，调用官方 `POST /v2/groups/{group_openid}/restrict_chat_setting` 接口）。由配置 `[mute].enabled` 开关（默认关闭，WebUI 插件配置「禁言工具」中可切换，保存即生效）；启用后受以下配置约束：
+提供 `mute` LLM 工具（参数：`msg_id`、`duration`、`reason`；按消息 ID 禁言发送者，所在群从该消息解析，调用官方 `POST /v2/groups/{group_openid}/restrict_chat_setting` 接口）。由配置 `[mute].enabled` 开关（默认开启，WebUI 插件配置「禁言工具」中可切换，保存即生效）；启用后受以下配置约束：
 
 - `allowed_groups`：允许使用禁言的群（统一群号或 group_openid）；留空不限制
 - `admin_users`：保护名单（统一 QQ 号或 OpenID），名单内用户不会被禁言
@@ -57,9 +67,19 @@ QQ 官方平台的 OpenID 与真实 QQ 号不互通。为了让消息以真实 Q
 
 ## 撤回工具
 
-提供 `recall_message` LLM 工具（参数：`msg_id`；所在群/单聊从该消息解析，调用官方 `DELETE /v2/groups/{group_openid}/messages/{message_id}` 或 `DELETE /v2/users/{user_openid}/messages/{message_id}` 接口）。由配置 `[recall].enabled` 开关（默认关闭）；`allowed_groups` 限制可撤回的群（统一群号或 group_openid），留空不限制。
+提供 `recall_message` LLM 工具（参数：`msg_id`；所在群/单聊从该消息解析，调用官方 `DELETE /v2/groups/{group_openid}/messages/{message_id}` 或 `DELETE /v2/users/{user_openid}/messages/{message_id}` 接口）。由配置 `[recall].enabled` 开关（默认开启）；`allowed_groups` 限制可撤回的群（统一群号或 group_openid），留空不限制。
+
+未填写工具配置或 `allowed_groups` 时，工具默认启用且不限制群；已有配置中显式设置的 `enabled = false` 仍会关闭对应工具。
 
 平台限制：发送超过 2 分钟的消息不可撤回；群聊中机器人是群管理员时可撤回自己与普通群成员的消息，否则只能撤回自己发的消息；单聊只能撤回机器人自己发的消息。
+
+## 头像接口
+
+提供公开 API `adapter.avatar.get`（版本 `1`），与 SnowLuma 适配器使用相同的头像协议。参数为 `platform`、`target_id`、`target_type`（`user` 或 `group`，默认 `user`），并接受宿主传入的 `account_id` 和 `scope`。
+
+- 数字 QQ 号、群号返回头像 URL 和 `expires_in = 86400`，图片由宿主统一下载、缓存。
+- OpenID 已通过 `/assign_id` 或 `/assign_group_id` 绑定真实数字 ID 时，使用绑定值查询头像。
+- 未绑定的 OpenID、非数字绑定值及非 `qq` 平台返回 `status = "unsupported"`。
 
 ## 戳一戳
 

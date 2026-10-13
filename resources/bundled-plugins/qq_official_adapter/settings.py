@@ -10,7 +10,7 @@ class PluginSettings(PluginConfigBase):
     __ui_order__: ClassVar[int] = 0
 
     enabled: bool = Field(default=False, description="启用 QQ 官方机器人连接")
-    config_version: str = Field(default="0.4.0", description="配置版本")
+    config_version: str = Field(default="0.4.1", description="配置版本")
 
 
 class QQOfficialSettings(PluginConfigBase):
@@ -41,7 +41,7 @@ class MuteSettings(PluginConfigBase):
     __ui_label__: ClassVar[str] = "禁言工具"
     __ui_order__: ClassVar[int] = 2
 
-    enabled: bool = Field(default=False, description="启用 mute 禁言工具，关闭时不向模型提供该工具")
+    enabled: bool = Field(default=True, description="启用 mute 禁言工具，默认开启，关闭时不向模型提供该工具")
     allowed_groups: List[str] = Field(
         default_factory=list,
         description="允许使用禁言的群（统一群号或 group_openid）；留空不限制",
@@ -58,7 +58,7 @@ class RecallSettings(PluginConfigBase):
     __ui_label__: ClassVar[str] = "撤回工具"
     __ui_order__: ClassVar[int] = 3
 
-    enabled: bool = Field(default=False, description="启用 recall_message 撤回工具，关闭时不向模型提供该工具")
+    enabled: bool = Field(default=True, description="启用 recall_message 撤回工具，默认开启，关闭时不向模型提供该工具")
     allowed_groups: List[str] = Field(
         default_factory=list,
         description="允许使用撤回的群（统一群号或 group_openid）；留空不限制，单聊不受此限制",

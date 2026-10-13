@@ -26,6 +26,7 @@ test("first Core preparation installs both adapters and preserves an existing of
   await mkdir(bundledSnowLuma, { recursive: true });
   await writeFile(join(bundledCore, "bot.py"), "# fixture");
   await writeFile(join(bundledSnowLuma, "plugin.py"), "# fixture");
+  await writeFile(join(bundledSnowLuma, "config.toml"), "bundled config must not be copied");
   await writeFile(join(bundledSnowLuma, "_manifest.json"), JSON.stringify({ id: "maibot-team.snowluma-adapter" }));
   await cp(
     join(process.cwd(), "resources", "bundled-plugins", QQ_OFFICIAL_ADAPTER_DIRECTORY),
@@ -36,7 +37,8 @@ test("first Core preparation installs both adapters and preserves an existing of
   await manager.ensureServiceReady("maibot");
   const official = join(paths.maibotRoot, "plugins", QQ_OFFICIAL_ADAPTER_DIRECTORY);
   expect(existsSync(join(paths.maibotRoot, "plugins", "snowluma-adapter", "plugin.py"))).toBe(true);
-  for (const file of ["plugin.py", "settings.py", "codec.py", "_manifest.json", "LICENSE"]) {
+  expect(existsSync(join(paths.maibotRoot, "plugins", "snowluma-adapter", "config.toml"))).toBe(false);
+  for (const file of ["plugin.py", "settings.py", "codec.py", "_manifest.json", "LICENSE", "assets/icon.svg"]) {
     expect(existsSync(join(official, file))).toBe(true);
   }
   expect(JSON.parse(await readFile(join(official, "_manifest.json"), "utf8")).id).toBe(QQ_OFFICIAL_ADAPTER_PLUGIN_ID);
@@ -51,31 +53,25 @@ test("first Core preparation installs both adapters and preserves an existing of
   const backendStatePath = join(paths.userDataRoot, "qq-backend.json");
   const connections = { snowluma: { port: 7988, token: "preserved-token" } };
   await writeFile(backendStatePath, JSON.stringify({ backend: "snowluma", connections }));
-  const snowConfig = manager.snowlumaAdapterConfigPath();
-  await writeFile(snowConfig, '[plugin]\nenabled = true\n[client]\nport = 7988\ntoken = "saved-token"\n');
-  expect(manager.getQqProtocolSync()).toBe("snowluma");
-  expect(manager.hasOfficialQqCredentials()).toBe(true);
+  const snowConfig = join(paths.maibotRoot, "plugins", "snowluma-adapter", "config.toml");
+  const snowOriginal = '[plugin]\nenabled = true\n[client]\nport = 7988\ntoken = "saved-token"\n';
+  await writeFile(snowConfig, snowOriginal);
+  const requests: unknown[] = [];
+  manager.adapters.configureOfficial = async (credentials) => {
+    if (credentials && !credentials.appSecret.trim()) throw new Error("请填写 AppID 和 AppSecret");
+    requests.push(credentials);
+  };
   await expect(manager.setQqProtocol("official", { officialCredentials: { appId: "new-id", appSecret: " " } })).rejects.toThrow("请填写 AppID 和 AppSecret");
   expect(manager.getQqProtocolSync()).toBe("snowluma");
-  expect(await readFile(join(custom, "config.toml"), "utf8")).toBe(config);
   await manager.setQqProtocol("official");
-  const reloaded = new InitManager(paths);
-  expect(reloaded.getQqProtocolSync()).toBe("official");
-  expect(reloaded.getQqBackendSync()).toBe("snowluma");
+  expect(new InitManager(paths).getQqProtocolSync()).toBe("official");
+  expect(manager.getQqBackendSync()).toBe("snowluma");
   expect(JSON.parse(await readFile(backendStatePath, "utf8")).connections).toEqual(connections);
-  const officialConfig = await readFile(join(custom, "config.toml"), "utf8");
-  expect(officialConfig).toContain("enabled = true");
-  expect(officialConfig).toContain('app_id = "saved-app-id"');
-  const disabledSnowConfig = await readFile(snowConfig, "utf8");
-  expect(disabledSnowConfig).toContain("enabled = false");
-  expect(disabledSnowConfig).toContain('token = "saved-token"');
-  await manager.setQqProtocol("official", { officialCredentials: { appId: " updated-id ", appSecret: " updated-fixture-secret " } });
-  const updatedCredentialsConfig = await readFile(join(custom, "config.toml"), "utf8");
-  expect(updatedCredentialsConfig).toContain('app_id = "updated-id"');
-  expect(updatedCredentialsConfig).toContain('app_secret = "updated-fixture-secret"');
-  await writeFile(snowConfig, '[plugin\nbroken = true');
-  await expect(manager.setQqProtocol("official")).rejects.toThrow();
-  expect(await readFile(join(custom, "config.toml"), "utf8")).toBe(updatedCredentialsConfig);
+  await manager.setQqProtocol("official", { officialCredentials: { appId: "new-id", appSecret: "fixture-secret" } });
+  expect(requests).toEqual([undefined, { appId: "new-id", appSecret: "fixture-secret" }]);
+  expect(await readFile(join(custom, "config.toml"), "utf8")).toBe(config);
+  expect(await readFile(snowConfig, "utf8")).toBe(snowOriginal);
+
 });
 
 test("release resources include the official plugin without user configuration", async () => {

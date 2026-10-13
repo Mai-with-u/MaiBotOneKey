@@ -14,7 +14,7 @@ import re
 import time
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, ClientWebSocketResponse, WSMsgType
-from maibot_sdk import MaiBotPlugin, MessageGateway, PluginConfigBase, Tool
+from maibot_sdk import API, MaiBotPlugin, MessageGateway, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 from .codec import (
@@ -667,6 +667,38 @@ class QQOfficialAdapterPlugin(MaiBotPlugin):
                 return openid
         # 未绑定的用户 user_id 本身就是 OpenID；纯数字是无法反查的 QQ 号。
         return "" if user_id.isdigit() else user_id
+
+    @API("adapter.avatar.get", description="获取独立用户或群头像资源", version="1", public=True)
+    async def api_get_avatar(
+        self,
+        platform: str,
+        target_id: str,
+        target_type: str = "user",
+        account_id: str = "",
+        scope: str = "",
+    ) -> Dict[str, Any]:
+        """统一头像协议：只返回资源 URL，图片由 Host 按有效期独立缓存。"""
+        if platform != PLATFORM:
+            return {"status": "unsupported"}
+        if target_type not in {"user", "group"}:
+            raise ValueError("target_type 必须为 user 或 group")
+        normalized_target_id = target_id.strip()
+        if not normalized_target_id:
+            raise ValueError("target_id 必须非空")
+
+        # OpenID 不能用于 QQ 头像 URL；已绑定时使用对应的真实 QQ 号或群号。
+        normalized_target_id = self._id_map[target_type].get(normalized_target_id, normalized_target_id).strip()
+        if re.fullmatch(r"[0-9]+", normalized_target_id) is None:
+            return {"status": "unsupported"}
+        normalized_id = int(normalized_target_id)
+        if normalized_id <= 0:
+            raise ValueError("target_id 必须为正整数")
+        url = (
+            f"https://p.qlogo.cn/gh/{normalized_id}/{normalized_id}/640"
+            if target_type == "group"
+            else f"https://q1.qlogo.cn/g?b=qq&nk={normalized_id}&s=640"
+        )
+        return {"status": "available", "url": url, "expires_in": 86400}
 
     @Tool(
         MUTE_TOOL_NAME,
