@@ -13,12 +13,16 @@ type Candidate = {
 type Requirement = {
   label: string;
   required: boolean;
+  standardOnly?: boolean;
   candidates: Candidate[];
 };
 
 type JsonRecord = Record<string, unknown>;
 
 const root = process.cwd();
+const flags = process.argv.slice(2);
+if (flags.some((flag) => flag !== "--snowluma-only")) throw new Error("Unsupported payload check option: " + flags.join(" "));
+const snowlumaOnly = flags.includes("--snowluma-only");
 const pythonBootstrapPackages = new Set([
   "pip",
   "pip.dist-info",
@@ -52,7 +56,7 @@ function dirContaining(path: string, contains: string[]): Candidate {
 }
 
 const requirements: Requirement[] = [
-  ...["plugin.py", "settings.py", "codec.py", "_manifest.json", "LICENSE"].map((name) => ({
+  ...["plugin.py", "settings.py", "codec.py", "_manifest.json", "LICENSE", "assets/icon.svg"].map((name) => ({
     label: `QQ official adapter bundled plugin: ${name}`,
     required: true,
     candidates: [file(`resources/bundled-plugins/qq_official_adapter/${name}`)],
@@ -134,11 +138,13 @@ const requirements: Requirement[] = [
   },
   {
     label: "NapCat module",
+    standardOnly: true,
     required: true,
     candidates: [dir("modules/napcat")],
   },
   {
     label: "NapCat Windows runtime",
+    standardOnly: true,
     required: true,
     candidates: [file("modules/napcat/node.exe"), file("modules/napcat/NapCatWinBootMain.exe")],
   },
@@ -182,6 +188,7 @@ const requirements: Requirement[] = [
   },
   {
     label: "NapCat version resources",
+    standardOnly: true,
     required: true,
     candidates: [
       file("modules/napcat/napcat/package.json"),
@@ -340,6 +347,7 @@ async function main(): Promise<void> {
   console.log("Checking Windows release payload...");
 
   for (const requirement of requirements) {
+    if (snowlumaOnly && requirement.standardOnly) continue;
     const matched = [];
     for (const candidate of requirement.candidates) {
       if (await matches(candidate)) {
@@ -409,7 +417,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log("Windows standard release payload looks complete.");
+  console.log(`Windows ${snowlumaOnly ? "SnowLuma" : "standard"} release payload looks complete.`);
 }
 
 await main();

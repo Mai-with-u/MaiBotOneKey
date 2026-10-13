@@ -13,6 +13,24 @@ bun run dev
 
 本地预览默认使用 `bun run dev`。除非特别说明要验证 `out/` 构建产物或发布形态，不要优先使用 `bun run preview`。
 
+开发 MaiBot WebUI 与一键包的联动时，使用：
+
+```bash
+bun run dev:build # 首次使用或修改 MaiBot Dashboard 后构建
+bun run dev:dev
+```
+
+`dev:build` 构建 `modules/MaiBot/dashboard/dist`。`dev:dev` 直接使用已有构建启动一键包，不自动构建；缺少构建时会提示先运行 `dev:build`。启动时默认勾选「启动时使用本地 Dashboard 构建」。即使之前保存为关闭，或在本次开发运行中重置设置，也默认开启；仍可在设置中手动关闭。该行为只作用于此开发入口，普通 `bun run dev` 和安装包保持原有设置逻辑。
+
+`dev:dev` 使用独立的 `.cache/dev-python-env` 测试环境，首次从当前已安装的 `python-env` 复制，之后直接复用。如果没有现成环境，则首次初始化安装依赖并保留。启动仍会检查项目依赖，只补装缺失、版本不匹配或损坏的包。普通 `bun run dev` 继续使用原来的 Python 环境。
+
+从零重测首次引导时，先退出运行中的一键包和服务，再执行以下命令；配置和数据会清空，测试环境及已安装依赖会保留：
+
+```bash
+bun run dev:reset
+bun run dev:dev
+```
+
 ### Electron dev 启动排障
 
 如果 `bun run dev` 在 `start electron app...` 后立刻退出，并在日志里看到类似下面的错误：
