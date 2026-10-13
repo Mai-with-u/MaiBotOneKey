@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/use-shortcut";
 import { parseMaiBotTheme, READ_MAIBOT_THEME_SCRIPT, rememberMaiBotTheme } from "@/lib/maibot-theme";
 import { READ_MAIBOT_CONTENT_SCRIPT, waitForWebviewContent } from "@/lib/webview-readiness";
+import { isMessagePlatformRequest } from "@/lib/webui-host-message";
 
 interface WebviewPanelProps {
   readMaiBotAppearance?: boolean;
@@ -31,6 +32,7 @@ interface WebviewPanelProps {
   /** After authentication lands on the WebUI home page, continue to this URL. */
   navigationTargetUrl?: string;
   onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
+  onMessagePlatformRequest?: () => void;
 }
 
 type LoadState = "loading" | "ready" | "error";
@@ -96,6 +98,7 @@ export function WebviewPanel({
   showExternalToolbarMetadata = true,
   navigationTargetUrl,
   onWebuiIdentity,
+  onMessagePlatformRequest,
 }: WebviewPanelProps): React.JSX.Element {
   const webviewRef = useRef<WebviewElement | null>(null);
   const domReadyRef = useRef(false);
@@ -345,6 +348,15 @@ export function WebviewPanel({
       syncCurrentUrl(navigationEvent.url);
     };
 
+    const handleHostMessage = (event: Event): void => {
+      const message = event as Event & { channel: string };
+      if (isMessagePlatformRequest(message.channel, readLiveWebviewUrl(), url)) {
+        onMessagePlatformRequest?.();
+      }
+    };
+
+    webview.addEventListener("ipc-message", handleHostMessage);
+
     webview.addEventListener("did-start-navigation", handleNavigation);
     webview.addEventListener("did-redirect-navigation", handleNavigation);
     webview.addEventListener("did-navigate", handleNavigation);
@@ -355,6 +367,7 @@ export function WebviewPanel({
     webview.addEventListener("did-fail-load", handleFail);
 
     return () => {
+      webview.removeEventListener("ipc-message", handleHostMessage);
       webview.removeEventListener("did-start-navigation", handleNavigation);
       webview.removeEventListener("did-redirect-navigation", handleNavigation);
       webview.removeEventListener("did-navigate", handleNavigation);
@@ -364,7 +377,7 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [applyZoom, handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, readLiveWebviewUrl, readMaiBotAppearance, reloadKey, syncCurrentUrl, url, setLoadState]);
+  }, [applyZoom, handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, onMessagePlatformRequest, readLiveWebviewUrl, readMaiBotAppearance, reloadKey, syncCurrentUrl, url, setLoadState]);
 
   useEffect(() => {
     if (loadState !== "loading") return;
@@ -504,6 +517,7 @@ export function WebviewPanel({
           }`}
           key={webviewUrl}
           partition="persist:maibot-webui"
+          preload={onMessagePlatformRequest ? window.maibotDesktop?.webuiPreloadUrl : undefined}
           ref={webviewRef}
           src={webviewUrl}
           webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"

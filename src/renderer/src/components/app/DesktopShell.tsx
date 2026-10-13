@@ -1172,6 +1172,7 @@ function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | nul
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("maibot");
+  const openMessagePlatformFromWebui = useCallback(() => setActiveTab("message-platform"), []);
   const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
   const [maibotCoreHost, setMaibotCoreHost] = useState<HTMLDivElement | null>(null);
   const [maibotUpdateHost, setMaibotUpdateHost] = useState<HTMLDivElement | null>(null);
@@ -1816,6 +1817,7 @@ export function DesktopShell(): React.JSX.Element {
             className="flex min-h-0 flex-1 flex-col"
           >
           <Titlebar
+            serviceStatus={maibotService?.status}
             coreHostRef={setMaibotCoreHost}
             appVersion={snapshot?.appVersion ?? "0.1.0"}
             retro={useRetroChrome}
@@ -1888,6 +1890,7 @@ export function DesktopShell(): React.JSX.Element {
                 <WebviewPanel
                   active={activeTab === "maibot"}
                   onWebuiIdentity={rememberWebuiIdentity}
+                  onMessagePlatformRequest={openMessagePlatformFromWebui}
                   readMaiBotAppearance
                   loadingFallback={maibotWebuiStatusPanel}
                   title="MaiBot WebUI"

@@ -1,5 +1,16 @@
 export type ServiceId = "maibot" | "napcat";
 export type QqBackend = "napcat" | "snowluma";
+export type GithubSourcePreset =
+  | "auto"
+  | "github"
+  | "gh-proxy-com"
+  | "v6-gh-proxy-org"
+  | "cdn-gh-proxy-com"
+  | "gitproxy-mrhjx-cn"
+  | "ghproxy-net"
+  | "ghproxy-vip"
+  | (string & {});
+
 export type QqProtocol = QqBackend | "official";
 
 export type ServiceStatus =
@@ -443,6 +454,8 @@ export interface InitCheck {
   actionUrl?: string;
 }
 
+export type MaiBotSetupStatus = "pending" | "complete";
+
 export interface InitState {
   isReady: boolean;
   qqAccount?: string;
@@ -454,12 +467,8 @@ export interface InitState {
   repairedAt?: number;
 }
 
-export interface QqProtocolOptions extends InitRepairOptions {
+export interface QqProtocolOptions {
   officialCredentials?: { appId: string; appSecret: string };
-}
-
-export interface InitRepairOptions {
-  resetInvalidAdapterConfigs?: boolean;
 }
 
 export interface InitRepairResult {
@@ -653,31 +662,6 @@ export interface LauncherResetResult {
   resetAt: number;
 }
 
-export interface MaiBotChatStatistic {
-  name: string;
-  messageCount: number;
-}
-
-export interface MaiBotStatisticSummary {
-  available: boolean;
-  updatedAt: number;
-  sourcePath?: string;
-  periodLabel?: string;
-  startedAt?: string;
-  totalOnlineTime?: string;
-  totalMessages?: number;
-  totalReplies?: number;
-  totalRequests?: number;
-  totalTokens?: number;
-  totalCost?: string;
-  costPerMessage?: string;
-  costPerReceivedMessage?: string;
-  costPerReply?: string;
-  costPerHour?: string;
-  tokensPerHour?: string;
-  chatStats: MaiBotChatStatistic[];
-}
-
 export type MaiBotConfigFileName = "bot_config.toml" | "model_config.toml";
 
 export interface MaiBotConfigImportResult {
@@ -689,317 +673,10 @@ export interface MaiBotConfigImportResult {
   importedAt: number;
 }
 
-export type NapcatChatListMode = "whitelist" | "blacklist";
-
-export interface NapcatAdapterChatConfig {
-  enableChatListFilter: boolean;
-  showDroppedChatListMessages: boolean;
-  groupListType: NapcatChatListMode;
-  groupList: string[];
-  privateListType: NapcatChatListMode;
-  privateList: string[];
-  banUserId: string[];
-  banQqBot: boolean;
-}
-
-export interface NapcatAdapterServerConfig {
-  host: string;
-  port: number;
-  token: string;
-  heartbeatInterval: number;
-  reconnectDelaySec: number;
-  actionTimeoutSec: number;
-  connectionId: string;
-}
-
-export interface NapcatAdapterPluginOptions {
-  enabled: boolean;
-  configVersion: string;
-}
-
-export interface NapcatAdapterFilterConfig {
-  ignoreSelfMessage: boolean;
-}
-
-export interface NapcatAdapterConfig {
-  plugin: NapcatAdapterPluginOptions;
-  server: NapcatAdapterServerConfig;
-  chat: NapcatAdapterChatConfig;
-  filters: NapcatAdapterFilterConfig;
-}
-
-export interface MaiBotPluginManifest {
-  id?: string;
-  name?: string;
-  version?: string;
-  description?: string;
-  author?: string | { name?: string; url?: string };
-  homepage_url?: string;
-  repository_url?: string;
-  license?: string;
-  urls?: { repository?: string; homepage?: string };
-  keywords?: string[];
-  categories?: string[];
-  plugin_type?: MaiBotPluginType;
-  display?: {
-    icon?: MaiBotPluginDisplayIcon;
-  };
-  host_application?: { min_version?: string; max_version?: string };
-  sdk?: { min_version?: string; max_version?: string };
-  dependencies?: string[];
-  capabilities?: string[];
-  manifest_version?: number;
-}
-
-export type MaiBotPluginType =
-  | "adapter"
-  | "chat"
-  | "creative"
-  | "provider"
-  | "management"
-  | "search"
-  | "knowledge"
-  | "media"
-  | "game"
-  | "security"
-  | "automation"
-  | "extension"
-  | "other";
-
-export interface MaiBotPluginDisplayIcon {
-  type: "lucide" | "emoji" | "local";
-  value: string;
-  fallback?: string;
-  background?: string;
-}
-
-export interface MaiBotMarketPlugin {
-  id: string;
-  manifest: MaiBotPluginManifest;
-  installed?: boolean;
-  installedVersion?: string;
-  marketplace_id?: string;
-  marketplace_order?: number;
-  published_at?: string;
-  updated_at?: string;
-  source?: string;
-  downloads?: number;
-  rating?: number;
-  likes?: number;
-  comment_count?: number;
-}
-
-export interface MaiBotInstalledPlugin {
-  id: string;
-  manifest: MaiBotPluginManifest;
-  path: string;
-  enabled?: boolean;
-  loaded?: boolean;
-  load_status?: string;
-}
-
-export interface MaiBotPluginListResult {
-  installed: MaiBotInstalledPlugin[];
-  market: MaiBotMarketPlugin[];
-  stats?: Record<string, MaiBotPluginStats>;
-}
-
-export type GithubSourcePreset =
-  | "auto"
-  | "github"
-  | "gh-proxy-com"
-  | "v6-gh-proxy-org"
-  | "cdn-gh-proxy-com"
-  | "gitproxy-mrhjx-cn"
-  | "ghproxy-net"
-  | "ghproxy-vip"
-  | (string & {});
-
-export type MaiBotPluginMarketSource = GithubSourcePreset;
-
-export interface MaiBotPluginListOptions {
-  forceRefresh?: boolean;
-  marketSource?: MaiBotPluginMarketSource;
-}
-
-export interface MaiBotPluginStats {
-  plugin_id: string;
-  likes: number;
-  dislikes: number;
-  downloads: number;
-  rating: number;
-  rating_count: number;
-  comment_count: number;
-  recent_ratings?: MaiBotPluginRating[];
-}
-
-export interface MaiBotPluginRating {
-  id?: string;
-  user_id: string;
-  rating?: number | null;
-  comment?: string;
-  created_at: string;
-  updated_at?: string;
-  likes?: number;
-  dislikes?: number;
-}
-
-export interface MaiBotPluginUserState {
-  liked: boolean;
-  disliked: boolean;
-  rating: number | null;
-  comment: string;
-}
-
-export type MaiBotPluginUserStates = Record<string, MaiBotPluginUserState>;
-
-export interface MaiBotPluginVoteResult {
-  success: boolean;
-  error?: string;
-  liked?: boolean;
-  disliked?: boolean;
-  likes?: number;
-  dislikes?: number;
-  remaining?: number;
-}
-
-export interface MaiBotPluginRatingResult {
-  success: boolean;
-  error?: string;
-  user_rating?: number | null;
-  rating?: number;
-  rating_count?: number;
-  comment_count?: number;
-  remaining?: number;
-}
-
-export interface MaiBotPluginDownloadResult {
-  success: boolean;
-  error?: string;
-  counted?: boolean;
-  downloads?: number;
-  remaining?: number;
-}
-
-export interface MaiBotPluginReadmeResult {
-  success: boolean;
-  content?: string;
-  error?: string;
-}
-
-export interface MaiBotPluginOperationRequest {
-  pluginId: string;
-  repositoryUrl?: string;
-  branch?: string;
-  latestVersion?: string;
-  sourcePreset?: MaiBotPluginMarketSource;
-}
-
-export interface MaiBotPluginOperationResult {
-  success: boolean;
-  message?: string;
-  plugin_id?: string;
-  plugin_name?: string;
-  old_version?: string;
-  new_version?: string;
-}
-
-export type MaiBotPluginConfigPrimitive = string | number | boolean | null;
-
-export type MaiBotPluginConfigValue =
-  | MaiBotPluginConfigPrimitive
-  | MaiBotPluginConfigValue[]
-  | { [key: string]: MaiBotPluginConfigValue };
-
-export type MaiBotPluginConfigLocalizedText = string | Record<string, string>;
-
-export interface MaiBotPluginConfigField {
-  name: string;
-  label: MaiBotPluginConfigLocalizedText;
-  path: string[];
-  type: "string" | "number" | "boolean" | "array" | "object" | "null";
-  value: MaiBotPluginConfigValue;
-  description?: MaiBotPluginConfigLocalizedText;
-  hint?: MaiBotPluginConfigLocalizedText;
-  placeholder?: MaiBotPluginConfigLocalizedText;
-  uiType?: string;
-  inputType?: string;
-  choices?: Array<MaiBotPluginConfigValue | { label?: MaiBotPluginConfigLocalizedText; value: MaiBotPluginConfigValue }>;
-  min?: number;
-  max?: number;
-  step?: number;
-  rows?: number;
-  required?: boolean;
-  hidden?: boolean;
-  disabled?: boolean;
-  order?: number;
-  icon?: string;
-  default?: MaiBotPluginConfigValue;
-  itemType?: string;
-  minItems?: number;
-  maxItems?: number;
-}
-
-export interface MaiBotPluginConfigSection {
-  name: string;
-  title: MaiBotPluginConfigLocalizedText;
-  description?: MaiBotPluginConfigLocalizedText;
-  icon?: string;
-  collapsed?: boolean;
-  order?: number;
-  fields: MaiBotPluginConfigField[];
-}
-
-export interface MaiBotPluginConfigTab {
-  id: string;
-  title: MaiBotPluginConfigLocalizedText;
-  sections: string[];
-  icon?: string;
-  order?: number;
-  badge?: string;
-}
-
-export interface MaiBotPluginConfigSchema {
-  pluginInfo?: {
-    name?: MaiBotPluginConfigLocalizedText;
-    version?: string;
-    description?: MaiBotPluginConfigLocalizedText;
-    author?: string;
-  };
-  sections: MaiBotPluginConfigSection[];
-  layout?: {
-    type: "auto" | "tabs" | "pages";
-    tabs: MaiBotPluginConfigTab[];
-  };
-  source?: "runtime" | "local";
-}
-
-export interface MaiBotPluginConfigState {
-  pluginId: string;
-  pluginPath: string;
-  configPath: string;
-  exists: boolean;
-  config: Record<string, MaiBotPluginConfigValue>;
-  schema: MaiBotPluginConfigSchema;
-  raw: string;
-}
-
-export interface MaiBotPluginConfigSaveResult {
-  pluginId: string;
-  configPath: string;
-  config: Record<string, MaiBotPluginConfigValue>;
-  schema: MaiBotPluginConfigSchema;
-  raw: string;
-  backupPath?: string;
-  savedAt: number;
-}
-
 export interface QqAccountSetupRequest {
   qqAccount: string;
   qqBackend?: QqBackend;
   websocketToken?: string;
-  chat?: Partial<NapcatAdapterChatConfig>;
-  resetInvalidAdapterConfigs?: boolean;
 }
 
 export type MessagePlatformLoginInfo = Record<QqBackend, { qqAccount?: string; webuiToken?: string }>;
@@ -1017,11 +694,11 @@ export interface ModuleUpdateResult {
   changed: boolean;
   output: string[];
   updatedAt: number;
-  /** 实际拉取来源：remote = GitHub 上游；bundled = 一键包内置兜底快照。 */
-  source: "remote" | "bundled";
-  /** 当回退到 bundled 时面向用户展示的提示文本。 */
+  /** 实际拉取来源为远端仓库。 */
+  source: "remote";
+  /** 更新失败或部分完成时面向用户展示的提示文本。 */
   warning?: string;
-  /** 当回退到 bundled 时，记录尝试 origin 失败的原始错误信息，便于排查网络问题。 */
+  /** 远端更新失败的原始错误信息。 */
   remoteError?: string;
   /** 仅 moduleId="maibot" 时携带；同次更新里同步的子插件结果（如 napcat-adapter）。 */
   plugins?: ModuleUpdateResult[];
@@ -1217,9 +894,24 @@ export interface PtySessionSnapshot {
   endedAt?: number;
 }
 
-export interface PtyDataEvent {
-  sessionId: string;
+export interface PtyOutputChunk {
   data: string;
+  cols: number;
+  rows: number;
+  sequence: number;
+}
+
+export interface PtyBufferSnapshot {
+  chunks: PtyOutputChunk[];
+  lastSequence: number;
+  cols: number;
+  rows: number;
+  startedAt: number;
+}
+
+export interface PtyDataEvent extends PtyOutputChunk {
+  sessionId: string;
+  startedAt: number;
 }
 
 export interface PtyExitEvent {
@@ -1234,6 +926,8 @@ export interface PtyErrorEvent {
 }
 
 export interface DesktopBridge {
+  webuiPreloadUrl: string;
+  readonly platform: NodeJS.Platform;
   getSnapshot: () => Promise<DesktopSnapshot>;
   getSystemPerformance: () => Promise<SystemPerformanceSnapshot>;
   openLogsDirectory: () => Promise<void>;
@@ -1263,16 +957,22 @@ export interface DesktopBridge {
   };
   init: {
     getState: () => Promise<InitState>;
+    getMaiBotSetupStatus: () => Promise<MaiBotSetupStatus>;
     repair: () => Promise<InitRepairResult>;
-    syncQqConnections: () => Promise<InitRepairResult>;
-    resetSnowLuma: () => Promise<SnowLumaResetResult>;
-    upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
+  };
+  protocols: {
     getLoginInfo: () => Promise<MessagePlatformLoginInfo>;
     saveQqBackendAccount: (backend: QqBackend, account: string) => Promise<void>;
     saveSnowLumaWebuiPassword: (password: string) => Promise<void>;
-    setQqBackend: (backend: QqBackend, options?: InitRepairOptions) => Promise<InitState>;
-    setQqProtocol: (protocol: QqProtocol, options?: QqProtocolOptions) => Promise<InitState>;
+    setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
+    resetSnowLuma: () => Promise<SnowLumaResetResult>;
+    upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
+  };
+  adapters: {
+    syncQqConnections: () => Promise<InitRepairResult>;
+    setQqProtocol: (protocol: QqProtocol, options?: QqProtocolOptions) => Promise<InitState>;
+    setEnabled: (adapter: "onebot" | "official", enabled: boolean) => Promise<void>;
   };
   agreements: {
     getState: () => Promise<StartupAgreementState>;
@@ -1312,49 +1012,6 @@ export interface DesktopBridge {
     onDownloadProgress: (callback: (progress: LauncherUpdateDownloadProgress) => void) => () => void;
     resetSettings: () => Promise<LauncherResetResult>;
     resetAll: () => Promise<LauncherResetResult>;
-  };
-  plugins: {
-    listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) => Promise<MaiBotPluginListResult>;
-    listInstalled: (serviceUrl?: string) => Promise<MaiBotInstalledPlugin[]>;
-    install: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
-    update: (request: MaiBotPluginOperationRequest) => Promise<MaiBotPluginOperationResult>;
-    uninstall: (pluginId: string) => Promise<MaiBotPluginOperationResult>;
-    getConfig: (pluginId: string, serviceUrl?: string) => Promise<MaiBotPluginConfigState>;
-    saveConfig: (
-      pluginId: string,
-      config: Record<string, MaiBotPluginConfigValue>,
-      serviceUrl?: string,
-    ) => Promise<MaiBotPluginConfigSaveResult>;
-    saveConfigRaw: (
-      pluginId: string,
-      raw: string,
-      serviceUrl?: string,
-    ) => Promise<MaiBotPluginConfigSaveResult>;
-    resetConfig: (pluginId: string, serviceUrl?: string) => Promise<MaiBotPluginConfigSaveResult>;
-    getReadme: (
-      pluginId: string,
-      repositoryUrl?: string,
-      sourcePreset?: MaiBotPluginMarketSource,
-    ) => Promise<MaiBotPluginReadmeResult>;
-    getStats: (pluginId: string) => Promise<MaiBotPluginStats | null>;
-    getUserState: (pluginId: string, userId: string) => Promise<MaiBotPluginUserState | null>;
-    getUserStates: (userId: string) => Promise<MaiBotPluginUserStates>;
-    like: (pluginId: string, userId: string) => Promise<MaiBotPluginVoteResult>;
-    dislike: (pluginId: string, userId: string) => Promise<MaiBotPluginVoteResult>;
-    rate: (
-      pluginId: string,
-      rating: number | null | undefined,
-      comment: string | null | undefined,
-      userId: string,
-    ) => Promise<MaiBotPluginRatingResult>;
-    recordDownload: (
-      pluginId: string,
-      userId?: string,
-      fingerprint?: string,
-    ) => Promise<MaiBotPluginDownloadResult>;
-  };
-  statistics: {
-    getMaiBot: () => Promise<MaiBotStatisticSummary>;
   };
   pythonDeps: {
     getState: () => Promise<PythonEnvironmentState>;
@@ -1407,7 +1064,7 @@ export interface DesktopBridge {
     resize: (request: PtyResizeRequest) => Promise<void>;
     clear: (sessionId: string) => Promise<void>;
     list: () => Promise<PtySessionSnapshot[]>;
-    getBuffer: (sessionId: string) => Promise<string>;
+    getBuffer: (sessionId: string) => Promise<PtyBufferSnapshot | null>;
     onData: (callback: (event: PtyDataEvent) => void) => () => void;
     onExit: (callback: (event: PtyExitEvent) => void) => () => void;
     onError: (callback: (event: PtyErrorEvent) => void) => () => void;

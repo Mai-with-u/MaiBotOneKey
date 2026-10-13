@@ -19,6 +19,10 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
+        input: {
+          index: resolve("src/preload/index.ts"),
+          webui: resolve("src/preload/webui.ts"),
+        },
         output: {
           chunkFileNames: "chunks/[name]-[hash].cjs",
           entryFileNames: "[name].cjs",

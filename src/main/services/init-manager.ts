@@ -1,19 +1,21 @@
-import { normalizeQqAccount } from "../../shared/qq-account";
-import { execFile } from "node:child_process";
+import { ProtocolComponentManager } from "./protocol-component-manager";
+import { readMaiBotSetupStatus } from "./maibot-setup-client";
+import { runProcess, runWithoutAsar, samePath, sameOrInsidePath } from "./runtime-file-utils";
+import { ProtocolBackendManager } from "./protocol-backend-manager";
+import { MaiBotAdapterClient } from "./maibot-adapter-client";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { createReadStream, createWriteStream, existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { createGunzip, createGzip } from "node:zlib";
-import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { parse as parseToml } from "smol-toml";
 import { QQ_OFFICIAL_ADAPTER_DIRECTORY, QQ_OFFICIAL_ADAPTER_PLUGIN_ID } from "../../shared/qq-official-adapter";
 import type {
   AgreementDocument,
   AgreementDocumentId,
   InitCheck,
-  InitRepairOptions,
   InitRepairResult,
   InitState,
   MaiBotBackupExportResult,
@@ -28,11 +30,6 @@ import type {
   MaiBotStorageCleanupResult,
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
-  NapcatAdapterChatConfig,
-  NapcatAdapterConfig,
-  NapcatChatListMode,
-  QqComponentUpgradeEntry,
-  QqComponentUpgradeId,
   QqComponentUpgradeResult,
   QqBackend,
   QqProtocol,
@@ -54,18 +51,7 @@ const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
 const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
 const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
-const QQ_BACKEND_FILE = "qq-backend.json";
-const MESSAGE_PLATFORM_FILE = "message-platform.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
-const NAPCAT_COMPONENT_PROTECTED_PATHS = [
-  "config",
-  "data",
-  "logs",
-  "napcat/config",
-  "napcat/data",
-  "napcat/logs",
-];
-
 interface StoredRuntimePathFile {
   version: 1;
   paths?: Partial<Record<RuntimePathKey, string>>;
@@ -76,10 +62,6 @@ interface MacNapCatQqCleanupResult {
   cleanedRuntime: boolean;
 }
 
-const SNOWLUMA_COMPONENT_PROTECTED_PATHS = ["config", "data", "logs"];
-const NAPCAT_VERSION_CONFIG_PATTERN = /^versions\/[^/]+\/resources\/app\/napcat\/config(?:\/|$)/iu;
-const COMPONENT_DATA_FILE_PATTERN = /(?:\.db|\.sqlite|\.sqlite3)(?:-(?:shm|wal))?$/iu;
-const COMPONENT_LOG_FILE_PATTERN = /\.log$/iu;
 const MAIBOT_BACKUP_FORMAT = "maibot-onekey-backup" as const;
 const MAIBOT_BACKUP_FORMAT_VERSION = 1 as const;
 const TAR_BLOCK_SIZE = 512;
@@ -91,23 +73,6 @@ interface MaiBotWebUiEndpoint {
   fallbackUsed?: boolean;
   fallbackReason?: string;
   sourcePath?: string;
-}
-
-interface AdapterConfigWriteOptions {
-  resetInvalidConfig?: boolean;
-}
-
-class AdapterConfigParseError extends Error {
-  constructor(
-    readonly backend: QqBackend,
-    readonly configPath: string,
-    cause: unknown,
-  ) {
-    super(
-      `ADAPTER_CONFIG_PARSE_FAILED::${backend}::${configPath}::${toDetail(cause)}`,
-    );
-    this.name = "AdapterConfigParseError";
-  }
 }
 
 function uniqueExistingPaths(paths: string[]): string[] {
@@ -126,22 +91,6 @@ function uniqueExistingPaths(paths: string[]): string[] {
   return existing;
 }
 
-function uniquePaths(paths: string[]): string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-
-  for (const path of paths) {
-    const normalized = process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    unique.push(path);
-  }
-
-  return unique;
-}
-
 function readRuntimePathOverride(paths: RuntimePaths, key: RuntimePathKey): string | undefined {
   try {
     const raw = JSON.parse(readFileSync(join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE), "utf8")) as StoredRuntimePathFile;
@@ -150,23 +99,6 @@ function readRuntimePathOverride(paths: RuntimePaths, key: RuntimePathKey): stri
   } catch {
     return undefined;
   }
-}
-
-function normalizePathForCompare(path: string): string {
-  const resolved = resolve(path);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function samePath(left: string, right: string): boolean {
-  return normalizePathForCompare(left) === normalizePathForCompare(right);
-}
-
-function sameOrInsidePath(parent: string, child: string): boolean {
-  if (samePath(parent, child)) {
-    return true;
-  }
-  const diff = relative(resolve(parent), resolve(child));
-  return Boolean(diff) && diff !== ".." && !diff.startsWith(`..${sep}`);
 }
 
 function quoteShellArg(value: string): string {
@@ -709,33 +641,6 @@ function storageCategory(
   };
 }
 
-function normalizeRelativePath(path: string): string {
-  return path.split(/[\\/]+/u).filter(Boolean).join("/");
-}
-
-function isExactOrInsideRelativePath(path: string, protectedPath: string): boolean {
-  return path === protectedPath || path.startsWith(`${protectedPath}/`);
-}
-
-function isProtectedByList(path: string, protectedPaths: string[]): boolean {
-  return protectedPaths.some((protectedPath) => isExactOrInsideRelativePath(path, protectedPath));
-}
-
-function isNapcatComponentProtectedPath(relativePath: string): boolean {
-  const normalized = normalizeRelativePath(relativePath);
-  const fileName = normalized.split("/").at(-1) ?? normalized;
-  return (
-    isProtectedByList(normalized, NAPCAT_COMPONENT_PROTECTED_PATHS) ||
-    NAPCAT_VERSION_CONFIG_PATTERN.test(normalized) ||
-    COMPONENT_DATA_FILE_PATTERN.test(fileName) ||
-    COMPONENT_LOG_FILE_PATTERN.test(fileName)
-  );
-}
-
-function isSnowLumaComponentProtectedPath(relativePath: string): boolean {
-  return isProtectedByList(normalizeRelativePath(relativePath), SNOWLUMA_COMPONENT_PROTECTED_PATHS);
-}
-
 function cleanPathEntry(entry: string): string {
   return entry.trim().replace(/^"|"$/gu, "");
 }
@@ -820,67 +725,13 @@ const NAPCAT_LAUNCHER_CONTENT = [
 ].join("\r\n");
 
 const NAPCAT_ADAPTER_DIR = join("plugins", "napcat-adapter");
-const NAPCAT_ADAPTER_CONFIG_VERSION = "0.1.0";
-const NAPCAT_ADAPTER_PLUGIN_ID = "maibot-team.napcat-adapter";
 const SNOWLUMA_ADAPTER_DIR = join("plugins", "snowluma-adapter");
 const QQ_OFFICIAL_ADAPTER_DIR = join("plugins", QQ_OFFICIAL_ADAPTER_DIRECTORY);
-const SNOWLUMA_ADAPTER_CONFIG_VERSION = "1.0.0";
 const SNOWLUMA_ADAPTER_PLUGIN_ID = "maibot-team.snowluma-adapter";
-const NAPCAT_ADAPTER_HOST = "127.0.0.1";
-const NAPCAT_ADAPTER_PORT = 7998;
-const SNOWLUMA_ONEBOT_PORT = 7988;
-const SNOWLUMA_WEBUI_PORT = 5099;
-
-interface NapcatWebsocketServerConfig {
-  host: string;
-  port: number;
-  token: string;
-}
-
-function buildDefaultNapcatAdapterConfig(token = "", port = NAPCAT_ADAPTER_PORT): NapcatAdapterConfig {
-  return {
-    plugin: {
-      enabled: true,
-      configVersion: NAPCAT_ADAPTER_CONFIG_VERSION,
-    },
-    server: {
-      host: NAPCAT_ADAPTER_HOST,
-      port,
-      token,
-      heartbeatInterval: 30,
-      reconnectDelaySec: 5,
-      actionTimeoutSec: 15,
-      connectionId: "",
-    },
-    chat: {
-      enableChatListFilter: true,
-      showDroppedChatListMessages: false,
-      groupListType: "whitelist",
-      groupList: [],
-      privateListType: "whitelist",
-      privateList: [],
-      banUserId: [],
-      banQqBot: false,
-    },
-    filters: {
-      ignoreSelfMessage: true,
-    },
-  };
-}
 
 function asString(value: unknown, fallback: string): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "bigint") return String(value);
-  return fallback;
-}
-
-function asBool(value: unknown, fallback: boolean): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["true", "1", "yes", "on"].includes(normalized)) return true;
-    if (["false", "0", "no", "off"].includes(normalized)) return false;
-  }
   return fallback;
 }
 
@@ -938,202 +789,10 @@ function buildMaiBotWebUiEndpoint(
   }
 }
 
-function asListMode(value: unknown, fallback: NapcatChatListMode): NapcatChatListMode {
-  if (value === "whitelist" || value === "blacklist") return value;
-  return fallback;
-}
-
-function asStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of value) {
-    const text = typeof item === "string" ? item.trim() : String(item ?? "").trim();
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
-    out.push(text);
-  }
-  return out;
-}
-
-function normalizeNapcatAdapterConfig(
-  raw: Record<string, unknown>,
-  defaults: NapcatAdapterConfig,
-): NapcatAdapterConfig {
-  const pluginRaw = (raw["plugin"] as Record<string, unknown> | undefined) ?? {};
-  const serverRaw =
-    (raw["client"] as Record<string, unknown> | undefined) ?? {};
-  const chatRaw = (raw["chat"] as Record<string, unknown> | undefined) ?? {};
-  const filtersRaw = (raw["filters"] as Record<string, unknown> | undefined) ?? {};
-
-  return {
-    plugin: {
-      enabled: asBool(pluginRaw["enabled"], defaults.plugin.enabled),
-      configVersion: asString(pluginRaw["config_version"], defaults.plugin.configVersion),
-    },
-    server: {
-      host: asString(serverRaw["server"], defaults.server.host).trim() || defaults.server.host,
-      port: asPositiveInt(serverRaw["port"], defaults.server.port),
-      token: asString(serverRaw["token"], defaults.server.token),
-      heartbeatInterval: asPositiveNumber(
-        serverRaw["heartbeat_interval"] ?? serverRaw["heartbeat_sec"],
-        defaults.server.heartbeatInterval,
-      ),
-      reconnectDelaySec: asPositiveNumber(
-        serverRaw["reconnect_delay_sec"],
-        defaults.server.reconnectDelaySec,
-      ),
-      actionTimeoutSec: asPositiveNumber(
-        serverRaw["action_timeout_sec"],
-        defaults.server.actionTimeoutSec,
-      ),
-      connectionId: asString(serverRaw["connection_id"], defaults.server.connectionId),
-    },
-    chat: {
-      enableChatListFilter: asBool(
-        chatRaw["enable_chat_list_filter"],
-        defaults.chat.enableChatListFilter,
-      ),
-      showDroppedChatListMessages: asBool(
-        chatRaw["show_dropped_chat_list_messages"],
-        defaults.chat.showDroppedChatListMessages,
-      ),
-      groupListType: asListMode(chatRaw["group_list_type"], defaults.chat.groupListType),
-      groupList: asStringList(chatRaw["group_list"] ?? defaults.chat.groupList),
-      privateListType: asListMode(chatRaw["private_list_type"], defaults.chat.privateListType),
-      privateList: asStringList(chatRaw["private_list"] ?? defaults.chat.privateList),
-      banUserId: asStringList(chatRaw["ban_user_id"] ?? defaults.chat.banUserId),
-      banQqBot: asBool(chatRaw["ban_qq_bot"], defaults.chat.banQqBot),
-    },
-    filters: {
-      ignoreSelfMessage: asBool(filtersRaw["ignore_self_message"], defaults.filters.ignoreSelfMessage),
-    },
-  };
-}
-
-function snowlumaAdapterConfigToToml(config: NapcatAdapterConfig): string {
-  const document = {
-    plugin: {
-      enabled: config.plugin.enabled,
-      config_version: config.plugin.configVersion,
-    },
-    client: {
-      server: config.server.host,
-      port: config.server.port,
-      token: config.server.token,
-      connection_id: config.server.connectionId,
-      reconnect_delay_sec: config.server.reconnectDelaySec,
-      action_timeout_sec: config.server.actionTimeoutSec,
-    },
-    chat: {
-      enable_chat_list_filter: config.chat.enableChatListFilter,
-      show_dropped_chat_list_messages: config.chat.showDroppedChatListMessages,
-      group_list_type: config.chat.groupListType,
-      group_list: config.chat.groupList,
-      private_list_type: config.chat.privateListType,
-      private_list: config.chat.privateList,
-      ban_user_id: config.chat.banUserId,
-      ban_qq_bot: config.chat.banQqBot,
-    },
-    filters: {
-      ignore_self_message: config.filters.ignoreSelfMessage,
-    },
-  } as const;
-  return stringifyToml(document);
-}
-
-function applyChatOverrides(
-  base: NapcatAdapterChatConfig,
-  override?: Partial<NapcatAdapterChatConfig>,
-): NapcatAdapterChatConfig {
-  if (!override) return base;
-  return {
-    enableChatListFilter: override.enableChatListFilter ?? base.enableChatListFilter,
-    showDroppedChatListMessages:
-      override.showDroppedChatListMessages ?? base.showDroppedChatListMessages,
-    groupListType: override.groupListType ?? base.groupListType,
-    groupList: override.groupList !== undefined ? asStringList(override.groupList) : base.groupList,
-    privateListType: override.privateListType ?? base.privateListType,
-    privateList: override.privateList !== undefined ? asStringList(override.privateList) : base.privateList,
-    banUserId: override.banUserId !== undefined ? asStringList(override.banUserId) : base.banUserId,
-    banQqBot: override.banQqBot ?? base.banQqBot,
-  };
-}
-
-function hasUsableWebsocketServerConfig(server: NapcatWebsocketServerConfig | undefined): server is NapcatWebsocketServerConfig {
-  return Boolean(
-    server?.host.trim()
-    && Number.isFinite(server.port)
-    && server.port > 0
-    && server.port <= 65535,
-  );
-}
-
 interface StoredAgreementFile {
   version: 1;
   hashes: Partial<Record<AgreementDocumentId, string>>;
   confirmedAt?: number;
-}
-
-interface StoredMessagePlatformFile {
-  version: 1;
-  backend?: QqBackend;
-  qqAccount?: string;
-  accounts?: Partial<Record<QqBackend, string>>;
-  configuredAt?: number;
-}
-
-interface BundledComponentUpgradeSpec {
-  id: QqComponentUpgradeId;
-  name: string;
-  moduleName: string;
-  isProtectedPath: (relativePath: string) => boolean;
-}
-
-interface WindowsProcessInfo {
-  ProcessId?: number;
-  ExecutablePath?: string;
-  CommandLine?: string;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-function normalizeTomlLineEndings(content: string): string {
-  return content.replace(/\r\n?/gu, "\n");
-}
-
-function readTomlTable(content: string, tableName: string): Record<string, unknown> | undefined {
-  const normalized = normalizeTomlLineEndings(content);
-  const tablePattern = new RegExp(
-    `(^|\\n)\\s*\\[${escapeRegExp(tableName)}\\]\\s*(?:#.*)?(?:\\n|$)`,
-    "u",
-  );
-  const tableMatch = tablePattern.exec(normalized);
-  if (!tableMatch) {
-    return undefined;
-  }
-
-  const tableStart = tableMatch.index + tableMatch[0].length;
-  const nextTableOffset = normalized
-    .slice(tableStart)
-    .search(/\n\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?(?:\n|$)/u);
-  const tableBody = nextTableOffset === -1
-    ? normalized.slice(tableStart)
-    : normalized.slice(tableStart, tableStart + nextTableOffset);
-
-  try {
-    const parsed = parseToml(`[${tableName}]\n${tableBody.trimEnd()}\n`);
-    const table = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)[tableName]
-      : undefined;
-    return table && typeof table === "object" && !Array.isArray(table)
-      ? table as Record<string, unknown>
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function checkFile(path: string, label: string, id: string): InitCheck {
@@ -1152,62 +811,12 @@ function checkDir(path: string, label: string, id: string): InitCheck {
   return { id, label, status: "error", detail: "缺失", path };
 }
 
-function runProcess(file: string, args: string[], cwd: string, timeoutMs = 8_000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        cwd,
-        timeout: timeoutMs,
-        windowsHide: true,
-        maxBuffer: 8 * 1024 * 1024,
-        env: {
-          ...process.env,
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUTF8: "1",
-        },
-      },
-      (error, stdout, stderr) => {
-        const output = `${stdout}${stderr}`.trim();
-        if (error) {
-          reject(new Error(output || error.message));
-          return;
-        }
-
-        resolve(output);
-      },
-    );
-  });
-}
-
 function isCleanPipCheckOutput(output: string): boolean {
   return /(?:^|\n)\s*No broken requirements found\.\s*$/iu.test(output.trim());
 }
 
 function toDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isBusyComponentFsError(error: unknown): boolean {
-  const code = typeof error === "object" && error !== null && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
-  return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
-}
-
-function normalizeQqComponentUpgradeError(componentName: string, error: unknown): Error {
-  if (!isBusyComponentFsError(error)) {
-    return error instanceof Error ? error : new Error(String(error));
-  }
-
-  const errorPath = typeof error === "object" && error !== null && "path" in error
-    ? String((error as NodeJS.ErrnoException).path)
-    : "";
-  const detail = errorPath ? `被占用路径: ${errorPath}` : toDetail(error);
-  return new Error(`${componentName} 文件被占用，请关闭残留进程后重试。${detail}`);
-}
-
-function createWebsocketToken(): string {
-  return randomBytes(24).toString("base64url").slice(0, 32);
 }
 
 function md5Utf8(content: string): string {
@@ -1261,227 +870,56 @@ function maibotInitialConfigVersion(templateVersion: string): string {
   return `${match[1]}${current - 1}${match[3]}`;
 }
 
-async function runWithoutAsar<T>(operation: () => Promise<T>): Promise<T> {
-  const electronProcess = process as NodeJS.Process & { noAsar?: boolean };
-  const previousNoAsar = electronProcess.noAsar;
-  electronProcess.noAsar = true;
-
-  try {
-    return await operation();
-  } finally {
-    electronProcess.noAsar = previousNoAsar;
-  }
-}
-
 export class InitManager {
   private dependencyCache?: { expiresAt: number; checks: InitCheck[] };
 
-  constructor(private readonly paths: RuntimePaths) {}
-
-  getQqBackendSync(): QqBackend {
-    try {
-      const parsed = JSON.parse(readFileSync(this.qqBackendPath(), "utf8")) as { backend?: unknown };
-      return parsed.backend === "snowluma" ? "snowluma" : "napcat";
-    } catch {
-      return this.paths.bundledModulesRoot
-        && !existsSync(join(this.paths.bundledModulesRoot, "napcat"))
-        && existsSync(join(this.paths.bundledModulesRoot, "SnowLuma"))
-        ? "snowluma" : "napcat";
-    }
+  readonly protocolComponents: ProtocolComponentManager;
+  readonly protocols: ProtocolBackendManager;
+  readonly adapters: MaiBotAdapterClient;
+  constructor(private readonly paths: RuntimePaths) {
+    this.protocolComponents = new ProtocolComponentManager(paths);
+    this.protocols = new ProtocolBackendManager(paths);
+    this.adapters = new MaiBotAdapterClient(() => this.readMaiBotWebUiEndpointSync().url, async () => (await this.readMaiBotWebUiToken()).token);
   }
 
-  async readQqBackend(): Promise<QqBackend> {
-    return this.getQqBackendSync();
+  resetSnowLumaComponent(): Promise<SnowLumaResetResult> { return this.protocolComponents.resetSnowLumaComponent(); }
+  upgradeQqComponents(): Promise<QqComponentUpgradeResult> { return this.protocolComponents.upgradeQqComponents(); }
+  getQqBackendSync() { return this.protocols.getQqBackendSync(); }
+  async getMaiBotSetupStatus() {
+    // Read the active instance's latest token on every request, including after password changes.
+    const { token } = await this.readMaiBotWebUiToken();
+    return readMaiBotSetupStatus(this.readMaiBotWebUiEndpointSync().url, token);
   }
-
-  getQqProtocolSync(): QqProtocol {
-    try {
-      const stored = JSON.parse(readFileSync(this.qqBackendPath(), "utf8"));
-      if (stored.protocol === "official") return "official";
-    } catch {
-      // Existing installations use their saved QQ backend.
-    }
-    return this.getQqBackendSync();
+  readQqBackend() { return this.protocols.readQqBackend(); }
+  getQqProtocolSync() { return this.protocols.getQqProtocolSync(); }
+  hasMessagePlatformConfigured() { return this.protocols.hasMessagePlatformConfigured(); }
+  getMessagePlatformQqAccount(backend?: QqBackend) { return this.protocols.getMessagePlatformQqAccount(backend); }
+  getQqBackendAccounts() { return this.protocols.getQqBackendAccounts(); }
+  readSnowLumaServicePortsSync() { return this.protocols.readSnowLumaServicePortsSync(); }
+  readNapcatWebsocketServer(account?: string) { return this.protocols.readNapcatWebsocketServer(account); }
+  readNapcatWebsocketToken(account?: string) { return this.protocols.readNapcatWebsocketToken(account); }
+  readSnowLumaWebsocketServer(account?: string) { return this.protocols.readSnowLumaWebsocketServer(account); }
+  ensureNapCatWebUiConfig() { return this.protocols.ensureNapCatWebUiConfig(); }
+  readNapCatWebUiToken() { return this.protocols.readNapCatWebUiToken(); }
+  saveQqBackendAccount(backend: QqBackend, account: string) { return this.protocols.saveQqBackendAccount(backend, account); }
+  async setQqBackend(backend: QqBackend): Promise<void> {
+    await this.protocols.setQqBackend(backend, () => this.ensureServiceReady("napcat"));
   }
-
-  private async saveQqProtocolSelection(protocol: QqProtocol): Promise<void> {
-    const path = this.qqBackendPath();
-    const stored = await readFile(path, "utf8").then((text) => JSON.parse(text)).catch(() => ({}));
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify({ ...stored, protocol, updatedAt: Date.now() }, null, 2)}\n`, "utf8");
-  }
-
-  hasOfficialQqCredentials(): boolean {
-    const dir = this.findMaiBotPluginDirByManifestId(QQ_OFFICIAL_ADAPTER_PLUGIN_ID);
-    if (!dir) return false;
-    try {
-      const config = parseToml(readFileSync(join(dir, "config.toml"), "utf8"));
-      const credentials = config.qq_official as Record<string, unknown> | undefined;
-      return typeof credentials?.app_id === "string" && Boolean(credentials.app_id.trim())
-        && typeof credentials?.app_secret === "string" && Boolean(credentials.app_secret.trim());
-    } catch {
-      return false;
-    }
-  }
-
   async setQqProtocol(protocol: QqProtocol, options: QqProtocolOptions = {}): Promise<void> {
-    await this.ensureServiceReady("maibot");
-    const officialDir = this.findMaiBotPluginDirByManifestId(QQ_OFFICIAL_ADAPTER_PLUGIN_ID);
-    if (protocol === "official" && !officialDir) throw new Error("官方 QQ 适配器文件缺失，请修复启动环境。");
-    const configs = [
-      ...(officialDir ? [{ path: join(officialDir, "config.toml"), enabled: protocol === "official" }] : []),
-      { path: this.snowlumaAdapterConfigPath(), enabled: protocol !== "official" },
-    ];
-    const backups = await Promise.all(configs.map(async (config) => ({
-      ...config,
-      content: await readFile(config.path, "utf8").catch((error) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      }),
-    })));
-    // Parse every configuration before changing either adapter.
-    const updates = backups.map((config) => {
-      const document = config.content ? parseToml(config.content) : {};
-      const plugin = document.plugin;
-      if (plugin !== undefined && (typeof plugin !== "object" || Array.isArray(plugin) || plugin === null)) {
-        throw new Error(`插件配置的 plugin 字段无效: ${config.path}`);
-      }
-      document.plugin = { ...(plugin as Record<string, never> | undefined), enabled: config.enabled };
-      if (protocol === "official" && officialDir && config.path === join(officialDir, "config.toml")) {
-        const credentials = options.officialCredentials;
-        if (credentials) {
-          if (typeof credentials.appId !== "string" || typeof credentials.appSecret !== "string" || !credentials.appId.trim() || !credentials.appSecret.trim()) {
-            throw new Error("请填写 AppID 和 AppSecret 后再切换官方适配器。");
-          }
-          document.qq_official = {
-            ...(document.qq_official as Record<string, never> | undefined),
-            app_id: credentials.appId.trim(),
-            app_secret: credentials.appSecret.trim(),
-          };
-        } else if (!this.hasOfficialQqCredentials()) {
-          throw new Error("请填写 AppID 和 AppSecret 后再切换官方适配器。");
-        }
-      }
-      return { ...config, next: stringifyToml(document) };
-    });
-    try {
-      if (protocol !== "official") await this.setQqBackend(protocol, options);
-      for (const config of updates) {
-        await mkdir(dirname(config.path), { recursive: true });
-        await writeFile(config.path, config.next, "utf8");
-      }
-      await this.saveQqProtocolSelection(protocol);
-    } catch (error) {
-      for (const config of backups) {
-        if (config.content === undefined) await rm(config.path, { force: true });
-        else await writeFile(config.path, config.content, "utf8");
-      }
-      throw error;
-    }
+    if (protocol === "official") {
+      await this.adapters.configureOfficial(options.officialCredentials);
+      await this.protocols.saveQqProtocolSelection(protocol);
+    } else await this.setQqBackend(protocol);
   }
-
-  hasMessagePlatformConfigured(): boolean {
-    return Boolean(this.getMessagePlatformQqAccount());
+  async setQqAccount(account: string, token?: string, backend: QqBackend = this.getQqBackendSync()): Promise<InitState> {
+    await this.protocols.configureAccount(account, backend, token);
+    await this.ensureServiceReady("napcat");
+    return this.getState();
   }
-
-  getMessagePlatformQqAccount(backend: QqBackend = this.getQqBackendSync()): string | undefined {
-    return normalizeQqAccount(this.readMessagePlatformStore()?.accounts?.[backend]);
-  }
-
-  async setQqBackend(
-    backend: QqBackend,
-    options: { syncAdapters?: boolean } & InitRepairOptions = {},
-  ): Promise<void> {
-    const statePath = this.qqBackendPath();
-    const previousState = await readFile(statePath, "utf8").catch(() => undefined);
-    const previousBackend = this.getQqBackendSync();
-    const previousProtocol = this.getQqProtocolSync();
-    const connections = this.readQqBackendConnections();
-    const switching = backend !== previousBackend && (this.hasMessagePlatformConfigured() || Boolean(connections[previousBackend]));
-    const configPath = this.snowlumaAdapterConfigPath();
-    const previousConfig = await readFile(configPath, "utf8").catch(() => undefined);
-    const adapterServer = await this.readAdapterServerFromConfig("snowluma");
-    let configChanged = false;
-    if (switching) {
-      if (hasUsableWebsocketServerConfig(adapterServer)) {
-        connections[previousBackend] = { port: adapterServer.port, token: adapterServer.token };
-      }
-      connections[backend] = {
-        port: connections[backend]?.port ?? SNOWLUMA_ONEBOT_PORT,
-        token: connections[backend]?.token ?? createWebsocketToken(),
-      };
-    }
-
-    try {
-      if (switching && previousConfig !== undefined) {
-        try {
-          const document = parseToml(previousConfig);
-          if (!document.client || typeof document.client !== "object" || Array.isArray(document.client)) {
-            document.client = {};
-          }
-          const client = document.client as Record<string, unknown>;
-          const target = connections[backend]!;
-          if (client.port !== target.port || client.token !== target.token) {
-            client.port = target.port;
-            client.token = target.token!;
-            await writeFile(configPath, stringifyToml(document), "utf8");
-            configChanged = true;
-          }
-        } catch (error) {
-          if (!options.resetInvalidAdapterConfigs) {
-            throw new AdapterConfigParseError("snowluma", configPath, error);
-          }
-        }
-      }
-      await mkdir(dirname(statePath), { recursive: true });
-      await writeFile(
-        statePath,
-        `${JSON.stringify({ version: 1, backend, protocol: previousProtocol === "official" ? "official" : backend, connections, updatedAt: Date.now() }, null, 2)}\n`,
-        "utf8",
-      );
-      await this.ensureServiceReady("napcat");
-      if (options.syncAdapters !== false) {
-        const qqAccount = this.getMessagePlatformQqAccount();
-        if (qqAccount) {
-          const syncedPaths = await this.syncSelectedQqAdapterConfigs({
-            resetInvalidConfig: options.resetInvalidAdapterConfigs,
-          });
-          if (syncedPaths.some((path) => samePath(path, configPath))) {
-            await this.markMessagePlatformConfigured(backend, qqAccount);
-          }
-        }
-      }
-    } catch (error) {
-      if (configChanged && previousConfig !== undefined) {
-        await writeFile(configPath, previousConfig, "utf8");
-      }
-      if (previousState !== undefined) {
-        await writeFile(statePath, previousState, "utf8");
-      } else {
-        await rm(statePath, { force: true });
-      }
-      throw error;
-    }
-  }
-
-  private readQqBackendConnections(): Partial<Record<QqBackend, { port: number; token?: string }>> {
-    const connections: Partial<Record<QqBackend, { port: number; token?: string }>> = {};
-    try {
-      const stored = JSON.parse(readFileSync(this.qqBackendPath(), "utf8"));
-      for (const backend of ["napcat", "snowluma"] as const) {
-        const saved = stored.connections?.[backend];
-        const port = saved?.port ?? stored.ports?.[backend];
-        if (Number.isInteger(port) && port >= 1 && port <= 65535) {
-          connections[backend] = {
-            port,
-            token: typeof saved?.token === "string" ? saved.token : undefined,
-          };
-        }
-      }
-    } catch {
-      // Older installations have no per-backend connection history.
-    }
-    return connections;
+  async syncQqConnections(): Promise<InitRepairResult> {
+    if (this.getQqProtocolSync() === "official") throw new Error("官方 QQ 适配器不使用 OneBot 连接，无需同步。");
+    await this.adapters.configureConnection(await this.protocols.connection());
+    return { state: await this.getState(), changedFiles: [] };
   }
 
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
@@ -1516,7 +954,7 @@ export class InitManager {
       ...dependencyChecks,
     ];
     const isReady = checks.every((check) => check.status !== "error");
-    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), qqOfficialConfigured: this.hasOfficialQqCredentials(), messagePlatformConfigured, checks };
+    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), qqOfficialConfigured: this.adapters.officialConfigured, messagePlatformConfigured, checks };
   }
 
   async refreshDependencyChecks(): Promise<InitCheck[]> {
@@ -1531,15 +969,6 @@ export class InitManager {
       repairedAt: Date.now(),
     };
     return { state, changedFiles };
-  }
-
-  async syncQqConnections(): Promise<InitRepairResult> {
-    if (this.getQqProtocolSync() === "official") {
-      throw new Error("官方 QQ 适配器不使用 OneBot 连接，无需同步。");
-    }
-    const changedFiles = await this.syncSelectedQqAdapterConfigs();
-    if (changedFiles.length === 0) throw new Error("请先在消息平台中配置 QQ 账号与协议端。");
-    return { state: await this.getState(), changedFiles };
   }
 
   async getAgreementState(): Promise<StartupAgreementState> {
@@ -2376,140 +1805,6 @@ export class InitManager {
     return { removedEntries: [targetPath], removedBytes: stats.sizeBytes };
   }
 
-  async resetSnowLumaComponent(): Promise<SnowLumaResetResult> {
-    const bundledRoot = join(this.paths.bundledModulesRoot, "SnowLuma");
-    const snowlumaRoot = this.paths.snowlumaRoot;
-
-    if (!existsSync(bundledRoot)) {
-      throw new Error(`内置 SnowLuma 模板缺失: ${bundledRoot}`);
-    }
-
-    if (samePath(bundledRoot, snowlumaRoot)) {
-      throw new Error("当前 SnowLuma 目录指向内置模板，拒绝重置。请在打包后的可写数据目录中执行。");
-    }
-
-    const removed = existsSync(snowlumaRoot);
-    await rm(snowlumaRoot, { recursive: true, force: true });
-    await mkdir(dirname(snowlumaRoot), { recursive: true });
-    await runWithoutAsar(() =>
-      cp(bundledRoot, snowlumaRoot, {
-        recursive: true,
-        force: true,
-        errorOnExist: false,
-      }),
-    );
-
-    return {
-      snowlumaRoot,
-      bundledRoot,
-      removed,
-      copied: true,
-      resetAt: Date.now(),
-    };
-  }
-
-  async upgradeQqComponents(): Promise<QqComponentUpgradeResult> {
-    await this.cleanupQqComponentProcesses();
-
-    const components: QqComponentUpgradeEntry[] = [];
-    if (existsSync(join(this.paths.bundledModulesRoot, "napcat"))) {
-      components.push(
-        await this.upgradeBundledComponent({
-          id: "napcat",
-          name: "NapCat",
-          moduleName: "napcat",
-          isProtectedPath: isNapcatComponentProtectedPath,
-        }),
-      );
-    }
-    components.push(
-      await this.upgradeBundledComponent({
-        id: "snowluma",
-        name: "SnowLuma",
-        moduleName: "SnowLuma",
-        isProtectedPath: isSnowLumaComponentProtectedPath,
-      }),
-    );
-    return { components, upgradedAt: Date.now() };
-  }
-
-  private async cleanupQqComponentProcesses(): Promise<void> {
-    if (process.platform !== "win32") {
-      return;
-    }
-
-    const targetRoots = [this.paths.napcatRoot, this.paths.snowlumaRoot]
-      .filter((path) => path.trim().length > 0)
-      .map((path) => resolve(path));
-    if (targetRoots.length === 0) {
-      return;
-    }
-
-    let processes: WindowsProcessInfo[] = [];
-    try {
-      processes = await this.listWindowsProcesses();
-    } catch {
-      return;
-    }
-
-    const currentPid = process.pid;
-    const targetPids = processes
-      .filter((item) => typeof item.ProcessId === "number" && item.ProcessId > 0 && item.ProcessId !== currentPid)
-      .filter((item) => this.isQqComponentProcess(item, targetRoots))
-      .map((item) => item.ProcessId as number);
-
-    const uniquePids = [...new Set(targetPids)];
-    if (uniquePids.length === 0) {
-      return;
-    }
-
-    await Promise.all(uniquePids.map((pid) => this.killWindowsProcessTree(pid).catch(() => undefined)));
-    await new Promise((resolve) => setTimeout(resolve, 700));
-  }
-
-  private async listWindowsProcesses(): Promise<WindowsProcessInfo[]> {
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      "Get-CimInstance Win32_Process |",
-      "Select-Object ProcessId,ExecutablePath,CommandLine |",
-      "ConvertTo-Json -Compress -Depth 2",
-    ].join(" ");
-    const output = await runProcess("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      script,
-    ], this.paths.installRoot, 12_000);
-    if (!output.trim()) {
-      return [];
-    }
-
-    const parsed = JSON.parse(output) as WindowsProcessInfo | WindowsProcessInfo[];
-    return Array.isArray(parsed) ? parsed : [parsed];
-  }
-
-  private isQqComponentProcess(processInfo: WindowsProcessInfo, targetRoots: string[]): boolean {
-    const executablePath = typeof processInfo.ExecutablePath === "string" ? processInfo.ExecutablePath : "";
-    if (executablePath && targetRoots.some((root) => sameOrInsidePath(root, executablePath))) {
-      return true;
-    }
-
-    const commandLine = typeof processInfo.CommandLine === "string" ? processInfo.CommandLine : "";
-    if (!commandLine) {
-      return false;
-    }
-
-    const normalizedCommandLine = commandLine.replace(/\//gu, "\\").toLowerCase();
-    return targetRoots
-      .map((root) => resolve(root).replace(/\//gu, "\\").toLowerCase())
-      .some((root) => normalizedCommandLine.includes(root));
-  }
-
-  private killWindowsProcessTree(pid: number): Promise<void> {
-    return runProcess("taskkill", ["/PID", String(pid), "/T", "/F"], this.paths.installRoot, 8_000).then(() => undefined);
-  }
-
   private agreementStorePath(): string {
     return join(this.paths.userDataRoot, AGREEMENT_STORE_FILE);
   }
@@ -2533,235 +1828,6 @@ export class InitManager {
     } catch {
       return undefined;
     }
-  }
-
-  async setQqAccount(
-    qqAccount: string,
-    websocketToken?: string,
-    chatOverrides?: Partial<NapcatAdapterChatConfig>,
-    qqBackend: QqBackend = "napcat",
-    options: InitRepairOptions = {},
-  ): Promise<InitState> {
-    const normalizedAccount = normalizeQqAccount(qqAccount);
-    if (!normalizedAccount) {
-      throw new Error("QQ 号必须是纯数字且不能为 0");
-    }
-    qqAccount = normalizedAccount;
-
-    await this.setQqBackend(qqBackend, { ...options, syncAdapters: false });
-    await this.ensureServiceReady("maibot");
-    const existingWebsocketServer = qqBackend === "snowluma"
-      ? await this.readSnowLumaWebsocketServer(qqAccount)
-      : await this.readNapcatWebsocketServer(qqAccount);
-    const adapterWebsocketServer = await this.readAdapterServerFromConfig("snowluma");
-    const configuredWebsocketServer = hasUsableWebsocketServerConfig(adapterWebsocketServer)
-      ? adapterWebsocketServer
-      : existingWebsocketServer;
-    const resolvedWebsocketServer: NapcatWebsocketServerConfig = {
-      host: configuredWebsocketServer?.host || NAPCAT_ADAPTER_HOST,
-      port: adapterWebsocketServer?.port || this.readQqBackendConnections()[qqBackend]?.port || configuredWebsocketServer?.port || SNOWLUMA_ONEBOT_PORT,
-      token: adapterWebsocketServer?.token ?? this.readQqBackendConnections()[qqBackend]?.token ?? configuredWebsocketServer?.token ?? websocketToken ?? createWebsocketToken(),
-    };
-
-    if (qqBackend === "snowluma") {
-      await this.createSnowLumaConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
-    } else {
-      await this.createNapCatConfigs(qqAccount, resolvedWebsocketServer.token, resolvedWebsocketServer.port);
-      await this.ensureNapCatWebUiConfig();
-    }
-    await this.ensureQqAdapterConfig(
-      resolvedWebsocketServer,
-      chatOverrides,
-      { resetInvalidConfig: options.resetInvalidAdapterConfigs },
-    );
-    await this.markMessagePlatformConfigured(
-      qqBackend,
-      qqAccount,
-      true,
-    );
-    await this.saveQqProtocolSelection(qqBackend);
-    return this.getState();
-  }
-
-  napcatAdapterConfigPath(): string {
-    return join(
-      this.findMaiBotPluginDirByManifestId(NAPCAT_ADAPTER_PLUGIN_ID) ?? join(this.paths.maibotRoot, NAPCAT_ADAPTER_DIR),
-      "config.toml",
-    );
-  }
-
-  snowlumaAdapterConfigPath(): string {
-    return join(
-      this.findMaiBotPluginDirByManifestId(SNOWLUMA_ADAPTER_PLUGIN_ID) ?? join(this.paths.maibotRoot, SNOWLUMA_ADAPTER_DIR),
-      "config.toml",
-    );
-  }
-
-  /**
-   * Read the latest onebot11_<qq>.json that contains a WebSocket Token.
-   * Reuse the same token in napcat-adapter config to avoid failed MaiBot connections.
-   */
-  async readNapcatWebsocketServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig | undefined> {
-    try {
-      const configDirs = await this.findNapCatRuntimeConfigDirs();
-      const onebotPattern = qqAccount
-        ? new RegExp(`^onebot11_${escapeRegExp(qqAccount)}\\.json$`, "i")
-        : /^onebot11_\d+\.json$/i;
-      for (const configDir of configDirs) {
-        if (!existsSync(configDir)) continue;
-        const entries = await readdir(configDir);
-        const onebotFile = entries.find((name) => onebotPattern.test(name));
-        if (!onebotFile) continue;
-        const raw = await readFile(join(configDir, onebotFile), "utf8");
-        const parsed = JSON.parse(raw) as {
-          network?: { websocketServers?: Array<{ host?: string; token?: string; port?: number }> };
-        };
-        const server =
-          parsed?.network?.websocketServers?.find((entry) => entry?.port === NAPCAT_ADAPTER_PORT && entry?.token) ??
-          parsed?.network?.websocketServers?.find((entry) => entry?.token);
-        if (server?.token) {
-          return {
-            host: server.host ? String(server.host) : NAPCAT_ADAPTER_HOST,
-            port: Number.isFinite(server.port) && server.port ? Math.floor(server.port) : NAPCAT_ADAPTER_PORT,
-            token: String(server.token),
-          };
-        }
-      }
-    } catch {
-      // ignore and fall through to empty token
-    }
-    return undefined;
-  }
-
-  async readNapcatWebsocketToken(qqAccount?: string): Promise<string> {
-    return (await this.readNapcatWebsocketServer(qqAccount))?.token ?? "";
-  }
-
-  async readSnowLumaWebsocketServer(qqAccount?: string): Promise<NapcatWebsocketServerConfig | undefined> {
-    try {
-      const raw = await readFile(join(this.paths.snowlumaRoot, "config", qqAccount ? `onebot_${qqAccount}.json` : "onebot.json"), "utf8");
-      const parsed = JSON.parse(raw) as {
-        networks?: {
-          wsServers?: Array<{ host?: string; port?: number; accessToken?: string }>;
-        };
-      };
-      const server =
-        parsed.networks?.wsServers?.find((entry) => entry?.port === SNOWLUMA_ONEBOT_PORT && entry?.accessToken) ??
-        parsed.networks?.wsServers?.find((entry) => entry?.accessToken) ??
-        parsed.networks?.wsServers?.[0];
-      if (!server?.port) {
-        return undefined;
-      }
-      return {
-        host: server.host ? String(server.host) : NAPCAT_ADAPTER_HOST,
-        port: Number.isFinite(server.port) ? Math.floor(server.port) : SNOWLUMA_ONEBOT_PORT,
-        token: server.accessToken ? String(server.accessToken) : "",
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
-  // Both QQ backends use the unified SnowLuma adapter. Existing plugin
-  // settings belong to the user and must not be toggled when selecting a backend.
-  private async ensureQqAdapterConfig(
-    websocketServer: NapcatWebsocketServerConfig,
-    chatOverrides?: Partial<NapcatAdapterChatConfig>,
-    options: AdapterConfigWriteOptions = {},
-  ): Promise<void> {
-    const configPath = this.snowlumaAdapterConfigPath();
-    if (existsSync(configPath)) {
-      try {
-        parseToml(await readFile(configPath, "utf8"));
-        return;
-      } catch (error) {
-        if (!options.resetInvalidConfig) {
-          throw new AdapterConfigParseError("snowluma", configPath, error);
-        }
-      }
-    }
-    await this.writeSnowLumaAdapterConfigForServer(websocketServer, chatOverrides, options);
-  }
-
-  private async syncSelectedQqAdapterConfigs(options: AdapterConfigWriteOptions = {}): Promise<string[]> {
-    const qqAccount = this.getMessagePlatformQqAccount();
-    const qqBackend = await this.readQqBackend();
-    if (!qqAccount) {
-      return [];
-    }
-
-    const adapterServer = await this.readAdapterServerFromConfig("snowluma");
-    let websocketServer = qqBackend === "snowluma"
-      ? await this.readSnowLumaWebsocketServer(qqAccount)
-      : await this.readNapcatWebsocketServer(qqAccount);
-
-    if (hasUsableWebsocketServerConfig(adapterServer)) {
-      websocketServer = adapterServer;
-    }
-    websocketServer = {
-      host: websocketServer?.host || NAPCAT_ADAPTER_HOST,
-      port: adapterServer?.port || this.readQqBackendConnections()[qqBackend]?.port || websocketServer?.port || SNOWLUMA_ONEBOT_PORT,
-      token: adapterServer?.token ?? this.readQqBackendConnections()[qqBackend]?.token ?? websocketServer?.token ?? createWebsocketToken(),
-    };
-    if (qqBackend === "snowluma") {
-      await this.createSnowLumaConfigs(qqAccount, websocketServer.token, websocketServer.port);
-    } else {
-      await this.createNapCatConfigs(qqAccount, websocketServer.token, websocketServer.port);
-      await this.ensureNapCatWebUiConfig();
-    }
-
-    await this.ensureQqAdapterConfig(websocketServer, undefined, options);
-    return [this.snowlumaAdapterConfigPath()].filter((path) => existsSync(path));
-  }
-
-  private async writeSnowLumaAdapterConfigForServer(
-    websocketServer: NapcatWebsocketServerConfig,
-    chatOverrides?: Partial<NapcatAdapterChatConfig>,
-    options: AdapterConfigWriteOptions = {},
-  ): Promise<boolean> {
-    const defaults = buildDefaultNapcatAdapterConfig(websocketServer.token, websocketServer.port);
-    defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
-    defaults.server.actionTimeoutSec = 10;
-
-    let existing: NapcatAdapterConfig = defaults;
-    const configPath = this.snowlumaAdapterConfigPath();
-    const adapterRoot = dirname(configPath);
-
-    if (!existsSync(adapterRoot)) {
-      throw new Error(`QQ 适配器目录不存在，无法写入配置: ${adapterRoot}`);
-    }
-
-    if (existsSync(configPath)) {
-      try {
-        const text = await readFile(configPath, "utf8");
-        const parsed = parseToml(text);
-        if (parsed && typeof parsed === "object") {
-          existing = normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults);
-        }
-      } catch (error) {
-        if (!options.resetInvalidConfig) {
-          throw new AdapterConfigParseError("snowluma", configPath, error);
-        }
-      }
-    }
-
-    const merged: NapcatAdapterConfig = {
-      ...existing,
-      plugin: {
-        enabled: existing.plugin.enabled,
-        configVersion: SNOWLUMA_ADAPTER_CONFIG_VERSION,
-      },
-      server: {
-        ...existing.server,
-        host: websocketServer.host,
-        port: websocketServer.port,
-        token: websocketServer.token,
-      },
-      chat: applyChatOverrides(existing.chat, chatOverrides),
-    };
-
-    await writeFile(configPath, snowlumaAdapterConfigToToml(merged), "utf8");
-    return true;
   }
 
   async ensureModulesReady(): Promise<string[]> {
@@ -2829,185 +1895,6 @@ export class InitManager {
     return changedFiles;
   }
 
-  private async upgradeBundledComponent(spec: BundledComponentUpgradeSpec): Promise<QqComponentUpgradeEntry> {
-    const bundledRoot = join(this.paths.bundledModulesRoot, spec.moduleName);
-    const targetRoot = this.moduleTargetRoot(spec.moduleName);
-    const upgradedAt = Date.now();
-
-    if (!existsSync(bundledRoot)) {
-      throw new Error(`内置 ${spec.name} 模板缺失: ${bundledRoot}`);
-    }
-
-    if (samePath(bundledRoot, targetRoot)) {
-      return {
-        id: spec.id,
-        name: spec.name,
-        root: targetRoot,
-        bundledRoot,
-        preservedEntries: [],
-        copied: false,
-        skipped: true,
-        upgradedAt,
-      };
-    }
-
-    const backupRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-${upgradedAt}`);
-    const stagingRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-staging-${upgradedAt}`);
-    const replacedRoot = join(dirname(targetRoot), `.maibot-${spec.id}-upgrade-replaced-${upgradedAt}`);
-    let preservedEntries: string[] = [];
-    let movedTargetAside = false;
-
-    try {
-      await mkdir(dirname(targetRoot), { recursive: true });
-      await rm(stagingRoot, { recursive: true, force: true });
-      await runWithoutAsar(() =>
-        cp(bundledRoot, stagingRoot, {
-          recursive: true,
-          force: true,
-          errorOnExist: false,
-          filter: (sourcePath) => {
-            if (samePath(sourcePath, bundledRoot)) {
-              return true;
-            }
-            const relativePath = normalizeRelativePath(relative(bundledRoot, sourcePath));
-            return !spec.isProtectedPath(relativePath);
-          },
-        }),
-      );
-
-      if (existsSync(targetRoot)) {
-        preservedEntries = await this.moveProtectedComponentEntries(targetRoot, backupRoot, spec.isProtectedPath);
-        await this.restoreProtectedComponentEntries(backupRoot, stagingRoot, preservedEntries);
-        await this.movePath(targetRoot, replacedRoot);
-        movedTargetAside = true;
-      }
-
-      await this.movePath(stagingRoot, targetRoot);
-      if (movedTargetAside) {
-        await rm(replacedRoot, { recursive: true, force: true }).catch(() => undefined);
-      }
-    } catch (error) {
-      await this.rollbackBundledComponentUpgrade({
-        targetRoot,
-        backupRoot,
-        stagingRoot,
-        replacedRoot,
-        preservedEntries,
-        movedTargetAside,
-      }).catch(() => undefined);
-      throw normalizeQqComponentUpgradeError(spec.name, error);
-    } finally {
-      await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
-      await rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
-    }
-
-    return {
-      id: spec.id,
-      name: spec.name,
-      root: targetRoot,
-      bundledRoot,
-      preservedEntries,
-      copied: true,
-      skipped: false,
-      upgradedAt,
-    };
-  }
-
-  private async rollbackBundledComponentUpgrade({
-    targetRoot,
-    backupRoot,
-    stagingRoot,
-    replacedRoot,
-    preservedEntries,
-    movedTargetAside,
-  }: {
-    targetRoot: string;
-    backupRoot: string;
-    stagingRoot: string;
-    replacedRoot: string;
-    preservedEntries: string[];
-    movedTargetAside: boolean;
-  }): Promise<void> {
-    if (movedTargetAside && existsSync(replacedRoot)) {
-      await rm(targetRoot, { recursive: true, force: true }).catch(() => undefined);
-      await this.movePath(replacedRoot, targetRoot);
-    }
-
-    if (preservedEntries.length > 0 && existsSync(stagingRoot) && existsSync(targetRoot)) {
-      await this.restoreProtectedComponentEntries(stagingRoot, targetRoot, preservedEntries);
-    }
-
-    if (existsSync(backupRoot) && existsSync(targetRoot)) {
-      await cp(backupRoot, targetRoot, {
-        recursive: true,
-        force: true,
-        errorOnExist: false,
-      });
-    }
-  }
-
-  private async moveProtectedComponentEntries(
-    root: string,
-    backupRoot: string,
-    isProtectedPath: (relativePath: string) => boolean,
-  ): Promise<string[]> {
-    const entries: string[] = [];
-
-    const visit = async (currentRoot: string, relativeRoot = ""): Promise<void> => {
-      let children: Dirent[];
-      try {
-        children = await readdir(currentRoot, { withFileTypes: true });
-      } catch {
-        return;
-      }
-
-      for (const child of children) {
-        const relativePath = normalizeRelativePath(join(relativeRoot, child.name));
-        const sourcePath = join(root, relativePath);
-        if (isProtectedPath(relativePath)) {
-          const backupPath = join(backupRoot, ...relativePath.split("/"));
-          await mkdir(dirname(backupPath), { recursive: true });
-          await this.movePath(sourcePath, backupPath);
-          entries.push(relativePath);
-          continue;
-        }
-
-        if (child.isDirectory()) {
-          await visit(sourcePath, relativePath);
-        }
-      }
-    };
-
-    await visit(root);
-    return entries;
-  }
-
-  private async restoreProtectedComponentEntries(backupRoot: string, targetRoot: string, relativePaths: string[]): Promise<void> {
-    for (const relativePath of relativePaths) {
-      const backupPath = join(backupRoot, ...relativePath.split("/"));
-      if (!existsSync(backupPath)) {
-        continue;
-      }
-      const targetPath = join(targetRoot, ...relativePath.split("/"));
-      await mkdir(dirname(targetPath), { recursive: true });
-      await rm(targetPath, { recursive: true, force: true });
-      await this.movePath(backupPath, targetPath);
-    }
-  }
-
-  private async movePath(source: string, target: string): Promise<void> {
-    try {
-      await rename(source, target);
-    } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
-      if (code !== "EXDEV") {
-        throw error;
-      }
-      await cp(source, target, { recursive: true, force: true, errorOnExist: false });
-      await rm(source, { recursive: true, force: true });
-    }
-  }
-
   /**
    * Generate a fixed launcher .cmd under the napcat directory; it runs chcp 65001 before the exe.
    * Avoid building a `cmd /C` command string in source while keeping the console in UTF-8.
@@ -3035,49 +1922,6 @@ export class InitManager {
 
     await writeFile(launcherPath, desired, "utf8");
     return launcherPath;
-  }
-
-  readSnowLumaServicePortsSync(): { webui: number; onebot: number; error?: string } {
-    const errors: string[] = [];
-    const readConfig = (name: string): Record<string, unknown> => {
-      const path = join(this.paths.snowlumaRoot, "config", name);
-      if (!existsSync(path)) return {};
-      try {
-        const config = JSON.parse(readFileSync(path, "utf8"));
-        if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("配置必须是对象");
-        return config;
-      } catch (error) {
-        errors.push(`SnowLuma 配置读取失败: ${path}: ${toDetail(error)}`);
-        return {};
-      }
-    };
-    const runtime = readConfig("runtime.json");
-    const account = this.getMessagePlatformQqAccount("snowluma");
-    const accountFile = account ? `onebot_${account}.json` : "onebot.json";
-    const onebot = existsSync(join(this.paths.snowlumaRoot, "config", accountFile)) ? readConfig(accountFile) : readConfig("onebot.json");
-    const networks = onebot.networks as { wsServers?: Array<{ name?: string; port?: number }> } | undefined;
-    const server = Array.isArray(networks?.wsServers) ? networks.wsServers.find((item) => item?.name === "MaiBot Main") : undefined;
-    return { webui: asTcpPort(runtime.webuiPort, SNOWLUMA_WEBUI_PORT), onebot: asTcpPort(server?.port, SNOWLUMA_ONEBOT_PORT), error: errors[0] };
-  }
-
-  async saveQqBackendAccount(backend: QqBackend, account: string): Promise<void> {
-    const normalizedAccount = normalizeQqAccount(account);
-    if (backend !== "napcat" && backend !== "snowluma") throw new Error("不支持的 QQ 协议端");
-    if (!normalizedAccount) {
-      throw new Error("请输入正确的 QQ 号");
-    }
-    if (backend === this.getQqBackendSync() && this.getQqProtocolSync() !== "official") {
-      await this.setQqAccount(normalizedAccount, undefined, undefined, backend);
-      return;
-    }
-    const existing = this.readMessagePlatformStore();
-    await mkdir(this.paths.userDataRoot, { recursive: true });
-    await writeFile(this.messagePlatformPath(), `${JSON.stringify({
-      ...existing,
-      version: 1,
-      accounts: { ...existing?.accounts, [backend]: normalizedAccount },
-      updatedAt: Date.now(),
-    }, null, 2)}\n`, "utf8");
   }
 
   getPythonPath(): string {
@@ -3257,6 +2101,10 @@ export class InitManager {
         recursive: true,
         force: false,
         errorOnExist: false,
+        filter: (sourcePath) => {
+          const name = basename(sourcePath);
+          return name !== "config.toml" && !name.startsWith("config.toml.") && name !== "config_back";
+        },
       }),
     );
     return [target];
@@ -3377,231 +2225,44 @@ export class InitManager {
     return result;
   }
 
-  async ensureNapCatWebUiConfig(): Promise<string | undefined> {
-    const writeDefaultWebUiConfig = async (token: string): Promise<void> => {
-      const defaultJson = {
-        host: "0.0.0.0",
-        port: 6099,
-        token,
-        loginRate: 10,
-        autoLoginAccount: "",
-        theme: { dark: {}, light: {} },
-        disableWebUI: false,
-        disableNonLANAccess: false,
-      };
-
-      for (const configDir of await this.findNapCatRuntimeConfigWriteDirs()) {
-        const target = join(configDir, "webui.json");
-        if (existsSync(target)) {
-          continue;
-        }
-
-        await mkdir(configDir, { recursive: true });
-        await writeFile(target, JSON.stringify(defaultJson, null, 2), "utf8");
-      }
-    };
-
-    const existing = await this.readNapCatWebUiToken();
-    if (existing.token) {
-      await writeDefaultWebUiConfig(existing.token);
-      return existing.token;
-    }
-
-    if (existing.exists) {
-      throw new Error(existing.error ?? "NapCat WebUI config exists but token is missing; please check webui.json manually");
-    }
-
-    const configDirs = await this.findNapCatRuntimeConfigWriteDirs();
-    if (configDirs.length === 0) {
-      return undefined;
-    }
-
-    const token = randomBytes(6).toString("hex");
-    await writeDefaultWebUiConfig(token);
-
-    return token;
-  }
-
-  async readNapCatWebUiToken(): Promise<{ token?: string; exists: boolean; error?: string }> {
-    const candidates = await this.findNapCatWebUiFiles();
-    let sawExisting = false;
-    let firstError: string | undefined;
-
-    for (const candidate of candidates) {
-      if (!existsSync(candidate)) {
-        continue;
-      }
-
-      sawExisting = true;
-      try {
-        const raw = JSON.parse(await readFile(candidate, "utf8")) as { token?: unknown };
-        if (typeof raw.token === "string" && raw.token.length > 0) {
-          return { token: raw.token, exists: true };
-        }
-        firstError ??= `缺少 token: ${candidate}`;
-      } catch (error) {
-        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
-      }
-    }
-
-    return { exists: sawExisting, error: firstError };
-  }
-
   readMaiBotWebUiEndpointSync(): MaiBotWebUiEndpoint {
     const fallback = buildMaiBotWebUiEndpoint();
-    const candidates = uniqueExistingPaths([
-      this.botConfigPath(),
-      join(this.paths.bundledModulesRoot, "MaiBot", "config", "bot_config.toml"),
-    ]);
-    const failures: string[] = [];
-
-    for (const candidate of candidates) {
-      try {
-        const config = readTomlTable(readFileSync(candidate, "utf8"), "webui");
-        if (!config) {
-          continue;
-        }
-
-        const endpoint = buildMaiBotWebUiEndpoint(
-          asString(config["host"], fallback.host),
-          asTcpPort(config["port"], fallback.port),
-        );
+    const configPath = this.botConfigPath();
+    let reason = "未找到 WebUI 配置，已使用默认地址";
+    try {
+      const document = parseToml(readFileSync(configPath, "utf8"));
+      const config = document.webui;
+      if (config && typeof config === "object" && !Array.isArray(config) && !(config instanceof Date)) {
         return {
-          ...endpoint,
-          sourcePath: candidate,
-          fallbackReason: failures.length > 0 ? failures[0] : undefined,
+          ...buildMaiBotWebUiEndpoint(asString(config["host"], fallback.host), asTcpPort(config["port"], fallback.port)),
+          sourcePath: configPath,
         };
-      } catch (error) {
-        failures.push(`读取 WebUI 配置失败: ${candidate}: ${toDetail(error)}`);
-        continue;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        reason = "读取 WebUI 配置失败: " + configPath + ": " + toDetail(error);
       }
     }
-
-    return {
-      ...fallback,
-      fallbackUsed: true,
-      fallbackReason: failures[0] ?? "未找到 WebUI 配置，已使用默认地址",
-    };
+    return { ...fallback, fallbackUsed: true, fallbackReason: reason };
   }
 
-  /**
-   * Read MaiBot Core WebUI access_token for composing the WebUI entry URL.
-   * `?token=<access_token>` performs automatic login.
-   * If the file or field is missing, return an empty token and let callers use the plain root URL.
-   */
+  /** Read only the active instance's token; missing credentials use normal login. */
   async readMaiBotWebUiToken(): Promise<{ token?: string; exists: boolean; error?: string }> {
-    const candidates = [
-      join(this.paths.maibotRoot, "data", "webui.json"),
-      join(this.paths.bundledModulesRoot, "MaiBot", "data", "webui.json"),
-    ];
-
-    let sawExisting = false;
-    let firstError: string | undefined;
-
-    for (const candidate of candidates) {
-      if (!existsSync(candidate)) {
-        continue;
+    const tokenPath = join(this.paths.maibotRoot, "data", "webui.json");
+    try {
+      const raw = JSON.parse(await readFile(tokenPath, "utf8")) as { access_token?: unknown };
+      if (typeof raw.access_token === "string" && raw.access_token.length > 0) {
+        return { token: raw.access_token, exists: true };
       }
-
-      sawExisting = true;
-      try {
-        const raw = JSON.parse(await readFile(candidate, "utf8")) as { access_token?: unknown };
-        if (typeof raw.access_token === "string" && raw.access_token.length > 0) {
-          return { token: raw.access_token, exists: true };
-        }
-        firstError ??= `缺少 access_token: ${candidate}`;
-      } catch (error) {
-        firstError ??= `JSON 格式错误: ${candidate}: ${toDetail(error)}`;
-      }
+      return { exists: true, error: "缺少 access_token: " + tokenPath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { exists: false };
+      return { exists: true, error: "读取 WebUI 令牌失败: " + tokenPath + ": " + toDetail(error) };
     }
-
-    return { exists: sawExisting, error: firstError };
   }
 
   private botConfigPath(): string {
     return join(this.paths.maibotRoot, "config", "bot_config.toml");
-  }
-
-  private qqBackendPath(): string {
-    return join(this.paths.userDataRoot, QQ_BACKEND_FILE);
-  }
-
-  getQqBackendAccounts(): Partial<Record<QqBackend, string>> {
-    const stored = this.readMessagePlatformStore();
-    return { ...stored?.accounts };
-  }
-
-  private messagePlatformPath(): string {
-    return join(this.paths.userDataRoot, MESSAGE_PLATFORM_FILE);
-  }
-
-  private readMessagePlatformStore(): StoredMessagePlatformFile | undefined {
-    try {
-      const parsed = JSON.parse(readFileSync(this.messagePlatformPath(), "utf8")) as Partial<StoredMessagePlatformFile>;
-      const backend = parsed.backend === "snowluma" ? "snowluma" : parsed.backend === "napcat" ? "napcat" : undefined;
-      return {
-        version: 1,
-        backend,
-        accounts: {
-          napcat: typeof parsed.accounts?.napcat === "string" ? parsed.accounts.napcat
-            : !parsed.accounts && backend === "napcat" && typeof parsed.qqAccount === "string" ? parsed.qqAccount : undefined,
-          snowluma: typeof parsed.accounts?.snowluma === "string" ? parsed.accounts.snowluma
-            : !parsed.accounts && backend === "snowluma" && typeof parsed.qqAccount === "string" ? parsed.qqAccount : undefined,
-        },
-        configuredAt: typeof parsed.configuredAt === "number" ? parsed.configuredAt : undefined,
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
-  private async readAdapterServerFromConfig(backend: QqBackend): Promise<NapcatWebsocketServerConfig | undefined> {
-    const configPath = backend === "snowluma"
-      ? this.snowlumaAdapterConfigPath()
-      : this.napcatAdapterConfigPath();
-    if (!existsSync(configPath)) {
-      return undefined;
-    }
-
-    const defaults = buildDefaultNapcatAdapterConfig(
-      "",
-      backend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ADAPTER_PORT,
-    );
-    if (backend === "snowluma") {
-      defaults.plugin.configVersion = SNOWLUMA_ADAPTER_CONFIG_VERSION;
-      defaults.server.actionTimeoutSec = 10;
-    }
-
-    try {
-      const parsed = parseToml(await readFile(configPath, "utf8"));
-      if (parsed && typeof parsed === "object") {
-        return normalizeNapcatAdapterConfig(parsed as Record<string, unknown>, defaults).server;
-      }
-    } catch {
-      return undefined;
-    }
-
-    return undefined;
-  }
-
-  private async markMessagePlatformConfigured(
-    backend: QqBackend,
-    qqAccount: string,
-    recordAccount = false,
-  ): Promise<void> {
-    const existing = this.readMessagePlatformStore();
-    await mkdir(dirname(this.messagePlatformPath()), { recursive: true });
-    await writeFile(
-      this.messagePlatformPath(),
-      `${JSON.stringify({
-        version: 1,
-        backend,
-        accounts: { ...this.getQqBackendAccounts(), ...(recordAccount ? { [backend]: qqAccount } : {}) },
-        configuredAt: existing?.configuredAt ?? Date.now(),
-        updatedAt: Date.now(),
-      }, null, 2)}\n`,
-      "utf8",
-    );
   }
 
   private agreementSourcePath(fileName: string): string {
@@ -3929,169 +2590,5 @@ export class InitManager {
     };
   }
 
-  private async createNapCatConfigs(
-    qqAccount: string,
-    websocketToken: string,
-    websocketPort = NAPCAT_ADAPTER_PORT,
-  ): Promise<void> {
-    const napcatProtocolConfig = {
-      enable: false,
-      network: {
-        httpServers: [],
-        websocketServers: [],
-        websocketClients: [],
-      },
-    };
-    const napcatConfig = {
-      fileLog: false,
-      consoleLog: true,
-      fileLogLevel: "debug",
-      consoleLogLevel: "info",
-      packetBackend: "auto",
-      packetServer: "",
-      o3HookMode: 1,
-      bypass: {
-        hook: false,
-        window: false,
-        module: false,
-        process: false,
-        container: false,
-        js: false,
-      },
-      autoTimeSync: true,
-    };
-    const onebotConfig = {
-      network: {
-        httpServers: [],
-        httpSseServers: [],
-        httpClients: [],
-        websocketServers: [
-          {
-            enable: true,
-            name: "MaiBot Main",
-            host: "127.0.0.1",
-            port: websocketPort,
-            reportSelfMessage: false,
-            enableForcePushEvent: true,
-            messagePostFormat: "array",
-            token: websocketToken,
-            debug: false,
-            heartInterval: 30000,
-          },
-        ],
-        websocketClients: [],
-        plugins: [],
-      },
-      musicSignUrl: "",
-      enableLocalFile2Url: false,
-      parseMultMsg: false,
-      imageDownloadProxy: "",
-      timeout: {
-        baseTimeout: 10000,
-        uploadSpeedKBps: 256,
-        downloadSpeedKBps: 256,
-        maxTimeout: 1800000,
-      },
-    };
-
-    for (const configDir of await this.findNapCatRuntimeConfigWriteDirs()) {
-      await mkdir(configDir, { recursive: true });
-      await writeFile(
-        join(configDir, `napcat_protocol_${qqAccount}.json`),
-        JSON.stringify(napcatProtocolConfig, null, 2),
-        "utf8",
-      );
-      await writeFile(
-        join(configDir, `onebot11_${qqAccount}.json`),
-        JSON.stringify(onebotConfig, null, 2),
-        "utf8",
-      );
-      await writeFile(
-        join(configDir, `napcat_${qqAccount}.json`),
-        JSON.stringify(napcatConfig, null, 2),
-        "utf8",
-      );
-    }
-  }
-
-  private async createSnowLumaConfigs(
-    qqAccount: string,
-    websocketToken: string,
-    websocketPort = SNOWLUMA_ONEBOT_PORT,
-  ): Promise<void> {
-    const configDir = join(this.paths.snowlumaRoot, "config");
-    await mkdir(configDir, { recursive: true });
-    const runtimePath = join(configDir, "runtime.json");
-    const runtime = existsSync(runtimePath) ? JSON.parse(await readFile(runtimePath, "utf8")) : {};
-    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
-      throw new Error("SnowLuma 运行配置格式错误，请修复 runtime.json 后重试。");
-    }
-    await writeFile(runtimePath, JSON.stringify({
-      ...runtime,
-      webuiPort: runtime.webuiPort ?? SNOWLUMA_WEBUI_PORT,
-      hookAutoLoad: false,
-    }, null, 2), "utf8");
-    const onebotConfig = {
-      networks: {
-        httpServers: [],
-        httpClients: [],
-        wsServers: [
-          {
-            name: "MaiBot Main",
-            host: "127.0.0.1",
-            port: websocketPort,
-            path: "/",
-            role: "Universal",
-            accessToken: websocketToken,
-            messageFormat: "array",
-            reportSelfMessage: false,
-          },
-        ],
-        wsClients: [],
-      },
-      musicSignUrl: "",
-    };
-    const serialized = JSON.stringify(onebotConfig, null, 2);
-    await writeFile(join(configDir, "onebot.json"), serialized, "utf8");
-    if (qqAccount) {
-      await writeFile(join(configDir, `onebot_${qqAccount}.json`), serialized, "utf8");
-    }
-  }
-
-  private async findNapCatWebUiFiles(): Promise<string[]> {
-    const configDirs = await this.findNapCatWebUiConfigDirs();
-    return configDirs.map((configDir) => join(configDir, "webui.json"));
-  }
-
-  private async findNapCatWebUiConfigDirs(): Promise<string[]> {
-    return this.findNapCatRuntimeConfigDirs();
-  }
-
-  private async findNapCatRuntimeConfigDirs(): Promise<string[]> {
-    if (process.platform !== "darwin") {
-      return [join(this.paths.napcatRoot, "napcat", "config")];
-    }
-
-    return uniquePaths([
-      this.macNapCatRuntimeConfigDir(),
-      join(homedir(), "Library", "Application Support", "QQ", "NapCat", "config"),
-      join(this.paths.napcatRoot, "napcat", "config"),
-    ]);
-  }
-
-  private async findNapCatRuntimeConfigWriteDirs(): Promise<string[]> {
-    if (process.platform === "darwin") {
-      return [this.macNapCatRuntimeConfigDir()];
-    }
-
-    return [join(this.paths.napcatRoot, "napcat", "config")];
-  }
-
-  private macNapCatRuntimeConfigDir(): string {
-    const qqContainer = process.env.NAPCAT_QQ_CONTAINER?.trim()
-      ? resolve(process.env.NAPCAT_QQ_CONTAINER.trim())
-      : join(homedir(), "Library", "Containers", "com.tencent.qq", "Data");
-    return join(qqContainer, "Documents", "napcat", "config");
-  }
 
 }

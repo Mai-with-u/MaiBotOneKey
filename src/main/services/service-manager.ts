@@ -30,6 +30,7 @@ import { InitManager } from "./init-manager";
 import { LogStore } from "./log-store";
 import { PythonDependencyManager } from "./python-dependency-manager";
 import { SnowLumaWebuiAuth } from "./snowluma-webui-auth";
+import { defaultServiceStartupSettings, isLocalDashboardDevLaunch } from "./service-startup-defaults";
 import { prepareSnowLumaEntry } from "./snowluma-auto-inject";
 
 interface ServiceDefinition {
@@ -114,8 +115,6 @@ const STOP_FORCE_AFTER_MS = 10_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_RESTART_ATTEMPTS = 3;
 const RESTART_DELAY_MS = 2_500;
-const SERVICE_TERMINAL_COLS = 260;
-const SERVICE_TERMINAL_ROWS = 36;
 const LOCAL_DASHBOARD_ENV_NAME = "MAIBOT_WEBUI_USE_LOCAL_DASHBOARD";
 const COMMAND_CONFIG_FILE = "service-commands.json";
 const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
@@ -511,13 +510,15 @@ class ServiceStartupSettingsStore {
   }
 
   private read(): ServiceStartupSettings {
+    // The explicit dev:dev entry starts checked even if a previous production-style run saved false.
+    if (isLocalDashboardDevLaunch()) return defaultServiceStartupSettings();
     try {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredServiceStartupSettingsFile;
       return {
-        useLocalDashboard: raw.useLocalDashboard ?? false,
+        useLocalDashboard: raw.useLocalDashboard ?? defaultServiceStartupSettings().useLocalDashboard,
       };
     } catch {
-      return { useLocalDashboard: false };
+      return defaultServiceStartupSettings();
     }
   }
 }
@@ -590,9 +591,9 @@ export class ServiceManager extends EventEmitter {
 
   async startAll(): Promise<ServiceDescriptor[]> {
     this.operationLock.assertCanStart();
-    if (this.requestMissingQqAccount()) return [];
+    const missingAccount = this.requestMissingQqAccount();
     await this.initManager.assertAgreementsConfirmed();
-    const serviceIds: ServiceId[] = this.initManager.getQqProtocolSync() === "official" ? ["maibot"] : ["napcat", "maibot"];
+    const serviceIds: ServiceId[] = missingAccount || this.initManager.getQqProtocolSync() === "official" ? ["maibot"] : ["napcat", "maibot"];
     const failures: string[] = [];
     for (const serviceId of serviceIds) {
       try {
@@ -820,8 +821,6 @@ export class ServiceManager extends EventEmitter {
         cwd: resolved.cwd,
         command: useCommandLine ? undefined : resolved.command,
         commandLine: useCommandLine ? resolved.commandLine : undefined,
-        cols: SERVICE_TERMINAL_COLS,
-        rows: SERVICE_TERMINAL_ROWS,
         encoding: "auto",
         env: Object.keys(mergedEnv).length > 0 ? mergedEnv : undefined,
       });

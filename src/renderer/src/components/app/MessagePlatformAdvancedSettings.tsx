@@ -37,7 +37,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     setLoginInfoError(null);
     const load = async () => {
       try {
-        const info = await window.maibotDesktop?.init.getLoginInfo();
+        const info = await window.maibotDesktop?.protocols.getLoginInfo();
         if (!info) throw new Error("无法读取登录信息");
         if (!cancelled) {
           setLoginInfo(info);
@@ -60,7 +60,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma"),
   }));
   const qqComponentsChangeBlocked = snapshot.services.some((service) =>
-    service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping",
+    service.id === "napcat" && (service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping"),
   );
   const qqWebuiPortsDirty = qqWebuiPorts.napcat !== readBackendPort("napcat") || qqWebuiPorts.snowluma !== readBackendPort("snowluma");
   const qqWebuiPortsValid = isValidPortText(qqWebuiPorts.napcat) && isValidPortText(qqWebuiPorts.snowluma);
@@ -82,7 +82,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     try {
       const bridge = window.maibotDesktop;
       if (!bridge) throw new Error("无法连接启动器");
-      await bridge.init.saveQqBackendAccount(backend, account);
+      await bridge.protocols.saveQqBackendAccount(backend, account);
       setLoginInfo((current) => current ? { ...current, [backend]: { ...current[backend], qqAccount: account } } : current);
       setQqAccounts((current) => ({ ...current, [backend]: account }));
       await refreshSnapshot();
@@ -99,7 +99,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     try {
       const bridge = window.maibotDesktop;
       if (!bridge) throw new Error("无法连接启动器");
-      await bridge.init.saveSnowLumaWebuiPassword(snowLumaPassword);
+      await bridge.protocols.saveSnowLumaWebuiPassword(snowLumaPassword);
       setLoginInfo((current) => current ? { ...current, snowluma: { ...current.snowluma, webuiToken: snowLumaPassword } } : current);
       toast.success("SnowLuma WebUI 密码已保存，下次启动将使用新密码自动登录");
       await refreshSnapshot();
@@ -111,14 +111,14 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   };
   const upgradeQqComponents = useCallback(async () => {
     if (qqComponentsChangeBlocked) {
-      setError("请先停止 MaiBot Core 和 QQ 后端，再重新安装 NapCat / SnowLuma。");
+      setError("请先停止 QQ 协议端，再重新安装 NapCat / SnowLuma。");
       return;
     }
 
     setBusy("qq-components:upgrade");
     setError(null);
     try {
-      const result = await window.maibotDesktop?.init.upgradeQqComponents();
+      const result = await window.maibotDesktop?.protocols.upgradeQqComponents();
       setConfirmQqComponentsUpgradeOpen(false);
       const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
       toast.success(`NapCat / SnowLuma 已重新安装，保留 ${preservedCount} 项配置与数据`);
@@ -149,11 +149,27 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     try {
       const bridge = window.maibotDesktop;
       if (!bridge) throw new Error("无法连接启动器");
-      await bridge.init.syncQqConnections();
+      await bridge.adapters.syncQqConnections();
       await refreshSnapshot();
-      toast.success("QQ 连接配置已同步");
+      toast.success("MaiBot 适配器连接配置已保存");
     } catch (error) {
       setError(messageFromError(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setAdapterEnabled = async (enabled: boolean) => {
+    setBusy("adapter:enabled");
+    setError(null);
+    try {
+      const bridge = window.maibotDesktop;
+      if (!bridge) throw new Error("无法连接启动器");
+      await bridge.adapters.setEnabled(snapshot.initState.qqProtocol === "official" ? "official" : "onebot", enabled);
+      toast.success(enabled ? "适配器已启用" : "适配器已停用");
+      await refreshSnapshot();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
@@ -279,15 +295,13 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
                   <p className="text-sm font-medium">同步 QQ 连接配置</p>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    将当前 NapCat / SnowLuma 的 OneBot 连接地址、端口和 token 与 MaiBot QQ 适配器对齐。此操作会写入连接配置。
+                    将当前协议端的连接信息保存到 MaiBot 适配器。需先启动 MaiBot；协议端配置保持不变。
                   </p>
                   {snapshot.initState.qqProtocol === "official" ? (
                     <p className="text-xs text-muted-foreground">官方 QQ 适配器不使用 OneBot 连接，无需同步。</p>
-                  ) : qqComponentsChangeBlocked ? (
-                    <p className="text-xs text-warning-foreground">请先停止 MaiBot Core 和 QQ 协议端。</p>
                   ) : null}
                   <Button
-                    disabled={busy !== null || qqComponentsChangeBlocked || snapshot.initState.qqProtocol === "official"}
+                    disabled={busy !== null || snapshot.initState.qqProtocol === "official"}
                     onClick={() => void syncConnections()}
                     size="sm"
                     variant="secondary"
@@ -295,10 +309,17 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                     {busy === "qq-connections:sync" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
                     同步连接配置
                   </Button>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    适配器的启用状态由 MaiBot 管理，与协议端的启动、停止分别操作。
+                  </p>
+                  <div className="flex gap-2">
+                    <Button disabled={busy !== null} onClick={() => void setAdapterEnabled(true)} size="sm" variant="secondary">启用适配器</Button>
+                    <Button disabled={busy !== null} onClick={() => void setAdapterEnabled(false)} size="sm" variant="secondary">停用适配器</Button>
+                  </div>
                 </div>
               </TabsContent>
               <TabsContent value="reinstall" className="space-y-3">
-                {qqComponentsChangeBlocked ? <p className="text-xs text-warning-foreground">MaiBot Core 或 QQ 协议端仍在运行，请先停止全部服务。</p> : null}
+                {qqComponentsChangeBlocked ? <p className="text-xs text-warning-foreground">QQ 协议端仍在运行，请先停止协议端。</p> : null}
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">重新安装 NapCat / SnowLuma</p>

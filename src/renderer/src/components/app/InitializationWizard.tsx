@@ -1,4 +1,5 @@
-import { requestMessagePlatformGuide } from "@/lib/message-platform-guide";
+import { getDesktopSnapshot } from "@/lib/desktop-api";
+import { watchSetupCompletion } from "@/lib/setup-completion";
 import {
   CheckCircle2,
   Loader2,
@@ -13,7 +14,6 @@ import type {
   PythonPackageSourcePreset,
   ServiceDescriptor,
 } from "@shared/contracts";
-import { LOCAL_CHAT_USER_NAME_STORAGE_KEY } from "@shared/local-chat-defaults";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +23,6 @@ import {
   DialogFooter,
   DialogHeader,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 
 interface InitializationWizardProps {
@@ -36,11 +35,7 @@ const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
 const AUTO_START_DELAY_MS = 2000;
 const WEBUI_READY_TIMEOUT_MS = 90_000;
 const WEBUI_READY_POLL_MS = 1000;
-type WizardStep =
-  | "core"
-  | "profile"
-  | "webui"
-  | "localchat";
+type WizardStep = "core" | "webui";
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -57,22 +52,6 @@ function readStartupWizardSeen(): boolean {
 function markStartupWizardSeen(): void {
   try {
     localStorage.setItem(STARTUP_WIZARD_KEY, "1");
-  } catch {
-    // Local storage can be unavailable in isolated previews.
-  }
-}
-
-function readLocalUserName(): string {
-  try {
-    return localStorage.getItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function saveLocalUserName(userName: string): void {
-  try {
-    localStorage.setItem(LOCAL_CHAT_USER_NAME_STORAGE_KEY, userName);
   } catch {
     // Local storage can be unavailable in isolated previews.
   }
@@ -151,9 +130,6 @@ export function InitializationWizard({
   );
   const [sourceSaving, setSourceSaving] = useState(false);
   const [downloadRestarting, setDownloadRestarting] = useState(false);
-  const [localUserName, setLocalUserName] = useState(
-    () => readLocalUserName() || "人类",
-  );
   const [step, setStep] = useState<WizardStep>("core");
   const [statusEllipsis, setStatusEllipsis] = useState("");
   const autoStartRequested = useRef(false);
@@ -189,10 +165,8 @@ export function InitializationWizard({
   }, [statusAnimating, step]);
 
   const refreshSnapshot = useCallback(async () => {
-    const nextSnapshot = await window.maibotDesktop?.getSnapshot();
-    if (nextSnapshot) {
-      onSnapshot(nextSnapshot);
-    }
+    const nextSnapshot = await getDesktopSnapshot();
+    onSnapshot(nextSnapshot);
     return nextSnapshot;
   }, [onSnapshot]);
 
@@ -200,9 +174,7 @@ export function InitializationWizard({
     const startedAt = Date.now();
     while (Date.now() - startedAt < WEBUI_READY_TIMEOUT_MS) {
       const nextSnapshot = await refreshSnapshot();
-      const nextService = nextSnapshot
-        ? maibotServiceFrom(nextSnapshot)
-        : undefined;
+      const nextService = maibotServiceFrom(nextSnapshot);
       if (nextService?.status === "running" && nextService.health === "ready") {
         return;
       }
@@ -229,7 +201,7 @@ export function InitializationWizard({
     event.preventDefault();
   }, []);
   const ignoreWizardOpenChange = useCallback((_next: boolean) => {
-    // Startup guidance is advanced only by explicit in-flow actions.
+    // Runtime readiness and Core setup status own this flow; dismissing the dialog does not complete it.
   }, []);
 
   const runMaiCoreStartup = useCallback(
@@ -257,7 +229,8 @@ export function InitializationWizard({
         }
         await waitForMaiBotWebUi();
         if (startupRunId.current === runId) {
-          setStep("profile");
+          onOpenTab("maibot");
+          setStep("webui");
         }
       } catch (nextError) {
         if (startupRunId.current === runId) {
@@ -270,7 +243,7 @@ export function InitializationWizard({
         }
       }
     },
-    [refreshSnapshot, waitForMaiBotWebUi],
+    [onOpenTab, refreshSnapshot, waitForMaiBotWebUi],
   );
 
   const startMaiCore = useCallback(async () => {
@@ -322,11 +295,6 @@ export function InitializationWizard({
     },
     [busy, running, starting],
   );
-
-  const updateLocalUserName = useCallback((value: string) => {
-    setLocalUserName(value);
-    setError(null);
-  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -383,93 +351,26 @@ export function InitializationWizard({
     void startMaiCore();
   }, [startMaiCore]);
 
-  const finishProfile = useCallback(() => {
-    const userName = localUserName.trim();
-    if (!userName) {
-      setError("请先填写你自己的用户名。");
-      return;
-    }
-    saveLocalUserName(userName);
-    setError(null);
+  useEffect(() => {
+    if (!open || step !== "core" || !ready) return;
+    // A Core already running when the shell mounts needs the same handoff.
     onOpenTab("maibot");
     setStep("webui");
-  }, [localUserName, onOpenTab]);
+  }, [onOpenTab, open, ready, step]);
 
-  const finishWebUiConfig = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await waitForMaiBotWebUi();
-      onOpenTab("localchat");
-      setStep("localchat");
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(false);
-    }
-  }, [onOpenTab, waitForMaiBotWebUi]);
+  useEffect(() => {
+    if (!open || step !== "webui" || !ready) return;
+    const init = window.maibotDesktop?.init;
+    if (typeof init?.getMaiBotSetupStatus !== "function") return;
+    return watchSetupCompletion(() => init.getMaiBotSetupStatus(), close);
+  }, [close, open, ready, step]);
 
-  const finishLocalChatGuide = useCallback(() => {
-    onOpenTab("message-platform");
-    requestMessagePlatformGuide();
-    close();
-  }, [close, onOpenTab]);
-
-  if (open && (step === "webui" || step === "localchat")) {
-    const floatingTitle =
-      step === "webui"
-        ? "在 WebUI 继续初始设置"
-        : "试试本地聊天";
-    const floatingDescription =
-      step === "webui"
-        ? "请在 WebUI 中完成基础配置，保存后点这里继续。"
-        : "已在 MaiBot 页面打开聊天。这里可以直接和本机运行中的 MaiBot 对话，用来测试角色、回复风格和插件效果。";
-    const floatingAction =
-      step === "webui" ? "已完成" : "下一步";
-    const floatingOnClick =
-      step === "webui"
-        ? () => void finishWebUiConfig()
-        : finishLocalChatGuide;
-
-    return (
-      <div
-        className="pointer-events-none fixed right-4 top-1/2 z-[100] flex -translate-y-1/2 justify-end"
-        style={{
-          width: "min(8rem, calc((100vh - 2rem) / 2), calc(100vw - 2rem))",
-        }}
-      >
-        <section className="pointer-events-auto flex aspect-[1/3] w-full flex-col justify-between rounded-lg border border-border bg-card/95 p-4 text-card-foreground shadow-2xl backdrop-blur">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">{floatingTitle}</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {floatingDescription}
-            </p>
-            {error ? (
-              <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
-                <ShieldAlert className="size-3.5 shrink-0" />
-                <span>{error}</span>
-              </div>
-            ) : null}
-          </div>
-          <div className="flex flex-col gap-2">
-            <Button className="w-full justify-center" disabled={busy} onClick={floatingOnClick} size="sm">
-              {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-              {floatingAction}
-            </Button>
-          </div>
-        </section>
-      </div>
-    );
-  }
+  // MaiBot owns its setup UI; no host overlay or duplicate completion button.
+  if (step === "webui") return null;
 
   return (
     <Dialog open={open} onOpenChange={ignoreWizardOpenChange}>
       <DialogContent
-        className={
-          step === "profile"
-            ? "h-56 transition-[height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-            : undefined
-        }
         onEscapeKeyDown={preventWizardDismiss}
         onFocusOutside={preventWizardDismiss}
         onInteractOutside={preventWizardDismiss}
@@ -479,7 +380,7 @@ export function InitializationWizard({
       >
         <DialogHeader
           title={
-            <span className="text-3xl font-bold tracking-normal">初次配置麦麦</span>
+            <span className="text-3xl font-bold tracking-normal">准备麦麦运行环境</span>
           }
           tone="default"
         />
@@ -619,29 +520,6 @@ export function InitializationWizard({
                 </div>
               </section>
             </>
-          ) : step === "profile" ? (
-            <section className="animate-in fade-in-0 slide-in-from-top-1 px-4 py-2 duration-300 motion-reduce:animate-none">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">麦麦如何称呼你？</p>
-              </div>
-              <div className="mt-3 flex items-center gap-3">
-                <Input
-                  autoFocus
-                  className="bg-transparent"
-                  onChange={(event) => updateLocalUserName(event.target.value)}
-                  placeholder="人类"
-                  value={localUserName}
-                />
-                <Button
-                  className="shrink-0 font-sans font-bold"
-                  onClick={finishProfile}
-                  size="sm"
-                  style={{ color: "var(--retro-paper, var(--background))" }}
-                >
-                  完成
-                </Button>
-              </div>
-            </section>
           ) : null}
 
           {error ? (

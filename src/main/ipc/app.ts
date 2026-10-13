@@ -17,7 +17,6 @@ import {
   readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { cpus, freemem, loadavg, totalmem, uptime } from "node:os";
@@ -36,7 +35,6 @@ import type {
   AppIconSettings,
   DesktopSnapshot,
   InitRepairResult,
-  InitRepairOptions,
   InitState,
   LauncherUiSettings,
   LauncherUpdateApplyResult,
@@ -58,23 +56,6 @@ import type {
   MaiBotStorageCleanupResult,
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
-  MaiBotInstalledPlugin,
-  MaiBotPluginConfigSaveResult,
-  MaiBotPluginConfigState,
-  MaiBotPluginConfigValue,
-  MaiBotPluginListOptions,
-  MaiBotPluginListResult,
-  MaiBotPluginDownloadResult,
-  MaiBotPluginMarketSource,
-  MaiBotPluginOperationRequest,
-  MaiBotPluginOperationResult,
-  MaiBotPluginRatingResult,
-  MaiBotPluginReadmeResult,
-  MaiBotPluginStats,
-  MaiBotPluginUserState,
-  MaiBotPluginUserStates,
-  MaiBotPluginVoteResult,
-  MaiBotStatisticSummary,
   MaiBotUpdateInfo,
   MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
@@ -124,13 +105,13 @@ import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { LauncherUiSettingsManager } from "../services/launcher-ui-settings-manager";
 import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-cleanup";
-import { MaiBotPluginClient } from "../services/maibot-plugin-client";
 import { ModuleUpdater } from "../services/module-updater";
 import { NetworkProxyManager } from "../services/network-proxy-manager";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
 import { RemoteSourceManager } from "../services/remote-source-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
+import { defaultServiceStartupSettings } from "../services/service-startup-defaults";
 import { SourceSettingsManager } from "../services/source-settings-manager";
 import {
   getWindowWorkAreaBounds,
@@ -1492,190 +1473,11 @@ async function fetchPypiVersionSummary(
   }
 }
 
-function decodeStatisticText(content: string): string {
-  return content
-    .replace(/\u001b\[[0-9;]*m/gu, "")
-    .replace(/<br\s*\/?>/giu, "\n")
-    .replace(/<\/(?:p|div|tr|li|h[1-6]|section|article)>/giu, "\n")
-    .replace(/<[^>]+>/gu, " ")
-    .replace(/&nbsp;/giu, " ")
-    .replace(/&yen;/giu, "Yen")
-    .replace(/&amp;/giu, "&")
-    .replace(/&lt;/giu, "<")
-    .replace(/&gt;/giu, ">")
-    .replace(/&#(\d+);/gu, (_match, code: string) =>
-      String.fromCodePoint(Number(code)),
-    )
-    .replace(/\r\n?/gu, "\n");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-function readStatisticField(text: string, label: string): string | undefined {
-  const inlineValue = text
-    .match(
-      new RegExp(`${escapeRegExp(label)}\\s*[:\\uFF1A]\\s*([^\\n]+)`, "u"),
-    )?.[1]
-    ?.trim();
-  if (inlineValue) {
-    return inlineValue;
-  }
-
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const labelIndex = lines.findIndex((line) => line === label);
-  const nextLine = labelIndex >= 0 ? lines[labelIndex + 1] : undefined;
-  return nextLine && !nextLine.endsWith(":") && !nextLine.endsWith("\uFF1A")
-    ? nextLine
-    : undefined;
-}
-
-function readStatisticCount(text: string, label: string): number | undefined {
-  const raw = readStatisticField(text, label);
-  const value = raw?.match(/[\d,]+/u)?.[0]?.replace(/,/gu, "");
-  return value ? Number(value) : undefined;
-}
-
-function isStatisticStyleLine(line: string): boolean {
-  return /^[a-z][\w-]*\s*:\s*[-\w.%#()'",\s]+$/iu.test(line);
-}
-
-function isChatStatisticHeading(line: string): boolean {
-  const normalized = line.trim().toLowerCase();
-  return (
-    line.includes("\u804A\u5929\u6D88\u606F\u7EDF\u8BA1") ||
-    /^(?:chat\s+)?message\s+statistics$/iu.test(normalized) ||
-    /^chat\s+statistics$/iu.test(normalized)
-  );
-}
-
-function isChatStatisticBoundary(line: string): boolean {
-  const normalized = line.trim().toLowerCase();
-  return (
-    line.includes("\u7EDF\u8BA1\u65F6\u6BB5") ||
-    line.includes("\u6309\u6A21\u578B\u5206\u7C7B\u7EDF\u8BA1") ||
-    line.includes("\u6309\u6A21\u5757\u5206\u7C7B\u7EDF\u8BA1") ||
-    line.includes("\u6309\u8BF7\u6C42\u7C7B\u578B\u5206\u7C7B\u7EDF\u8BA1") ||
-    line.includes("\u6570\u636E\u5206\u5E03\u56FE\u8868") ||
-    line.includes("\u6307\u6807\u8D8B\u52BF") ||
-    /^(?:statistics\s+period|model\s+statistics|module\s+statistics|request\s+type\s+statistics|data\s+distribution|metrics\s+trend|charts?)$/iu.test(
-      normalized,
-    )
-  );
-}
-
-function parseChatStatistics(
-  text: string,
-): MaiBotStatisticSummary["chatStats"] {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const startIndex = lines.findIndex(isChatStatisticHeading);
-  if (startIndex < 0) {
-    return [];
-  }
-
-  const stats: MaiBotStatisticSummary["chatStats"] = [];
-  for (const line of lines.slice(startIndex + 1)) {
-    if (isStatisticStyleLine(line)) {
-      continue;
-    }
-    if (isChatStatisticBoundary(line)) {
-      break;
-    }
-    if (
-      line.startsWith("-") ||
-      line.includes("Token/") ||
-      line.toLowerCase().includes("cost")
-    ) {
-      break;
-    }
-    if (
-      line.includes("\u8054\u7CFB\u4EBA") ||
-      line.includes("\u7FA4\u7EC4\u540D\u79F0") ||
-      line.includes("\u6D88\u606F\u6570\u91CF") ||
-      line.toLowerCase().includes("total") ||
-      line.toLowerCase().includes("online") ||
-      line.toLowerCase().includes("reply")
-    ) {
-      continue;
-    }
-    const match = line.match(/^(.+?)\s+(\d+)$/u);
-    if (!match) {
-      continue;
-    }
-    const name = match[1].trim();
-    if (name.endsWith(":")) {
-      continue;
-    }
-    stats.push({ name, messageCount: Number(match[2]) });
-  }
-  return stats;
-}
-
-async function readMaiBotStatistics(
-  paths: RuntimePaths,
-): Promise<MaiBotStatisticSummary> {
-  const candidates = [
-    join(paths.maibotRoot, "maibot_statistics.html"),
-    join(paths.maibotRoot, "data", "maibot_statistics.html"),
-    join(paths.maibotRoot, "logs", "maibot_statistics.html"),
-  ];
-  const sourcePath = candidates.find((path) => existsSync(path));
-  if (!sourcePath) {
-    return { available: false, updatedAt: Date.now(), chatStats: [] };
-  }
-
-  const [content, fileStat] = await Promise.all([
-    readFile(sourcePath, "utf8"),
-    stat(sourcePath),
-  ]);
-  const text = decodeStatisticText(content);
-  const periodLabel = text.match(
-    /(\u6700\u8FD1[^\s(\uFF08]*\u7EDF\u8BA1\u6570\u636E|period[^\s(]*)/iu,
-  )?.[1];
-  const startedAt = text
-    .match(
-      /(?:\u81EA\s*([^,\uFF0C)\uFF09]+)\u5F00\u59CB|started\s*[:\uFF1A]\s*([^\n]+))/iu,
-    )
-    ?.slice(1)
-    .find(Boolean)
-    ?.trim();
-
-  return {
-    available: true,
-    updatedAt: fileStat.mtimeMs,
-    sourcePath,
-    periodLabel,
-    startedAt,
-    totalOnlineTime: readStatisticField(text, "\u603B\u5728\u7EBF\u65F6\u95F4"),
-    totalMessages: readStatisticCount(text, "总消息数"),
-    totalReplies: readStatisticCount(text, "总回复数"),
-    totalRequests: readStatisticCount(text, "总请求数"),
-    totalTokens: readStatisticCount(text, "Token"),
-    totalCost: readStatisticField(text, "\u603B\u82B1\u8D39"),
-    costPerMessage: readStatisticField(text, "花费/消息数量"),
-    costPerReceivedMessage: readStatisticField(
-      text,
-      "\u82B1\u8D39/\u63A5\u53D7\u6D88\u606F\u6570\u91CF",
-    ),
-    costPerReply: readStatisticField(text, "花费/回复数量"),
-    costPerHour: readStatisticField(text, "\u82B1\u8D39/\u65F6\u95F4"),
-    tokensPerHour: readStatisticField(text, "Token/\u65F6\u95F4"),
-    chatStats: parseChatStatistics(text),
-  };
-}
 
 export function registerAppIpc({
   paths,
   initManager,
   moduleUpdater,
-  remoteSourceManager,
   networkProxyManager,
   launcherUiSettingsManager,
   pythonDependencyManager,
@@ -2570,18 +2372,9 @@ export function registerAppIpc({
       });
   };
 
-  const createMaibotPluginClient = (): MaiBotPluginClient =>
-    new MaiBotPluginClient({
-      maibotRoot: paths.maibotRoot,
-      gitPath: initManager.getGitPath(),
-      remoteSourceManager,
-    });
-  let maibotPluginClient = createMaibotPluginClient();
-
   const mutateQqBackendSafely = async <T>(
     requestedBackend: QqBackend,
     operation: () => Promise<T>,
-    rollbackOptions: InitRepairOptions = {},
   ): Promise<T> => {
     const currentInitState = await initManager.getState();
     const switchingBackend = requestedBackend !== currentInitState.qqBackend;
@@ -2602,10 +2395,7 @@ export function registerAppIpc({
     } catch (error) {
       if (switchingBackend && !operationCompleted) {
         try {
-          await initManager.setQqBackend(currentInitState.qqBackend, {
-            syncAdapters: currentInitState.messagePlatformConfigured,
-            resetInvalidAdapterConfigs: rollbackOptions.resetInvalidAdapterConfigs,
-          });
+          await initManager.setQqBackend(currentInitState.qqBackend);
           serviceManager.reloadRuntimePaths();
         } catch (rollbackError) {
           logStore.append(
@@ -2642,7 +2432,6 @@ export function registerAppIpc({
   resourceLocationManager.setApplyHandler(async () => {
     initManager.clearDependencyCache();
     serviceManager.reloadRuntimePaths();
-    maibotPluginClient = createMaibotPluginClient();
   });
   const onResourceOperation = (): void => { void broadcastSnapshot().catch((error) => logStore.append("desktop", "system", `目录操作状态刷新失败: ${String(error)}`)); };
   const onResourceProgress = (progress: ResourcePathProgress): void => {
@@ -2662,7 +2451,7 @@ export function registerAppIpc({
       ...serviceManager.getTerminalSettings(),
       useEmbeddedTerminal: true,
     });
-    await serviceManager.saveStartupSettings({ useLocalDashboard: false });
+    await serviceManager.saveStartupSettings(defaultServiceStartupSettings());
     await networkProxyManager.resetSettings();
     await launcherUiSettingsManager.resetSettings();
     appIconManager.reset();
@@ -2679,7 +2468,6 @@ export function registerAppIpc({
 
     initManager.clearDependencyCache();
     serviceManager.reloadRuntimePaths();
-    maibotPluginClient = createMaibotPluginClient();
   };
 
   const resetLauncherSettings = async (): Promise<LauncherResetResult> => {
@@ -2733,7 +2521,6 @@ export function registerAppIpc({
     await mkdir(paths.logsRoot, { recursive: true });
     initManager.clearDependencyCache();
     serviceManager.reloadRuntimePaths();
-    maibotPluginClient = createMaibotPluginClient();
     logStore.append("desktop", "system", `运行时资源目录已清空: ${root}`);
     await broadcastSnapshot();
     return {
@@ -2799,13 +2586,12 @@ export function registerAppIpc({
     return initManager.getState({ refreshDependencies: true });
   });
 
-  handleRuntimeMutation("init:syncQqConnections", async (): Promise<InitRepairResult> => {
+  ipcMain.handle("init:getMaiBotSetupStatus", () => initManager.getMaiBotSetupStatus());
+
+  handleRuntimeMutation("adapters:syncQqConnections", async (): Promise<InitRepairResult> => {
     await serviceManager.refresh();
-    if (serviceManager.snapshot().some(isRuntimeBusy)) {
-      throw new Error("请先停止 MaiBot Core 和 QQ 协议端，再同步连接配置。");
-    }
     const result = await initManager.syncQqConnections();
-    logStore.append("desktop", "system", "QQ 协议端与适配器连接配置已同步");
+    logStore.append("desktop", "system", "已通过 MaiBot API 同步适配器连接配置");
     await broadcastSnapshot();
     return result;
   });
@@ -2822,12 +2608,12 @@ export function registerAppIpc({
   });
 
   handleRuntimeMutation(
-    "init:resetSnowLuma",
+    "protocols:resetSnowLuma",
     async (): Promise<SnowLumaResetResult> => {
       await serviceManager.refresh();
-      if (serviceManager.snapshot().some(isRuntimeBusy)) {
+      if (serviceManager.snapshot().some((service) => service.id === "napcat" && isRuntimeBusy(service))) {
         throw new Error(
-          "Stop MaiBot Core and QQ backend before resetting SnowLuma.",
+          "Stop QQ backend before resetting SnowLuma.",
         );
       }
 
@@ -2844,12 +2630,12 @@ export function registerAppIpc({
   );
 
   handleRuntimeMutation(
-    "init:upgradeQqComponents",
+    "protocols:upgradeQqComponents",
     async (): Promise<QqComponentUpgradeResult> => {
       await serviceManager.refresh();
-      if (serviceManager.snapshot().some(isRuntimeBusy)) {
+      if (serviceManager.snapshot().some((service) => service.id === "napcat" && isRuntimeBusy(service))) {
         throw new Error(
-          "Stop MaiBot Core and QQ backend before upgrading NapCat / SnowLuma.",
+          "Stop QQ backend before upgrading NapCat / SnowLuma.",
         );
       }
 
@@ -2871,50 +2657,28 @@ export function registerAppIpc({
     },
   );
 
-  handleRuntimeMutation("init:setQqProtocol", async (_event, protocol: "napcat" | "snowluma" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
+  handleRuntimeMutation("adapters:setQqProtocol", async (_event, protocol: "napcat" | "snowluma" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
     if (!["napcat", "snowluma", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
     await serviceManager.refresh();
     const backendService = serviceManager.snapshot().find((service) => service.id === "napcat");
-    if (protocol !== initManager.getQqProtocolSync() && backendService && isRuntimeBusy(backendService)) {
+    if (protocol !== "official" && protocol !== initManager.getQqProtocolSync() && backendService && isRuntimeBusy(backendService)) {
       throw new Error("请先停止当前 QQ 协议端，再切换。");
     }
     if (protocol === "official") {
-      const stopForSwitch = async (id: "napcat"): Promise<void> => {
-        await serviceManager.stop(id);
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline && serviceManager.snapshot().some((service) => service.id === id && isRuntimeBusy(service))) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        if (serviceManager.snapshot().some((service) => service.id === id && isRuntimeBusy(service))) {
-          await serviceManager.kill(id);
-          const forceDeadline = Date.now() + 5_000;
-          while (Date.now() < forceDeadline && serviceManager.snapshot().some((service) => service.id === id && isRuntimeBusy(service))) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-        }
-        if (serviceManager.snapshot().some((service) => service.id === id && isRuntimeBusy(service))) {
-          throw new Error("旧协议端未能停止，请稍后重试。");
-        }
-      };
-      try {
-        await stopForSwitch("napcat");
-        await initManager.setQqProtocol("official", options);
-        serviceManager.reloadRuntimePaths();
-        return await initManager.getState();
-      } finally {
-        await broadcastSnapshot();
-      }
+      await initManager.setQqProtocol(protocol, options);
+    } else {
+      await mutateQqBackendSafely(protocol, () => initManager.setQqProtocol(protocol));
     }
-    await mutateQqBackendSafely(
-      protocol,
-      () => initManager.setQqProtocol(protocol, options),
-      options,
-    );
     await broadcastSnapshot();
     return initManager.getState();
   });
 
-  ipcMain.handle("init:getLoginInfo", async () => {
+  handleRuntimeMutation("adapters:setEnabled", async (_event, adapter: "onebot" | "official", enabled: boolean): Promise<void> => {
+    await initManager.adapters.setEnabled(adapter, enabled);
+    await broadcastSnapshot();
+  });
+
+  ipcMain.handle("protocols:getLoginInfo", async () => {
     const accounts = initManager.getQqBackendAccounts();
     const tokens = await serviceManager.readQqWebuiTokens();
     return {
@@ -2923,7 +2687,7 @@ export function registerAppIpc({
     };
   });
 
-  handleRuntimeMutation("init:saveQqBackendAccount", async (_event, backend: QqBackend, account: string) => {
+  handleRuntimeMutation("protocols:saveQqBackendAccount", async (_event, backend: QqBackend, account: string) => {
     await serviceManager.refresh();
     const service = serviceManager.snapshot().find((item) => item.id === "napcat");
     if (backend === initManager.getQqBackendSync() && service && isRuntimeBusy(service)) {
@@ -2933,21 +2697,20 @@ export function registerAppIpc({
     await broadcastSnapshot();
   });
 
-  handleRuntimeMutation("init:saveSnowLumaWebuiPassword", async (_event, password: string) => {
+  handleRuntimeMutation("protocols:saveSnowLumaWebuiPassword", async (_event, password: string) => {
     await serviceManager.saveSnowLumaWebuiPassword(password);
     await broadcastSnapshot();
   });
 
   handleRuntimeMutation(
-    "init:setQqBackend",
-    async (_event, backend: QqBackend, options?: InitRepairOptions): Promise<InitState> => {
+    "protocols:setQqBackend",
+    async (_event, backend: QqBackend): Promise<InitState> => {
       if (backend !== "napcat" && backend !== "snowluma") {
         throw new Error("Unsupported QQ backend.");
       }
       await mutateQqBackendSafely(
         backend,
-        () => initManager.setQqBackend(backend, options),
-        options,
+        () => initManager.setQqBackend(backend),
       );
       const state = await initManager.getState();
       logStore.append(
@@ -2961,7 +2724,7 @@ export function registerAppIpc({
   );
 
   handleRuntimeMutation(
-    "init:setQqAccount",
+    "protocols:setQqAccount",
     async (_event, request: QqAccountSetupRequest): Promise<InitState> => {
       const currentInitState = await initManager.getState();
       const requestedBackend = request.qqBackend ?? currentInitState.qqBackend;
@@ -2970,11 +2733,8 @@ export function registerAppIpc({
         () => initManager.setQqAccount(
           request.qqAccount,
           request.websocketToken,
-          request.chat,
           request.qqBackend,
-          { resetInvalidAdapterConfigs: request.resetInvalidAdapterConfigs },
         ),
-        { resetInvalidAdapterConfigs: request.resetInvalidAdapterConfigs },
       );
       logStore.append(
         "desktop",
@@ -3600,259 +3360,6 @@ export function registerAppIpc({
     requestQuit();
   });
 
-  ipcMain.handle(
-    "plugins:listMarket",
-    async (
-      _event,
-      serviceUrl?: string,
-      options?: MaiBotPluginListOptions,
-    ): Promise<MaiBotPluginListResult> => {
-      return maibotPluginClient.listMarket(serviceUrl, options);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:listInstalled",
-    async (_event, serviceUrl?: string): Promise<MaiBotInstalledPlugin[]> => {
-      return maibotPluginClient.listInstalled(serviceUrl);
-    },
-  );
-
-  handleRuntimeMutation(
-    "plugins:install",
-    async (
-      _event,
-      request: MaiBotPluginOperationRequest,
-    ): Promise<MaiBotPluginOperationResult> => {
-      if (!request.pluginId || !request.repositoryUrl) {
-        throw new Error("Plugin id and repository url are required.");
-      }
-      const result = await maibotPluginClient.install(
-        request.pluginId,
-        request.repositoryUrl,
-        request.branch,
-        request.sourcePreset,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin installed: ${request.pluginId}`,
-      );
-      return result;
-    },
-  );
-
-  handleRuntimeMutation(
-    "plugins:update",
-    async (
-      _event,
-      request: MaiBotPluginOperationRequest,
-    ): Promise<MaiBotPluginOperationResult> => {
-      if (!request.pluginId || !request.repositoryUrl) {
-        throw new Error("Plugin id and repository url are required.");
-      }
-      const result = await maibotPluginClient.update(
-        request.pluginId,
-        request.repositoryUrl,
-        request.branch,
-        request.latestVersion,
-        request.sourcePreset,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin updated: ${request.pluginId}`,
-      );
-      return result;
-    },
-  );
-
-  handleRuntimeMutation(
-    "plugins:uninstall",
-    async (_event, pluginId: string): Promise<MaiBotPluginOperationResult> => {
-      if (!pluginId) {
-        throw new Error("Plugin id is required.");
-      }
-      const result = await maibotPluginClient.uninstall(pluginId);
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin uninstalled: ${pluginId}`,
-      );
-      return result;
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:getConfig",
-    async (
-      _event,
-      pluginId: string,
-      serviceUrl?: string,
-    ): Promise<MaiBotPluginConfigState> => {
-      return maibotPluginClient.getConfig(pluginId, serviceUrl);
-    },
-  );
-
-  handleRuntimeMutation(
-    "plugins:saveConfig",
-    async (
-      _event,
-      pluginId: string,
-      config: Record<string, MaiBotPluginConfigValue>,
-      serviceUrl?: string,
-    ): Promise<MaiBotPluginConfigSaveResult> => {
-      const result = await maibotPluginClient.saveConfig(
-        pluginId,
-        config,
-        serviceUrl,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin config saved: ${pluginId}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
-  handleRuntimeMutation(
-    "plugins:saveConfigRaw",
-    async (
-      _event,
-      pluginId: string,
-      raw: string,
-      serviceUrl?: string,
-    ): Promise<MaiBotPluginConfigSaveResult> => {
-      const result = await maibotPluginClient.saveConfigRaw(
-        pluginId,
-        raw,
-        serviceUrl,
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin raw config saved: ${pluginId}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
-  handleRuntimeMutation(
-    "plugins:resetConfig",
-    async (
-      _event,
-      pluginId: string,
-      serviceUrl?: string,
-    ): Promise<MaiBotPluginConfigSaveResult> => {
-      const result = await maibotPluginClient.resetConfig(pluginId, serviceUrl);
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot plugin config reset: ${pluginId}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:getReadme",
-    async (
-      _event,
-      pluginId: string,
-      repositoryUrl?: string,
-      sourcePreset?: MaiBotPluginMarketSource,
-    ): Promise<MaiBotPluginReadmeResult> => {
-      return maibotPluginClient.getReadme(
-        pluginId,
-        repositoryUrl,
-        sourcePreset,
-      );
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:getStats",
-    async (_event, pluginId: string): Promise<MaiBotPluginStats | null> => {
-      return maibotPluginClient.getStats(pluginId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:getUserState",
-    async (
-      _event,
-      pluginId: string,
-      userId: string,
-    ): Promise<MaiBotPluginUserState | null> => {
-      return maibotPluginClient.getUserState(pluginId, userId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:getUserStates",
-    async (_event, userId: string): Promise<MaiBotPluginUserStates> => {
-      return maibotPluginClient.getUserStates(userId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:like",
-    async (
-      _event,
-      pluginId: string,
-      userId: string,
-    ): Promise<MaiBotPluginVoteResult> => {
-      return maibotPluginClient.likePlugin(pluginId, userId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:dislike",
-    async (
-      _event,
-      pluginId: string,
-      userId: string,
-    ): Promise<MaiBotPluginVoteResult> => {
-      return maibotPluginClient.dislikePlugin(pluginId, userId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:rate",
-    async (
-      _event,
-      pluginId: string,
-      rating: number | null | undefined,
-      comment: string | null | undefined,
-      userId: string,
-    ): Promise<MaiBotPluginRatingResult> => {
-      return maibotPluginClient.ratePlugin(pluginId, rating, comment, userId);
-    },
-  );
-
-  ipcMain.handle(
-    "plugins:recordDownload",
-    async (
-      _event,
-      pluginId: string,
-      userId?: string,
-      fingerprint?: string,
-    ): Promise<MaiBotPluginDownloadResult> => {
-      return maibotPluginClient.recordDownload(pluginId, userId, fingerprint);
-    },
-  );
-
-  ipcMain.handle(
-    "statistics:getMaibot",
-    async (): Promise<MaiBotStatisticSummary> => {
-      return readMaiBotStatistics(paths);
-    },
-  );
-
   ipcMain.handle("pythonDeps:getState", (): PythonEnvironmentState => {
     return pythonDependencyManager.getState();
   });
@@ -3995,7 +3502,6 @@ export function registerAppIpc({
       const configs = await serviceManager.saveRuntimePathConfig(config);
       if (config.key === "git") {
         initManager.clearDependencyCache();
-        maibotPluginClient = createMaibotPluginClient();
       }
       await broadcastSnapshot();
       return configs;
@@ -4008,7 +3514,6 @@ export function registerAppIpc({
       const configs = await serviceManager.resetRuntimePathConfig(key);
       if (key === "git") {
         initManager.clearDependencyCache();
-        maibotPluginClient = createMaibotPluginClient();
       }
       await broadcastSnapshot();
       return configs;

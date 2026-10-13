@@ -1,3 +1,4 @@
+import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { normalizeQqAccount } from "@shared/qq-account";
 import { MESSAGE_PLATFORM_GUIDE_EVENT, MESSAGE_PLATFORM_GUIDE_REQUEST_KEY } from "@/lib/message-platform-guide";
 import {
@@ -14,7 +15,6 @@ import {
   Play,
   Radar,
   RefreshCw,
-  RotateCcw,
   Server,
   Settings,
   Sparkles,
@@ -68,11 +68,6 @@ import {
   isValidPortText,
   readQqWebuiPort,
 } from "@/lib/qq-webui-port";
-import {
-  adapterBackendLabel,
-  adapterConfigResetRequestFromError,
-  type AdapterConfigResetRequest,
-} from "@/lib/adapter-config-reset";
 import { useAppearance, usesRetroStructure } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { QqWebuiDialog } from "./QqWebuiDialog";
@@ -602,9 +597,6 @@ function MessagePlatformConnectCard({
             <p className={cn("truncate", retro ? "retro-title text-2xl" : "text-sm font-semibold")}>
               消息平台
             </p>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              新增 QQ-NapCat 或 QQ-SnowLuma，自动写入连接配置并启动后端。
-            </p>
           </div>
         </div>
       </div>
@@ -630,30 +622,19 @@ function SolidUpgradeIcon(): React.JSX.Element {
 }
 
 function MaiBotOverviewCard({
-  service,
   localVersion,
   launcherVersion,
   retro,
 }: {
-  service: ServiceDescriptor | undefined;
   localVersion: string | undefined;
   launcherVersion: string;
   retro: boolean;
 }): React.JSX.Element {
-  const serviceStatus = service?.status;
-  const serviceTransitioning = serviceStatus === "starting" || serviceStatus === "stopping";
-  const serviceRunning = serviceStatus === "running";
-
   return (
     <div className="flex h-8 items-center gap-2 whitespace-nowrap">
       <span className={cn("font-bold leading-none", retro && "retro-title")}>
         MaiBot
       </span>
-      <span
-        aria-label={`MaiBot 状态：${serviceStatus ?? "未就绪"}`}
-        className="size-2 shrink-0 rounded-full"
-        style={{ backgroundColor: serviceRunning ? "#179f37" : serviceTransitioning ? "var(--warning)" : "var(--muted-foreground)" }}
-      />
       <div className="flex flex-col items-start gap-0.5 font-mono text-primary">
         <span className="text-xs font-semibold leading-none" title="MaiBot 版本">{valueOrFallback(localVersion)}</span>
         <span className="text-[9px] leading-none" title="一键包版本">v{launcherVersion}</span>
@@ -1212,8 +1193,6 @@ export function MessagePlatformPanel({
     setSelectedProtocol(currentProtocol);
   }, [currentProtocol]);
   const [messagePlatformAccount, setMessagePlatformAccount] = useState(snapshot.initState.qqAccount ?? "");
-  const [adapterResetRequest, setAdapterResetRequest] =
-    useState<AdapterConfigResetRequest | null>(null);
   const [maibotChannel, setMaibotChannel] = useState<MaiBotUpdateChannel>("stable");
   const [napcatWebuiOpen, setNapcatWebuiOpen] = useState(false);
   const [qqWebuiPort, setQqWebuiPort] = useState(() => readQqWebuiPort(snapshot.initState.qqBackend, snapshot.services.find((service) => service.id === "napcat")?.url));
@@ -1360,7 +1339,7 @@ export function MessagePlatformPanel({
     if (!window.maibotDesktop) {
       return;
     }
-    onSnapshot(await window.maibotDesktop.getSnapshot());
+    onSnapshot(await getDesktopSnapshot());
   }, [onSnapshot]);
 
   const openNapcatWebui = useCallback(() => {
@@ -1706,7 +1685,7 @@ export function MessagePlatformPanel({
 
   const openMessagePlatformDialog = useCallback((backend: QqBackend = snapshot.initState.qqBackend) => {
     setError(null);
-    setAdapterResetRequest(null);
+
     setMessagePlatformBackend(backend);
     setMessagePlatformAccount(backend === snapshot.initState.qqBackend ? snapshot.initState.qqAccount ?? "" : "");
     setMessagePlatformDialogOpen(true);
@@ -1739,7 +1718,7 @@ export function MessagePlatformPanel({
     setOfficialAppId("");
     setOfficialAppSecret("");
     setError(null);
-    setAdapterResetRequest(null);
+
     if (pendingProtocolSwitch !== null) {
       setSelectedProtocol(pendingProtocolSwitch);
       setPendingProtocolSwitch(null);
@@ -1747,7 +1726,7 @@ export function MessagePlatformPanel({
     }
   }, [busy, pendingProtocolSwitch]);
 
-  const setupMessagePlatform = useCallback(async (resetInvalidAdapterConfigs = false) => {
+  const setupMessagePlatform = useCallback(async () => {
     if (messagePlatformBackend === "official") {
       if (!officialAppId.trim() || !officialAppSecret.trim()) {
         setError("请填写 AppID 和 AppSecret");
@@ -1783,15 +1762,16 @@ export function MessagePlatformPanel({
 
     setBusy("message-platform:setup");
     setError(null);
-    setAdapterResetRequest(null);
+
     try {
-      await window.maibotDesktop.init.setQqAccount({
+      await window.maibotDesktop.protocols.setQqAccount({
         qqAccount,
         qqBackend: messagePlatformBackend,
-        resetInvalidAdapterConfigs,
       });
+      // Adding a platform is an explicit connection workflow; MaiBot owns adapter validation and activation.
+      await window.maibotDesktop.adapters.syncQqConnections();
+      await window.maibotDesktop.adapters.setEnabled("onebot", true);
       setPendingProtocolSwitch(null);
-      await window.maibotDesktop.init.repair();
       await window.maibotDesktop.services.start("napcat");
       toast.success(`${messagePlatformBackend === "snowluma" ? "QQ-SnowLuma" : "QQ-NapCat"} 已配置并启动`);
       setMessagePlatformDialogOpen(false);
@@ -1801,15 +1781,9 @@ export function MessagePlatformPanel({
         setNapcatWebuiOpen(true);
       }
     } catch (nextError) {
-      const resetRequest = adapterConfigResetRequestFromError(nextError);
-      if (resetRequest) {
-        setAdapterResetRequest(resetRequest);
-        setError(null);
-      } else {
-        const message = messageFromError(nextError);
-        setError(message);
-        toast.error(message);
-      }
+      const message = messageFromError(nextError);
+      setError(message);
+      toast.error(message);
       await refreshSnapshot().catch(() => undefined);
     } finally {
       setBusy(null);
@@ -1818,7 +1792,7 @@ export function MessagePlatformPanel({
 
   const saveProtocolSelection = useCallback(async () => {
     if (!window.maibotDesktop || qqBackendBusy) return;
-    const savedAccounts = selectedProtocol !== "official" ? await window.maibotDesktop.init.getLoginInfo().catch((error) => {
+    const savedAccounts = selectedProtocol !== "official" ? await window.maibotDesktop.protocols.getLoginInfo().catch((error) => {
       setError(messageFromError(error));
       return null;
     }) : null;
@@ -1828,13 +1802,13 @@ export function MessagePlatformPanel({
       : "";
     const targetAccountValid = Boolean(targetAccount);
     if (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : targetAccountValid)) return;
-    if (selectedProtocol === "official" && !snapshot.initState.qqOfficialConfigured) {
+    if (selectedProtocol === "official" && snapshot.initState.qqOfficialConfigured === false) {
       setPendingProtocolSwitch(currentProtocol);
       setMessagePlatformBackend("official");
       setOfficialAppId("");
       setOfficialAppSecret("");
       setError(null);
-      setAdapterResetRequest(null);
+
       setMessagePlatformDialogOpen(true);
       return;
     }
@@ -1843,7 +1817,7 @@ export function MessagePlatformPanel({
       setMessagePlatformBackend(selectedProtocol);
       setMessagePlatformAccount(targetAccount);
       setError(null);
-      setAdapterResetRequest(null);
+
       setMessagePlatformDialogOpen(true);
       return;
     }
@@ -1851,7 +1825,7 @@ export function MessagePlatformPanel({
     setError(null);
     try {
       if (selectedProtocol === "snowluma") {
-        await window.maibotDesktop.init.setQqAccount({ qqAccount: targetAccount, qqBackend: "snowluma" });
+        await window.maibotDesktop.protocols.setQqAccount({ qqAccount: targetAccount, qqBackend: "snowluma" });
         await window.maibotDesktop.init.repair();
         await window.maibotDesktop.services.start("napcat");
         setQqWebuiPort(readQqWebuiPort("snowluma"));
@@ -1992,7 +1966,6 @@ export function MessagePlatformPanel({
           localVersion={snapshot.moduleVersions.maibotLocal}
           launcherVersion={snapshot.appVersion}
           retro={useRetroStyle}
-          service={maibot}
         />,
         coreToolbarTarget,
       ) : null}
@@ -2029,48 +2002,52 @@ export function MessagePlatformPanel({
       <div className={cn("relative h-full overflow-auto px-5 py-4", !useRetroStyle && "bg-background", active ? "block" : "hidden")}>
         <div className="mx-auto w-full max-w-5xl pb-40">
           {messagePlatformCard}
-          <section className={cn("mt-4 flex flex-wrap items-center justify-between gap-3 p-4", useRetroStyle ? "retro-panel" : "rounded-lg border border-border bg-card")}>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-semibold">协议端选择</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {selectedProtocol === "snowluma" ? "使用 SnowLuma 注入 QQ 进程。" : selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
-              </p>
-            </div>
-            <div aria-label="QQ 协议端" className="grid w-full grid-cols-3 overflow-hidden rounded-md border border-border sm:w-auto" role="group">
-              {([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方 QQ 适配器" }] as const).map((option) => (
-                <button
-                  aria-pressed={selectedProtocol === option.value}
-                  className={cn("px-4 py-2 text-xs font-semibold transition-colors", selectedProtocol === option.value ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-accent", "disabled:cursor-not-allowed disabled:opacity-50")}
-                  disabled={busy !== null || (qqBackendBusy && option.value !== currentProtocol)}
-                  key={option.value}
-                  onClick={() => setSelectedProtocol(option.value)}
-                  type="button"
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount))))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
-              {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
-              保存协议端
-            </Button>
-            {qqBackendBusy ? <p className="w-full text-xs text-muted-foreground">{snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请稍候。` : "请先停止当前 QQ 协议端，再切换。"}</p> : null}
-            {error && !messagePlatformDialogOpen ? <p className="w-full text-xs text-destructive">{error}</p> : null}
-          </section>
-          <div className="mt-4 flex justify-end">
-            <MessagePlatformAdvancedSettings snapshot={snapshot} refreshSnapshot={refreshSnapshot} disabled={busy !== null} />
-          </div>
-          {currentProtocol === "napcat" ? (
-            <aside className={cn("mt-4 space-y-4 !border-0 !bg-amber-100 p-5 !text-amber-950 dark:!bg-amber-950 dark:!text-amber-100", useRetroStyle ? "retro-panel" : "rounded-lg")}>
-              <h2 className="flex items-center gap-2 text-xl font-bold">
-                <AlertTriangle className="size-6 shrink-0" />
-                注意
-              </h2>
-              <div className="space-y-3 text-sm leading-relaxed">
-                <p><strong className="font-bold">NapCat一键配置可能在未来一键包被移除</strong>，推荐使用<strong className="font-bold">Snowluma或官方QQ bot平台</strong>连接。</p>
-                <p>不过NapCat连接方法仍旧可以，你可以单独部署NapCat，使用Snowluma适配器连接到MaiBot</p>
+          {messagePlatformConfigured || snapshot.initState.qqProtocol === "official" ? (
+            <>
+              <section className={cn("mt-4 flex flex-wrap items-center justify-between gap-3 p-4", useRetroStyle ? "retro-panel" : "rounded-lg border border-border bg-card")}>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-sm font-semibold">协议端选择</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {selectedProtocol === "snowluma" ? "使用 SnowLuma 注入 QQ 进程。" : selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
+                  </p>
+                </div>
+                <div aria-label="QQ 协议端" className="grid w-full grid-cols-3 overflow-hidden rounded-md border border-border sm:w-auto" role="group">
+                  {([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方 QQ 适配器" }] as const).map((option) => (
+                    <button
+                      aria-pressed={selectedProtocol === option.value}
+                      className={cn("px-4 py-2 text-xs font-semibold transition-colors", selectedProtocol === option.value ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-accent", "disabled:cursor-not-allowed disabled:opacity-50")}
+                      disabled={busy !== null || (qqBackendBusy && option.value !== currentProtocol)}
+                      key={option.value}
+                      onClick={() => setSelectedProtocol(option.value)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount))))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
+                  {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
+                  保存协议端
+                </Button>
+                {qqBackendBusy ? <p className="w-full text-xs text-muted-foreground">{snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请稍候。` : "请先停止当前 QQ 协议端，再切换。"}</p> : null}
+                {error && !messagePlatformDialogOpen ? <p className="w-full text-xs text-destructive">{error}</p> : null}
+              </section>
+              <div className="mt-4 flex justify-end">
+                <MessagePlatformAdvancedSettings snapshot={snapshot} refreshSnapshot={refreshSnapshot} disabled={busy !== null} />
               </div>
-            </aside>
+              {currentProtocol === "napcat" ? (
+                <aside className={cn("mt-4 space-y-4 !border-0 !bg-amber-100 p-5 !text-amber-950 dark:!bg-amber-950 dark:!text-amber-100", useRetroStyle ? "retro-panel" : "rounded-lg")}>
+                  <h2 className="flex items-center gap-2 text-xl font-bold">
+                    <AlertTriangle className="size-6 shrink-0" />
+                    注意
+                  </h2>
+                  <div className="space-y-3 text-sm leading-relaxed">
+                    <p><strong className="font-bold">NapCat一键配置可能在未来一键包被移除</strong>，推荐使用<strong className="font-bold">Snowluma或官方QQ bot平台</strong>连接。</p>
+                    <p>不过NapCat连接方法仍旧可以，你可以单独部署NapCat，使用Snowluma适配器连接到MaiBot</p>
+                  </div>
+                </aside>
+              ) : null}
+            </>
           ) : null}
         </div>
         {useRetroStyle ? (
@@ -2171,6 +2148,8 @@ export function MessagePlatformPanel({
                 },
               ] as const).map((option) => (
                 <button
+                  data-slot="choice-card"
+                  aria-pressed={messagePlatformBackend === option.backend}
                   className={cn(
                     cn(useRetroStyle ? "rounded-sm" : "rounded-lg", "relative border p-3 pt-9 text-left transition-colors"),
                     messagePlatformBackend === option.backend
@@ -2182,7 +2161,7 @@ export function MessagePlatformPanel({
                   onClick={() => {
                     setMessagePlatformBackend(option.backend);
                     setError(null);
-                    setAdapterResetRequest(null);
+
                   }}
                   type="button"
                 >
@@ -2215,42 +2194,6 @@ export function MessagePlatformPanel({
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-warning-foreground", useRetroStyle ? "rounded-sm" : "rounded-lg")}>
                 QQ 后端正在运行，请先停止后再新增或切换消息平台。
               </div>
-            ) : null}
-            {adapterResetRequest && messagePlatformBackend !== "official" ? (
-              <section className={cn("border border-warning/40 bg-warning/15 px-3 py-3 text-xs", useRetroStyle ? "rounded-sm" : "rounded-lg")}>
-                <div className="flex items-start gap-2">
-                  <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-warning-foreground">
-                      {adapterBackendLabel(adapterResetRequest.backend)}配置解析失败
-                    </p>
-                    <p className="mt-1 break-all text-muted-foreground">
-                      {adapterResetRequest.configPath}
-                    </p>
-                    <p className="mt-1 text-muted-foreground">
-                      {adapterResetRequest.detail}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
-                        disabled={busy === "message-platform:setup"}
-                        onClick={() => void setupMessagePlatform(true)}
-                        size="sm"
-                      >
-                        {busy === "message-platform:setup" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-                        重置默认配置
-                      </Button>
-                      <Button
-                        disabled={busy === "message-platform:setup"}
-                        onClick={() => setAdapterResetRequest(null)}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        暂不修复
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </section>
             ) : null}
           </DialogBody>
           <DialogFooter>

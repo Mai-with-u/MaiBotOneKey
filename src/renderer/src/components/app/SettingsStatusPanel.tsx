@@ -1,3 +1,4 @@
+import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { ResourcePathEditor } from "./ResourcePathEditor";
 import { RESOURCE_SCOPE_NOTE, useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
@@ -967,10 +968,8 @@ export function SettingsStatusPanel({
   const recentLogs = useMemo(() => settingsLogs(recentLogEntries), [recentLogEntries]);
 
   const refreshSnapshot = useCallback(async () => {
-    const nextSnapshot = await window.maibotDesktop?.getSnapshot();
-    if (nextSnapshot) {
-      onSnapshot(nextSnapshot);
-    }
+    const nextSnapshot = await getDesktopSnapshot();
+    onSnapshot(nextSnapshot);
   }, [onSnapshot]);
 
   const openPath = useCallback((path: string) => {
@@ -1615,37 +1614,35 @@ export function SettingsStatusPanel({
               </TabsContent>
 
               <TabsContent className="settings-content" value="network">
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
+                <div className="settings-section flex items-center gap-3 overflow-x-auto bg-muted/40 p-3">
+                    <div className="flex shrink-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Network className="size-4" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-sm font-medium">网络代理</p>
-                        <p className="text-xs text-muted-foreground">
-                          对接 Clash 等本机代理，地址固定为 127.0.0.1。
-                        </p>
                       </div>
                     </div>
-                    <Badge variant={networkProxyDraft.enabled ? "success" : "outline"}>
+                    <Badge className="shrink-0" variant={networkProxyDraft.enabled ? "success" : "outline"}>
                       {networkProxyDraft.enabled ? "已启用" : "未启用"}
                     </Badge>
-                  </div>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <label className="flex min-h-10 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                      <Checkbox
+                    <label className="flex shrink-0 items-center gap-2 text-sm">
+                      <Switch.Root
+                        aria-label="启用本机代理"
                         checked={networkProxyDraft.enabled}
+                        className="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent bg-input transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary"
                         disabled={busy !== null}
                         onCheckedChange={(checked) =>
-                          setNetworkProxyDraft((current) => ({ ...current, enabled: checked === true }))
+                          setNetworkProxyDraft((current) => ({ ...current, enabled: checked }))
                         }
-                      />
+                      >
+                        <Switch.Thumb className="pointer-events-none block size-4 translate-x-0 rounded-full bg-background shadow-sm transition-transform data-[state=checked]:translate-x-4" />
+                      </Switch.Root>
                       启用本机代理
                     </label>
-                    <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                    <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-muted-foreground">
                       端口
-                      <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
+                      <div className="flex items-center gap-2">
                         <span className="font-mono text-xs text-muted-foreground">127.0.0.1:</span>
                         <Input
                           className="h-8 w-24 font-mono text-sm"
@@ -1664,10 +1661,8 @@ export function SettingsStatusPanel({
                         />
                       </div>
                     </label>
-                    <p className="min-w-[220px] flex-1 pb-2 text-xs text-muted-foreground">
-                      保存后影响启动器网络请求、Git / pip 更新，以及之后启动的托管服务。
-                    </p>
                     <Button
+                      className="ml-auto shrink-0"
                       disabled={
                         busy !== null ||
                         !networkProxyDirty ||
@@ -1681,7 +1676,6 @@ export function SettingsStatusPanel({
                       {busy === "network-proxy" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                       保存代理设置
                     </Button>
-                  </div>
                 </div>
 
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">

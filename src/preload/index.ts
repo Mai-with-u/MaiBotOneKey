@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { MessagePlatformLoginInfo, QqProtocol, QqProtocolOptions } from "../shared/contracts";
 import type {
   CloseAction,
@@ -6,9 +8,9 @@ import type {
   AppIconSettings,
   DesktopBridge,
   DesktopSnapshot,
-  InitRepairOptions,
   InitRepairResult,
   InitState,
+  MaiBotSetupStatus,
   LauncherUiSettings,
   LauncherUpdateApplyResult,
   LauncherUpdateInfo,
@@ -28,23 +30,6 @@ import type {
   MaiBotStorageCleanupResult,
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
-  MaiBotInstalledPlugin,
-  MaiBotPluginConfigSaveResult,
-  MaiBotPluginConfigState,
-  MaiBotPluginConfigValue,
-  MaiBotPluginDownloadResult,
-  MaiBotPluginListOptions,
-  MaiBotPluginListResult,
-  MaiBotPluginMarketSource,
-  MaiBotPluginOperationRequest,
-  MaiBotPluginOperationResult,
-  MaiBotPluginRatingResult,
-  MaiBotPluginReadmeResult,
-  MaiBotPluginStats,
-  MaiBotPluginUserState,
-  MaiBotPluginUserStates,
-  MaiBotPluginVoteResult,
-  MaiBotStatisticSummary,
   MaiBotUpdateInfo,
   MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
@@ -61,6 +46,7 @@ import type {
   PythonPackageInstallResult,
   PythonPackageVersionList,
   PtyDataEvent,
+  PtyBufferSnapshot,
   PtyErrorEvent,
   PtyExitEvent,
   PtyInputRequest,
@@ -114,6 +100,8 @@ ipcRenderer.on("desktop:qq-account-setup-required", (_event, backend: QqBackend)
 });
 
 const desktopBridge: DesktopBridge = {
+  webuiPreloadUrl: pathToFileURL(join(__dirname, "webui.cjs")).toString(),
+  platform: process.platform,
   getSnapshot: () => ipcRenderer.invoke("desktop:getSnapshot") as Promise<DesktopSnapshot>,
   getSystemPerformance: () =>
     ipcRenderer.invoke("desktop:getSystemPerformance") as Promise<SystemPerformanceSnapshot>,
@@ -171,22 +159,29 @@ const desktopBridge: DesktopBridge = {
   },
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
-    getLoginInfo: () => ipcRenderer.invoke("init:getLoginInfo") as Promise<MessagePlatformLoginInfo>,
-    saveQqBackendAccount: (backend: QqBackend, account: string) => ipcRenderer.invoke("init:saveQqBackendAccount", backend, account) as Promise<void>,
-    saveSnowLumaWebuiPassword: (password: string) => ipcRenderer.invoke("init:saveSnowLumaWebuiPassword", password) as Promise<void>,
+    getMaiBotSetupStatus: () => ipcRenderer.invoke("init:getMaiBotSetupStatus") as Promise<MaiBotSetupStatus>,
     repair: () =>
       ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
-    syncQqConnections: () => ipcRenderer.invoke("init:syncQqConnections") as Promise<InitRepairResult>,
-    resetSnowLuma: () =>
-      ipcRenderer.invoke("init:resetSnowLuma") as Promise<SnowLumaResetResult>,
-    upgradeQqComponents: () =>
-      ipcRenderer.invoke("init:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
-    setQqBackend: (backend: QqBackend, options?: InitRepairOptions) =>
-      ipcRenderer.invoke("init:setQqBackend", backend, options) as Promise<InitState>,
-    setQqProtocol: (protocol: QqProtocol, options?: QqProtocolOptions) =>
-      ipcRenderer.invoke("init:setQqProtocol", protocol, options) as Promise<InitState>,
+  },
+  protocols: {
+    getLoginInfo: () => ipcRenderer.invoke("protocols:getLoginInfo") as Promise<MessagePlatformLoginInfo>,
+    saveQqBackendAccount: (backend: QqBackend, account: string) => ipcRenderer.invoke("protocols:saveQqBackendAccount", backend, account) as Promise<void>,
+    saveSnowLumaWebuiPassword: (password: string) => ipcRenderer.invoke("protocols:saveSnowLumaWebuiPassword", password) as Promise<void>,
+    setQqBackend: (backend: QqBackend) =>
+      ipcRenderer.invoke("protocols:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
-      ipcRenderer.invoke("init:setQqAccount", request) as Promise<InitState>,
+      ipcRenderer.invoke("protocols:setQqAccount", request) as Promise<InitState>,
+    resetSnowLuma: () =>
+      ipcRenderer.invoke("protocols:resetSnowLuma") as Promise<SnowLumaResetResult>,
+    upgradeQqComponents: () =>
+      ipcRenderer.invoke("protocols:upgradeQqComponents") as Promise<QqComponentUpgradeResult>,
+  },
+  adapters: {
+    syncQqConnections: () => ipcRenderer.invoke("adapters:syncQqConnections") as Promise<InitRepairResult>,
+    setQqProtocol: (protocol: QqProtocol, options?: QqProtocolOptions) =>
+      ipcRenderer.invoke("adapters:setQqProtocol", protocol, options) as Promise<InitState>,
+    setEnabled: (adapter: "onebot" | "official", enabled: boolean) =>
+      ipcRenderer.invoke("adapters:setEnabled", adapter, enabled) as Promise<void>,
   },
   agreements: {
     getState: () => ipcRenderer.invoke("agreements:getState") as Promise<StartupAgreementState>,
@@ -255,46 +250,6 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("launcher:resetSettings") as Promise<LauncherResetResult>,
     resetAll: () =>
       ipcRenderer.invoke("launcher:resetAll") as Promise<LauncherResetResult>,
-  },
-  plugins: {
-    listMarket: (serviceUrl?: string, options?: MaiBotPluginListOptions) =>
-      ipcRenderer.invoke("plugins:listMarket", serviceUrl, options) as Promise<MaiBotPluginListResult>,
-    listInstalled: (serviceUrl?: string) =>
-      ipcRenderer.invoke("plugins:listInstalled", serviceUrl) as Promise<MaiBotInstalledPlugin[]>,
-    install: (request: MaiBotPluginOperationRequest) =>
-      ipcRenderer.invoke("plugins:install", request) as Promise<MaiBotPluginOperationResult>,
-    update: (request: MaiBotPluginOperationRequest) =>
-      ipcRenderer.invoke("plugins:update", request) as Promise<MaiBotPluginOperationResult>,
-    uninstall: (pluginId: string) =>
-      ipcRenderer.invoke("plugins:uninstall", pluginId) as Promise<MaiBotPluginOperationResult>,
-    getConfig: (pluginId: string, serviceUrl?: string) =>
-      ipcRenderer.invoke("plugins:getConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigState>,
-    saveConfig: (pluginId: string, config: Record<string, MaiBotPluginConfigValue>, serviceUrl?: string) =>
-      ipcRenderer.invoke("plugins:saveConfig", pluginId, config, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
-    saveConfigRaw: (pluginId: string, raw: string, serviceUrl?: string) =>
-      ipcRenderer.invoke("plugins:saveConfigRaw", pluginId, raw, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
-    resetConfig: (pluginId: string, serviceUrl?: string) =>
-      ipcRenderer.invoke("plugins:resetConfig", pluginId, serviceUrl) as Promise<MaiBotPluginConfigSaveResult>,
-    getReadme: (pluginId: string, repositoryUrl?: string, sourcePreset?: MaiBotPluginMarketSource) =>
-      ipcRenderer.invoke("plugins:getReadme", pluginId, repositoryUrl, sourcePreset) as Promise<MaiBotPluginReadmeResult>,
-    getStats: (pluginId: string) =>
-      ipcRenderer.invoke("plugins:getStats", pluginId) as Promise<MaiBotPluginStats | null>,
-    getUserState: (pluginId: string, userId: string) =>
-      ipcRenderer.invoke("plugins:getUserState", pluginId, userId) as Promise<MaiBotPluginUserState | null>,
-    getUserStates: (userId: string) =>
-      ipcRenderer.invoke("plugins:getUserStates", userId) as Promise<MaiBotPluginUserStates>,
-    like: (pluginId: string, userId: string) =>
-      ipcRenderer.invoke("plugins:like", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
-    dislike: (pluginId: string, userId: string) =>
-      ipcRenderer.invoke("plugins:dislike", pluginId, userId) as Promise<MaiBotPluginVoteResult>,
-    rate: (pluginId: string, rating: number | null | undefined, comment: string | null | undefined, userId: string) =>
-      ipcRenderer.invoke("plugins:rate", pluginId, rating, comment, userId) as Promise<MaiBotPluginRatingResult>,
-    recordDownload: (pluginId: string, userId?: string, fingerprint?: string) =>
-      ipcRenderer.invoke("plugins:recordDownload", pluginId, userId, fingerprint) as Promise<MaiBotPluginDownloadResult>,
-  },
-  statistics: {
-    getMaiBot: () =>
-      ipcRenderer.invoke("statistics:getMaibot") as Promise<MaiBotStatisticSummary>,
   },
   pythonDeps: {
     getState: () => ipcRenderer.invoke("pythonDeps:getState") as Promise<PythonEnvironmentState>,
@@ -367,7 +322,7 @@ const desktopBridge: DesktopBridge = {
     clear: (sessionId: string) => ipcRenderer.invoke("pty:clear", sessionId) as Promise<void>,
     list: () => ipcRenderer.invoke("pty:list") as Promise<PtySessionSnapshot[]>,
     getBuffer: (sessionId: string) =>
-      ipcRenderer.invoke("pty:getBuffer", sessionId) as Promise<string>,
+      ipcRenderer.invoke("pty:getBuffer", sessionId) as Promise<PtyBufferSnapshot | null>,
     onData: (callback: (event: PtyDataEvent) => void) => onIpc("pty:data", callback),
     onExit: (callback: (event: PtyExitEvent) => void) => onIpc("pty:exit", callback),
     onError: (callback: (event: PtyErrorEvent) => void) => onIpc("pty:error", callback),
