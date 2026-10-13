@@ -1,3 +1,4 @@
+import { getPlatform } from "./platform";
 import { useEffect } from "react";
 
 export interface ShortcutOptions {
@@ -37,7 +38,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function matches(event: KeyboardEvent, combo: ParsedCombo): boolean {
-  const isMac = navigator.platform.toLowerCase().includes("mac");
+  const isMac = getPlatform() === "darwin";
   const modPressed = isMac ? event.metaKey : event.ctrlKey;
   if (combo.mod !== modPressed) return false;
   if (combo.shift !== event.shiftKey) return false;
@@ -52,7 +53,6 @@ function matches(event: KeyboardEvent, combo: ParsedCombo): boolean {
   if (combo.key === "period" || combo.key === ".") return key === ".";
   if (combo.key === "comma" || combo.key === ",") return key === ",";
   if (combo.key === "slash" || combo.key === "/") return key === "/";
-  if (combo.key.length === 1) return key === combo.key;
   return key === combo.key;
 }
 
