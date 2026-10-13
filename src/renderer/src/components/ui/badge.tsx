@@ -44,7 +44,7 @@ export function Badge({
   ...props
 }: BadgeProps): React.JSX.Element {
   return (
-    <span className={cn(badgeVariants({ variant, className }))} {...props}>
+    <span data-slot="badge" className={cn(badgeVariants({ variant, className }))} {...props}>
       {dot ? (
         <span
           aria-hidden

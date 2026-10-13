@@ -2,6 +2,7 @@ import { RuntimeOperationLock } from "./services/runtime-operation-lock";
 import {
   app,
   BrowserWindow,
+  dialog,
   Menu,
   nativeImage,
   net,
@@ -40,7 +41,15 @@ import { ServiceManager } from "./services/service-manager";
 import { SourceSettingsManager } from "./services/source-settings-manager";
 import { isWindowVisuallyMaximized } from "./window-state";
 
-const runtimePaths = configureRuntimePaths();
+const runtimePaths = (() => {
+  try {
+    return configureRuntimePaths();
+  } catch (error) {
+    dialog.showErrorBox("无法加载组件目录配置", error instanceof Error ? error.message : String(error));
+    app.exit(1);
+    throw error;
+  }
+})();
 const instanceLock = acquireInstallInstanceLock(runtimePaths);
 const runtimeOperationLock = new RuntimeOperationLock();
 const resourceLocationManager = new ResourceLocationManager(
@@ -332,8 +341,8 @@ function broadcastWindowState(window: BrowserWindow): void {
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     title: "MaiBot OneKey",
-    width: 1100,
-    height: 720,
+    width: 1280,
+    height: 800,
     minWidth: 1000,
     minHeight: 680,
     resizable: false,

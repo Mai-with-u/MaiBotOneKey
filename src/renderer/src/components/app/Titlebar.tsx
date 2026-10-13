@@ -5,14 +5,14 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import type { WindowState } from "@shared/contracts";
+import type { ServiceStatus, WindowState } from "@shared/contracts";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/platform";
 import { useShortcut } from "@/lib/use-shortcut";
-import { useTheme, type ThemePreference } from "@/lib/use-theme";
 
 interface TitlebarProps {
   appVersion: string;
+  serviceStatus?: ServiceStatus;
   retro?: boolean;
   navigation?: ReactNode;
   actions?: ReactNode;
@@ -137,20 +137,17 @@ function WinControls({ isMaximized, miniMode = false, retro = false }: { isMaxim
   );
 }
 
-const themeLabels: Record<ThemePreference, string> = {
-  dark: "深夜",
-  light: "白天",
-  system: "随系统",
+const serviceStatusLabels: Record<ServiceStatus, string> = {
+  stopped: "已停止",
+  starting: "正在启动",
+  running: "运行中",
+  stopping: "正在停止",
+  error: "启动或运行出错",
 };
-
-type SystemOrbPhase = "hold" | "fade" | null;
-
-function nextTitlebarTheme(current: ThemePreference): ThemePreference {
-  return current === "dark" ? "light" : current === "light" ? "system" : "dark";
-}
 
 export function Titlebar({
   appVersion,
+  serviceStatus,
   retro = false,
   navigation,
   actions,
@@ -159,34 +156,12 @@ export function Titlebar({
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
   const state = useWindowState();
-  const theme = useTheme();
-  const [systemOrbPhase, setSystemOrbPhase] = useState<SystemOrbPhase>(null);
   const isMac = platform === "darwin";
   const bridge = window.maibotDesktop?.window;
-  const nextTheme = nextTitlebarTheme(theme.preference);
+  const statusLabel = `MaiBot 状态：${serviceStatus ? serviceStatusLabels[serviceStatus] : "未就绪"}`;
 
   useShortcut("Mod+M", () => bridge?.minimize());
   useShortcut("Mod+Shift+M", () => bridge?.toggleMaximize());
-
-  useEffect(() => {
-    if (theme.preference !== "system") {
-      setSystemOrbPhase(null);
-      return;
-    }
-    if (systemOrbPhase === "hold") {
-      const timeout = window.setTimeout(() => setSystemOrbPhase("fade"), 5000);
-      return () => window.clearTimeout(timeout);
-    }
-    if (systemOrbPhase === "fade") {
-      const timeout = window.setTimeout(() => setSystemOrbPhase(null), 700);
-      return () => window.clearTimeout(timeout);
-    }
-  }, [systemOrbPhase, theme.preference]);
-
-  const switchTheme = (): void => {
-    setSystemOrbPhase(nextTheme === "system" ? "hold" : null);
-    theme.setPreference(nextTheme);
-  };
 
   return (
     <div
@@ -203,32 +178,15 @@ export function Titlebar({
       {/* Brand */}
       <div className="app-titlebar-brand flex items-center gap-2.5 pl-4 pr-1.5" data-app-region="no-drag">
         <span
-          aria-label={`切换主题：当前${themeLabels[theme.preference]}，点击切换到${themeLabels[nextTheme]}`}
-          className="relative block size-[18px] shrink-0 overflow-hidden rounded-full bg-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={switchTheme}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              switchTheme();
-            }
-          }}
-          role="button"
-          tabIndex={0}
-          title={`主题：${themeLabels[theme.preference]}，点击切换到${themeLabels[nextTheme]}`}
-        >
-          {systemOrbPhase ? (
-            <span
-              aria-hidden
-              className={cn(
-                "absolute inset-0 rounded-full transition-opacity duration-700",
-                systemOrbPhase === "fade" && "opacity-0",
-              )}
-              style={{
-                background: "linear-gradient(90deg, #c24d24 0 50%, hsl(19.2 44.7% 42.5%) 50% 100%)",
-              }}
-            />
-          ) : null}
-        </span>
+          aria-label={statusLabel}
+          className="app-titlebar-status relative block size-[18px] shrink-0 overflow-hidden rounded-full bg-primary"
+          data-status={serviceStatus ?? "unknown"}
+          role="img"
+          title={statusLabel}
+          style={{ backgroundColor: serviceStatus === "running" ? undefined
+            : serviceStatus === "starting" || serviceStatus === "stopping" ? "var(--warning)"
+              : serviceStatus === "error" ? "var(--destructive)" : "var(--muted-foreground)" }}
+        />
       </div>
 
       <div

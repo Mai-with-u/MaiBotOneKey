@@ -1,3 +1,4 @@
+import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { Loader2, Power, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { DesktopSnapshot } from "@shared/contracts";
@@ -51,10 +52,8 @@ export function StartupAgreementDialog({
   const canAccept = canCheck && accepted;
 
   const refreshSnapshot = useCallback(async () => {
-    const nextSnapshot = await window.maibotDesktop?.getSnapshot();
-    if (nextSnapshot) {
-      onSnapshot(nextSnapshot);
-    }
+    const nextSnapshot = await getDesktopSnapshot();
+    onSnapshot(nextSnapshot);
   }, [onSnapshot]);
 
   const acceptAgreements = useCallback(async () => {
@@ -117,14 +116,14 @@ export function StartupAgreementDialog({
 
         <DialogBody className="space-y-4">
           <ScrollArea
-            className="h-[min(56vh,560px)] rounded-lg border border-border bg-muted/30 px-4 py-3"
+            className="agreement-document h-[min(56vh,560px)] rounded-lg border border-border bg-muted/30 px-4 py-3"
             onScroll={handleScroll}
             ref={handleViewportReady}
           >
             <div className="space-y-8">
               {orderedDocuments.map((document) => (
                 <section className="space-y-3" key={document.id}>
-                  <div className="flex items-center gap-2 border-b border-border pb-2 text-sm font-semibold text-foreground">
+                  <div className="agreement-document-title flex items-center gap-2 border-b border-border pb-2 text-sm font-semibold text-foreground">
                     <ShieldCheck className="size-4 text-primary" />
                     {document.title}
                   </div>
@@ -140,7 +139,7 @@ export function StartupAgreementDialog({
             </div>
           </ScrollArea>
 
-          <label className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground/85">
+          <label className="agreement-consent flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground/85">
             <input
               checked={accepted}
               className="mt-0.5 size-3.5 accent-primary disabled:opacity-40"

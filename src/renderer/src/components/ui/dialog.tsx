@@ -4,7 +4,6 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 export const Dialog = DialogPrimitive.Root;
-export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogPortal = DialogPrimitive.Portal;
 export const DialogClose = DialogPrimitive.Close;
 
@@ -106,6 +105,7 @@ export function DialogHeader({
 }: DialogHeaderProps): React.JSX.Element {
   return (
     <div
+      data-slot="dialog-header"
       className={cn(
         "flex items-start gap-3 border-b border-border px-5 py-4",
         className,
@@ -158,6 +158,7 @@ export function DialogFooter({
 }): React.JSX.Element {
   return (
     <div
+      data-slot="dialog-footer"
       className={cn(
         "flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3",
         className,
@@ -170,4 +171,3 @@ export function DialogFooter({
 
 // Re-export Title/Description for advanced usage
 export const DialogTitle = DialogPrimitive.Title;
-export const DialogDescription = DialogPrimitive.Description;

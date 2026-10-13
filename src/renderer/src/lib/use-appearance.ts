@@ -35,7 +35,7 @@ export const RETRO_WINDOW_CORNER_RADIUS_MIN = 0;
 export const WINDOW_CORNER_RADIUS_MIN = 12;
 export const WINDOW_CORNER_RADIUS_MAX = 32;
 
-const DEFAULT_APPEARANCE_MODE: AppearanceMode = "future-retro";
+const DEFAULT_APPEARANCE_MODE: AppearanceMode = "millennium";
 const DEFAULT_WINDOW_CORNER_RADII: WindowCornerRadii = {
   "future-retro": 16,
   millennium: 0,

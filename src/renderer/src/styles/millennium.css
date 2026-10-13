@@ -158,6 +158,33 @@
   color-scheme: dark;
 }
 
+/* 普通面板的默认边框也遵循主题；放在专用组件规则前，保留组件的选中/告警配色。 */
+:root[data-appearance-mode="millennium"] :where(div, section, aside, label, pre, code, span):where(.border) {
+  border-width: 2px;
+}
+
+:root[data-appearance-mode="millennium"] :where(div, section, aside, label, pre, code, span):where(.border-border) {
+  border-color: var(--mil-line);
+}
+
+:root[data-appearance-mode="millennium"] :where(div, section, aside, label):where(.border.bg-card) {
+  background-color: var(--mil-panel);
+  box-shadow: var(--mil-bevel);
+}
+
+:root[data-appearance-mode="millennium"] :where(div, section, aside):where(.border-t) {
+  border-top-width: 2px;
+}
+
+:root[data-appearance-mode="millennium"]
+  :where(div, section, aside):where(.border-b:not(.last\:border-b-0:last-child)) {
+  border-bottom-width: 2px;
+}
+
+:root[data-appearance-mode="millennium"] hr {
+  border-top: 2px solid var(--mil-lo);
+}
+
 /* ---------- 机壳底纹与字体 ---------- */
 
 :root[data-appearance-mode="millennium"] .retro-shell {
@@ -210,7 +237,7 @@
 }
 
 /* 电源指示灯：点一下切换日间 / 夜间 */
-:root[data-appearance-mode="millennium"] .app-titlebar [role="button"][aria-label^="切换主题"] {
+:root[data-appearance-mode="millennium"] .app-titlebar .app-titlebar-status {
   background-color: var(--mil-led);
   border: 2px solid var(--mil-line);
   box-shadow: 0 0 0 2px var(--mil-lo);
@@ -233,12 +260,7 @@
   text-transform: uppercase;
 }
 
-/* 铭牌旁的运行状态灯和版本号 */
-:root[data-appearance-mode="millennium"] .app-titlebar .size-2 {
-  outline: 2px solid var(--mil-line);
-  outline-offset: 0;
-}
-
+/* 铭牌旁的版本号 */
 :root[data-appearance-mode="millennium"] .app-titlebar .font-mono {
   color: var(--mil-print);
   font-family: var(--mil-font);
@@ -436,6 +458,25 @@
 
 /* ---------- 凸起的塑料模块 ---------- */
 
+:root[data-appearance-mode="millennium"] [data-slot="choice-card"][aria-pressed] {
+  border: 2px solid var(--mil-line);
+  background-color: var(--mil-panel);
+  box-shadow: var(--mil-bevel);
+  color: var(--mil-ink);
+  padding-bottom: 0.75rem;
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="choice-card"][aria-pressed="true"] {
+  background-color: var(--mil-on);
+  box-shadow: inset 3px 3px 0 var(--mil-on-side);
+  color: var(--mil-on-ink);
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="choice-card"]:focus-visible {
+  outline: 2px solid var(--mil-on-side);
+  outline-offset: 2px;
+}
+
 :root[data-appearance-mode="millennium"] .retro-panel,
 :root[data-appearance-mode="millennium"] .settings-section {
   background-color: var(--mil-panel);
@@ -513,6 +554,27 @@
 
 /* ---------- 浮层：弹窗、菜单 ---------- */
 
+:root[data-appearance-mode="millennium"] [data-slot="badge"] {
+  border: 2px solid currentColor;
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="tooltip-content"] {
+  border: 2px solid var(--mil-line);
+  background: var(--mil-plate);
+  color: var(--mil-plate-ink);
+  box-shadow: 3px 3px 0 var(--mil-float-shadow);
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="tooltip-content"] > svg {
+  display: none;
+}
+
+:root[data-appearance-mode="millennium"] [data-sonner-toast] {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-float);
+}
+
 :root[data-appearance-mode="millennium"] [data-slot="dialog-overlay"] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
@@ -536,6 +598,72 @@
 }
 
 /* ---------- 标签页：一排键帽，选中的是按下去的绿键 ---------- */
+
+/* 弹窗也使用机壳接缝；Portal 不在 .retro-shell 内，需要单独覆盖。 */
+:root[data-appearance-mode="millennium"] [data-slot="dialog-header"] {
+  border-bottom: 2px solid var(--mil-line);
+  box-shadow: 0 2px 0 var(--mil-hi);
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="dialog-footer"] {
+  border-top: 2px solid var(--mil-line);
+  background-color: var(--mil-shell);
+  box-shadow: inset 0 2px 0 var(--mil-hi);
+}
+
+:root[data-appearance-mode="millennium"] .agreement-document {
+  border: 2px solid var(--mil-line);
+  background-color: var(--mil-screen);
+  background-image: var(--mil-screen-tex);
+  background-size: 3px 3px;
+  box-shadow: var(--mil-sunk);
+  color: var(--mil-screen-ink);
+}
+
+:root[data-appearance-mode="millennium"] .agreement-document-title {
+  border-bottom: 2px solid var(--mil-line);
+}
+
+:root[data-appearance-mode="millennium"] .agreement-consent {
+  border: 2px solid var(--mil-line);
+  background-color: var(--mil-panel);
+  box-shadow: var(--mil-bevel);
+  color: var(--mil-ink);
+}
+
+:root[data-appearance-mode="millennium"] .agreement-consent input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--mil-accent-text);
+}
+
+/* Chromium 的标准 scrollbar-color/width 会覆盖伪元素皮肤。 */
+:root[data-appearance-mode="millennium"] [data-slot="dialog-content"],
+:root[data-appearance-mode="millennium"] [data-slot="dialog-content"] * {
+  scrollbar-color: auto;
+  scrollbar-width: auto;
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="dialog-content"] ::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="dialog-content"] ::-webkit-scrollbar-track {
+  background: var(--mil-shell);
+  box-shadow: inset 2px 2px 0 var(--mil-lo);
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="dialog-content"] ::-webkit-scrollbar-thumb {
+  background: var(--mil-panel);
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-bevel);
+}
+
+:root[data-appearance-mode="millennium"] [data-slot="dialog-content"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--mil-key-hover);
+}
 
 :root[data-appearance-mode="millennium"] [role="tablist"]:not(.retro-tabs) {
   background: transparent;
@@ -591,6 +719,62 @@
 
 :root[data-appearance-mode="millennium"] [role="radio"] {
   color: var(--mil-on-side);
+}
+
+/* 原生控件不会带 Radix role；协议勾选框和外观滑块需要同样的硬边材质。 */
+:root[data-appearance-mode="millennium"] input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  color: var(--mil-on-ink);
+}
+
+:root[data-appearance-mode="millennium"] input[type="checkbox"]:checked {
+  background: var(--mil-on);
+  box-shadow: none;
+}
+
+:root[data-appearance-mode="millennium"] input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+:root[data-appearance-mode="millennium"] input[type="checkbox"]:checked::before {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+:root[data-appearance-mode="millennium"] input[type="range"] {
+  appearance: none;
+  height: 24px;
+  background: transparent;
+}
+
+:root[data-appearance-mode="millennium"] input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-shell);
+  box-shadow: inset 0 2px 0 var(--mil-lo);
+}
+
+:root[data-appearance-mode="millennium"] input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 22px;
+  margin-top: -9px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  box-shadow: var(--mil-bevel);
 }
 
 /* ---------- 进度条：分段格 ---------- */
@@ -703,19 +887,30 @@
 
 :root[data-appearance-mode="millennium"] .retro-shell,
 :root[data-appearance-mode="millennium"] .retro-shell * {
-  scrollbar-color: var(--mil-drop) transparent;
+  scrollbar-color: auto;
+  scrollbar-width: auto;
+}
+
+:root[data-appearance-mode="millennium"] .retro-shell ::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+:root[data-appearance-mode="millennium"] .retro-shell ::-webkit-scrollbar-track {
+  background: var(--mil-shell);
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 var(--mil-lo);
 }
 
 :root[data-appearance-mode="millennium"] .retro-shell ::-webkit-scrollbar-thumb {
-  background: var(--mil-drop);
-  background-clip: padding-box;
-  border: 2px solid transparent;
+  background: var(--mil-key);
+  border: 2px solid var(--mil-line);
   border-radius: 0;
+  box-shadow: var(--mil-bevel);
 }
 
 :root[data-appearance-mode="millennium"] .retro-shell ::-webkit-scrollbar-thumb:hover {
-  background: var(--mil-line);
-  background-clip: padding-box;
+  background: var(--mil-key-hover);
 }
 
 /* ---------- 悬浮收起态：底部三色条换成这套配色 ---------- */
@@ -770,10 +965,10 @@
 
 :root[data-appearance-mode="millennium"] .settings-scroll-scope::-webkit-scrollbar-thumb,
 :root[data-appearance-mode="millennium"] .settings-scroll-scope *::-webkit-scrollbar-thumb {
-  background: var(--mil-drop) !important;
+  background: var(--mil-key) !important;
 }
 
 :root[data-appearance-mode="millennium"] .settings-scroll-scope::-webkit-scrollbar-thumb:hover,
 :root[data-appearance-mode="millennium"] .settings-scroll-scope *::-webkit-scrollbar-thumb:hover {
-  background: var(--mil-line) !important;
+  background: var(--mil-key-hover) !important;
 }
