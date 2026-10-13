@@ -32,7 +32,6 @@ interface RepoUpdateSpec {
   moduleId: ModuleUpdateResult["moduleId"];
   moduleName: string;
   cwd: string;
-  bundledDir: string;
   remoteUrl: string;
   defaultBranch: string;
   /** 是否在更新失败时把错误抛到外层（false 时仅返回 result，原地保留错误信息）。 */
@@ -254,7 +253,6 @@ export class ModuleUpdater {
             moduleId: "maibot",
             moduleName: "MaiBot",
             cwd: this.paths.maibotRoot,
-            bundledDir: join(this.paths.bundledModulesRoot, "MaiBot"),
             remoteUrl: candidate.maibotUrl,
             defaultBranch: "main",
             throwOnFailure: true,
@@ -362,7 +360,7 @@ export class ModuleUpdater {
     gitPath: string,
     spec: RepoUpdateSpec,
   ): Promise<ModuleUpdateResult> {
-    const { cwd, bundledDir, remoteUrl, defaultBranch, moduleId, moduleName } = spec;
+    const { cwd, remoteUrl, defaultBranch, moduleId, moduleName } = spec;
     const emit = (
       phase: MaiBotModuleUpdateProgress["phase"],
       percent: number,
@@ -434,8 +432,6 @@ export class ModuleUpdater {
     };
 
     if (!existsSync(cwd)) {
-      // 模块目录不存在：若 bundled 里有，则尝试从 bundled 复制 .git 后再走 reset 流程；
-      // 这里简单抛错让上层（init-manager 的 ensure 流程）先确保目录存在。
       throw new Error(`模块目录不存在: ${cwd}`);
     }
 
@@ -468,26 +464,6 @@ export class ModuleUpdater {
         (await this.runGit(gitPath, cwd, ["remote", "set-url", "origin", remoteUrl], 30_000)).output,
       );
       remote = remoteUrl;
-    }
-
-    const bundledHasGit = bundledDir !== cwd && existsSync(join(bundledDir, ".git"));
-    if (bundledHasGit) {
-      const existingBundledUrl = await this.readGitValue(gitPath, cwd, [
-        "config",
-        "--get",
-        "remote.bundled.url",
-      ]);
-      if (!existingBundledUrl) {
-        append(
-          `[${moduleName}] remote add bundled ${bundledDir}`,
-          (await this.runGit(gitPath, cwd, ["remote", "add", "bundled", bundledDir], 30_000)).output,
-        );
-      } else if (existingBundledUrl !== bundledDir) {
-        append(
-          `[${moduleName}] remote set-url bundled ${bundledDir}`,
-          (await this.runGit(gitPath, cwd, ["remote", "set-url", "bundled", bundledDir], 30_000)).output,
-        );
-      }
     }
 
     const before = await this.readGitValue(gitPath, cwd, ["rev-parse", "--short", "HEAD"]);
