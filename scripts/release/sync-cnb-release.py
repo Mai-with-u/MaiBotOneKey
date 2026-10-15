@@ -30,7 +30,8 @@ def request(url, method="GET", body=None, token=None, headers=None):
 
 def api(url, token, method="GET", body=None, missing=False):
     try:
-        with request(url, method, body, token) as response:
+        accept = "application/vnd.cnb.api+json" if url.startswith(API + "/") else "application/vnd.github+json"
+        with request(url, method, body, token, {"Accept": accept}) as response:
             raw = response.read()
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
