@@ -143,7 +143,7 @@ def main():
             # Use a fixed local filename: release names are never interpreted as local paths.
             file = root / "attachment.bin"
             sha256 = download(asset, file)
-            existing = next((a for a in remote.get("assets", []) if a["name"] == asset["name"]), None)
+            existing = next((a for a in (remote.get("assets") or []) if a["name"] == asset["name"]), None)
             if existing:
                 known_hash = existing.get("hash_value") if existing.get("hash_algo", "").lower().replace("-", "") == "sha256" else None
                 if not known_hash and not remote.get("draft"):
@@ -207,5 +207,7 @@ if __name__ == "__main__":
         if isinstance(error, (ValueError, RuntimeError)):
             print(f"Sync failed: {error}", flush=True)
         else:
-            print(f"Sync failed: {type(error).__name__}; rerun after checking network and permissions", flush=True)
+            import traceback
+            location = traceback.extract_tb(error.__traceback__)[-1]
+            print(f"Sync failed: {type(error).__name__} at {location.name}:{location.lineno}", flush=True)
         raise SystemExit(1)
