@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
-import { dirname, join, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { homedir, platform } from "node:os";
+import { readMaiBotDeployment } from "../../src/main/services/maibot-deployment-state";
 
 const RESOURCE_PATHS_FILE = "resource-paths.json";
-const LEGACY_RESOURCE_LOCATION_FILE = "resource-location.json";
 
 interface StoredResourcePathsFile {
   version: 1;
@@ -14,11 +14,6 @@ interface StoredResourcePathsFile {
     napcat?: string;
     snowluma?: string;
   };
-}
-
-interface LegacyStoredResourceLocationFile {
-  version: 1;
-  resourceRoot?: string;
 }
 
 function appDataRoot(): string {
@@ -41,9 +36,10 @@ function createInstallScope(installRoot: string): string {
   return createHash("sha256").update(installRoot).digest("hex").slice(0, 12);
 }
 
-function normalizePath(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? resolve(trimmed) : undefined;
+function normalizePath(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim() || !isAbsolute(value.trim())) throw new Error("Component paths must be non-empty absolute paths.");
+  return resolve(value.trim());
 }
 
 function readJsonFile<T>(path: string): T | undefined {
@@ -54,23 +50,8 @@ function readJsonFile<T>(path: string): T | undefined {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as T;
   } catch (error) {
-    console.warn(`[reset-dev-state] Failed to read ${path}:`, error);
-    return undefined;
+    throw new Error(`[reset-dev-state] Failed to read ${path}: ${String(error)}`);
   }
-}
-
-function readStoredMaiBotRoot(userDataRoot: string): string | undefined {
-  const resourcePaths = readJsonFile<StoredResourcePathsFile>(join(userDataRoot, RESOURCE_PATHS_FILE));
-  const maibotRoot = normalizePath(resourcePaths?.paths?.maibot);
-  if (maibotRoot) {
-    return maibotRoot;
-  }
-
-  const legacyLocation = readJsonFile<LegacyStoredResourceLocationFile>(
-    join(userDataRoot, LEGACY_RESOURCE_LOCATION_FILE),
-  );
-  const resourceRoot = normalizePath(legacyLocation?.resourceRoot);
-  return resourceRoot ? join(resourceRoot, "modules", "MaiBot") : undefined;
 }
 
 interface StoredComponentRoots {
@@ -79,25 +60,17 @@ interface StoredComponentRoots {
   snowluma?: string;
 }
 
-function readStoredComponentRoots(userDataRoot: string): StoredComponentRoots {
+export function readStoredComponentRoots(userDataRoot: string): StoredComponentRoots {
   const resourcePaths = readJsonFile<StoredResourcePathsFile>(join(userDataRoot, RESOURCE_PATHS_FILE));
-  const stored: StoredComponentRoots = {
+  if (resourcePaths !== undefined && (!resourcePaths || resourcePaths.version !== 1 || !resourcePaths.paths || typeof resourcePaths.paths !== "object" || Array.isArray(resourcePaths.paths))) {
+    throw new Error("Invalid resource-paths.json; fix it before resetting development state.");
+  }
+  return {
     maibot: normalizePath(resourcePaths?.paths?.maibot),
     napcat: normalizePath(resourcePaths?.paths?.napcat),
     snowluma: normalizePath(resourcePaths?.paths?.snowluma),
   };
 
-  const legacyLocation = readJsonFile<LegacyStoredResourceLocationFile>(
-    join(userDataRoot, LEGACY_RESOURCE_LOCATION_FILE),
-  );
-  const resourceRoot = normalizePath(legacyLocation?.resourceRoot);
-  if (resourceRoot) {
-    stored.maibot ??= join(resourceRoot, "modules", "MaiBot");
-    stored.napcat ??= join(resourceRoot, "modules", "napcat");
-    stored.snowluma ??= join(resourceRoot, "modules", "SnowLuma");
-  }
-
-  return stored;
 }
 
 function assertNotFilesystemRoot(target: string, label: string): void {
@@ -116,11 +89,18 @@ function assertInside(parent: string, child: string, label: string): void {
   }
 }
 
-function assertLooksLikeMaiBotRoot(maibotRoot: string): void {
-  const markers = [join(maibotRoot, "bot.py"), join(maibotRoot, "src"), join(maibotRoot, "dashboard")];
-  if (!markers.every((marker) => existsSync(marker))) {
-    throw new Error(`MaiBot root does not look valid: ${maibotRoot}`);
+export function assertLooksLikeMaiBotRoot(maibotRoot: string, defaultMaiBotRoot: string): void {
+  assertNotFilesystemRoot(maibotRoot, "MaiBot instance");
+  if (readMaiBotDeployment(maibotRoot)) return;
+  // A fresh default instance may contain only bundled plugins, or may not
+  // exist yet. It does not acquire a deployment record until PyPI installation.
+  if (resolve(maibotRoot) === resolve(defaultMaiBotRoot)) {
+    if (!existsSync(maibotRoot)) return;
+    const entry = lstatSync(maibotRoot);
+    if (entry.isDirectory() && !entry.isSymbolicLink()) return;
+    throw new Error(`Default MaiBot root is not a regular directory: ${maibotRoot}`);
   }
+  throw new Error(`Custom MaiBot directory is not a PyPI instance: ${maibotRoot}`);
 }
 
 async function removePath(path: string, label: string, dryRun: boolean): Promise<void> {
@@ -210,7 +190,7 @@ async function main(): Promise<void> {
   const defaultMaiBotRoot = join(installRoot, "modules", "MaiBot");
   const defaultNapcatRoot = join(installRoot, "modules", "napcat");
   const defaultSnowlumaRoot = join(installRoot, "modules", "SnowLuma");
-  const maibotRoot = storedComponentRoots.maibot ?? readStoredMaiBotRoot(userDataRoot) ?? defaultMaiBotRoot;
+  const maibotRoot = storedComponentRoots.maibot ?? defaultMaiBotRoot;
   const napcatRoot = storedComponentRoots.napcat ?? defaultNapcatRoot;
   const snowlumaRoot = storedComponentRoots.snowluma ?? defaultSnowlumaRoot;
   const maibotConfigDir = join(maibotRoot, "config");
@@ -220,7 +200,7 @@ async function main(): Promise<void> {
   assertNotFilesystemRoot(maibotConfigDir, "MaiBot config");
   assertNotFilesystemRoot(maibotDataDir, "MaiBot data");
   assertInside(join(appDataRoot(), "MaiBotOneKeyDesktop"), userDataRoot, "Launcher userData");
-  assertLooksLikeMaiBotRoot(maibotRoot);
+  assertLooksLikeMaiBotRoot(maibotRoot, defaultMaiBotRoot);
   assertInside(maibotRoot, maibotConfigDir, "MaiBot config");
   assertInside(maibotRoot, maibotDataDir, "MaiBot data");
 
@@ -238,7 +218,7 @@ async function main(): Promise<void> {
     addTarget(targets, snowlumaRoot, stateDirectory, `SnowLuma ${stateDirectory}`);
   }
   await addNapCatVersionTargets(targets, napcatRoot);
-  await addAdapterConfigTargets(targets, maibotRoot, "napcat-adapter", "NapCat 适配器");
+  await addAdapterConfigTargets(targets, maibotRoot, "qq_official_adapter", "QQ 官方适配器");
   await addAdapterConfigTargets(targets, maibotRoot, "snowluma-adapter", "SnowLuma 适配器");
 
   if (platform() === "darwin") {
@@ -269,7 +249,7 @@ async function main(): Promise<void> {
   console.log(dryRun ? "[reset-dev-state] Dry run complete." : "[reset-dev-state] Done.");
 }
 
-main().catch((error) => {
+if (import.meta.main) main().catch((error) => {
   console.error("[reset-dev-state] Failed:", error);
   process.exitCode = 1;
 });

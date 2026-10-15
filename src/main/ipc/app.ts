@@ -11,20 +11,17 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { fetchMirrorManifest, isOfficialLauncherDownloadUrl, withDownloadFallback } from "../services/launcher-update-mirror";
-import { publishedStableReleaseTags, resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
+import { resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import {
   mkdir,
   readdir,
-  readFile,
   rename,
   rm,
-  writeFile,
 } from "node:fs/promises";
 import { cpus, freemem, loadavg, totalmem, uptime } from "node:os";
 import {
   basename,
-  dirname,
   isAbsolute,
   join,
   relative,
@@ -61,12 +58,9 @@ import type {
   MaiBotUpdateInfo,
   MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
-  ModuleBranchOption,
   ModuleRuntimeVersions,
   ModuleUpdateResult,
   NetworkProxySettings,
-  ModuleSourceConfig,
-  ModuleSourceUpdate,
   ModuleTagOption,
   ModuleUpdateTarget,
   PythonEnvironmentState,
@@ -101,6 +95,7 @@ import type {
   WindowState,
 } from "../../shared/contracts";
 import { InitManager } from "../services/init-manager";
+import { readMaiBotDeployment } from "../services/maibot-deployment-state";
 import type { AppIconManager } from "../services/app-icon-manager";
 import type { CodexPetManager } from "../services/codex-pet-manager";
 import { LogStore } from "../services/log-store";
@@ -110,7 +105,6 @@ import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-clean
 import { ModuleUpdater } from "../services/module-updater";
 import { NetworkProxyManager } from "../services/network-proxy-manager";
 import { PythonDependencyManager } from "../services/python-dependency-manager";
-import { RemoteSourceManager } from "../services/remote-source-manager";
 import { ResourceLocationManager } from "../services/resource-location-manager";
 import { ServiceManager } from "../services/service-manager";
 import { defaultServiceStartupSettings } from "../services/service-startup-defaults";
@@ -174,11 +168,6 @@ const ONEKEY_LATEST_RELEASE_API_URL =
 const ONEKEY_RELEASES_API_URL =
   "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases?per_page=100";
 const ONEKEY_RELEASE_SOURCE = "Mai-with-u/MaiBotOneKey";
-const MAIBOT_RELEASES_API_URL =
-  "https://api.github.com/repos/Mai-with-u/MaiBot/releases?per_page=100";
-const MAIBOT_COMMITS_API_URL =
-  "https://api.github.com/repos/Mai-with-u/MaiBot/commits";
-const MAIBOT_RELEASE_SOURCE = "Mai-with-u/MaiBot";
 const MAIBOT_UPDATE_SELECTION_FILE = "maibot-update-selection.json";
 
 interface GitHubReleaseAsset {
@@ -199,21 +188,6 @@ interface GitHubReleasePayload {
   assets?: unknown;
 }
 
-interface GitHubCommitPayload {
-  sha?: unknown;
-  html_url?: unknown;
-  commit?: {
-    message?: unknown;
-    author?: {
-      name?: unknown;
-      date?: unknown;
-    };
-  };
-  author?: {
-    login?: unknown;
-  };
-}
-
 interface LauncherUpdateInternalInfo extends LauncherUpdateInfo {
   downloadUrl?: string;
   fallbackDownloadUrl?: string;
@@ -226,13 +200,6 @@ interface LauncherUpdateDownloadResult {
   totalBytes?: number;
 }
 
-interface StoredMaiBotUpdateSelection {
-  version: 1;
-  channel: NonNullable<ModuleRuntimeVersions["maibotSelectedChannel"]>;
-  target: ModuleUpdateTarget;
-  selectedAt: number;
-}
-
 type LauncherUpdateDownloadProgressCallback = (
   progress: LauncherUpdateDownloadProgress,
 ) => void;
@@ -241,7 +208,6 @@ interface RegisterAppIpcOptions {
   paths: RuntimePaths;
   initManager: InitManager;
   moduleUpdater: ModuleUpdater;
-  remoteSourceManager: RemoteSourceManager;
   networkProxyManager: NetworkProxyManager;
   launcherUiSettingsManager: LauncherUiSettingsManager;
   pythonDependencyManager: PythonDependencyManager;
@@ -295,8 +261,6 @@ function readWindowState(
     floatingEdge: floatingEdgeSide ?? undefined,
   };
 }
-
-
 
 function isRuntimeBusy(service: ServiceDescriptor): boolean {
   return (
@@ -629,31 +593,6 @@ function compareParsedTags(
   });
 }
 
-function pickLatestTags(
-  rawTags: string[],
-): Pick<
-  ModuleRuntimeVersions,
-  "maibotLatestStableTag" | "maibotLatestPrereleaseTag"
-> {
-  const parsed = rawTags
-    .map(parseVersionTag)
-    .filter((tag): tag is ParsedVersionTag => Boolean(tag));
-  const stable = parsed
-    .filter((tag) => !tag.prerelease)
-    .sort(compareParsedTags)
-    .at(-1)?.tag;
-  const prerelease = parsed
-    .filter((tag) => tag.prerelease)
-    .sort(compareParsedTags)
-    .at(-1)?.tag;
-  return {
-    maibotLatestStableTag: stable,
-    maibotLatestPrereleaseTag: prerelease,
-  };
-}
-
-
-
 function compareVersionTags(
   left: string | undefined,
   right: string | undefined,
@@ -892,34 +831,6 @@ function releaseTitle(
     : fallbackTag;
 }
 
-async function fetchMaiBotReleases(): Promise<GitHubReleasePayload[]> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const response = await fetch(MAIBOT_RELEASES_API_URL, {
-      headers: { Accept: "application/vnd.github+json" },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
-    }
-
-    const releases = (await response.json()) as unknown;
-    if (!Array.isArray(releases)) {
-      return [];
-    }
-
-    return releases.filter(
-      (release): release is GitHubReleasePayload =>
-        Boolean(release && typeof release === "object") &&
-        release.draft !== true &&
-        typeof release.tag_name === "string",
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function fetchMaiBotReleaseByTag(
   tag: string,
 ): Promise<GitHubReleasePayload | undefined> {
@@ -978,171 +889,17 @@ async function fetchOneKeyReleases(): Promise<GitHubReleasePayload[]> {
   }
 }
 
-function releaseNotesInRange(
-  releases: GitHubReleasePayload[],
-  currentTag: string | undefined,
-  targetTag: string,
-): string | undefined {
-  const notes = releases
-    .filter((release) => {
-      const tag = String(release.tag_name);
-      return (
-        (!currentTag || compareVersionTags(tag, currentTag) > 0) &&
-        compareVersionTags(tag, targetTag) <= 0
-      );
-    })
-    .sort((left, right) =>
-      compareVersionTags(String(right.tag_name), String(left.tag_name)),
-    )
-    .map((release) => {
-      const tag = String(release.tag_name);
-      return `## ${releaseTitle(release, tag)}\n\n${releaseBody(release) ?? "此版本没有填写更新说明。"}`;
-    });
-
-  return notes.length > 1 ? notes.join("\n\n---\n\n") : undefined;
-}
-
-function formatCommitDate(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) {
-    return "未知时间";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value.trim();
-  }
-  return date.toISOString().slice(0, 10);
-}
-
-function commitSubject(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) {
-    return "无提交说明";
-  }
-  return value.trim().split(/\r?\n/u)[0]?.trim() || "无提交说明";
-}
-
-function formatBranchCommitNotes(
-  branch: string,
-  commits: GitHubCommitPayload[],
-): string | undefined {
-  const items = commits
-    .filter((commit) => typeof commit.sha === "string" && commit.sha.trim())
-    .slice(0, 10)
-    .map((commit) => {
-      const sha = String(commit.sha);
-      const shortSha = sha.slice(0, 7);
-      const url =
-        typeof commit.html_url === "string" && commit.html_url.trim()
-          ? commit.html_url.trim()
-          : `https://github.com/Mai-with-u/MaiBot/commit/${encodeURIComponent(sha)}`;
-      const author =
-        typeof commit.author?.login === "string" && commit.author.login.trim()
-          ? commit.author.login.trim()
-          : typeof commit.commit?.author?.name === "string" &&
-              commit.commit.author.name.trim()
-            ? commit.commit.author.name.trim()
-            : "未知作者";
-      const date = formatCommitDate(commit.commit?.author?.date);
-      return `- [\`${shortSha}\`](${url}) ${commitSubject(commit.commit?.message)}\n  ${author} / ${date}`;
-    });
-
-  if (items.length === 0) {
-    return undefined;
-  }
-
-  return `## ${branch} 最新提交\n\n分支：\`${branch}\`\n\n${items.join("\n\n")}`;
-}
-
-async function fetchMaiBotBranchCommitNotes(
-  branch: string,
-): Promise<string | undefined> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  const url = new URL(MAIBOT_COMMITS_API_URL);
-  url.searchParams.set("sha", branch);
-  url.searchParams.set("per_page", "10");
-  try {
-    const response = await fetch(url, {
-      headers: { Accept: "application/vnd.github+json" },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`GitHub Commits returned HTTP ${response.status}`);
-    }
-
-    const commits = (await response.json()) as unknown;
-    if (!Array.isArray(commits)) {
-      return undefined;
-    }
-
-    return formatBranchCommitNotes(
-      branch,
-      commits.filter((commit): commit is GitHubCommitPayload =>
-        Boolean(commit && typeof commit === "object"),
-      ),
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function fetchMaiBotUpdateInfo(
   currentVersion: string | undefined,
   target: ModuleUpdateTarget,
 ): Promise<MaiBotUpdateInfo> {
   const currentTag = versionAsTag(currentVersion);
   const targetName = target.name.trim();
-  const releaseUrlBase = "https://github.com/Mai-with-u/MaiBot";
-
-  if (target.type === "branch") {
-    return {
-      currentVersion,
-      currentTag,
-      target,
-      releaseName: `分支 ${targetName}`,
-      releaseUrl: `${releaseUrlBase}/tree/${encodeURIComponent(targetName)}`,
-      releaseNotes: /^(?:main|dev)$/iu.test(targetName)
-        ? await fetchMaiBotBranchCommitNotes(targetName)
-        : undefined,
-      available: true,
-      checkedAt: Date.now(),
-      source: MAIBOT_RELEASE_SOURCE,
-    };
-  }
-
-  const targetTag = targetName;
-  const releases = await fetchMaiBotReleases();
-  const listedTargetRelease = releases.find(
-    (release) => String(release.tag_name) === targetTag,
-  );
-  const targetRelease =
-    listedTargetRelease ?? (await fetchMaiBotReleaseByTag(targetTag));
-  const releasesWithTarget =
-    targetRelease && !listedTargetRelease
-      ? [...releases, targetRelease]
-      : releases;
-  const releaseNotes =
-    releaseNotesInRange(releasesWithTarget, currentTag, targetTag) ??
-    (targetRelease ? releaseBody(targetRelease) : undefined);
-
-  return {
-    currentVersion,
-    currentTag,
-    target,
-    targetTag,
-    releaseName: targetRelease
-      ? releaseTitle(targetRelease, targetTag)
-      : targetTag,
-    releaseUrl:
-      typeof targetRelease?.html_url === "string"
-        ? targetRelease.html_url
-        : `${releaseUrlBase}/releases/tag/${encodeURIComponent(targetTag)}`,
-    releaseNotes,
-    available: currentTag
-      ? compareVersionTags(targetTag, currentTag) > 0
-      : true,
-    checkedAt: Date.now(),
-    source: MAIBOT_RELEASE_SOURCE,
-  };
+  const release = await fetchMaiBotReleaseByTag(`v${targetName}`).catch(() => undefined);
+  return { currentVersion, currentTag, target, releaseName: `MaiBot ${targetName} (PyPI)`,
+    releaseUrl: `https://pypi.org/project/maibot/${encodeURIComponent(targetName)}/`,
+    releaseNotes: release ? releaseBody(release) : `安装 MaiBot ${targetName} 及其依赖。更新会备份配置、数据和插件，并保留上一个运行环境。`,
+    available: currentVersion !== targetName, checkedAt: Date.now(), source: "PyPI" };
 }
 
 async function fetchLauncherUpdateInfo(
@@ -1526,65 +1283,6 @@ export function registerAppIpc({
       ...readWindowState(window, floatingMode, floatingEdgeSide, shellMaximized),
       isMiniMode: miniMode,
     });
-
-  const readMaiBotUpdateSelection = async (): Promise<
-    Pick<
-      ModuleRuntimeVersions,
-      "maibotSelectedAt" | "maibotSelectedChannel" | "maibotSelectedTarget"
-    >
-  > => {
-    try {
-      const raw = JSON.parse(
-        await readFile(maibotUpdateSelectionPath, "utf8"),
-      ) as Partial<StoredMaiBotUpdateSelection>;
-      const target = raw.target;
-      if (
-        raw.version !== 1 ||
-        !raw.channel ||
-        !target ||
-        (target.type !== "tag" && target.type !== "branch") ||
-        typeof target.name !== "string" ||
-        target.name.trim().length === 0
-      ) {
-        return {};
-      }
-      return {
-        maibotSelectedChannel: raw.channel,
-        maibotSelectedTarget: {
-          type: target.type,
-          name: target.name.trim(),
-        },
-        maibotSelectedAt:
-          typeof raw.selectedAt === "number" ? raw.selectedAt : undefined,
-      };
-    } catch {
-      return {};
-    }
-  };
-
-  const writeMaiBotUpdateSelection = async (
-    channel: NonNullable<ModuleRuntimeVersions["maibotSelectedChannel"]>,
-    target: ModuleUpdateTarget,
-  ): Promise<void> => {
-    await mkdir(dirname(maibotUpdateSelectionPath), { recursive: true });
-    await writeFile(
-      maibotUpdateSelectionPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          channel,
-          target: {
-            type: target.type,
-            name: target.name.trim(),
-          },
-          selectedAt: Date.now(),
-        } satisfies StoredMaiBotUpdateSelection,
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-  };
 
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
     if (window && floatingMode) {
@@ -2150,10 +1848,20 @@ export function registerAppIpc({
     const versions: ModuleRuntimeVersions = {};
     const maibotRoot = paths.maibotRoot;
 
+    const deployment = readMaiBotDeployment(maibotRoot);
+    versions.maibotDeploymentMode = moduleUpdater.isPackageMode() ? "pypi" : "source";
+    versions.maibotCanRollback = Boolean(deployment?.previous && deployment.snapshot);
+
     const pyprojectVersion = await readPyprojectVersion(
       join(maibotRoot, "pyproject.toml"),
     );
-    if (pyprojectVersion) {
+    if (deployment) {
+      versions.maibotLocal = await readPythonDistInfoVersion(pythonDependencyManager.getPythonPackagesRoot(), "maibot");
+      versions.maibotLocalSource = "pypi";
+      versions.maibotSelectedTarget = { type: "package", name: deployment.packageVersion };
+      versions.maibotSelectedAt = deployment.installedAt;
+      versions.maibotSelectedChannel = deployment.packageVersion === remoteModuleVersionsCache.maibotLatestStableTag ? "stable" : "custom";
+    } else if (pyprojectVersion) {
       versions.maibotLocal = pyprojectVersion;
       versions.maibotLocalSource = "pyproject";
     }
@@ -2172,30 +1880,14 @@ export function registerAppIpc({
 
   const readRemoteModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
-    const [tagsResult, releaseResult] = await Promise.allSettled([
-      existsSync(initManager.getGitPath())
-        ? moduleUpdater.listMaiBotRemoteTagNames()
-        : Promise.reject(new Error(`未找到可用 Git: ${initManager.getGitPath()}`)),
-      fetchMaiBotReleases(),
-    ]);
-    if (tagsResult.status === "fulfilled") {
-      versions.maibotLatestPrereleaseTag = pickLatestTags(tagsResult.value.tags).maibotLatestPrereleaseTag;
-      versions.maibotRemoteSource = tagsResult.value.remoteUrl;
-    } else {
-      versions.maibotRemoteError = String(tagsResult.reason);
-    }
-
-    if (releaseResult.status === "fulfilled") {
-      versions.maibotLatestStableTag = pickLatestTags(
-        publishedStableReleaseTags(releaseResult.value),
-      ).maibotLatestStableTag;
-      if (!versions.maibotLatestStableTag) {
-        versions.maibotRemoteError = "未找到已发布的 MaiBot 正式 Release";
-      }
-    } else {
-      const detail = releaseResult.reason instanceof Error ? releaseResult.reason.message : String(releaseResult.reason);
-      versions.maibotRemoteError = `获取 MaiBot 正式 Release 失败：${detail}`;
-    }
+    try {
+      const packages = await moduleUpdater.listMaiBotPackageVersions();
+      for (const line of packages.output) logStore.append("desktop", "system", line);
+      versions.maibotLatestStableTag = packages.versions.find((item) => !item.isPrerelease)?.version;
+      versions.maibotLatestPrereleaseTag = packages.versions.find((item) => item.isPrerelease)?.version;
+      versions.maibotRemoteSource = packages.sourceUrl;
+      if (!versions.maibotLatestStableTag) versions.maibotRemoteError = "未找到可安装的 MaiBot 正式包";
+    } catch (error) { versions.maibotRemoteError = String(error); }
 
     const dashboardVersions = await fetchPypiVersionSummary("maibot-dashboard");
     if (
@@ -2224,7 +1916,6 @@ export function registerAppIpc({
   const readModuleVersions = async (): Promise<ModuleRuntimeVersions> => ({
     ...remoteModuleVersionsCache,
     ...(await readLocalModuleVersions()),
-    ...(await readMaiBotUpdateSelection()),
   });
 
   const checkLauncherUpdate = async (): Promise<LauncherUpdateInternalInfo> => {
@@ -2241,6 +1932,9 @@ export function registerAppIpc({
 
   const handleRuntimeMutation: typeof ipcMain.handle = (channel, listener) => {
     ipcMain.handle(channel, (event, ...args) => resourceLocationManager.withRuntimeActivity(async () => listener(event, ...args)));
+  };
+  const handleDeploymentMutation: typeof ipcMain.handle = (channel, listener) => {
+    ipcMain.handle(channel, (event, ...args) => resourceLocationManager.withDeploymentOperation(async () => listener(event, ...args)));
   };
 
   const buildSnapshot = async (
@@ -2560,8 +2254,11 @@ export function registerAppIpc({
     return result;
   });
 
-  handleRuntimeMutation("init:repair", async (): Promise<InitRepairResult> => {
-    const result = await initManager.repair();
+  handleRuntimeMutation("init:repair", async (event): Promise<InitRepairResult> => {
+    const result = await initManager.repair((progress) => {
+      logStore.append("maibot", "system", `MaiBot preparation: ${progress.log ?? progress.label}`);
+      if (!event.sender.isDestroyed()) event.sender.send("modules:maibot-update-progress", progress);
+    });
     logStore.append(
       "desktop",
       "system",
@@ -2737,7 +2434,7 @@ export function registerAppIpc({
       if (!target || typeof target.name !== "string" || !target.name.trim()) {
         throw new Error("没有可用的 MaiBot 目标版本");
       }
-      if (target.type !== "tag" && target.type !== "branch") {
+      if (target.type !== "package") {
         throw new Error("MaiBot 目标版本类型不正确");
       }
 
@@ -2749,15 +2446,15 @@ export function registerAppIpc({
     },
   );
 
-  handleRuntimeMutation(
+  handleDeploymentMutation(
     "modules:updateMaibot",
     async (
       event,
       target?: ModuleUpdateTarget,
     ): Promise<ModuleUpdateResult> => {
-      target ??= resolveMaiBotUpdateTarget("stable", "tag", remoteModuleVersionsCache.maibotLatestStableTag, undefined);
-      if (!target || !["tag", "branch"].includes(target.type) || typeof target.name !== "string" || !target.name.trim()) {
-        throw new Error("没有可用的 MaiBot 更新目标，请先获取正式 Release 或选择其他版本");
+      target ??= resolveMaiBotUpdateTarget("stable", remoteModuleVersionsCache.maibotLatestStableTag, undefined);
+      if (!target || target.type !== "package" || typeof target.name !== "string" || !target.name.trim()) {
+        throw new Error("没有可用的 MaiBot 更新目标，请先获取 PyPI 包版本；旧源码实例可迁移到 PyPI");
       }
       target = { type: target.type, name: target.name.trim() };
       const maibot = serviceManager
@@ -2772,24 +2469,17 @@ export function registerAppIpc({
         throw new Error("Stop MaiBot Core before updating MaiBot.");
       }
 
-      logStore.append("desktop", "system", "Updating MaiBot module from Git.");
+      logStore.append("desktop", "system", "Updating MaiBot from PyPI.");
       const sendProgress = (progress: MaiBotModuleUpdateProgress): void => {
         if (!event.sender.isDestroyed()) {
           event.sender.send("modules:maibot-update-progress", progress);
         }
       };
       const result = await moduleUpdater.updateMaiBot(target, sendProgress);
-      if (target) {
-        await writeMaiBotUpdateSelection(
-          (target.type === "tag" && target.name === remoteModuleVersionsCache.maibotLatestStableTag)
-            ? "stable"
-            : target.type === "branch" &&
-                /^dev(?:elop(?:ment)?)?$/iu.test(target.name)
-              ? "dev"
-              : "custom",
-          target,
-        );
-      }
+      initManager.clearDependencyCache();
+      serviceManager.reloadRuntimePaths();
+      // The deployment record is authoritative. Discard legacy tag/branch/dev selections.
+      await rm(maibotUpdateSelectionPath, { force: true }).catch(() => undefined);
       logStore.append(
         "desktop",
         "system",
@@ -2800,6 +2490,16 @@ export function registerAppIpc({
     },
   );
 
+  handleDeploymentMutation("modules:rollbackMaibot", async (): Promise<void> => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot?.managed || (maibot && ["starting", "running", "stopping"].includes(maibot.status))) throw new Error("请先停止 MaiBot，再恢复上一环境");
+    await moduleUpdater.rollbackMaiBot();
+    await rm(maibotUpdateSelectionPath, { force: true });
+    initManager.clearDependencyCache();
+    serviceManager.reloadRuntimePaths();
+    await broadcastSnapshot();
+  });
+
   ipcMain.handle(
     "modules:refreshVersions",
     async (): Promise<DesktopSnapshot> => {
@@ -2808,36 +2508,9 @@ export function registerAppIpc({
   );
 
   ipcMain.handle(
-    "modules:listMaibotBranches",
-    async (): Promise<ModuleBranchOption[]> => {
-      return moduleUpdater.listMaiBotBranches();
-    },
-  );
-
-  ipcMain.handle(
     "modules:listMaibotTags",
     async (): Promise<ModuleTagOption[]> => {
       return moduleUpdater.listMaiBotTags();
-    },
-  );
-
-  ipcMain.handle(
-    "modules:getSourceConfig",
-    async (): Promise<ModuleSourceConfig> => {
-      return moduleUpdater.getSourceConfig();
-    },
-  );
-
-  handleRuntimeMutation(
-    "modules:saveSourceConfig",
-    async (_event, config: ModuleSourceUpdate): Promise<ModuleSourceConfig> => {
-      const result = await moduleUpdater.saveSourceConfig(config);
-      logStore.append(
-        "desktop",
-        "system",
-        `Module source saved: ${result.preset} (${result.maibotUrl})`,
-      );
-      return result;
     },
   );
 
@@ -3216,7 +2889,7 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        `Source settings saved: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
+        `Source settings saved: python=${result.python.length}`,
       );
       await broadcastSnapshot();
       return result;
@@ -3230,7 +2903,7 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        `Source settings reset to defaults: github=${result.github.length}, launcher=${result.launcher.length}, python=${result.python.length}`,
+        `Source settings reset to defaults: python=${result.python.length}`,
       );
       await broadcastSnapshot();
       return result;
@@ -3350,7 +3023,7 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
+  handleDeploymentMutation(
     "pythonDeps:installVersion",
     async (
       _event,

@@ -16,8 +16,8 @@ import type {
   RuntimePaths,
 } from "../../shared/contracts";
 import { SourceSettingsManager } from "./source-settings-manager";
+import { activePythonEnvironmentRoot, isMaiBotPackageMode, readMaiBotDeployment } from "./maibot-deployment-state";
 
-const PYTHON_SOURCE_FILE = "python-dependency-source.json";
 const PYPI_SIMPLE_INDEX = "https://pypi.org/simple";
 const RESOURCE_PATHS_FILE = "resource-paths.json";
 const MANAGED_PACKAGES: ManagedPythonPackage[] = [
@@ -36,6 +36,7 @@ interface SimpleProjectFile {
   filename?: unknown;
   "upload-time"?: unknown;
   yanked?: unknown;
+  "requires-python"?: unknown;
 }
 
 interface SimpleProjectJson {
@@ -96,7 +97,7 @@ function isPrereleaseVersion(version: string): boolean {
 }
 
 function isYanked(value: unknown): boolean {
-  return value === true || (typeof value === "string" && value.length > 0);
+  return value === true || typeof value === "string";
 }
 
 function uploadTime(raw: unknown): { uploadedAt?: string; uploadedAtMs?: number } {
@@ -234,7 +235,7 @@ function buildVersionListFromMap(versions: Map<string, PythonPackageVersion>): P
 function parseSimpleJson(packageName: ManagedPythonPackageName, data: SimpleProjectJson): PythonPackageVersion[] {
   const versions = new Map<string, PythonPackageVersion>();
 
-  if (Array.isArray(data.versions)) {
+  if (packageName !== "maibot" && Array.isArray(data.versions)) {
     for (const version of data.versions) {
       if (typeof version === "string" && version.length > 0) {
         versions.set(version, versionEntry(version));
@@ -252,7 +253,10 @@ function parseSimpleJson(packageName: ManagedPythonPackageName, data: SimpleProj
       continue;
     }
 
-    versions.set(version, mergeUploadTime(versions.get(version), version, uploadTime(file["upload-time"])));
+    const current = versions.get(version);
+    const entry = mergeUploadTime(current, version, uploadTime(file["upload-time"]));
+    entry.requiresPython = [...(current?.requiresPython ?? []), typeof file["requires-python"] === "string" ? file["requires-python"] : ""];
+    versions.set(version, entry);
   }
 
   return buildVersionListFromMap(versions);
@@ -293,6 +297,7 @@ function parseSimpleHtml(packageName: ManagedPythonPackageName, html: string): P
   let match: RegExpExecArray | null;
 
   while ((match = anchorPattern.exec(html)) !== null) {
+    if (/\bdata-yanked(?:\s|=|$)/iu.test(match[1] ?? "")) continue;
     const href = attributeValue(match[1] ?? "", "href");
     const filename = href ? filenameFromUrl(href) : decodeHtml((match[2] ?? "").replace(/<[^>]*>/gu, "").trim());
     if (!filename) {
@@ -304,7 +309,8 @@ function parseSimpleHtml(packageName: ManagedPythonPackageName, html: string): P
       continue;
     }
 
-    versions.set(version, mergeUploadTime(versions.get(version), version));
+    const current = versions.get(version);
+    versions.set(version, { ...mergeUploadTime(current, version), requiresPython: [...(current?.requiresPython ?? []), attributeValue(match[1] ?? "", "data-requires-python") ?? ""] });
   }
 
   return buildVersionListFromMap(versions);
@@ -351,7 +357,7 @@ async function fetchText(url: string): Promise<FetchTextResult> {
   }
 }
 
-function parseSimpleResponse(
+export function parseSimpleResponse(
   packageName: ManagedPythonPackageName,
   response: FetchTextResult,
 ): PythonPackageVersion[] {
@@ -379,6 +385,7 @@ export class PythonDependencyManager {
   constructor(
     private readonly paths: RuntimePaths,
     private readonly sourceSettingsManager?: SourceSettingsManager,
+    private readonly fixedEnvironment = false,
   ) {}
 
   getPythonPackagesRoot(): string {
@@ -386,7 +393,45 @@ export class PythonDependencyManager {
   }
 
   getPythonEnvRoot(): string {
-    return this.paths.pythonEnvRoot;
+    return this.fixedEnvironment ? this.paths.pythonEnvRoot : activePythonEnvironmentRoot(this.paths);
+  }
+
+  async execute(args: string[], onOutput?: PythonOutputHandler, signal?: AbortSignal): Promise<string[]> {
+    return this.runPython(args, signal, onOutput ?? (() => {}));
+  }
+
+  async listMaiBotVersions(): Promise<PythonPackageVersionList> {
+    const bootstrap = new PythonDependencyManager({ ...this.paths, pythonEnvRoot: this.getBundledPythonRoot() }, this.sourceSettingsManager, true);
+    const failures: string[] = [];
+    for (const index of this.getPipIndexes()) {
+      try {
+        const versions = await fetchSimpleVersions("maibot", index.url);
+        // Python packaging is the authority for PEP 440 ordering (rc/dev/post/epochs).
+        const output = await bootstrap.execute(["-I", "-c", "import json,sys,platform; from packaging.version import Version,InvalidVersion; from packaging.specifiers import SpecifierSet,InvalidSpecifier; rows=json.loads(sys.argv[1]); valid=[]\nfor row in rows:\n try:\n  v=Version(row['version'])\n  if not any(SpecifierSet(s).contains(platform.python_version()) for s in row.get('requiresPython',[''])): continue\n  row['isPrerelease']=v.is_prerelease; row['isDev']=v.is_devrelease; valid.append(row)\n except (InvalidVersion,InvalidSpecifier): pass\nprint(json.dumps(sorted(valid,key=lambda r:Version(r['version']),reverse=True)))", JSON.stringify(versions)]);
+        const sorted = JSON.parse(output.join("\n")) as PythonPackageVersion[];
+        if (!sorted.length) throw new Error("没有可安装的 MaiBot 版本");
+        return { packageName: "maibot", sourceUrl: index.url, versions: sorted, output: failures.map((failure) => `版本查询源失败，已切换到下一个源：${failure}`), fetchedAt: Date.now() };
+      } catch (error) { failures.push(`${index.label}: ${toDetail(error)}`); }
+    }
+    throw new Error(`读取 MaiBot PyPI 版本失败：\n${failures.join("\n")}`);
+  }
+
+  async installMaiBot(version: string, pluginRequirements: string[], onOutput?: PythonOutputHandler, signal?: AbortSignal, constraints?: string, onPhase?: (phase: "core" | "dependencies") => void): Promise<PipInstallAttemptResult> {
+    if (!/^[0-9][a-zA-Z0-9.!+_-]*$/u.test(version)) throw new Error("无效的 MaiBot 包版本");
+    const args = ["-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location", "--no-compile", "--timeout", "120", "--retries", "3", "--progress-bar", "off"];
+    onPhase?.("core");
+    const core = await this.installRequirementsIntoEnvironment(
+      [...args, "--no-deps"], [`maibot==${version}`], signal, onOutput,
+    );
+    signal?.throwIfAborted();
+    onPhase?.("dependencies");
+    // Resolve the installed core's declared dependencies together with plugin
+    // requirements; the incomplete environment is never made active.
+    const dependencies = await this.installRequirementsIntoEnvironment(
+      args,
+      [`maibot==${version}`, ...(constraints ? ["--constraint", constraints] : []), ...pluginRequirements.flatMap((path) => ["-r", path])], signal, onOutput,
+    );
+    return { sourceUrl: core.sourceUrl, output: [...core.output, ...dependencies.output] };
   }
 
   getPythonPath(): string {
@@ -504,23 +549,16 @@ export class PythonDependencyManager {
   }
 
   getSourcePreset(): PythonPackageSourcePreset {
-    try {
-      const raw = JSON.parse(readFileSync(this.sourceConfigPath(), "utf8")) as { preset?: unknown };
-      return this.normalizeSourcePreset(raw.preset);
-    } catch {
-      return this.getConfiguredPipIndexes()[0]?.preset ?? "tuna";
-    }
+    // The ordered list is the single authority; ignore legacy standalone presets.
+    return this.getConfiguredPipIndexes()[0].preset;
   }
 
   async saveSourcePreset(preset: PythonPackageSourcePreset): Promise<PythonEnvironmentState> {
     const nextPreset = this.normalizeSourcePreset(preset);
-    const path = this.sourceConfigPath();
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(
-      path,
-      `${JSON.stringify({ version: 1, preset: nextPreset, updatedAt: Date.now() }, null, 2)}\n`,
-      "utf8",
-    );
+    const manager = this.sourceSettingsManager ?? new SourceSettingsManager(this.paths);
+    const sources = manager.getPythonSources();
+    const selected = sources.find((source) => source.id === nextPreset)!;
+    await manager.saveSettings({ python: [selected, ...sources.filter((source) => source.id !== nextPreset)] });
     return this.getState();
   }
 
@@ -578,6 +616,7 @@ export class PythonDependencyManager {
   }
 
   async installVersion(request: PythonPackageInstallRequest): Promise<PythonPackageInstallResult> {
+    if (isMaiBotPackageMode(this.paths)) throw new Error("PyPI 实例的依赖由 MaiBot 包统一管理，请通过 MaiBot 版本更新或修复环境");
     assertManagedPackage(request.packageName);
     if (!request.version.trim()) {
       throw new Error("Please select a version to install");
@@ -671,6 +710,12 @@ export class PythonDependencyManager {
     signal?: AbortSignal,
     onOutput?: PythonOutputHandler,
   ): Promise<StartupDependencyUpgradeResult> {
+    if (!this.fixedEnvironment && isMaiBotPackageMode(this.paths)) {
+      const deployment = readMaiBotDeployment(this.paths.maibotRoot);
+      if (!deployment) throw new Error("请先安装 MaiBot PyPI 环境");
+      const output = await this.runPython(["-I", "-c", "from importlib.metadata import version; import sys; actual=version('maibot'); assert actual == sys.argv[1], f'MaiBot version mismatch: {actual}'; import src.cli.tool; print(actual)", deployment.packageVersion], signal, onOutput);
+      return { sourceFile: "MaiBot package metadata", sourceUrl: deployment.sourceUrl, targetDir: this.getPythonPackagesRoot(), output, installedAt: Date.now() };
+    }
     await this.ensurePythonEnvironment(onOutput);
     const maibotRoot = this.paths.maibotRoot;
     const requirementsPath = join(maibotRoot, "requirements.txt");
@@ -801,6 +846,7 @@ export class PythonDependencyManager {
   }
 
   private async cleanupLegacyPythonDependencyRoot(onOutput?: PythonOutputHandler): Promise<void> {
+    if (this.fixedEnvironment) return;
     for (const root of this.getLegacyPythonDependencyRoots()) {
       if (!existsSync(root)) {
         continue;
@@ -1145,10 +1191,6 @@ print(json.dumps(corrupt, ensure_ascii=False))
     return next ? `retrying with ${next.label}` : "no fallback index remains";
   }
 
-  private sourceConfigPath(): string {
-    return join(this.paths.userDataRoot, PYTHON_SOURCE_FILE);
-  }
-
   private normalizeSourcePreset(value: unknown): PythonPackageSourcePreset {
     const text = typeof value === "string" ? value : "";
     const indexes = this.getConfiguredPipIndexes();
@@ -1162,7 +1204,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
   }
 
   private getConfiguredPipIndexes(): Array<PythonPackageSourceOption & { trustedHost?: string }> {
-    const indexes = this.sourceSettingsManager?.getPythonSources().map(pythonSourceToPipIndex) ?? [];
+    const indexes = (this.sourceSettingsManager ?? new SourceSettingsManager(this.paths)).getPythonSources().map(pythonSourceToPipIndex);
     if (indexes.length === 0) {
       return [{ preset: "pypi", label: "官方 PyPI", url: "https://pypi.org/simple" }];
     }
@@ -1181,6 +1223,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
     onOutput?: PythonOutputHandler,
     extraEnv?: Record<string, string>,
   ): Promise<string[]> {
+    if (args.includes("-I")) args = ["-X", "utf8", ...args];
     if (onOutput) {
       return this.runPythonStreaming(args, signal, onOutput, extraEnv);
     }
@@ -1217,19 +1260,26 @@ print(json.dumps(corrupt, ensure_ascii=False))
     extraEnv?: Record<string, string>,
   ): Promise<string[]> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error("Python dependency install was cancelled")); return; }
       const output: string[] = [];
       const child = spawn(this.getPythonPath(), args, {
         cwd: this.paths.installRoot,
         windowsHide: true,
-        signal,
         env: this.buildPythonProcessEnv(extraEnv),
       });
+      const stopChild = (): void => {
+        if (process.platform === "win32" && child.pid) {
+          execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
+        } else child.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", stopChild, { once: true });
       this.startupUpgradeChild = child;
       let settled = false;
+      let processError: Error | undefined;
       let stdoutBuffer = "";
       let stderrBuffer = "";
       const timeout = setTimeout(() => {
-        child.kill();
+        stopChild();
         finish(new Error(`Python command timed out after ${Math.round(PIP_TIMEOUT_MS / 1000)}s`));
       }, PIP_TIMEOUT_MS);
 
@@ -1271,6 +1321,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
           return;
         }
         settled = true;
+        signal?.removeEventListener("abort", stopChild);
         if (this.startupUpgradeChild === child) {
           this.startupUpgradeChild = undefined;
         }
@@ -1285,8 +1336,13 @@ print(json.dumps(corrupt, ensure_ascii=False))
 
       child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
       child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
-      child.on("error", (error) => finish(error));
+      child.on("error", (error) => {
+        processError = error;
+        if (!child.pid) finish(error);
+      });
       child.on("close", (code, signalName) => {
+        if (signal?.aborted) { finish(new Error("Python dependency install was cancelled")); return; }
+        if (processError) { finish(processError); return; }
         if (code === 0) {
           finish();
           return;

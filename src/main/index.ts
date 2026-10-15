@@ -29,13 +29,13 @@ import {
   type LauncherUpdateCleanupResult,
 } from "./services/launcher-update-cleanup";
 import { cleanupMaiBotPrivacyLeakOnce } from "./services/maibot-privacy-cleanup";
+import { MaiBotDeploymentManager } from "./services/maibot-deployment-manager";
 import { LogStore } from "./services/log-store";
 import { LauncherUiSettingsManager } from "./services/launcher-ui-settings-manager";
 import { ModuleUpdater } from "./services/module-updater";
 import { NetworkProxyManager } from "./services/network-proxy-manager";
 import { configureRuntimePaths } from "./services/paths";
 import { PythonDependencyManager } from "./services/python-dependency-manager";
-import { RemoteSourceManager } from "./services/remote-source-manager";
 import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
 import { SourceSettingsManager } from "./services/source-settings-manager";
@@ -69,16 +69,14 @@ const initManager = new InitManager(runtimePaths);
 const networkProxyManager = new NetworkProxyManager(runtimePaths);
 const launcherUiSettingsManager = new LauncherUiSettingsManager(runtimePaths);
 const sourceSettingsManager = new SourceSettingsManager(runtimePaths);
-const moduleUpdater = new ModuleUpdater(
-  runtimePaths,
-  initManager,
-  sourceSettingsManager,
-);
-const remoteSourceManager = new RemoteSourceManager({ sourceSettingsManager });
+const moduleUpdater = new ModuleUpdater(runtimePaths);
 const pythonDependencyManager = new PythonDependencyManager(
   runtimePaths,
   sourceSettingsManager,
 );
+const maiBotDeploymentManager = new MaiBotDeploymentManager(runtimePaths, sourceSettingsManager);
+initManager.setDeploymentManager(maiBotDeploymentManager);
+moduleUpdater.setDeploymentManager(maiBotDeploymentManager);
 const ptySessionManager = new PtySessionManager();
 const QQ_COMPONENT_UPGRADE_STATE_FILE = "qq-component-upgrade-state.json";
 const serviceManager = new ServiceManager(
@@ -447,6 +445,7 @@ function requestQuit(): void {
   );
   void (async () => {
     try {
+      maiBotDeploymentManager.cancel();
       await resourceLocationManager.finishBeforeQuit();
       await serviceManager.shutdownAll();
     } catch (error: unknown) {
@@ -567,7 +566,6 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       paths: runtimePaths,
       initManager,
       moduleUpdater,
-      remoteSourceManager,
       networkProxyManager,
       launcherUiSettingsManager,
       pythonDependencyManager,

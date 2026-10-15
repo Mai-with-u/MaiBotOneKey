@@ -5,25 +5,7 @@ import type { ManagedSourceEntry, RuntimePaths, SourceSettings, SourceSettingsUp
 
 const SOURCE_SETTINGS_FILE = "source-settings.json";
 
-const OFFICIAL_MAIBOT_REMOTE_URL = "https://github.com/Mai-with-u/MaiBot.git";
-
 const DEFAULT_SOURCE_SETTINGS: SourceSettings = {
-  github: [
-    { id: "gitproxy-mrhjx-cn", label: "gitproxy.mrhjx.cn", url: "https://gitproxy.mrhjx.cn/", builtIn: true },
-    { id: "ghproxy-vip", label: "ghproxy.vip", url: "https://ghproxy.vip/", builtIn: true },
-    { id: "official", label: "官方 GitHub", url: "https://github.com/", builtIn: true },
-    { id: "gh-proxy-com", label: "gh-proxy.com", url: "https://gh-proxy.com/", builtIn: true },
-    { id: "v6-gh-proxy-org", label: "v6.gh-proxy.org", url: "https://v6.gh-proxy.org/", builtIn: true },
-    { id: "cdn-gh-proxy-com", label: "cdn.gh-proxy.com", url: "https://cdn.gh-proxy.com/", builtIn: true },
-  ],
-  launcher: [
-    {
-      id: "github-releases",
-      label: "官方 GitHub Releases",
-      url: "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest",
-      builtIn: true,
-    },
-  ],
   python: [
     {
       id: "tuna",
@@ -42,10 +24,6 @@ const DEFAULT_SOURCE_SETTINGS: SourceSettings = {
     { id: "pypi", label: "官方 PyPI", url: "https://pypi.org/simple", builtIn: true },
   ],
 };
-
-export function getDefaultGitSources(): ManagedSourceEntry[] {
-  return DEFAULT_SOURCE_SETTINGS.github.map((source) => ({ ...source }));
-}
 
 export class SourceSettingsManager {
   private readonly settingsPath: string;
@@ -77,10 +55,6 @@ export class SourceSettingsManager {
     return this.saveSettings(this.getDefaultSettings());
   }
 
-  getGitSources(): ManagedSourceEntry[] {
-    return this.getSettings().github;
-  }
-
   getPythonSources(): ManagedSourceEntry[] {
     return this.getSettings().python;
   }
@@ -99,8 +73,6 @@ export class SourceSettingsManager {
 
   private normalizeSettings(update?: SourceSettingsUpdate): SourceSettings {
     return {
-      github: normalizeEntries(update?.github, DEFAULT_SOURCE_SETTINGS.github),
-      launcher: normalizeEntries(update?.launcher, DEFAULT_SOURCE_SETTINGS.launcher),
       python: normalizeEntries(update?.python, DEFAULT_SOURCE_SETTINGS.python),
     };
   }
@@ -108,8 +80,6 @@ export class SourceSettingsManager {
 
 function cloneSettings(settings: SourceSettings): SourceSettings {
   return {
-    github: settings.github.map((entry) => ({ ...entry })),
-    launcher: settings.launcher.map((entry) => ({ ...entry })),
     python: settings.python.map((entry) => ({ ...entry })),
   };
 }
@@ -122,7 +92,7 @@ function normalizeEntries(rawEntries: ManagedSourceEntry[] | undefined, defaults
   for (const entry of source) {
     const id = sanitizeId(entry.id || entry.label || entry.url);
     const label = entry.label?.trim();
-    const url = normalizeEntryUrl(entry.url?.trim() ?? "", defaults);
+    const url = entry.url?.trim() ?? "";
     if (!id || !label || !url || seen.has(id)) {
       continue;
     }
@@ -137,23 +107,6 @@ function normalizeEntries(rawEntries: ManagedSourceEntry[] | undefined, defaults
   }
 
   return entries.length > 0 ? entries : defaults;
-}
-
-function normalizeEntryUrl(url: string, defaults: ManagedSourceEntry[]): string {
-  if (!url) {
-    return "";
-  }
-  if (defaults === DEFAULT_SOURCE_SETTINGS.github) {
-    const lower = url.toLowerCase();
-    const officialIndex = lower.indexOf(OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase());
-    if (officialIndex > 0) {
-      return url.slice(0, officialIndex);
-    }
-    if (lower === OFFICIAL_MAIBOT_REMOTE_URL.toLowerCase()) {
-      return "https://github.com/";
-    }
-  }
-  return url;
 }
 
 function sanitizeId(value: string): string {

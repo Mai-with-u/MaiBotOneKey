@@ -411,6 +411,8 @@
   .retro-titlebar-actions
   [data-variant][aria-label="设置"].bg-primary:not(:disabled):hover {
   background-color: var(--mil-on);
+  /* Keep the selected fill inside the inset keycap outline, as for unselected keys. */
+  background-clip: padding-box;
   border-color: transparent;
   box-shadow: var(--mil-pressed);
   color: var(--mil-on-ink);
@@ -454,6 +456,11 @@
   height: 24px;
   padding: 0 0 3px;
   width: 30px;
+}
+
+/* Two-line update tabs keep symmetric padding instead of the compact keycap offset. */
+:root[data-appearance-mode="millennium"] [data-slot="update-tab"][aria-pressed] {
+  padding-block: 0.75rem;
 }
 
 /* ---------- 凸起的塑料模块 ---------- */

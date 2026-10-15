@@ -18,6 +18,9 @@ test("packaging excludes the generated SnowLuma account entry and runtime data",
   for (const file of ["SnowLuma/.maibot-target-runtime.mjs", "SnowLuma/config/runtime.json", "SnowLuma/data/account.db", "SnowLuma/logs/runtime.log", "napcat/index.js"]) {
     expect(filter(join(root, file), stat)).toBe(false);
   }
+  for (const file of ["MaiBot/bot.py", "MaiBot/src/runtime.py", "MaiBot/.onekey-deployment.json", "MaiBot/.onekey/environments/test/python.exe"]) {
+    expect(filter(join(root, file), stat)).toBe(false);
+  }
 });
 test("installer and uninstaller share the same sidebar resource", () => {
   expect(pkg.build.nsis.uninstallerSidebar).toBe(pkg.build.nsis.installerSidebar);

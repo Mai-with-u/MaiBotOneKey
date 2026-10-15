@@ -4,7 +4,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { isMaiBotPackageMode } from "./maibot-deployment-state";
 import type {
   PtyDataEvent,
   PtyErrorEvent,
@@ -510,8 +511,8 @@ class ServiceStartupSettingsStore {
   }
 
   private read(): ServiceStartupSettings {
-    // The explicit dev:dev entry starts checked even if a previous production-style run saved false.
-    if (isLocalDashboardDevLaunch()) return defaultServiceStartupSettings();
+    // Development entry points explicitly choose the initial Dashboard source.
+    if (isLocalDashboardDevLaunch() || process.env.MAIBOT_ONEKEY_DEV_LOCAL_DASHBOARD === "0") return defaultServiceStartupSettings();
     try {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredServiceStartupSettingsFile;
       return {
@@ -610,6 +611,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async stopAll(): Promise<ServiceDescriptor[]> {
+    this.initManager.cancelMaiBotInstall();
     for (const serviceId of ["maibot", "napcat"] as ServiceId[]) {
       await this.stop(serviceId);
     }
@@ -702,7 +704,22 @@ export class ServiceManager extends EventEmitter {
 
     let resolved: ResolvedServiceCommand;
     try {
+      if (serviceId === "maibot" && isMaiBotPackageMode(this.paths)) {
+        this.setState(serviceId, { ...state, status: "starting", desired: true, detail: "正在准备 MaiBot PyPI 环境" });
+        await this.initManager.ensureMaiBotPackage(
+          (line) => this.logs.append("maibot", "system", `MaiBot preparation: ${line}`),
+          (progress) => this.setState(serviceId, { ...this.getState(serviceId), detail: progress.label }),
+        );
+        await this.initManager.ensureServiceReady("maibot");
+        await this.initManager.assertAgreementsConfirmed();
+        if (!this.getState(serviceId).desired) return this.toDescriptor(definition, this.getState(serviceId));
+        this.definitions = this.createDefinitions();
+        definition = this.getDefinition(serviceId);
+      }
       resolved = await this.resolveStartCommand(definition);
+      if (serviceId === "maibot" && isMaiBotPackageMode(this.paths) && resolved.customized && /\bbot\.py\b/iu.test(resolved.commandLine)) {
+        throw new Error("当前自定义命令仍使用 bot.py，请恢复 MaiBot 默认启动命令后启动 PyPI 实例");
+      }
       this.assertRequiredPaths(definition, resolved.requiredPaths);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -747,6 +764,11 @@ export class ServiceManager extends EventEmitter {
       const usePythonEnvironment = definition.id === "maibot" && Boolean(this.pythonDependencyManager);
       const serviceEnv = createServiceSpecificEnv(definition.id, this.startupSettingsStore.get());
       const mergedEnv: Record<string, string> = { ...agreementEnv, ...serviceEnv };
+      if (serviceId === "maibot" && this.pythonDependencyManager && isMaiBotPackageMode(this.paths)) {
+        const root = this.pythonDependencyManager.getPythonEnvRoot();
+        Object.assign(mergedEnv, { PYTHONNOUSERSITE: "1", PYTHONPATH: "", PYTHONHOME: "", PYTHONSAFEPATH: "1",
+          PATH: [root, join(root, "Scripts"), join(root, "bin"), process.env.PATH ?? process.env.Path ?? ""].join(delimiter) });
+      }
       if (serviceId === "napcat" && this.initManager.getQqBackendSync() === "snowluma") {
         Object.assign(mergedEnv, await this.snowLumaWebuiAuth.prepareEnvironment());
       }
@@ -876,6 +898,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async stop(serviceId: ServiceId): Promise<ServiceDescriptor> {
+    if (serviceId === "maibot") this.initManager.cancelMaiBotInstall();
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
     if (!state.ptySessionId && state.status === "starting") {
@@ -937,6 +960,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   async kill(serviceId: ServiceId): Promise<ServiceDescriptor> {
+    if (serviceId === "maibot") this.initManager.cancelMaiBotInstall();
     const definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
     if (state.terminalMode === "external" && state.pid) {
@@ -1172,11 +1196,13 @@ export class ServiceManager extends EventEmitter {
           ? `${maibotWebUi.fallbackReason}；当前使用 ${maibotWebUi.url}`
           : undefined,
         cwd: maibotRoot,
-        defaultRequiredPaths: [python, maibotRoot, join(maibotRoot, "bot.py")],
+        defaultRequiredPaths: isMaiBotPackageMode(this.paths) ? [python, maibotRoot] : [python, maibotRoot, join(maibotRoot, "bot.py")],
         conflictPorts: [maibotWebUi.port],
         readyPorts: [maibotWebUi.port],
-        buildDefaultCommand: async () => [python, "bot.py"],
-        buildDefaultCommandLine: async () => `${quoteCommandPart(python)} bot.py`,
+        buildDefaultCommand: async () => isMaiBotPackageMode(this.paths)
+          ? [python, "-I", "-X", "utf8", "-m", "src.cli.tool", "run", "--directory", maibotRoot] : [python, "bot.py"],
+        buildDefaultCommandLine: async () => isMaiBotPackageMode(this.paths)
+          ? `${quoteCommandPart(python)} -I -X utf8 -m src.cli.tool run --directory ${quoteCommandPart(maibotRoot)}` : `${quoteCommandPart(python)} bot.py`,
       },
       {
         id: "napcat",

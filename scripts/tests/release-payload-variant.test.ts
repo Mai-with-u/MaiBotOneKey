@@ -12,7 +12,7 @@ test("only standard payload checks require NapCat in an empty build workspace", 
       const output = await new Response(child.stdout).text();
       expect(await child.exited).toBe(1);
       expect(output).toContain("[missing] SnowLuma module");
-      expect(output).toContain("[missing] MaiBot module");
+      expect(output).toContain("[missing] MaiBot initial package manifest");
       if (flags.length) expect(output).not.toContain("[missing] NapCat");
       else expect(output).toContain("[missing] NapCat module");
     }

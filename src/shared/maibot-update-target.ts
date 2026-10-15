@@ -11,13 +11,11 @@ export function publishedStableReleaseTags(
 
 export function resolveMaiBotUpdateTarget(
   channel: "stable" | "other",
-  otherMode: "tag" | "dev",
   stableReleaseTag: string | undefined,
   historyTag: string | undefined,
 ): ModuleUpdateTarget | undefined {
   if (channel === "stable") {
-    return stableReleaseTag ? { type: "tag", name: stableReleaseTag } : undefined;
+    return stableReleaseTag ? { type: "package", name: stableReleaseTag.replace(/^v/iu, "") } : undefined;
   }
-  if (otherMode === "dev") return { type: "branch", name: "dev" };
-  return historyTag ? { type: "tag", name: historyTag } : undefined;
+  return historyTag ? { type: "package", name: historyTag.replace(/^v/iu, "") } : undefined;
 }

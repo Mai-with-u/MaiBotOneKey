@@ -1,16 +1,5 @@
 export type ServiceId = "maibot" | "napcat";
 export type QqBackend = "napcat" | "snowluma";
-export type GithubSourcePreset =
-  | "auto"
-  | "github"
-  | "gh-proxy-com"
-  | "v6-gh-proxy-org"
-  | "cdn-gh-proxy-com"
-  | "gitproxy-mrhjx-cn"
-  | "ghproxy-net"
-  | "ghproxy-vip"
-  | (string & {});
-
 export type QqProtocol = QqBackend | "official";
 
 export type ServiceStatus =
@@ -206,6 +195,8 @@ export interface NetworkProxySettings {
 }
 
 export interface RuntimePaths {
+  /** Explicit local development selection; packaged applications retain instance compatibility. */
+  maibotDevMode?: "pypi" | "source";
   installRoot: string;
   userDataRoot: string;
   defaultResourceRoot: string;
@@ -322,8 +313,10 @@ export type LocalChatEvent = LocalChatMessageEvent | LocalChatStateEvent;
 
 export interface ModuleRuntimeVersions {
   maibotLocal?: string;
-  maibotLocalSource?: "pyproject" | "unknown";
-  maibotSelectedChannel?: "stable" | "dev" | "custom";
+  maibotLocalSource?: "pyproject" | "pypi" | "unknown";
+  maibotDeploymentMode?: "source" | "pypi";
+  maibotCanRollback?: boolean;
+  maibotSelectedChannel?: "stable" | "custom";
   maibotSelectedTarget?: ModuleUpdateTarget;
   maibotSelectedAt?: number;
   maibotLatestStableTag?: string;
@@ -682,34 +675,27 @@ export interface QqAccountSetupRequest {
 export type MessagePlatformLoginInfo = Record<QqBackend, { qqAccount?: string; webuiToken?: string }>;
 
 export interface ModuleUpdateResult {
-  moduleId: "maibot" | "napcat-adapter";
+  moduleId: "maibot";
   moduleName: string;
   cwd: string;
-  gitPath: string;
   remote?: string;
-  branch?: string;
-  upstream?: string;
   before?: string;
   after?: string;
   changed: boolean;
   output: string[];
   updatedAt: number;
-  /** 实际拉取来源为远端仓库。 */
+  /** 实际安装来源为 Python 包索引。 */
   source: "remote";
   /** 更新失败或部分完成时面向用户展示的提示文本。 */
   warning?: string;
-  /** 远端更新失败的原始错误信息。 */
-  remoteError?: string;
-  /** 仅 moduleId="maibot" 时携带；同次更新里同步的子插件结果（如 napcat-adapter）。 */
-  plugins?: ModuleUpdateResult[];
 }
 
 export type MaiBotModuleUpdatePhase =
   | "preparing"
-  | "connecting"
-  | "fetching"
-  | "checking-out"
-  | "syncing"
+  | "installing"
+  | "installing-dependencies"
+  | "validating"
+  | "switching"
   | "completed"
   | "failed";
 
@@ -728,44 +714,12 @@ export interface ModuleTagOption {
   isPrerelease: boolean;
 }
 
-export interface ModuleBranchOption {
-  name: string;
-}
-
 export interface ModuleUpdateTarget {
-  type: "tag" | "branch";
+  type: "package";
   name: string;
 }
 
-export type ModuleSourcePreset =
-  | "auto"
-  | "ghproxy"
-  | "gh-proxy-com"
-  | "v6-gh-proxy-org"
-  | "cdn-gh-proxy-com"
-  | "gitproxy-mrhjx-cn"
-  | "ghproxy-net"
-  | "ghproxy-vip"
-  | "official"
-  | (string & {});
-
-export interface ModuleSourceOption {
-  preset: ModuleSourcePreset;
-  label: string;
-  maibotUrl: string;
-}
-
-export interface ModuleSourceConfig {
-  preset: ModuleSourcePreset;
-  maibotUrl: string;
-  options: ModuleSourceOption[];
-}
-
-export interface ModuleSourceUpdate {
-  preset: ModuleSourcePreset;
-}
-
-export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message";
+export type ManagedPythonPackageName = "maibot-dashboard" | "maim-message" | "maibot";
 
 export interface ManagedPythonPackage {
   name: ManagedPythonPackageName;
@@ -780,7 +734,7 @@ export interface PythonPackageSourceOption {
   url: string;
 }
 
-export type SourceSettingsGroup = "github" | "launcher" | "python";
+export type SourceSettingsGroup = "python";
 
 export interface ManagedSourceEntry {
   id: string;
@@ -791,14 +745,10 @@ export interface ManagedSourceEntry {
 }
 
 export interface SourceSettings {
-  github: ManagedSourceEntry[];
-  launcher: ManagedSourceEntry[];
   python: ManagedSourceEntry[];
 }
 
 export interface SourceSettingsUpdate {
-  github?: ManagedSourceEntry[];
-  launcher?: ManagedSourceEntry[];
   python?: ManagedSourceEntry[];
 }
 
@@ -808,6 +758,7 @@ export interface PythonPackageVersion {
   isDev: boolean;
   uploadedAt?: string;
   uploadedAtMs?: number;
+  requiresPython?: string[];
 }
 
 export interface PythonPackageVersionList {
@@ -982,11 +933,9 @@ export interface DesktopBridge {
     refreshVersions: () => Promise<DesktopSnapshot>;
     checkMaiBotUpdate: (target: ModuleUpdateTarget) => Promise<MaiBotUpdateInfo>;
     updateMaiBot: (target?: ModuleUpdateTarget) => Promise<ModuleUpdateResult>;
+    rollbackMaiBot: () => Promise<void>;
     onMaiBotUpdateProgress: (callback: (progress: MaiBotModuleUpdateProgress) => void) => () => void;
-    listMaiBotBranches: () => Promise<ModuleBranchOption[]>;
     listMaiBotTags: () => Promise<ModuleTagOption[]>;
-    getSourceConfig: () => Promise<ModuleSourceConfig>;
-    saveSourceConfig: (config: ModuleSourceUpdate) => Promise<ModuleSourceConfig>;
   };
   data: {
     onMaiBotBackupProgress: (callback: (progress: MaiBotBackupProgress) => void) => () => void;

@@ -1,12 +1,10 @@
-import { useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
   CheckCircle2,
   FileCog,
   FolderInput,
-  FolderOpen,
   Loader2,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +17,6 @@ import {
 import type {
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
-  RuntimeResourcePathChangeResult,
 } from "../../../../shared/contracts";
 
 function formatBytes(bytes: number): string {
@@ -66,17 +63,11 @@ function DetailRow({
   );
 }
 
-export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
-  const [lastMaiBotPathChange, setLastMaiBotPathChange] =
-    useState<RuntimeResourcePathChangeResult | null>(null);
+export function MaiBotConfigImportPanel({ disabled = false }: { disabled?: boolean }): React.JSX.Element {
   const [importingConfig, setImportingConfig] = useState<MaiBotConfigFileName | null>(null);
   const [lastConfigImports, setLastConfigImports] = useState<
     Partial<Record<MaiBotConfigFileName, MaiBotConfigImportResult>>
   >({});
-
-  const onPathChanged = useCallback(async (result: RuntimeResourcePathChangeResult) => { setLastMaiBotPathChange(result); }, []);
-  const resourceWorkflow = useResourcePathWorkflow(onPathChanged);
-  const selectingMaiBotPath = resourceWorkflow.busyKey !== null;
 
   const handleImportConfig = async (fileName: MaiBotConfigFileName): Promise<void> => {
     if (!window.maibotDesktop?.data) {
@@ -102,47 +93,6 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
   };
 
   return (
-    <div className={embedded ? "max-h-[70vh] overflow-y-auto" : "h-full overflow-y-auto bg-background"}>
-      <div className={embedded ? "flex flex-col gap-4 pr-2" : "mx-auto flex max-w-3xl flex-col gap-4 p-6"}>
-        <div className={embedded ? "hidden" : undefined}>
-          <h2 className="text-base font-semibold">快捷操作</h2>
-        </div>
-
-        {resourceWorkflow.dialogs}
-        <Card>
-          <CardHeader>
-            <div className="flex items-start gap-3">
-              <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">
-                <FolderOpen className="size-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <CardTitle>设置 MaiBot 路径</CardTitle>
-                <CardDescription>
-                  选择已有 MaiBot Core 目录作为当前实例路径。切换前请先停止所有服务，避免运行中的文件被占用。
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button disabled={selectingMaiBotPath} onClick={() => void resourceWorkflow.prepare("maibot", "existing")} size="sm">
-                {selectingMaiBotPath ? <Loader2 className="animate-spin" /> : <FolderOpen />}
-                选择 MaiBot 目录
-              </Button>
-              <span className="text-[11px] text-muted-foreground">
-                仅切换路径，不复制现有 MaiBot 数据
-              </span>
-            </div>
-            {lastMaiBotPathChange ? (
-              <ResultDetails title="最近一次路径切换">
-                <DetailRow label="原路径：">{lastMaiBotPathChange.previousPath}</DetailRow>
-                <DetailRow label="新路径：">{lastMaiBotPathChange.path}</DetailRow>
-                <DetailRow label="时间：">{formatTime(lastMaiBotPathChange.changedAt)}</DetailRow>
-              </ResultDetails>
-            ) : null}
-          </CardContent>
-        </Card>
-
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
@@ -163,7 +113,7 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <Button
-                disabled={importingConfig !== null}
+                disabled={disabled || importingConfig !== null}
                 onClick={() => void handleImportConfig("bot_config.toml")}
                 size="sm"
               >
@@ -171,7 +121,7 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
                 导入 bot_config.toml
               </Button>
               <Button
-                disabled={importingConfig !== null}
+                disabled={disabled || importingConfig !== null}
                 onClick={() => void handleImportConfig("model_config.toml")}
                 size="sm"
                 variant="secondary"
@@ -200,7 +150,5 @@ export function QuickActionsPanel({ embedded = false }: { embedded?: boolean } =
             })}
           </CardContent>
         </Card>
-      </div>
-    </div>
   );
 }

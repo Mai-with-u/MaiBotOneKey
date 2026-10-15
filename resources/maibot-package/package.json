@@ -1,0 +1,9 @@
+{
+  "package": "maibot",
+  "agreements_version": "1.3.8",
+  "source": "https://pypi.org/project/maibot/1.3.8/",
+  "agreements_sha256": {
+    "EULA.md": "67e2ed8fd0f6e424f231757f2da2e4963c7e11cacf7ce419d40abf2a33b6ed37",
+    "PRIVACY.md": "3b569d780df6a2517c95d9b9ad15e4f8f9da66d7638380fbcd8aeca22fd8bbbe"
+  }
+}

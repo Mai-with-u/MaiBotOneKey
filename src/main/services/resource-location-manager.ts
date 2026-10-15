@@ -2,13 +2,14 @@ import { RESOURCE_PATH_CANCELLED_MESSAGE } from "../../shared/resource-path-oper
 import { EventEmitter } from "node:events";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, rename, rm, rmdir, stat, statfs, unlink, utimes } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, readlink, rename, rm, rmdir, stat, statfs, symlink, unlink, utimes } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { RuntimePaths, RuntimeResourcePathChangeResult, RuntimeResourcePathConfig, RuntimeResourcePathKey, ResourcePathMode, ResourcePathPlan, ResourcePathProgress } from "../../shared/contracts";
 import { applyRuntimeResourcePaths, LEGACY_RESOURCE_LOCATION_FILE, RESOURCE_PATHS_FILE } from "./runtime-resource-paths";
 import { RuntimeOperationLock } from "./runtime-operation-lock";
+import { readMaiBotDeployment } from "./maibot-deployment-state";
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
@@ -19,7 +20,7 @@ function canonicalPath(path: string): string {
 function checkCancelled(signal: AbortSignal): void {
   if (signal.aborted) throw new Error(RESOURCE_PATH_CANCELLED_MESSAGE);
 }
-interface CopyEntry { relative: string; directory: boolean; size: number; mtime: number; atime: Date; mode: number; }
+interface CopyEntry { relative: string; directory: boolean; size: number; mtime: number; atime: Date; mode: number; linkTarget?: string; }
 interface PreparedPath { plan: ResourcePathPlan; entries: CopyEntry[]; }
 
 type RuntimeResourcePathMap = Record<RuntimeResourcePathKey, string>;
@@ -122,6 +123,9 @@ export class ResourceLocationManager extends EventEmitter {
   }
 
   withRuntimeActivity<T>(action: () => Promise<T>): Promise<T> { return this.operationLock.shared(action); }
+  withDeploymentOperation<T>(action: () => Promise<T>): Promise<T> {
+    return this.operationLock.exclusive("更新 MaiBot 环境", () => {}, action);
+  }
   async finishBeforeQuit(): Promise<void> {
     if (this.progress) this.cancelOperation(this.progress.operationId);
     await this.operationLock.waitForIdle();
@@ -230,7 +234,12 @@ export class ResourceLocationManager extends EventEmitter {
     const file = async (name: string): Promise<boolean> => (await stat(join(path, name)).catch(() => null))?.isFile() === true;
     const dir = async (name: string): Promise<boolean> => (await stat(join(path, name)).catch(() => null))?.isDirectory() === true;
     let valid: boolean, hint: string;
-    if (key === "maibot") { valid = await file("bot.py") && await dir("src"); hint = "bot.py 和 src"; }
+    if (key === "maibot") {
+      const deployment = readMaiBotDeployment(path);
+      valid = deployment ? await file("config/bot_config.toml") && await file("config/model_config.toml")
+        : await file("bot.py") && await dir("src");
+      hint = "MaiBot 部署记录与 config 配置，或源码 bot.py 和 src";
+    }
     else if (key === "snowluma") { valid = await file("index.mjs") && await dir("native") && (process.platform !== "win32" || await file("node.exe")); hint = "index.mjs、native 和配套运行时"; }
     else { valid = (await file("index.js") && (process.platform !== "win32" || await file("node.exe"))) || (await file("NapCatWinBootMain.exe") && await dir("napcat")) || (process.platform === "darwin" && await file("napcat-macos-launch.sh") && await dir("napcat")); hint = "NapCat 的入口和配套运行时"; }
     if (!valid) throw new Error(`这不是有效的 ${labelForKey(key).replace("路径", "")} 目录：缺少 ${hint}。请选择直接包含这些文件的目录，而不是上级目录。`);
@@ -254,7 +263,19 @@ export class ResourceLocationManager extends EventEmitter {
         if (!prefix && (name === RESOURCE_LOCK_FILE || (key === "snowluma" && name === ".maibot-target-runtime.mjs"))) continue;
         const rel = prefix ? join(prefix, name) : name;
         const info = await lstat(join(source, rel));
-        if (info.isSymbolicLink()) throw new Error(`复制目录含符号链接或目录联接，无法保证独立副本: ${rel}。请移除链接或使用已有目录。`);
+        if (info.isSymbolicLink()) {
+          // Portable Unix Python creates these two relative aliases. Recreate only
+          // aliases to a real interpreter in the same managed environment.
+          const match = key === "maibot" && rel.replace(/\\/gu, "/").match(/^\.onekey\/environments\/([a-zA-Z0-9-]+)\/bin\/python(?:3)?$/u);
+          const target = await readlink(join(source, rel));
+          const interpreter = /^(?:\.\/)?python\d+\.\d+$/u.test(target) && (await lstat(join(dir, target)).catch(() => null))?.isFile();
+          if (match && interpreter && existsSync(join(source, ".onekey", "environments", match[1], "maibot-python-env.json"))) {
+            entries.push({ relative: rel, directory: false, size: 0, mtime: info.mtimeMs, atime: info.atime, mode: info.mode, linkTarget: target });
+            fileCount += 1;
+            continue;
+          }
+          throw new Error(`复制目录含符号链接或目录联接，无法保证独立副本: ${rel}。请移除链接或使用已有目录。`);
+        }
         if (!info.isDirectory() && !info.isFile()) throw new Error(`无法复制特殊文件: ${rel}`);
         entries.push({ relative: rel, directory: info.isDirectory(), size: info.isFile() ? info.size : 0, mtime: info.mtimeMs, atime: info.atime, mode: info.mode });
         if (info.isFile()) { fileCount += 1; totalBytes += info.size; }
@@ -271,9 +292,10 @@ export class ResourceLocationManager extends EventEmitter {
     } catch (error) { throw new Error(`无法检查目标磁盘剩余空间，请检查目录权限：${String(error)}`); }
   }
   private fingerprint(entries: CopyEntry[]): string {
-    return createHash("sha256").update(JSON.stringify(entries.map((entry) => [entry.relative, entry.directory, entry.size, entry.mtime]))).digest("hex");
+    return createHash("sha256").update(JSON.stringify(entries.map((entry) => [entry.relative, entry.directory, entry.size, entry.mtime, entry.linkTarget]))).digest("hex");
   }
   private async prepare(key: RuntimeResourcePathKey, targetText: string, mode: ResourcePathMode, signal: AbortSignal, initializeDefault = false): Promise<PreparedPath> {
+    if (key === "maibot" && this.paths.maibotDevMode === "source") throw new Error("源码调试目录由 --source 指定，请退出后使用新的源码路径启动");
     if (!RESOURCE_KEYS.includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
     const target = this.normalizeTargetPath(targetText), source = this.getPath(key);
     this.assertCanUsePathSet(key, { ...this.currentPathSet(), [key]: target });
@@ -300,6 +322,12 @@ export class ResourceLocationManager extends EventEmitter {
       checkCancelled(signal); this.publish({ currentFile: entry.relative });
       const destination = join(stage, entry.relative);
       if (entry.directory) { await mkdir(destination, { recursive: true, mode: entry.mode }); continue; }
+      if (entry.linkTarget) {
+        if (await readlink(join(source, entry.relative)) !== entry.linkTarget) throw new Error(`源链接已变化: ${entry.relative}`);
+        await symlink(entry.linkTarget, destination);
+        this.publish({ copiedFiles: (this.progress?.copiedFiles ?? 0) + 1 });
+        continue;
+      }
       const before = await lstat(join(source, entry.relative));
       if (before.size !== entry.size || before.mtimeMs !== entry.mtime) throw new Error(`源文件已变化，请重新检查后重试: ${entry.relative}`);
       const counter = new Transform({ transform: (chunk, _encoding, callback) => {

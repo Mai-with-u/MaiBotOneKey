@@ -9,7 +9,7 @@ import { defaultServiceStartupSettings, LOCAL_DASHBOARD_DEV_ENV, resolvePythonEn
 import { prepareDevPythonEnvironment } from "../dev/prepare-python-environment";
 import type { RuntimePaths } from "../../src/shared/contracts";
 
-test("only dev:dev uses a persistent test environment; normal dev and packaged paths stay unchanged", () => {
+test("legacy local Dashboard environment and packaged defaults remain compatible", () => {
   const root = join(tmpdir(), "maibot-workspace");
   const resources = join(tmpdir(), "maibot-resources");
   const devEnv = { [LOCAL_DASHBOARD_DEV_ENV]: "1" };
@@ -70,6 +70,9 @@ test("dev:dev starts checked despite saved false, allows manual changes and rese
     delete process.env[LOCAL_DASHBOARD_DEV_ENV];
     expect(defaultServiceStartupSettings().useLocalDashboard).toBe(false);
     await writeFile(settingsPath, JSON.stringify({ version: 1, useLocalDashboard: false }));
+    expect(createManager().getStartupSettings().useLocalDashboard).toBe(false);
+    process.env[LOCAL_DASHBOARD_DEV_ENV] = "0";
+    await writeFile(settingsPath, JSON.stringify({ version: 1, useLocalDashboard: true }));
     expect(createManager().getStartupSettings().useLocalDashboard).toBe(false);
   } finally {
     for (const manager of managers) manager.dispose();

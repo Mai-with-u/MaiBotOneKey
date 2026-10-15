@@ -105,6 +105,7 @@ function isDependencyPreparationLog(entry: LogEntry): boolean {
     entry.stream === "system" &&
     (
       entry.message.includes("startup dependency upgrade") ||
+      entry.message.includes("MaiBot preparation:") ||
       entry.message.includes("portable Python") ||
       entry.message.includes("python-env") ||
       entry.message.includes("pip install") ||
@@ -1214,7 +1215,6 @@ export function DesktopShell(): React.JSX.Element {
   const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
   const [maibotCoreHost, setMaibotCoreHost] = useState<HTMLDivElement | null>(null);
   const [maibotUpdateHost, setMaibotUpdateHost] = useState<HTMLDivElement | null>(null);
-  const [quickActionsHost, setQuickActionsHost] = useState<HTMLDivElement | null>(null);
   const [webuiChatIdentity, setWebuiChatIdentity] = useState<{ userId?: string; userName?: string }>(() => ({
     userId: window.localStorage.getItem(WEBUI_CHAT_USER_ID_STORAGE_KEY) ?? undefined,
     userName: window.localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined,
@@ -1872,7 +1872,6 @@ export function DesktopShell(): React.JSX.Element {
             )}
             actions={(
               <>
-                <div className="mr-1 flex shrink-0 items-center" ref={setQuickActionsHost} />
                 {toolbarActions}
               </>
             )}
@@ -1901,7 +1900,6 @@ export function DesktopShell(): React.JSX.Element {
                 <MessagePlatformPanel
                   coreToolbarTarget={maibotCoreHost}
                   updateToolbarTarget={maibotUpdateHost}
-                  quickActionsToolbarTarget={quickActionsHost}
                   active={activeTab === "message-platform"}
                   onEnterFloatingMode={enterFloatingMode}
                   onOpenPluginConfig={openPluginConfig}

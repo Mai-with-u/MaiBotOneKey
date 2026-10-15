@@ -3,6 +3,8 @@ import { readMaiBotSetupStatus } from "./maibot-setup-client";
 import { runProcess, runWithoutAsar, samePath, sameOrInsidePath } from "./runtime-file-utils";
 import { ProtocolBackendManager } from "./protocol-backend-manager";
 import { MaiBotAdapterClient } from "./maibot-adapter-client";
+import type { MaiBotDeploymentManager } from "./maibot-deployment-manager";
+import { isMaiBotPackageMode, readMaiBotDeployment } from "./maibot-deployment-state";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -26,6 +28,7 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataImportResult,
   MaiBotDataResetResult,
+  MaiBotModuleUpdateProgress,
   MaiBotStorageCategory,
   MaiBotStorageCleanupResult,
   MaiBotStorageCleanupTarget,
@@ -872,6 +875,20 @@ function maibotInitialConfigVersion(templateVersion: string): string {
 
 export class InitManager {
   private dependencyCache?: { expiresAt: number; checks: InitCheck[] };
+  private deploymentManager?: MaiBotDeploymentManager;
+
+  setDeploymentManager(manager: MaiBotDeploymentManager): void { this.deploymentManager = manager; }
+  cancelMaiBotInstall(): boolean { return this.deploymentManager?.cancel() ?? false; }
+  async ensureMaiBotPackage(onOutput?: (line: string) => void, onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<void> {
+    if (this.deploymentManager?.isPackageMode()) {
+      await this.ensureBundledMaiBotPluginSubtree(SNOWLUMA_ADAPTER_DIR, ["plugin.py"], SNOWLUMA_ADAPTER_PLUGIN_ID);
+      await this.ensureBundledMaiBotPluginSubtree(QQ_OFFICIAL_ADAPTER_DIR, ["plugin.py", "settings.py", "codec.py", "_manifest.json"], QQ_OFFICIAL_ADAPTER_PLUGIN_ID);
+    }
+    await this.deploymentManager?.ensureInstalled((progress) => {
+      if (progress.log) onOutput?.(progress.log);
+      onProgress?.(progress);
+    });
+  }
 
   readonly protocolComponents: ProtocolComponentManager;
   readonly protocols: ProtocolBackendManager;
@@ -948,7 +965,9 @@ export class InitManager {
       this.checkRuntimeRoot(),
       this.checkPythonRuntime(),
       checkDir(this.paths.maibotRoot, "MaiBot 主模块", "maibot-module"),
-      checkFile(join(this.paths.maibotRoot, "bot.py"), "MaiBot 启动文件", "maibot-entry"),
+      isMaiBotPackageMode(this.paths)
+        ? { id: "maibot-entry", label: "MaiBot PyPI 环境", status: readMaiBotDeployment(this.paths.maibotRoot) ? "ok" : "warning", detail: readMaiBotDeployment(this.paths.maibotRoot)?.packageVersion ?? "首次启动时安装 MaiBot" }
+        : checkFile(join(this.paths.maibotRoot, "bot.py"), "MaiBot 启动文件", "maibot-entry"),
       this.checkMaiBotWebUiEndpoint(),
       ...qqModuleChecks,
       ...dependencyChecks,
@@ -961,8 +980,8 @@ export class InitManager {
     return this.checkDependencies();
   }
 
-  async repair(): Promise<InitRepairResult> {
-    const changedFiles = await this.ensureModulesReady();
+  async repair(onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<InitRepairResult> {
+    const changedFiles = await this.ensureModulesReady(onProgress);
 
     const state = {
       ...(await this.getState()),
@@ -1830,14 +1849,14 @@ export class InitManager {
     }
   }
 
-  async ensureModulesReady(): Promise<string[]> {
+  async ensureModulesReady(onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
     return [
-      ...(await this.ensureServiceReady("maibot")),
+      ...(await this.ensureServiceReady("maibot", onProgress)),
       ...(await this.ensureServiceReady("napcat")),
     ];
   }
 
-  async ensureServiceReady(serviceId: ServiceId): Promise<string[]> {
+  async ensureServiceReady(serviceId: ServiceId, onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
     await mkdir(this.paths.logsRoot, { recursive: true });
 
     if (!existsSync(this.paths.bundledModulesRoot)) {
@@ -1845,12 +1864,14 @@ export class InitManager {
     }
 
     if (serviceId === "maibot") {
-      const changedFiles = await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"], {
+      const packageMode = isMaiBotPackageMode(this.paths);
+      if (packageMode) await this.ensureMaiBotPackage(undefined, onProgress);
+      const changedFiles = packageMode ? [] : await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"], {
         excludeRelativePaths: [NAPCAT_ADAPTER_DIR, SNOWLUMA_ADAPTER_DIR, QQ_OFFICIAL_ADAPTER_DIR],
       });
       changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(SNOWLUMA_ADAPTER_DIR, ["plugin.py"], SNOWLUMA_ADAPTER_PLUGIN_ID)));
       changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(QQ_OFFICIAL_ADAPTER_DIR, ["plugin.py", "settings.py", "codec.py", "_manifest.json"], QQ_OFFICIAL_ADAPTER_PLUGIN_ID)));
-      const repairedConfig = await this.repairBotConfigVersionInfo();
+      const repairedConfig = packageMode ? undefined : await this.repairBotConfigVersionInfo();
       return [...changedFiles, ...(repairedConfig ? [repairedConfig] : [])];
     }
 
@@ -1925,6 +1946,7 @@ export class InitManager {
   }
 
   getPythonPath(): string {
+    if (this.deploymentManager?.getState()) return this.deploymentManager.getPython().getPythonPath();
     return this.getBundledPythonPath() ?? this.getBundledPythonCandidates()[0];
   }
 
@@ -2266,6 +2288,14 @@ export class InitManager {
   }
 
   private agreementSourcePath(fileName: string): string {
+    if (isMaiBotPackageMode(this.paths)) {
+      if (this.deploymentManager?.getState()) {
+        return join(this.deploymentManager.getPython().getPythonPackagesRoot(), "src", "_resources", fileName);
+      }
+      const root = dirname(this.paths.runtimeRoot);
+      const packaged = join(root, "maibot", fileName);
+      return existsSync(packaged) ? packaged : join(root, "resources", "maibot-package", fileName);
+    }
     const writablePath = join(this.paths.maibotRoot, fileName);
     if (existsSync(writablePath)) {
       return writablePath;
@@ -2474,7 +2504,7 @@ export class InitManager {
       checks.push({
         id: "git-runtime",
         label: "Git",
-        status: "error",
+        status: isMaiBotPackageMode(this.paths) ? "warning" : "error",
         detail: "未找到可用 Git",
         path: git,
         actionLabel: "下载 Git",
@@ -2494,7 +2524,7 @@ export class InitManager {
         checks.push({
         id: "git-runtime",
         label: "Git",
-        status: "error",
+        status: isMaiBotPackageMode(this.paths) ? "warning" : "error",
         detail: `Git 损坏或不可启动: ${toDetail(error)}`,
         path: git,
         actionLabel: "下载 Git",

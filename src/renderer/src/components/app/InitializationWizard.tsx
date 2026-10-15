@@ -1,5 +1,6 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { watchSetupCompletion } from "@/lib/setup-completion";
+import { initializationStatus } from "@/lib/initialization-status";
 import {
   CheckCircle2,
   Loader2,
@@ -10,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopSnapshot,
   LogEntry,
+  MaiBotModuleUpdateProgress,
   PythonEnvironmentState,
   PythonPackageSourcePreset,
   ServiceDescriptor,
@@ -69,48 +71,11 @@ function dependencyLogs(entries: LogEntry[]): LogEntry[] {
     .filter(
       (entry) =>
         entry.message.includes("startup dependency upgrade") ||
+        entry.message.includes("MaiBot preparation:") ||
         entry.message.includes("dependency") ||
         entry.message.includes("pip"),
     )
     .slice(-8);
-}
-
-function serviceProgress(
-  service: ServiceDescriptor | undefined,
-  busy: boolean,
-): number {
-  if (service?.status === "running" && service.health === "ready") {
-    return 100;
-  }
-  if (service?.status === "running") {
-    return service.health === "checking" ? 88 : 92;
-  }
-  if (
-    service?.status === "starting" &&
-    service.detail?.includes("依赖检查完成")
-  ) {
-    return 72;
-  }
-  if (service?.status === "starting") {
-    return 42;
-  }
-  return busy ? 18 : 0;
-}
-
-function wizardServiceDetail(
-  service: ServiceDescriptor | undefined,
-  busy: boolean,
-): string {
-  if (service?.status === "running" && service.health === "ready") {
-    return "MaiCore 已启动，正在进入首次配置";
-  }
-  if (service?.status === "running" || service?.health === "unreachable") {
-    return "等待 MaiCore 启动中";
-  }
-  if (service?.status === "starting") {
-    return "正在复制文件和下载必须文件";
-  }
-  return busy ? "正在复制文件和下载必须文件" : "正在读取依赖源并准备自动初始化";
 }
 
 function delay(ms: number): Promise<void> {
@@ -124,6 +89,7 @@ export function InitializationWizard({
 }: InitializationWizardProps): React.JSX.Element | null {
   const [seen, setSeen] = useState(readStartupWizardSeen);
   const [busy, setBusy] = useState(false);
+  const [preparation, setPreparation] = useState<MaiBotModuleUpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pythonDeps, setPythonDeps] = useState<PythonEnvironmentState | null>(
     null,
@@ -146,8 +112,13 @@ export function InitializationWizard({
   const starting = service?.status === "starting";
   const statusAnimating = busy || starting || (running && !ready);
   const open = !agreementPending && !seen;
-  const progress = serviceProgress(service, busy);
+  const status = initializationStatus(service, busy, preparation);
   const restartDownloadVisible = step === "core" && starting && !running;
+
+  useEffect(() => {
+    if (!open || step !== "core") return;
+    return window.maibotDesktop?.modules.onMaiBotUpdateProgress(setPreparation);
+  }, [open, step]);
 
   useEffect(() => {
     if (step !== "core" || !statusAnimating) {
@@ -215,6 +186,7 @@ export function InitializationWizard({
       const runId = startupRunId.current + 1;
       startupRunId.current = runId;
       setBusy(true);
+      setPreparation(null);
       setError(null);
       try {
         if (repairFirst) {
@@ -392,8 +364,7 @@ export function InitializationWizard({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                      首次启动会检查运行目录、同步基础文件，并按需安装 Python
-                      覆盖依赖。
+                      首次启动会准备 Python 环境、安装 MaiBot 及依赖，完成验证和初始化后启动。
                     </p>
                   </div>
                   <Badge
@@ -485,9 +456,9 @@ export function InitializationWizard({
                 </div>
 
                 <div className="mt-4 space-y-2">
-                  <Progress value={progress} />
+                  <Progress value={status.progress} />
                   <p className="text-xs text-muted-foreground">
-                    {wizardServiceDetail(service, busy)}
+                    {status.detail}
                     {statusAnimating ? statusEllipsis : ""}
                   </p>
                 </div>
@@ -500,7 +471,7 @@ export function InitializationWizard({
                   ) : (
                     <Loader2 className="size-3.5 animate-spin" />
                   )}
-                  依赖安装进度
+                  安装进度
                 </div>
                 <div className="mt-3 max-h-48 space-y-1 overflow-auto rounded-md border border-border p-3">
                   {logs.length > 0 ? (
@@ -514,7 +485,7 @@ export function InitializationWizard({
                     ))
                   ) : (
                     <p className="text-xs text-muted-foreground">
-                      还没有依赖安装日志。初始化开始后，检查、下载和安装输出会出现在这里。
+                      初始化开始后，环境准备、MaiBot 和依赖的安装日志会显示在这里。
                     </p>
                   )}
                 </div>

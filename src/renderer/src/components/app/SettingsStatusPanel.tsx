@@ -1,4 +1,5 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
+import { MaiBotConfigImportPanel } from "./MaiBotConfigImportPanel";
 import { ResourcePathEditor } from "./ResourcePathEditor";
 import { RESOURCE_SCOPE_NOTE, useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
@@ -119,27 +120,15 @@ const healthText: Record<ServiceHealth, string> = {
 };
 
 const sourceGroupMeta: Record<SourceSettingsGroup, { title: string; description: string; urlLabel: string }> = {
-  github: {
-    title: "GitHub / Git 仓库源",
-    description: "用于 MaiBot 模块更新、插件仓库和插件市场。选择“自动”时会按这里的顺序失败重试；手动选择某个源时只使用该源。",
-    urlLabel: "GitHub 基础地址",
-  },
-  launcher: {
-    title: "启动器更新源",
-    description: "当前启动器更新仍使用官方 GitHub Releases；这里先统一维护候选源。",
-    urlLabel: "Release API 地址",
-  },
   python: {
-    title: "Python / PyPI 依赖源",
-    description: "用于依赖版本查询和 pip 安装；列表顺序也是失败后的重试顺序。",
+    title: "Python 包源",
+    description: "用于 MaiBot、Dashboard 和依赖的版本查询及安装；列表顺序也是失败后的重试顺序。",
     urlLabel: "Simple 索引地址",
   },
 };
 
 function cloneSourceSettings(settings: SourceSettings): SourceSettings {
   return {
-    github: settings.github.map((entry) => ({ ...entry })),
-    launcher: settings.launcher.map((entry) => ({ ...entry })),
     python: settings.python.map((entry) => ({ ...entry })),
   };
 }
@@ -189,24 +178,6 @@ function SourceGroupEditor({
   };
 
   return (
-    <div className="settings-section grid gap-2 bg-card p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">{meta.title}</p>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{meta.description}</p>
-        </div>
-        <Button
-          aria-label="新增源"
-          disabled={disabled}
-          onClick={() => onChange([...entries, createSourceEntry(group)])}
-          size="icon-sm"
-          title="新增源"
-          variant="outline"
-        >
-          <Plus className="add-action-icon" />
-        </Button>
-      </div>
-
       <div className="settings-option-list grid gap-0">
         {entries.map((entry, index) => (
           <div
@@ -302,7 +273,6 @@ function SourceGroupEditor({
           </div>
         ))}
       </div>
-    </div>
   );
 }
 
@@ -1245,7 +1215,7 @@ export function SettingsStatusPanel({
       if (result) {
         setSourceSettings(result);
         setSourceSettingsDraft(cloneSourceSettings(result));
-        toast.success("源列表已保存");
+        toast.success("Python 包源已保存");
       }
     } catch (nextError) {
       setError(messageFromError(nextError));
@@ -1268,7 +1238,7 @@ export function SettingsStatusPanel({
       if (result) {
         setSourceSettings(result);
         setSourceSettingsDraft(cloneSourceSettings(result));
-        toast.success("源列表已恢复默认");
+        toast.success("Python 包源已恢复默认");
       }
     } catch (nextError) {
       setError(messageFromError(nextError));
@@ -1426,10 +1396,6 @@ export function SettingsStatusPanel({
                 <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="general">
                   <Settings className="size-3" />
                   通用
-                </TabsTrigger>
-                <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="network">
-                  <Network className="size-3" />
-                  网络
                 </TabsTrigger>
                 <TabsTrigger className="gap-1.5 px-3 text-[11px]" value="appearance">
                   <Palette className="size-3" />
@@ -1611,9 +1577,7 @@ export function SettingsStatusPanel({
                   </Switch.Root>
                 </div>
 
-              </TabsContent>
 
-              <TabsContent className="settings-content" value="network">
                 <div className="settings-section flex items-center gap-3 overflow-x-auto bg-muted/40 p-3">
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1685,9 +1649,9 @@ export function SettingsStatusPanel({
                         <Network className="size-4" />
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium">统一源管理</p>
+                        <p className="text-sm font-medium">Python 包源</p>
                         <p className="text-xs text-muted-foreground">
-                          管理 GitHub / Git、启动器更新和 Python 依赖的候选源；GitHub 源顺序用于“自动”模式。
+                          用于 MaiBot、Dashboard 和依赖的版本查询及安装；拖动调整顺序，失败时依次重试。
                         </p>
                       </div>
                     </div>
@@ -1695,6 +1659,16 @@ export function SettingsStatusPanel({
                       <Badge variant={sourceSettingsDirty ? "warning" : "outline"}>
                         {sourceSettingsDirty ? "未保存" : "已同步"}
                       </Badge>
+                      <Button
+                        aria-label="新增源"
+                        disabled={busy !== null || !sourceSettingsDraft}
+                        onClick={() => sourceSettingsDraft && updateSourceGroup("python", [...sourceSettingsDraft.python, createSourceEntry("python")])}
+                        size="sm"
+                        variant="outline"
+                      >
+                        <Plus className="add-action-icon" />
+                        新增源
+                      </Button>
                       <Button disabled={busy !== null || !sourceSettingsDirty} onClick={resetSourceSettingsDraft} size="sm" variant="ghost">
                         <RotateCcw className="size-4" />
                         撤销
@@ -1711,17 +1685,12 @@ export function SettingsStatusPanel({
                   </div>
 
                   {sourceSettingsDraft ? (
-                    <div className="grid gap-3">
-                      {(["github", "launcher", "python"] as const).map((group) => (
-                        <SourceGroupEditor
-                          disabled={busy !== null}
-                          entries={sourceSettingsDraft[group]}
-                          group={group}
-                          key={group}
-                          onChange={(entries) => updateSourceGroup(group, entries)}
-                        />
-                      ))}
-                    </div>
+                    <SourceGroupEditor
+                      disabled={busy !== null}
+                      entries={sourceSettingsDraft.python}
+                      group="python"
+                      onChange={(entries) => updateSourceGroup("python", entries)}
+                    />
                   ) : (
                     <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
                       <Loader2 className="size-3.5 animate-spin" />
@@ -2105,6 +2074,7 @@ export function SettingsStatusPanel({
                             service={service}
                           />
                         ))}
+                        {config.key === "maibot" ? <MaiBotConfigImportPanel disabled={maibotDataBlocked || Boolean(snapshot.runtimeOperation) || busy !== null || resourceWorkflow.busyKey !== null} /> : null}
                       </div>
                     ))}
                   </div>

@@ -3,7 +3,7 @@ import { InitManager } from "../../src/main/services/init-manager";
 import { ServiceManager } from "../../src/main/services/service-manager";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ResourceLocationManager } from "../../src/main/services/resource-location-manager";
@@ -92,6 +92,22 @@ test("copy migration preflights data size, keeps the source and publishes a comp
   expect(JSON.parse(await readFile(join(paths.userDataRoot, "resource-paths.json"), "utf8")).paths.maibot).toBe(target);
   expect(progress.some((value) => value.stage === "copying")).toBe(true); expect(progress.some((value) => value.stage === "committing")).toBe(true);
   expect(manager.getProgress()?.stage).toBe("completed"); await noStages(dirname(target));
+});
+
+test.skipIf(process.platform === "win32")("managed Unix Python aliases remain relative and independent when copying an instance", async () => {
+  const { root, paths, manager } = await fixture();
+  const environment = join(paths.maibotRoot, ".onekey", "environments", "test-env");
+  const bin = join(environment, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(environment, "maibot-python-env.json"), JSON.stringify({ version: 1 }));
+  await writeFile(join(bin, "python3.12"), "portable interpreter");
+  await symlink("./python3.12", join(bin, "python3"));
+  const target = join(root, "copied-package");
+  await manager.applyPlan(await manager.inspectPath("maibot", target, "copy"));
+  const copied = join(target, ".onekey", "environments", "test-env", "bin");
+  expect(await readlink(join(copied, "python3"))).toBe("./python3.12");
+  await writeFile(join(copied, "python3.12"), "independent interpreter");
+  expect(await readFile(join(bin, "python3.12"), "utf8")).toBe("portable interpreter");
 });
 
 test("nonempty migration targets are rejected without touching source or conflicting files", async () => {

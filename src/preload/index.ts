@@ -33,12 +33,9 @@ import type {
   MaiBotUpdateInfo,
   MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
-  ModuleBranchOption,
   ModuleUpdateTarget,
   ModuleUpdateResult,
   NetworkProxySettings,
-  ModuleSourceConfig,
-  ModuleSourceUpdate,
   ModuleTagOption,
   PythonEnvironmentState,
   PythonPackageSourcePreset,
@@ -194,13 +191,11 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("modules:checkMaibotUpdate", target) as Promise<MaiBotUpdateInfo>,
     updateMaiBot: (target?: ModuleUpdateTarget) =>
       ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
+    rollbackMaiBot: () => ipcRenderer.invoke("modules:rollbackMaibot") as Promise<void>,
     onMaiBotUpdateProgress: (callback: (progress: MaiBotModuleUpdateProgress) => void) =>
       onIpc("modules:maibot-update-progress", callback),
-    listMaiBotBranches: () => ipcRenderer.invoke("modules:listMaibotBranches") as Promise<ModuleBranchOption[]>,
     listMaiBotTags: () => ipcRenderer.invoke("modules:listMaibotTags") as Promise<ModuleTagOption[]>,
-    getSourceConfig: () => ipcRenderer.invoke("modules:getSourceConfig") as Promise<ModuleSourceConfig>,
-    saveSourceConfig: (config: ModuleSourceUpdate) =>
-      ipcRenderer.invoke("modules:saveSourceConfig", config) as Promise<ModuleSourceConfig>,
+
   },
   data: {
     onMaiBotBackupProgress: (callback: (progress: MaiBotBackupProgress) => void) =>

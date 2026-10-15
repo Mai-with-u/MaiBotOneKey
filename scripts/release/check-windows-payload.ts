@@ -1,6 +1,8 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import process from "node:process";
+import { createHash } from "node:crypto";
+import { MAIBOT_BUNDLED_AGREEMENTS_VERSION } from "../../src/main/services/maibot-deployment-state";
 
 type PathKind = "file" | "dir";
 
@@ -117,15 +119,15 @@ const requirements: Requirement[] = [
     candidates: [dir("modules")],
   },
   {
-    label: "MaiBot module",
+    label: "MaiBot initial package manifest",
     required: true,
-    candidates: [dir("modules/MaiBot")],
+    candidates: [file("resources/maibot-package/package.json")],
   },
-  {
-    label: "MaiBot entry",
+  ...["EULA.md", "PRIVACY.md"].map((name) => ({
+    label: `MaiBot package agreement: ${name}`,
     required: true,
-    candidates: [file("modules/MaiBot/bot.py")],
-  },
+    candidates: [file(`resources/maibot-package/${name}`)],
+  })),
   {
     label: "MaiBot snowluma-adapter plugin",
     required: true,
@@ -203,6 +205,7 @@ const requirements: Requirement[] = [
 ];
 
 const requiredModuleResourceExclusions = [
+  "!MaiBot/**",
   "!MaiBot/.venv/**",
   "!MaiBot/.pytest_cache/**",
   "!MaiBot/.ruff_cache/**",
@@ -372,6 +375,20 @@ async function main(): Promise<void> {
     console.log("");
     console.log(`Release payload is incomplete (${failures.length} required item(s) missing).`);
     console.log("Put runtime/ and modules/ in the repository root before running bun run release:win.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const packageResources = join(root, "resources", "maibot-package");
+  try {
+    const manifest = JSON.parse(await readFile(join(packageResources, "package.json"), "utf8")) as { package: string; agreements_version: string; agreements_sha256: Record<string, string> };
+    if (manifest.package !== "maibot" || manifest.agreements_version !== MAIBOT_BUNDLED_AGREEMENTS_VERSION) throw new Error("预置协议来源版本与清单不一致");
+    for (const name of ["EULA.md", "PRIVACY.md"]) {
+      const hash = createHash("sha256").update(await readFile(join(packageResources, name))).digest("hex");
+      if (manifest.agreements_sha256?.[name] !== hash) throw new Error(`${name} 校验不匹配`);
+    }
+  } catch (error) {
+    console.log(`[missing] MaiBot initial package metadata is invalid: ${String(error)}`);
     process.exitCode = 1;
     return;
   }

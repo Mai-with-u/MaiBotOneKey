@@ -4,7 +4,7 @@ import { app } from "electron";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { RuntimePaths } from "../../shared/contracts";
-import { resolvePythonEnvironmentRoot } from "./service-startup-defaults";
+import { developmentRuntimeProfile, resolvePythonEnvironmentRoot } from "./service-startup-defaults";
 
 function resolveInstallRoot(): string {
   return app.isPackaged ? dirname(process.execPath) : process.cwd();
@@ -22,10 +22,11 @@ export function configureRuntimePaths(): RuntimePaths {
   const installRoot = resolveInstallRoot();
   const payloadRoot = resolvePayloadRoot(installRoot);
   const installScope = createInstallScope(installRoot);
-  const userDataRoot = join(app.getPath("appData"), "MaiBotOneKeyDesktop", installScope);
-  const defaultResourceRoot = app.isPackaged ? userDataRoot : installRoot;
+  const profile = developmentRuntimeProfile(installRoot, app.isPackaged);
+  const userDataRoot = join(app.getPath("appData"), "MaiBotOneKeyDesktop", `${installScope}${profile.settingsSuffix}`);
+  const defaultResourceRoot = app.isPackaged ? userDataRoot : profile.resourceRoot ?? installRoot;
   const defaults = {
-    maibot: join(defaultResourceRoot, "modules", "MaiBot"),
+    maibot: profile.sourceRoot ?? join(defaultResourceRoot, "modules", "MaiBot"),
     napcat: join(defaultResourceRoot, "modules", "napcat"),
     snowluma: join(defaultResourceRoot, "modules", "SnowLuma"),
   };
@@ -35,6 +36,7 @@ export function configureRuntimePaths(): RuntimePaths {
   app.setPath("userData", userDataRoot);
 
   const paths: RuntimePaths = {
+    maibotDevMode: profile.mode,
     installRoot,
     userDataRoot,
     defaultResourceRoot,
@@ -51,6 +53,6 @@ export function configureRuntimePaths(): RuntimePaths {
     pythonEnvRoot: resolvePythonEnvironmentRoot(installRoot, defaultResourceRoot, app.isPackaged),
     logsRoot: join(userDataRoot, "logs"),
   };
-  applyRuntimeResourcePaths(paths, stored);
+  applyRuntimeResourcePaths(paths, profile.mode === "source" ? { ...stored, maibot: profile.sourceRoot } : stored);
   return paths;
 }
