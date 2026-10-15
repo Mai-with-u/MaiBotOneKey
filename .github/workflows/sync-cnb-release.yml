@@ -1,0 +1,36 @@
+name: Sync release to CNB
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'GitHub release tag to mirror (empty = latest stable)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-cnb-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Mirror release and publish verified update manifest
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/scripts/release/sync-cnb-release.py?ref=$GITHUB_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/sync-cnb-release.py"
+          python "$RUNNER_TEMP/sync-cnb-release.py"

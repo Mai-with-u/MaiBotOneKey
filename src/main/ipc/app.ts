@@ -7,8 +7,10 @@ import {
   session,
   shell,
 } from "electron";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createHash } from "node:crypto";
+import { fetchMirrorManifest, isOfficialLauncherDownloadUrl, withDownloadFallback } from "../services/launcher-update-mirror";
 import { publishedStableReleaseTags, resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import {
@@ -167,9 +169,6 @@ const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
   "bottom-left",
 ]);
 const MAIBOT_WEBVIEW_PARTITION = "persist:maibot-webui";
-const ONEKEY_REPOSITORY_URL = "https://github.com/Mai-with-u/MaiBotOneKey.git";
-const ONEKEY_TAGS_API_URL =
-  "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/tags?per_page=100";
 const ONEKEY_LATEST_RELEASE_API_URL =
   "https://api.github.com/repos/Mai-with-u/MaiBotOneKey/releases/latest";
 const ONEKEY_RELEASES_API_URL =
@@ -186,6 +185,8 @@ interface GitHubReleaseAsset {
   name?: unknown;
   size?: unknown;
   browser_download_url?: unknown;
+  fallback_download_url?: string;
+  sha256?: string;
 }
 
 interface GitHubReleasePayload {
@@ -215,6 +216,8 @@ interface GitHubCommitPayload {
 
 interface LauncherUpdateInternalInfo extends LauncherUpdateInfo {
   downloadUrl?: string;
+  fallbackDownloadUrl?: string;
+  sha256?: string;
 }
 
 interface LauncherUpdateDownloadResult {
@@ -293,38 +296,7 @@ function readWindowState(
   };
 }
 
-function runProcess(
-  file: string,
-  args: string[],
-  cwd: string,
-  env?: Record<string, string>,
-): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile(
-      file,
-      args,
-      {
-        cwd,
-        timeout: 10_000,
-        windowsHide: true,
-        maxBuffer: 1024 * 1024,
-        env: {
-          ...process.env,
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUTF8: "1",
-          ...env,
-        },
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          resolve(undefined);
-          return;
-        }
-        resolve(`${stdout}${stderr}`.trim() || undefined);
-      },
-    );
-  });
-}
+
 
 function isRuntimeBusy(service: ServiceDescriptor): boolean {
   return (
@@ -680,13 +652,7 @@ function pickLatestTags(
   };
 }
 
-function pickLatestVersionTag(rawTags: string[]): string | undefined {
-  return rawTags
-    .map(parseVersionTag)
-    .filter((tag): tag is ParsedVersionTag => Boolean(tag))
-    .sort(compareParsedTags)
-    .at(-1)?.tag;
-}
+
 
 function compareVersionTags(
   left: string | undefined,
@@ -816,7 +782,7 @@ function selectLauncherUpdateAsset(
       typeof asset.browser_download_url === "string"
         ? asset.browser_download_url
         : "";
-    return Boolean(name && url);
+    return Boolean(name && isOfficialLauncherDownloadUrl(url));
   });
 
   if (platform === "darwin") {
@@ -1182,18 +1148,27 @@ async function fetchMaiBotUpdateInfo(
 async function fetchLauncherUpdateInfo(
   currentVersion: string,
 ): Promise<LauncherUpdateInternalInfo> {
+  let mirror = await fetchMirrorManifest().catch(() => undefined);
+  if (mirror && !mirror.releases.some((release) => selectLauncherUpdateAsset(release.assets))) {
+    mirror = undefined;
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const response = await fetch(ONEKEY_LATEST_RELEASE_API_URL, {
-      headers: { Accept: "application/vnd.github+json" },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
-    }
+    let release: GitHubReleasePayload;
+    if (mirror) {
+      release = mirror.latest;
+    } else {
+      const response = await fetch(ONEKEY_LATEST_RELEASE_API_URL, {
+        headers: { Accept: "application/vnd.github+json" },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+      }
 
-    const release = (await response.json()) as GitHubReleasePayload;
+      release = (await response.json()) as GitHubReleasePayload;
+    }
     if (release.draft === true || typeof release.tag_name !== "string") {
       throw new Error("Latest release metadata is incomplete");
     }
@@ -1205,7 +1180,7 @@ async function fetchLauncherUpdateInfo(
     const latestAsset = selectLauncherUpdateAsset(release.assets);
     let asset = latestAsset;
     if (latestAvailable && !asset) {
-      const releases = await fetchOneKeyReleases().catch(() => []);
+      const releases = mirror?.releases ?? await fetchOneKeyReleases().catch(() => []);
       const fallbackRelease = releases
         .filter((item) => {
           const tag = String(item.tag_name);
@@ -1229,7 +1204,7 @@ async function fetchLauncherUpdateInfo(
       typeof release.body === "string" && release.body.trim()
         ? release.body.trim()
         : undefined;
-    const releaseNotes = available
+    const releaseNotes = mirror ? releaseBody(targetRelease) : available
       ? ((await fetchLauncherReleaseNotesInRange(currentTag, downloadTag).catch(
           () => undefined,
         )) ?? releaseBody(targetRelease) ?? latestReleaseNotes)
@@ -1251,7 +1226,9 @@ async function fetchLauncherUpdateInfo(
       latestAssetUnavailable: latestAvailable && !latestAsset,
       available,
       checkedAt: Date.now(),
-      source: ONEKEY_RELEASE_SOURCE,
+      source: mirror ? "CNB · Mai-with-u/MaiBotOneKey" : `GitHub 官方 · ${ONEKEY_RELEASE_SOURCE}`,
+      fallbackDownloadUrl: asset?.fallback_download_url,
+      sha256: asset?.sha256,
       downloadUrl:
         typeof asset?.browser_download_url === "string"
           ? asset.browser_download_url
@@ -1265,7 +1242,7 @@ async function fetchLauncherUpdateInfo(
 function publicLauncherUpdateInfo(
   update: LauncherUpdateInternalInfo,
 ): LauncherUpdateInfo {
-  const { downloadUrl: _downloadUrl, ...publicUpdate } = update;
+  const { downloadUrl: _downloadUrl, fallbackDownloadUrl: _fallback, sha256: _sha256, ...publicUpdate } = update;
   return publicUpdate;
 }
 
@@ -1314,16 +1291,33 @@ async function downloadLauncherUpdate(
   update: LauncherUpdateInternalInfo,
   onProgress?: LauncherUpdateDownloadProgressCallback,
 ): Promise<LauncherUpdateDownloadResult> {
+  if (!update.downloadUrl) throw new Error("没有可下载的安装包");
+  if ([update.downloadUrl, update.fallbackDownloadUrl].some((url) => url && !isOfficialLauncherDownloadUrl(url))) {
+    throw new Error("安装包只允许从 CNB 或 GitHub 官方仓库下载");
+  }
+  return withDownloadFallback(
+    [update.downloadUrl, update.fallbackDownloadUrl].filter((url): url is string => Boolean(url)),
+    (downloadUrl) => downloadLauncherUpdateFromUrl(paths, { ...update, downloadUrl }, onProgress),
+  );
+}
+
+async function downloadLauncherUpdateFromUrl(
+  paths: RuntimePaths,
+  update: LauncherUpdateInternalInfo,
+  onProgress?: LauncherUpdateDownloadProgressCallback,
+): Promise<LauncherUpdateDownloadResult> {
   if (!update.downloadUrl || !update.assetName) {
     throw new Error(`最新版本没有可下载的${launcherUpdatePackageLabel()}`);
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  let timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch(update.downloadUrl, {
       signal: controller.signal,
     });
+    clearTimeout(timeout);
+    timeout = setTimeout(() => controller.abort(), 30_000);
     if (!response.ok) {
       throw new Error(`安装包下载失败: HTTP ${response.status}`);
     }
@@ -1346,6 +1340,7 @@ async function downloadLauncherUpdate(
       update.assetSize;
     const reader = response.body.getReader();
     const stream = createWriteStream(partialPath);
+    const hash = createHash("sha256");
     let receivedBytes = 0;
     let lastProgressAt = 0;
 
@@ -1376,7 +1371,9 @@ async function downloadLauncherUpdate(
         if (!value) {
           continue;
         }
+        timeout.refresh();
         const chunk = Buffer.from(value);
+        hash.update(chunk);
         receivedBytes += chunk.length;
         await writeDownloadChunk(stream, chunk);
         emitProgress("downloading", receivedBytes === totalBytes);
@@ -1389,6 +1386,10 @@ async function downloadLauncherUpdate(
         );
       }
 
+      if (update.sha256 && hash.digest("hex") !== update.sha256) {
+        throw new Error("安装包 SHA-256 校验失败");
+      }
+
       await rm(installerPath, { force: true }).catch(() => undefined);
       await rename(partialPath, installerPath);
       emitProgress("starting", true);
@@ -1398,12 +1399,16 @@ async function downloadLauncherUpdate(
         totalBytes,
       };
     } catch (error: unknown) {
+      await reader.cancel().catch(() => undefined);
+      const closed = stream.closed ? Promise.resolve() : new Promise<void>((resolve) => stream.once("close", resolve));
       stream.destroy();
+      await closed;
       await rm(partialPath, { force: true }).catch(() => undefined);
       throw error;
     }
   } finally {
     clearTimeout(timeout);
+    controller.abort();
   }
 }
 
@@ -2208,52 +2213,11 @@ export function registerAppIpc({
   const readRemoteAppVersion = async (): Promise<
     Pick<DesktopSnapshot, "appLatestTag" | "appLatestSource">
   > => {
-    const gitPath = initManager.getGitPath();
-    if (existsSync(gitPath)) {
-      const tagsOutput = await runProcess(
-        gitPath,
-        ["ls-remote", "--tags", "--refs", ONEKEY_REPOSITORY_URL],
-        paths.installRoot,
-      );
-      const tags =
-        tagsOutput
-          ?.split(/\r?\n/u)
-          .map((line) => line.match(/refs\/tags\/(.+)$/u)?.[1])
-          .filter((tag): tag is string => Boolean(tag)) ?? [];
-      const latestTag = pickLatestVersionTag(Array.from(new Set(tags)));
-      if (latestTag) {
-        return {
-          appLatestTag: latestTag,
-          appLatestSource: ONEKEY_RELEASE_SOURCE,
-        };
-      }
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(ONEKEY_TAGS_API_URL, {
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        return {};
-      }
-      const data = (await response.json()) as Array<{ name?: unknown }>;
-      const latestTag = pickLatestVersionTag(
-        data
-          .map((tag) => (typeof tag.name === "string" ? tag.name : ""))
-          .filter(Boolean),
-      );
-      return latestTag
-        ? {
-            appLatestTag: latestTag,
-            appLatestSource: ONEKEY_RELEASE_SOURCE,
-          }
-        : {};
+      const update = await fetchLauncherUpdateInfo(app.getVersion());
+      return { appLatestTag: update.latestTag, appLatestSource: update.source };
     } catch {
       return {};
-    } finally {
-      clearTimeout(timeout);
     }
   };
 
