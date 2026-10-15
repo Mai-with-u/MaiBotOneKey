@@ -50,6 +50,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import maiMascotImage from "@/assets/mai2.png";
 import { MessagePlatformPanel } from "./MessagePlatformPanel";
+import { MillenniumStatusPanel, type MillenniumServicePhase } from "./MillenniumStatusPanel";
 import { InitializationWizard } from "./InitializationWizard";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementDialog } from "./StartupAgreementDialog";
@@ -501,12 +502,22 @@ function MaiBotWebuiStatusPanel({
   busy,
   onStart,
   retro,
+  millennium = false,
+  onStop,
+  onOpenTerminal,
+  onOpenFolder,
+  onOpenSettings,
   context = "webui",
 }: {
   service: ServiceDescriptor | undefined;
   busy: boolean;
   onStart: (id: ServiceId) => void;
   retro: boolean;
+  millennium?: boolean;
+  onStop?: (id: ServiceId) => void;
+  onOpenTerminal?: () => void;
+  onOpenFolder?: () => void;
+  onOpenSettings?: () => void;
   context?: "webui" | "plugins";
 }): React.JSX.Element {
   const status = service?.status ?? "stopped";
@@ -558,6 +569,33 @@ function MaiBotWebuiStatusPanel({
             : status === "stopping"
               ? "MAIBOT 正在停止"
               : "MAIBOT 启动异常";
+
+  if (millennium && !pluginContext) {
+    const phase: MillenniumServicePhase = !service
+      ? "missing"
+      : status === "stopped"
+        ? busy ? "booting" : "standby"
+        : status === "starting"
+          ? "booting"
+          : status === "running"
+            ? showWebUiUnavailable ? "unreachable" : "linking"
+            : status === "stopping"
+              ? "stopping"
+              : "error";
+    return (
+      <MillenniumStatusPanel
+        busy={busy}
+        onOpenFolder={onOpenFolder}
+        onOpenSettings={onOpenSettings}
+        onOpenTerminal={onOpenTerminal}
+        onStart={service ? () => onStart(service.id) : undefined}
+        onStop={service && onStop ? () => onStop(service.id) : undefined}
+        phase={phase}
+        title={title}
+      />
+    );
+  }
+
   return (
     <section className="relative grid h-full min-h-0 place-items-center overflow-hidden bg-transparent p-6 text-[var(--retro-ink,var(--foreground))]">
       <div className="relative z-10 flex w-full max-w-[530px] flex-col items-center text-center">
@@ -1776,7 +1814,12 @@ export function DesktopShell(): React.JSX.Element {
   const maibotWebuiStatusPanel = (
     <MaiBotWebuiStatusPanel
       busy={actionBusy?.startsWith("maibot:") ?? false}
+      millennium={appearance.mode === "millennium"}
+      onOpenFolder={openMaiBotRoot}
+      onOpenSettings={() => selectTab("settings")}
+      onOpenTerminal={showTerminalTab ? () => selectTab("terminal") : undefined}
       onStart={startService}
+      onStop={stopService}
       retro={useRetroChrome}
       service={maibotService}
     />

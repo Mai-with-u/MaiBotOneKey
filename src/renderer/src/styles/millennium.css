@@ -972,3 +972,326 @@
 :root[data-appearance-mode="millennium"] .settings-scroll-scope *::-webkit-scrollbar-thumb:hover {
   background: var(--mil-key-hover) !important;
 }
+
+/* ---------- 未启动页：坐在主机上的电脑 + 控制面板（MillenniumStatusPanel） ---------- */
+
+:root[data-appearance-mode="millennium"] .mil-launch {
+  --mil-crt: #2e2c28;
+  --mil-crt-ink: #ece5d2;
+  --mil-crt-dim: #8d8676;
+  --mil-crt-amber: #f2c14e;
+  --mil-crt-grid: #3b3934;
+  --mil-crt-noise: #5b574f;
+  color: var(--mil-ink);
+}
+
+:root.dark[data-appearance-mode="millennium"] .mil-launch {
+  --mil-crt: #141613;
+  --mil-crt-dim: #7d7666;
+  --mil-crt-amber: #e8b545;
+  --mil-crt-grid: #262924;
+  --mil-crt-noise: #3d3f39;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-stack {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+  /* 外层是按内容收缩的容器，宽度要写死上限，否则面板会被挤窄、键位掉到读数下面 */
+  flex: none;
+  margin: auto;
+  max-width: 100%;
+  width: 660px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-computer {
+  display: block;
+  height: auto;
+  width: min(440px, 100%);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-screen-text {
+  font-family: var(--mil-font);
+  font-weight: 700;
+}
+
+
+:root[data-appearance-mode="millennium"] .mil-launch-led[data-tone="off"] {
+  fill: var(--mil-crt-dim);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-led[data-tone="amber"] {
+  fill: var(--mil-crt-amber);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-led[data-tone="green"] {
+  fill: var(--mil-led);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-led[data-tone="red"] {
+  fill: var(--mil-danger);
+}
+
+@keyframes mil-launch-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-blink {
+  animation: mil-launch-blink 1.1s steps(1) infinite;
+}
+
+/* 开机自检的进度块从左往右依次亮起，循环往复 */
+@keyframes mil-launch-boot {
+  0%,
+  8% {
+    opacity: 0.18;
+  }
+  12%,
+  100% {
+    opacity: 1;
+  }
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-boot-block {
+  animation: mil-launch-boot 1.8s steps(1) infinite;
+}
+
+/* 控制面板：凸起的塑料模块 */
+:root[data-appearance-mode="millennium"] .mil-launch-panel {
+  background-color: var(--mil-panel);
+  background-image: var(--mil-speck);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  box-shadow: var(--mil-bevel), 0 5px 0 var(--mil-drop);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-head {
+  align-items: center;
+  border-bottom: 2px solid var(--mil-lo);
+  box-shadow: 0 2px 0 var(--mil-hi);
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px 9px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-head h3 {
+  color: var(--mil-ink);
+  flex: 1;
+  font-family: var(--mil-font);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin: 0;
+  min-width: 0;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-grip {
+  background: repeating-linear-gradient(90deg, var(--mil-vent) 0 2px, transparent 2px 6px);
+  flex: none;
+  height: 10px;
+  width: 34px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 18px;
+}
+
+/* 下沉读数 */
+:root[data-appearance-mode="millennium"] .mil-launch-readout {
+  background-color: var(--mil-screen);
+  background-image: var(--mil-screen-tex);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  box-shadow:
+    var(--mil-sunk),
+    -2px -2px 0 2px var(--mil-lo),
+    2px 2px 0 2px var(--mil-hi);
+  color: var(--mil-screen-ink);
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: 14px;
+  justify-content: center;
+  margin: 4px;
+  padding: 14px 16px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-led {
+  border: 2px solid var(--mil-line);
+  box-shadow: 0 0 0 2px var(--mil-lo);
+  box-sizing: border-box;
+  flex: none;
+  height: 12px;
+  width: 12px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-led[data-tone="off"] {
+  background: var(--mil-crt-dim);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-led[data-tone="amber"] {
+  background: var(--mil-crt-amber);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-led[data-tone="green"] {
+  background: var(--mil-led);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-led[data-tone="red"] {
+  background: var(--mil-danger);
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-label {
+  color: var(--mil-screen-dim);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-status-word {
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-cells {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-cells i {
+  background: var(--mil-meter-track);
+  flex: 1;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-cells[data-mode="full"] i {
+  background: var(--mil-meter);
+}
+
+@keyframes mil-launch-cell {
+  0%,
+  40% {
+    background: var(--mil-meter);
+  }
+  60%,
+  100% {
+    background: var(--mil-meter-track);
+  }
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-cells[data-mode="running"] i {
+  animation: mil-launch-cell 1.44s steps(1) infinite;
+}
+
+/* 键位：主操作是大号珊瑚橙键，辅助键并排在下面 */
+:root[data-appearance-mode="millennium"] .mil-launch-keys {
+  display: flex;
+  flex: 0 1 220px;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-keys [data-variant] {
+  font-size: 15px;
+  font-weight: 700;
+  height: 46px;
+  padding-bottom: 4px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-keys .mil-launch-primary {
+  font-size: 22px;
+  font-weight: 900;
+  gap: 10px;
+  height: 72px;
+  padding-bottom: 6px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-keys .mil-launch-primary svg {
+  height: 24px;
+  width: 24px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-secondary {
+  display: flex;
+  gap: 10px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-secondary [data-variant] {
+  flex: 1;
+}
+
+/* 待机时屏幕可以点：透明按钮盖在显示器屏幕上，悬停或聚焦时才显示「CLICK TO PLAY」 */
+:root[data-appearance-mode="millennium"] .mil-launch-screen-wrap {
+  max-width: 100%;
+  position: relative;
+  width: 440px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-screen-wrap .mil-launch-computer {
+  width: 100%;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-screen-hit {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  height: 48.5%;
+  left: 15.42%;
+  margin: 0;
+  padding: 0;
+  position: absolute;
+  top: 9%;
+  width: 69.17%;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-screen-hit:focus-visible {
+  outline: 3px solid var(--mil-on);
+  outline-offset: 2px;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-play-hint {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+:root[data-appearance-mode="millennium"]
+  .mil-launch-screen-wrap:is(:hover, :focus-within)
+  .mil-launch-play-hint {
+  opacity: 1;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-game-label {
+  font-family: "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  font-weight: 700;
+}
+
+:root[data-appearance-mode="millennium"] .mil-launch-scores {
+  display: flex;
+  font-family: var(--mil-font);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  gap: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-appearance-mode="millennium"] :is(.mil-launch-blink, .mil-launch-boot-block, .mil-launch-cells i) {
+    animation: none;
+  }
+}
