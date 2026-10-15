@@ -193,7 +193,7 @@ def main():
         if git(root, env, "status", "--porcelain"):
             git(root, env, "commit", "-m", f"chore: 同步 {tag} 更新清单")
             git(root, env, "push", f"{CNB}.git", f"HEAD:{branch}")
-        with request(f"{CNB}/-/raw/{MANIFEST_BRANCH}/latest.json") as response:
+        with request(f"{CNB}/-/git/raw/{MANIFEST_BRANCH}/latest.json") as response:
             if json.load(response) != manifest:
                 raise RuntimeError("Public update manifest verification failed")
         print(f"Verified CNB release {tag} and public update manifest")
