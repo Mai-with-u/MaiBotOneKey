@@ -94,7 +94,11 @@ def verify_public_asset(tag, name, size):
 def git(cwd, env, *args):
     result = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
     if result.returncode:
-        raise RuntimeError(f"Git {args[0]} failed (check CNB code permissions and tag conflicts)")
+        detail = result.stderr
+        for key in ("CNB_TOKEN", "GH_TOKEN", "GIT_CONFIG_VALUE_0"):
+            if env.get(key):
+                detail = detail.replace(env[key], "[redacted]")
+        raise RuntimeError(f"Git {args[0]} failed: {detail[-2000:]}")
     return result.stdout.strip()
 
 
@@ -125,7 +129,7 @@ def main():
         git(root, env, "init", "--quiet")
         git(root, env, "config", "user.name", "MaiBot Release Sync")
         git(root, env, "config", "user.email", "release-sync@users.noreply.github.com")
-        git(root, env, "fetch", "--depth=1", f"https://github.com/{REPO}.git", f"refs/tags/{tag}:refs/tags/{tag}")
+        git(root, env, "fetch", f"https://github.com/{REPO}.git", f"refs/tags/{tag}:refs/tags/{tag}")
         git(root, env, "push", f"{CNB}.git", f"refs/tags/{tag}:refs/tags/{tag}")
         remote = api(f"{endpoint}/tags/{urllib.parse.quote(tag, safe='')}", token, missing=True)
         if not remote:
