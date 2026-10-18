@@ -285,6 +285,7 @@
       "icon": "resources/icon.png"
     },
     "nsis": {
+      "installerLanguages": ["zh_CN", "en_US"],
       "oneClick": false,
       "perMachine": false,
       "include": "installer.nsh",
