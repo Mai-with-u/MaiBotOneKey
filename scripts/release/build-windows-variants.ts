@@ -51,6 +51,8 @@ const flags = process.argv.slice(2);
 if (flags.some((flag) => !["--snowluma-only", "--standard-only"].includes(flag))) {
   throw new Error("Unsupported Windows packaging option: " + flags.join(" "));
 }
+await run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+  join(root, "scripts/release/prepare-windows-installer.ps1")]);
 if (flags.includes("--snowluma-only")) {
   await buildVariant("snowluma");
 } else {

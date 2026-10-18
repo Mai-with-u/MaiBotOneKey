@@ -30,6 +30,15 @@ async function patchFile(
 
 const nsisTemplateRoot = join(process.cwd(), "node_modules", "app-builder-lib", "templates", "nsis");
 
+// Add a presentation hook without replacing the directory page or its callbacks.
+await patchFile(
+  join(nsisTemplateRoot, "assistedInstaller.nsh"),
+  "style Millennium directory page",
+  /([ \t]*)!insertmacro MUI_PAGE_DIRECTORY/u,
+  '$1!ifdef MAIBOT_MILLENNIUM_INSTALLER\n$1  !define MUI_PAGE_CUSTOMFUNCTION_SHOW MaiDirectoryShow\n$1!endif\n$1!insertmacro MUI_PAGE_DIRECTORY',
+  "!define MUI_PAGE_CUSTOMFUNCTION_SHOW MaiDirectoryShow",
+);
+
 await patchFile(
   join(nsisTemplateRoot, "installSection.nsh"),
   "enable NSIS details output",
