@@ -77,24 +77,6 @@ export function createPreviewSnapshot(): DesktopSnapshot {
       customized: false,
     },
   ],
-  runtimePathConfigs: [
-    {
-      key: "python",
-      label: "Python",
-      kind: "file",
-      value: "开发预览/runtime/python/python.exe",
-      defaultValue: "开发预览/runtime/python/python.exe",
-      customized: false,
-    },
-    {
-      key: "git",
-      label: "Git",
-      kind: "file",
-      value: "开发预览/runtime/git/bin/git.exe",
-      defaultValue: "开发预览/runtime/git/bin/git.exe",
-      customized: false,
-    },
-  ],
   runtimeResourcePathConfigs: [
     {
       key: "maibot",

@@ -89,6 +89,9 @@ jobs:
           Move-Item (Join-Path $payloadRoot "runtime") runtime
           Move-Item (Join-Path $payloadRoot "modules") modules
 
+      - name: Prepare bundled MinGit
+        run: bun run runtime:git
+
       - name: Check release payload
         run: bun run release:check
 

@@ -5,7 +5,7 @@ export function validateDesktopSnapshot(value: unknown): DesktopSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("桌面状态格式错误");
   const snapshot = value as Record<string, unknown>;
   const records = ["paths", "windowState", "initState", "startupAgreement", "terminalSettings", "serviceStartupSettings", "launcherUiSettings", "appIconSettings", "codexPetSettings", "networkProxySettings", "moduleVersions"];
-  const arrays = ["services", "serviceCommands", "runtimePathConfigs", "runtimeResourcePathConfigs", "recentLogs"];
+  const arrays = ["services", "serviceCommands", "runtimeResourcePathConfigs", "recentLogs"];
   for (const key of records) {
     if (!snapshot[key] || typeof snapshot[key] !== "object" || Array.isArray(snapshot[key])) throw new Error(`桌面状态缺失或无效: ${key}`);
   }

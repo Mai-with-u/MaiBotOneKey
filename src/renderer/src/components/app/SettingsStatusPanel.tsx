@@ -39,9 +39,6 @@ import type {
   MaiBotDataResetResult,
   LauncherUiSettings,
   NetworkProxySettings,
-  RuntimePathConfig,
-  RuntimePathKey,
-  RuntimePathUpdate,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -555,96 +552,6 @@ function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }):
   );
 }
 
-function RuntimePathEditor({
-  config,
-  busy,
-  onReset,
-  onSave,
-  onSelect,
-}: {
-  config: RuntimePathConfig;
-  busy: boolean;
-  onReset: (key: RuntimePathKey) => void;
-  onSave: (config: RuntimePathUpdate) => void;
-  onSelect: (key: RuntimePathKey) => Promise<string | null>;
-}): React.JSX.Element {
-  const [value, setValue] = useState(config.value);
-
-  useEffect(() => {
-    setValue(config.value);
-  }, [config.value]);
-
-  const dirty = value.trim() !== config.value;
-
-  return (
-    <div className="settings-section bg-card p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">{config.label}</span>
-            <Badge variant={config.kind === "file" ? "secondary" : "outline"}>
-              {config.kind === "file" ? "文件" : "目录"}
-            </Badge>
-          </div>
-          <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={config.defaultValue}>
-            默认: {config.defaultValue}
-          </p>
-        </div>
-        <Badge variant={config.customized ? "warning" : "secondary"}>
-          {config.customized ? "自定义" : "默认"}
-        </Badge>
-      </div>
-      <div className="flex min-w-0 gap-2">
-        <Input
-          aria-label={`${config.label} 路径`}
-          monospace
-          onChange={(event) => setValue(event.target.value)}
-          placeholder={config.defaultValue}
-          value={value}
-        />
-        <Button
-          aria-label={`选择 ${config.label}`}
-          disabled={busy}
-          onClick={async () => {
-            try {
-              const selected = await onSelect(config.key);
-              if (selected) {
-                setValue(selected);
-              }
-            } catch (error) {
-              toast.error(messageFromError(error));
-            }
-          }}
-          size="sm"
-          variant="outline"
-        >
-          <FolderOpen />
-          选择
-        </Button>
-      </div>
-      <div className="mt-2 flex justify-end gap-2">
-        <Button
-          disabled={busy || (!config.customized && !dirty)}
-          onClick={() => onReset(config.key)}
-          size="sm"
-          variant="ghost"
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-          恢复默认
-        </Button>
-        <Button
-          disabled={busy || !dirty || value.trim().length === 0}
-          onClick={() => onSave({ key: config.key, value: value.trim() })}
-          size="sm"
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <Save />}
-          保存路径
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function ServiceDetail({
   service,
   commandConfig,
@@ -858,10 +765,8 @@ export function SettingsStatusPanel({
   const services = snapshot.services ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
   const serviceCommands = snapshot.serviceCommands ?? [];
-  const runtimePathConfigs = snapshot.runtimePathConfigs ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs;
-  const editableRuntimePathConfigs = runtimePathConfigs.filter((config) => config.key !== "python");
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };
   const launcherUiSettings = { ...defaultLauncherUiSettings, ...snapshot.launcherUiSettings };
@@ -1099,53 +1004,6 @@ export function SettingsStatusPanel({
     },
     [onSnapshot, refreshSnapshot, snapshot],
   );
-
-  const saveRuntimePathConfig = useCallback(
-    async (config: RuntimePathUpdate) => {
-      setBusy(`path:${config.key}`);
-      setError(null);
-      try {
-        const runtimePathConfigs = await window.maibotDesktop?.services.saveRuntimePathConfig(config);
-        if (runtimePathConfigs) {
-          onSnapshot({ ...snapshot, runtimePathConfigs });
-        }
-        await refreshSnapshot();
-      } catch (nextError) {
-        setError(messageFromError(nextError));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [onSnapshot, refreshSnapshot, snapshot],
-  );
-
-  const resetRuntimePathConfig = useCallback(
-    async (key: RuntimePathKey) => {
-      setBusy(`path:${key}`);
-      setError(null);
-      try {
-        const runtimePathConfigs = await window.maibotDesktop?.services.resetRuntimePathConfig(key);
-        if (runtimePathConfigs) {
-          onSnapshot({ ...snapshot, runtimePathConfigs });
-        }
-        await refreshSnapshot();
-      } catch (nextError) {
-        setError(messageFromError(nextError));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [onSnapshot, refreshSnapshot, snapshot],
-  );
-
-  const selectRuntimePathConfig = useCallback(async (key: RuntimePathKey) => {
-    const selectPath = window.maibotDesktop?.services.selectRuntimePathConfig;
-    if (typeof selectPath !== "function") {
-      setError("当前桌面桥接尚未加载运行路径选择功能，请重启 MaiBot OneKey 后再试。");
-      return null;
-    }
-    return selectPath(key);
-  }, []);
 
   const saveTerminalSettings = useCallback(
     async (settings: TerminalSettings) => {
@@ -2107,7 +1965,7 @@ export function SettingsStatusPanel({
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  调试配置用于本地开发和排查更新链路；修改后会影响之后启动的服务或 Git 操作。
+                  调试配置用于本地开发和排查启动链路；修改后会影响之后启动的服务。
                 </p>
 
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
@@ -2159,18 +2017,6 @@ export function SettingsStatusPanel({
                   </label>
                 </div>
 
-                <div className="settings-pair-grid">
-                  {editableRuntimePathConfigs.map((config) => (
-                    <RuntimePathEditor
-                      busy={busy === `path:${config.key}`}
-                      config={config}
-                      key={config.key}
-                      onReset={resetRuntimePathConfig}
-                      onSave={saveRuntimePathConfig}
-                      onSelect={selectRuntimePathConfig}
-                    />
-                  ))}
-                </div>
               </TabsContent>
               ) : null}
 

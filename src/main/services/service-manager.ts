@@ -12,10 +12,6 @@ import type {
   PtyExitEvent,
   PtySessionSnapshot,
   RuntimePaths,
-  RuntimePathConfig,
-  RuntimePathKey,
-  RuntimePathKind,
-  RuntimePathUpdate,
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
@@ -48,13 +44,6 @@ interface ServiceDefinition {
   buildDefaultCommand?: () => Promise<string[]>;
   buildDefaultCommandLine: () => Promise<string>;
   displayDefaultCommandLine?: () => Promise<string>;
-}
-
-interface RuntimePathDefinition {
-  key: RuntimePathKey;
-  label: string;
-  kind: RuntimePathKind;
-  defaultValue: string;
 }
 
 interface ResolvedServiceCommand {
@@ -96,11 +85,6 @@ interface StoredCommandFile {
   services: Partial<Record<ServiceId, StoredServiceCommand>>;
 }
 
-interface StoredRuntimePathFile {
-  version: 1;
-  paths: Partial<Record<RuntimePathKey, string>>;
-}
-
 interface StoredTerminalSettingsFile {
   version: 1;
   useEmbeddedTerminal?: boolean;
@@ -118,7 +102,6 @@ const MAX_RESTART_ATTEMPTS = 3;
 const RESTART_DELAY_MS = 2_500;
 const LOCAL_DASHBOARD_ENV_NAME = "MAIBOT_WEBUI_USE_LOCAL_DASHBOARD";
 const COMMAND_CONFIG_FILE = "service-commands.json";
-const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
 const TERMINAL_SETTINGS_FILE = "terminal-settings.json";
 const SERVICE_STARTUP_SETTINGS_FILE = "service-startup-settings.json";
 const SERVICE_IDS: ServiceId[] = ["maibot", "napcat"];
@@ -158,18 +141,6 @@ function normalizeCommandLine(value: string): string {
     .replace(/\\(["'])(?=\s|$)/gu, "$1");
 }
 
-function normalizePathSeparators(value: string): string {
-  return normalizePathLikeValue(value)
-    .replace(/\\/gu, "/")
-    .replace(/\/+/gu, "/")
-    .replace(/\/$/u, "");
-}
-
-function normalizePathForMatch(value: string): string {
-  const normalized = normalizePathSeparators(value);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -192,33 +163,6 @@ function replaceAllPathVariants(value: string, search: string, replacement: stri
   }
 
   return nextValue;
-}
-
-function relocateBundledModulePath(value: string, paths: RuntimePaths): string {
-  const normalized = normalizePathLikeValue(value);
-  const normalizedWithSlashes = normalizePathSeparators(normalized);
-  const valueForMatch = normalizePathForMatch(normalized);
-  const mappings = [
-    { source: join(paths.bundledModulesRoot, "MaiBot"), target: paths.maibotRoot },
-    { source: join(paths.bundledModulesRoot, "napcat"), target: paths.napcatRoot },
-    { source: join(paths.bundledModulesRoot, "SnowLuma"), target: paths.snowlumaRoot },
-  ];
-
-  for (const mapping of mappings) {
-    const sourceWithSlashes = normalizePathSeparators(mapping.source);
-    const sourceForMatch = normalizePathForMatch(mapping.source);
-    const isBundledRoot = valueForMatch === sourceForMatch;
-    const isBundledChild = valueForMatch.startsWith(`${sourceForMatch}/`);
-    if (!isBundledRoot && !isBundledChild) {
-      continue;
-    }
-
-    const suffix = normalizedWithSlashes.slice(sourceWithSlashes.length);
-    const suffixParts = suffix.split("/").filter(Boolean);
-    return join(mapping.target, ...suffixParts);
-  }
-
-  return normalized;
 }
 
 function relocateBundledModuleReferences(value: string, paths: RuntimePaths): string {
@@ -402,48 +346,6 @@ class ServiceCommandStore {
   }
 }
 
-class RuntimePathStore {
-  private readonly path: string;
-  private cache: StoredRuntimePathFile;
-
-  constructor(private readonly paths: RuntimePaths) {
-    this.path = join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE);
-    this.cache = this.read();
-  }
-
-  get(key: RuntimePathKey): string | undefined {
-    const value = this.cache.paths[key];
-    return value ? relocateBundledModulePath(value, this.paths) || undefined : undefined;
-  }
-
-  async set(key: RuntimePathKey, value: string): Promise<void> {
-    this.cache.paths[key] = relocateBundledModulePath(value, this.paths) || undefined;
-    await this.write();
-  }
-
-  async reset(key: RuntimePathKey): Promise<void> {
-    delete this.cache.paths[key];
-    await this.write();
-  }
-
-  private read(): StoredRuntimePathFile {
-    try {
-      const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredRuntimePathFile;
-      return {
-        version: 1,
-        paths: raw.paths ?? {},
-      };
-    } catch {
-      return { version: 1, paths: {} };
-    }
-  }
-
-  private async write(): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, `${JSON.stringify(this.cache, null, 2)}\n`, "utf8");
-  }
-}
-
 class TerminalSettingsStore {
   private readonly path: string;
   private cache: TerminalSettings;
@@ -537,7 +439,6 @@ export class ServiceManager extends EventEmitter {
   private definitions: ServiceDefinition[];
   private readonly watchdogTimer: NodeJS.Timeout;
   private readonly commandStore: ServiceCommandStore;
-  private readonly runtimePathStore: RuntimePathStore;
   private readonly terminalSettingsStore: TerminalSettingsStore;
   private readonly startupSettingsStore: ServiceStartupSettingsStore;
   private readonly externalProcesses = new Map<ServiceId, ChildProcess>();
@@ -556,7 +457,6 @@ export class ServiceManager extends EventEmitter {
     super();
     this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(paths.snowlumaRoot, paths.userDataRoot);
     this.commandStore = new ServiceCommandStore(paths);
-    this.runtimePathStore = new RuntimePathStore(paths);
     this.terminalSettingsStore = new TerminalSettingsStore(paths);
     this.startupSettingsStore = new ServiceStartupSettingsStore(paths);
     this.definitions = this.createDefinitions();
@@ -810,6 +710,13 @@ export class ServiceManager extends EventEmitter {
           command: displayCommand,
           cwd: resolved.cwd,
         });
+      }
+      if (serviceId === "maibot") {
+        const git = await this.initManager.getGitPath();
+        if (git) {
+          mergedEnv.PATH = [dirname(git), mergedEnv.PATH ?? process.env.PATH ?? process.env.Path ?? ""].join(delimiter);
+          mergedEnv.GIT_PYTHON_GIT_EXECUTABLE = git;
+        }
       }
       this.logs.append(
         serviceId,
@@ -1081,32 +988,6 @@ export class ServiceManager extends EventEmitter {
     await this.commandStore.reset(serviceId);
     this.emit("snapshot", this.snapshot());
     return this.getCommandConfigs();
-  }
-
-  getRuntimePathConfigs(): RuntimePathConfig[] {
-    return this.getRuntimePathDefinitions().map((definition) => this.toRuntimePathConfig(definition));
-  }
-
-  async saveRuntimePathConfig(update: RuntimePathUpdate): Promise<RuntimePathConfig[]> {
-    this.getRuntimePathDefinition(update.key);
-    if (update.key === "python") {
-      await this.runtimePathStore.reset(update.key);
-      this.definitions = this.createDefinitions();
-      this.emit("snapshot", this.snapshot());
-      return this.getRuntimePathConfigs();
-    }
-    await this.runtimePathStore.set(update.key, update.value);
-    this.definitions = this.createDefinitions();
-    this.emit("snapshot", this.snapshot());
-    return this.getRuntimePathConfigs();
-  }
-
-  async resetRuntimePathConfig(key: RuntimePathKey): Promise<RuntimePathConfig[]> {
-    this.getRuntimePathDefinition(key);
-    await this.runtimePathStore.reset(key);
-    this.definitions = this.createDefinitions();
-    this.emit("snapshot", this.snapshot());
-    return this.getRuntimePathConfigs();
   }
 
   getTerminalSettings(): TerminalSettings {
@@ -1509,53 +1390,6 @@ export class ServiceManager extends EventEmitter {
       defaultCwd: definition.cwd,
       defaultCommandLine,
       customized: Boolean(override?.commandLine?.trim()),
-    };
-  }
-
-  private getRuntimePathDefinitions(): RuntimePathDefinition[] {
-    return [
-      {
-        key: "python",
-        label: "Python",
-        kind: "file",
-        defaultValue: this.initManager.getPythonPath(),
-      },
-      {
-        key: "git",
-        label: "Git",
-        kind: "file",
-        defaultValue: this.initManager.getDefaultGitPath(),
-      },
-    ];
-  }
-
-  private getRuntimePathDefinition(key: RuntimePathKey): RuntimePathDefinition {
-    const definition = this.getRuntimePathDefinitions().find((item) => item.key === key);
-    if (!definition) {
-      throw new Error(`Unknown path config: ${key}`);
-    }
-    return definition;
-  }
-
-  private toRuntimePathConfig(definition: RuntimePathDefinition): RuntimePathConfig {
-    if (definition.key === "python") {
-      return {
-        key: definition.key,
-        label: definition.label,
-        kind: definition.kind,
-        value: definition.defaultValue,
-        defaultValue: definition.defaultValue,
-        customized: false,
-      };
-    }
-    const customValue = this.runtimePathStore.get(definition.key);
-    return {
-      key: definition.key,
-      label: definition.label,
-      kind: definition.kind,
-      value: customValue ?? definition.defaultValue,
-      defaultValue: definition.defaultValue,
-      customized: Boolean(customValue),
     };
   }
 

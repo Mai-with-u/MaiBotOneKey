@@ -20,6 +20,7 @@
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
     "check": "bun run typecheck && bun run build",
     "preview": "electron-vite preview",
+    "runtime:git": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev/prepare-mingit.ps1",
     "release:check": "bun run scripts/release/check-windows-payload.ts",
     "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
     "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",

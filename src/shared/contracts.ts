@@ -22,10 +22,6 @@ export type LogStream = "stdout" | "stderr" | "system";
 export type LocalChatConnectionState = "idle" | "connecting" | "connected" | "error";
 export type LocalChatMessageRole = "user" | "bot" | "system" | "error";
 
-export type RuntimePathKey = "python" | "git";
-
-export type RuntimePathKind = "file" | "dir";
-
 export type InitCheckStatus = "ok" | "warning" | "error";
 
 export type CloseAction = "minimize" | "quit";
@@ -85,20 +81,6 @@ export interface ServiceCommandUpdate {
   serviceId: ServiceId;
   cwd: string;
   commandLine: string;
-}
-
-export interface RuntimePathConfig {
-  key: RuntimePathKey;
-  label: string;
-  kind: RuntimePathKind;
-  value: string;
-  defaultValue: string;
-  customized: boolean;
-}
-
-export interface RuntimePathUpdate {
-  key: RuntimePathKey;
-  value: string;
 }
 
 export type RuntimeResourcePathKey = "maibot" | "napcat" | "snowluma";
@@ -336,7 +318,6 @@ export interface DesktopSnapshot {
   runtimeOperation: string | null;
   services: ServiceDescriptor[];
   serviceCommands: ServiceCommandConfig[];
-  runtimePathConfigs: RuntimePathConfig[];
   runtimeResourcePathConfigs: RuntimeResourcePathConfig[];
   terminalSettings: TerminalSettings;
   serviceStartupSettings: ServiceStartupSettings;
@@ -977,9 +958,6 @@ export interface DesktopBridge {
     refresh: () => Promise<ServiceDescriptor[]>;
     saveCommandConfig: (config: ServiceCommandUpdate) => Promise<ServiceCommandConfig[]>;
     resetCommandConfig: (serviceId: ServiceId) => Promise<ServiceCommandConfig[]>;
-    saveRuntimePathConfig: (config: RuntimePathUpdate) => Promise<RuntimePathConfig[]>;
-    resetRuntimePathConfig: (key: RuntimePathKey) => Promise<RuntimePathConfig[]>;
-    selectRuntimePathConfig: (key: RuntimePathKey) => Promise<string | null>;
     saveTerminalSettings: (settings: TerminalSettings) => Promise<TerminalSettings>;
     saveStartupSettings: (settings: ServiceStartupSettings) => Promise<ServiceStartupSettings>;
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;

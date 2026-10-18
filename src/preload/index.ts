@@ -54,9 +54,6 @@ import type {
   QqBackend,
   QqAccountSetupRequest,
   QqComponentUpgradeResult,
-  RuntimePathConfig,
-  RuntimePathKey,
-  RuntimePathUpdate,
   RuntimeResourcePathChangeResult,
   RuntimeResourcePathKey,
   ResourcePathMode,
@@ -269,12 +266,6 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("services:saveCommandConfig", config) as Promise<ServiceCommandConfig[]>,
     resetCommandConfig: (serviceId: ServiceId) =>
       ipcRenderer.invoke("services:resetCommandConfig", serviceId) as Promise<ServiceCommandConfig[]>,
-    saveRuntimePathConfig: (config: RuntimePathUpdate) =>
-      ipcRenderer.invoke("services:saveRuntimePathConfig", config) as Promise<RuntimePathConfig[]>,
-    resetRuntimePathConfig: (key: RuntimePathKey) =>
-      ipcRenderer.invoke("services:resetRuntimePathConfig", key) as Promise<RuntimePathConfig[]>,
-    selectRuntimePathConfig: (key: RuntimePathKey) =>
-      ipcRenderer.invoke("services:selectRuntimePathConfig", key) as Promise<string | null>,
     saveTerminalSettings: (settings: TerminalSettings) =>
       ipcRenderer.invoke("services:saveTerminalSettings", settings) as Promise<TerminalSettings>,
     saveStartupSettings: (settings: ServiceStartupSettings) =>

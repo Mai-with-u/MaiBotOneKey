@@ -72,9 +72,6 @@ import type {
   QqAccountSetupRequest,
   QqComponentUpgradeResult,
   RuntimePaths,
-  RuntimePathConfig,
-  RuntimePathKey,
-  RuntimePathUpdate,
   RuntimeResourcePathChangeResult,
   RuntimeResourcePathKey,
   ResourcePathMode,
@@ -1944,7 +1941,6 @@ export function registerAppIpc({
     runtimeOperation: resourceLocationManager.getOperationLabel(),
     services: serviceManager.snapshot(),
     serviceCommands: await serviceManager.getCommandConfigs(),
-    runtimePathConfigs: serviceManager.getRuntimePathConfigs(),
     runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
     terminalSettings: serviceManager.getTerminalSettings(),
     serviceStartupSettings: serviceManager.getStartupSettings(),
@@ -2103,8 +2099,6 @@ export function registerAppIpc({
     for (const service of serviceManager.snapshot()) {
       await serviceManager.resetCommandConfig(service.id);
     }
-    await serviceManager.resetRuntimePathConfig("python");
-    await serviceManager.resetRuntimePathConfig("git");
     await serviceManager.saveTerminalSettings({
       ...serviceManager.getTerminalSettings(),
       useEmbeddedTerminal: true,
@@ -3130,71 +3124,6 @@ export function registerAppIpc({
       const configs = await serviceManager.resetCommandConfig(serviceId);
       await broadcastSnapshot();
       return configs;
-    },
-  );
-
-  ipcMain.handle(
-    "services:saveRuntimePathConfig",
-    async (_event, config: RuntimePathUpdate): Promise<RuntimePathConfig[]> => {
-      const configs = await serviceManager.saveRuntimePathConfig(config);
-      if (config.key === "git") {
-        initManager.clearDependencyCache();
-      }
-      await broadcastSnapshot();
-      return configs;
-    },
-  );
-
-  ipcMain.handle(
-    "services:resetRuntimePathConfig",
-    async (_event, key: RuntimePathKey): Promise<RuntimePathConfig[]> => {
-      const configs = await serviceManager.resetRuntimePathConfig(key);
-      if (key === "git") {
-        initManager.clearDependencyCache();
-      }
-      await broadcastSnapshot();
-      return configs;
-    },
-  );
-
-  ipcMain.handle(
-    "services:selectRuntimePathConfig",
-    async (_event, key: RuntimePathKey): Promise<string | null> => {
-      const config = serviceManager
-        .getRuntimePathConfigs()
-        .find((item) => item.key === key);
-      if (!config) {
-        throw new Error(`Unknown path config: ${key}`);
-      }
-
-      const mainWindow = getMainWindow();
-      const dialogOptions: Electron.OpenDialogOptions =
-        config.kind === "file"
-          ? {
-              title: `Select ${config.label}`,
-              properties: ["openFile"],
-              filters:
-                key === "git"
-                  ? [
-                      {
-                        name: "Git",
-                        extensions:
-                          process.platform === "win32" ? ["exe"] : ["*"],
-                      },
-                      { name: "全部文件", extensions: ["*"] },
-                    ]
-                  : [{ name: "全部文件", extensions: ["*"] }],
-            }
-          : {
-              title: `Select ${config.label}`,
-              properties: ["openDirectory"],
-            };
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
-      return result.canceled || result.filePaths.length === 0
-        ? null
-        : result.filePaths[0];
     },
   );
 

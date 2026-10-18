@@ -1,3 +1,4 @@
+import { resolveGitPath } from "./git-runtime";
 import { ProtocolComponentManager } from "./protocol-component-manager";
 import { readMaiBotSetupStatus } from "./maibot-setup-client";
 import { runProcess, runWithoutAsar, samePath, sameOrInsidePath } from "./runtime-file-utils";
@@ -10,7 +11,7 @@ import { once } from "node:events";
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream, createWriteStream, existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createGunzip, createGzip } from "node:zlib";
 import { parse as parseToml } from "smol-toml";
 import { QQ_OFFICIAL_ADAPTER_DIRECTORY, QQ_OFFICIAL_ADAPTER_PLUGIN_ID } from "../../shared/qq-official-adapter";
@@ -38,7 +39,6 @@ import type {
   QqProtocol,
   QqProtocolOptions,
   RuntimePaths,
-  RuntimePathKey,
   ServiceId,
   SnowLumaResetResult,
   StartupAgreementConfirmResult,
@@ -47,19 +47,12 @@ import type {
 
 const DEPENDENCY_CACHE_MS = 15_000;
 const PYTHON_RUNTIME_DIR = "python";
-const GIT_RUNTIME_DIR = "git";
 const PYTHON_MINIMUM_VERSION = "3.12";
 const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
 const GIT_DOWNLOAD_URL = "https://git-scm.com/download/win";
 const MAIBOT_FALLBACK_CONFIG_VERSION = "8.10.22";
 const MAIBOT_WEBUI_FALLBACK_HOST = "127.0.0.1";
 const MAIBOT_WEBUI_FALLBACK_PORT = 8001;
-const RUNTIME_PATH_CONFIG_FILE = "runtime-paths.json";
-interface StoredRuntimePathFile {
-  version: 1;
-  paths?: Partial<Record<RuntimePathKey, string>>;
-}
-
 interface MacNapCatQqCleanupResult {
   restoredPackage: boolean;
   cleanedRuntime: boolean;
@@ -92,16 +85,6 @@ function uniqueExistingPaths(paths: string[]): string[] {
   }
 
   return existing;
-}
-
-function readRuntimePathOverride(paths: RuntimePaths, key: RuntimePathKey): string | undefined {
-  try {
-    const raw = JSON.parse(readFileSync(join(paths.userDataRoot, RUNTIME_PATH_CONFIG_FILE), "utf8")) as StoredRuntimePathFile;
-    const value = raw.paths?.[key]?.trim();
-    return value ? resolve(value) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function quoteShellArg(value: string): string {
@@ -642,69 +625,6 @@ function storageCategory(
     latestModifiedAt: stats.latestModifiedAt,
     cleanupTarget,
   };
-}
-
-function cleanPathEntry(entry: string): string {
-  return entry.trim().replace(/^"|"$/gu, "");
-}
-
-function isWindowsAppsAlias(path: string): boolean {
-  return process.platform === "win32" && /\\microsoft\\windowsapps\\git\.exe$/iu.test(path);
-}
-
-function pathGitCandidates(): string[] {
-  const names = process.platform === "win32" ? ["git.exe"] : ["git"];
-  const pathEntries = (process.env.PATH ?? "")
-    .split(delimiter)
-    .map(cleanPathEntry)
-    .filter(Boolean);
-  const candidates: string[] = [];
-
-  for (const entry of pathEntries) {
-    for (const name of names) {
-      const candidate = join(entry, name);
-      if (!isWindowsAppsAlias(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-  }
-
-  return candidates;
-}
-
-function systemGitCandidates(): string[] {
-  if (process.platform !== "win32") {
-    return [
-      ...pathGitCandidates(),
-      "/usr/bin/git",
-      "/usr/local/bin/git",
-      "/opt/homebrew/bin/git",
-    ];
-  }
-
-  const candidates: string[] = [];
-  const addWindowsGitRoot = (root: string | undefined): void => {
-    if (!root) return;
-    candidates.push(
-      join(root, "Git", "cmd", "git.exe"),
-      join(root, "Git", "bin", "git.exe"),
-      join(root, "Git", "mingw64", "bin", "git.exe"),
-    );
-  };
-
-  addWindowsGitRoot(process.env.ProgramFiles);
-  addWindowsGitRoot(process.env["ProgramFiles(x86)"]);
-  addWindowsGitRoot(process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs") : undefined);
-
-  if (process.env.USERPROFILE) {
-    candidates.push(join(process.env.USERPROFILE, "scoop", "apps", "git", "current", "cmd", "git.exe"));
-  }
-  if (process.env.ProgramData) {
-    candidates.push(join(process.env.ProgramData, "chocolatey", "bin", "git.exe"));
-  }
-
-  candidates.push(...pathGitCandidates());
-  return candidates;
 }
 
 const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName: string; envVar: string }> = [
@@ -1950,22 +1870,8 @@ export class InitManager {
     return this.getBundledPythonPath() ?? this.getBundledPythonCandidates()[0];
   }
 
-  getGitPath(): string {
-    const customGit = readRuntimePathOverride(this.paths, "git");
-    if (customGit) {
-      return customGit;
-    }
-
-    return this.getDefaultGitPath();
-  }
-
-  getDefaultGitPath(): string {
-    const bundledGit = this.getBundledGitPath();
-    if (bundledGit) {
-      return bundledGit;
-    }
-
-    return this.findSystemGitPath() ?? this.getBundledGitCandidates()[0];
+  getGitPath(): Promise<string | undefined> {
+    return resolveGitPath(this.paths.runtimeRoot);
   }
 
   private getPythonRoot(): string {
@@ -1985,28 +1891,6 @@ export class InitManager {
 
   private getBundledPythonPath(): string | undefined {
     return uniqueExistingPaths(this.getBundledPythonCandidates())[0];
-  }
-
-  private getGitRoot(): string {
-    return join(this.paths.runtimeRoot, GIT_RUNTIME_DIR);
-  }
-
-  private getBundledGitCandidates(): string[] {
-    const root = this.getGitRoot();
-    return [
-      join(root, "bin", "git.exe"),
-      join(root, "cmd", "git.exe"),
-      join(root, "git.exe"),
-      join(root, "bin", "git"),
-    ];
-  }
-
-  private getBundledGitPath(): string | undefined {
-    return uniqueExistingPaths(this.getBundledGitCandidates())[0];
-  }
-
-  private findSystemGitPath(): string | undefined {
-    return uniqueExistingPaths(systemGitCandidates())[0];
   }
 
   private checkRuntimeRoot(): InitCheck {
@@ -2497,10 +2381,8 @@ export class InitManager {
       }
     }
 
-    const git = this.getGitPath();
-    const bundledGit = this.getBundledGitPath();
-    const gitSource = bundledGit && samePath(bundledGit, git) ? "内置 Git" : "系统 Git";
-    if (!existsSync(git)) {
+    const git = await this.getGitPath();
+    if (!git) {
       checks.push({
         id: "git-runtime",
         label: "Git",
@@ -2511,26 +2393,13 @@ export class InitManager {
         actionUrl: GIT_DOWNLOAD_URL,
       });
     } else {
-      try {
-        const output = await runProcess(git, ["--version"], this.paths.installRoot);
-        checks.push({
-          id: "git-runtime",
-          label: "Git",
-          status: "ok",
-          detail: output ? `${output} (${gitSource})` : `${gitSource} 可启动`,
-          path: git,
-        });
-      } catch (error) {
-        checks.push({
+      checks.push({
         id: "git-runtime",
         label: "Git",
-        status: isMaiBotPackageMode(this.paths) ? "warning" : "error",
-        detail: `Git 损坏或不可启动: ${toDetail(error)}`,
+        status: "ok",
+        detail: sameOrInsidePath(this.paths.runtimeRoot, git) ? "内置 Git 可启动" : "系统 Git 可启动",
         path: git,
-        actionLabel: "下载 Git",
-        actionUrl: GIT_DOWNLOAD_URL,
       });
-      }
     }
 
     this.dependencyCache = { expiresAt: Date.now() + DEPENDENCY_CACHE_MS, checks };
@@ -2566,7 +2435,6 @@ export class InitManager {
         label: "Git",
         status: "warning",
         detail: "后台检查中",
-        path: this.getGitPath(),
       },
     ];
   }

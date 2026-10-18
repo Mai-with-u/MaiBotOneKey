@@ -2,6 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import process from "node:process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { MAIBOT_BUNDLED_AGREEMENTS_VERSION } from "../../src/main/services/maibot-deployment-state";
 
 type PathKind = "file" | "dir";
@@ -109,9 +110,9 @@ const requirements: Requirement[] = [
     candidates: [dir("runtime/git")],
   },
   {
-    label: "embedded Git executable",
+    label: "embedded MinGit executable",
     required: true,
-    candidates: [file("runtime/git/bin/git.exe"), file("runtime/git/cmd/git.exe"), file("runtime/git/git.exe")],
+    candidates: [file("runtime/git/cmd/git.exe")],
   },
   {
     label: "modules directory",
@@ -345,6 +346,9 @@ function describeCandidates(candidates: Candidate[]): string {
 }
 
 async function main(): Promise<void> {
+  if (existsSync(join(root, "runtime/git/git-bash.exe"))) {
+    throw new Error("Replace full PortableGit with MinGit: bun run runtime:git");
+  }
   const failures: Requirement[] = [];
 
   console.log("Checking Windows release payload...");

@@ -82,7 +82,7 @@ MaiBot 更新窗口的正式版和历史版本来自 Python 包索引，使用�
 
 ## Windows 打包
 
-Windows x64 NSIS 默认构建标准包 `MaiBot-OK-<version>-win.exe`，也可单独构建不含 NapCat 的 SnowLuma 版 `MaiBot-OK-<version>-win-snowluma.exe`。两版都包含干净的基础 Python、内置 Git、MaiBot 首次安装协议、SnowLuma 与共享适配器插件；标准包额外包含 NapCat，SnowLuma 版首次使用默认选择 SnowLuma。MaiBot 源码不会进入安装包；首次启动时将基础 Python 复制到实例的独立环境并通过 PyPI 安装指定版本。
+Windows x64 NSIS 默认构建标准包 `MaiBot-OK-<version>-win.exe`，也可单独构建不含 NapCat 的 SnowLuma 版 `MaiBot-OK-<version>-win-snowluma.exe`。两版都包含干净的基础 Python、内置 MinGit、MaiBot 首次安装协议、SnowLuma 与共享适配器插件；标准包额外包含 NapCat，SnowLuma 版首次使用默认选择 SnowLuma。MaiBot 源码不会进入安装包；首次启动时将基础 Python 复制到实例的独立环境并通过 PyPI 安装指定版本。
 
 打包前需要在仓库根目录放好 payload：
 
@@ -94,7 +94,7 @@ runtime/
     Lib/
     Scripts/pip.exe
   git/
-    bin/git.exe
+    cmd/git.exe
 modules/
   MaiBot/
     plugins/
@@ -103,6 +103,8 @@ modules/
   napcat/
   SnowLuma/
 ```
+
+Windows 内置 Git 使用官方 MinGit，通过 `bun run runtime:git` 下载固定版本并校验 SHA-256，替换 `runtime/git`。启动 MaiBot 时优先使用可运行的内置 Git，仅在其缺失或损坏时尝试系统 Git；路径注入子进程的 `PATH` 和 `GIT_PYTHON_GIT_EXECUTABLE`，不修改系统环境变量，不支持自定义 Git 路径。
 
 `runtime/python` 必须保持为便携 Python，只允许 Python 自身、`pip`/`setuptools`/`wheel` 以及启动依赖解析需要的 `packaging`；不要把 MaiBot、dashboard 或其它应用依赖预装进 `runtime/python/Lib/site-packages`。macOS 包内路径是 `runtime/python/bin/python3.12` 或同版本真实二进制，Windows 包内路径是 `runtime/python/python.exe`。
 
