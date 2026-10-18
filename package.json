@@ -14,6 +14,7 @@
     "dev:dev": "bun run scripts/dev/start-dev.ts --mode source --local-dashboard",
     "dev:build": "bun run scripts/dev/build-local-dashboard.ts",
     "dev:reset": "bun run scripts/dev/reset-dev-state.ts",
+    "dev:fullreset": "bun run scripts/dev/reset-dev-state.ts --full",
     "dev:fresh": "bun run dev:reset && bun run dev",
     "dev:web": "vite --config vite.renderer.config.ts",
     "dev:ui": "vite --config vite.renderer.config.ts --open /controls.html",

@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { homedir, platform } from "node:os";
-import { readMaiBotDeployment } from "../../src/main/services/maibot-deployment-state";
+import { MAIBOT_DEPLOYMENT_FILE, readMaiBotDeployment } from "../../src/main/services/maibot-deployment-state";
 
 const RESOURCE_PATHS_FILE = "resource-paths.json";
 
@@ -115,6 +115,22 @@ async function removePath(path: string, label: string, dryRun: boolean): Promise
 
 const COMPONENT_STATE_DIRECTORIES = ["config", "data", "logs", "cache", "temp", "tmp"] as const;
 
+export function fullResetTargets(maibotRoot: string): Array<{ path: string; label: string }> {
+  assertNotFilesystemRoot(maibotRoot, "MaiBot full reset root");
+  if (existsSync(maibotRoot) && lstatSync(maibotRoot).isSymbolicLink()) {
+    throw new Error(`MaiBot full reset root must not be a symbolic link: ${maibotRoot}`);
+  }
+  const targets: Array<{ path: string; label: string }> = [];
+  for (const name of [".onekey", MAIBOT_DEPLOYMENT_FILE, ...COMPONENT_STATE_DIRECTORIES]) {
+    const target = join(maibotRoot, name);
+    if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
+      throw new Error(`MaiBot full reset target must not be a symbolic link: ${target}`);
+    }
+    addTarget(targets, maibotRoot, name, `MaiBot ${name}`);
+  }
+  return targets;
+}
+
 function addTarget(
   targets: Array<{ path: string; label: string }>,
   root: string,
@@ -183,6 +199,7 @@ async function addAdapterConfigTargets(
 
 async function main(): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
+  const full = process.argv.includes("--full");
   const installRoot = resolve(process.cwd());
   const installScope = createInstallScope(installRoot);
   const userDataRoot = join(appDataRoot(), "MaiBotOneKeyDesktop", installScope);
@@ -209,6 +226,14 @@ async function main(): Promise<void> {
     { path: maibotConfigDir, label: "MaiBot config" },
     { path: maibotDataDir, label: "MaiBot data" },
   ];
+  if (full) {
+    // Resetting launcher settings selects the default instance next time, even
+    // when the current instance was customized. Neither may retain an install.
+    for (const root of new Set([maibotRoot, defaultMaiBotRoot])) {
+      assertLooksLikeMaiBotRoot(root, defaultMaiBotRoot);
+      targets.push(...fullResetTargets(root));
+    }
+  }
   assertNotFilesystemRoot(napcatRoot, "NapCat root");
   assertNotFilesystemRoot(snowlumaRoot, "SnowLuma root");
 
@@ -233,12 +258,13 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log("[reset-dev-state] Targets:");
-  for (const target of targets) {
+  const uniqueTargets = [...new Map(targets.map((target) => [resolve(target.path), target])).values()];
+  console.log(`[reset-dev-state] ${full ? "Full reset" : "State reset"} targets:`);
+  for (const target of uniqueTargets) {
     console.log(`  ${target.label}: ${target.path}`);
   }
 
-  for (const target of targets) {
+  for (const target of uniqueTargets) {
     await removePath(target.path, target.label, dryRun);
   }
 

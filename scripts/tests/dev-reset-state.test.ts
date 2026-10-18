@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
-import { assertLooksLikeMaiBotRoot, readStoredComponentRoots } from "../dev/reset-dev-state";
+import { assertLooksLikeMaiBotRoot, fullResetTargets, readStoredComponentRoots } from "../dev/reset-dev-state";
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -64,4 +64,62 @@ test("dev reset dry run works in a fresh template-only workspace without deletin
   const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   expect(code).toBe(0); expect(error).toBe(""); expect(output).toContain("Dry run complete.");
   expect(existsSync(template)).toBe(true); expect(existsSync(join(instance, "config"))).toBe(false);
+});
+
+async function runReset(root: string, args: string[]) {
+  const child = Bun.spawn([process.execPath, resolve("scripts/dev/reset-dev-state.ts"), ...args], {
+    cwd: root, stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, APPDATA: join(root, "appdata"), XDG_CONFIG_HOME: join(root, "appdata") },
+  });
+  const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(error).toBe("");
+  expect(code).toBe(0);
+  return output;
+}
+
+async function installedFixture() {
+  const { root, instance } = await fixture();
+  const environment = join(instance, ".onekey", "environments", "test-env", "python.exe");
+  const plugin = join(instance, "plugins", "custom-plugin", "plugin.py");
+  const runtime = join(root, "runtime", "python", "python.exe");
+  const deployment = join(instance, ".onekey-deployment.json");
+  for (const path of [environment, plugin, runtime, join(instance, "config", "bot_config.toml"), join(instance, ".onekey", "snapshots", "test-env", "snapshot.json")]) {
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, "fixture");
+  }
+  await writeFile(deployment, JSON.stringify({ schema: 1, mode: "pypi", generation: "test-env", packageVersion: "1.3.8", sourceUrl: "https://pypi.org/simple", installedAt: Date.now() }));
+  return { root, instance, environment, plugin, runtime, deployment };
+}
+
+test("full reset preview preserves installs; full reset removes install and rollback environments but preserves plugin code and bundled Python", async () => {
+  const { root, instance, environment, plugin, runtime, deployment } = await installedFixture();
+  const output = await runReset(root, ["--full", "--dry-run"]);
+  expect(output).toContain("Full reset targets");
+  expect(output).toContain(deployment);
+  expect(existsSync(environment)).toBe(true);
+  expect(existsSync(deployment)).toBe(true);
+  await runReset(root, ["--full"]);
+  expect(existsSync(join(instance, ".onekey"))).toBe(false);
+  expect(existsSync(deployment)).toBe(false);
+  expect(existsSync(join(instance, "config"))).toBe(false);
+  expect(existsSync(plugin)).toBe(true);
+  expect(existsSync(runtime)).toBe(true);
+});
+
+test("ordinary reset continues to preserve the installed MaiBot environment", async () => {
+  const { root, instance, environment, deployment } = await installedFixture();
+  await runReset(root, []);
+  expect(existsSync(environment)).toBe(true);
+  expect(existsSync(deployment)).toBe(true);
+  expect(existsSync(join(instance, "config"))).toBe(false);
+});
+
+test("full reset rejects filesystem roots and linked installation directories", async () => {
+  const { root, instance } = await fixture();
+  expect(() => fullResetTargets(parse(root).root)).toThrow("filesystem root");
+  const outside = join(root, "other");
+  await mkdir(outside);
+  await mkdir(instance, { recursive: true });
+  await symlink(outside, join(instance, ".onekey"), "junction");
+  expect(() => fullResetTargets(instance)).toThrow("symbolic link");
 });
