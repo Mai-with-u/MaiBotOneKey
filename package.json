@@ -16,6 +16,7 @@
     "dev:reset": "bun run scripts/dev/reset-dev-state.ts",
     "dev:fresh": "bun run dev:reset && bun run dev",
     "dev:web": "vite --config vite.renderer.config.ts",
+    "dev:ui": "vite --config vite.renderer.config.ts --open /controls.html",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
     "check": "bun run typecheck && bun run build",

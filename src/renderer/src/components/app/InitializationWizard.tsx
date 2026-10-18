@@ -2,12 +2,12 @@ import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { watchSetupCompletion } from "@/lib/setup-completion";
 import { initializationStatus } from "@/lib/initialization-status";
 import {
-  CheckCircle2,
   Loader2,
   RotateCcw,
-  ShieldAlert,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { transitionStartupScene } from "@/lib/startup-transition";
 import type {
   DesktopSnapshot,
   LogEntry,
@@ -16,21 +16,16 @@ import type {
   PythonPackageSourcePreset,
   ServiceDescriptor,
 } from "@shared/contracts";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-} from "@/components/ui/dialog";
-import { Progress } from "@/components/ui/progress";
+import { InitializationPage } from "./InitializationPage";
 
 interface InitializationWizardProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenTab: (tab: string) => void;
+  onPreparingChange: (preparing: boolean) => void;
+  webuiState: "loading" | "ready" | "error";
+  onReloadWebui: () => void;
 }
 
 const STARTUP_WIZARD_KEY = "maibot-startup-wizard-seen";
@@ -43,7 +38,7 @@ function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function readStartupWizardSeen(): boolean {
+export function readStartupWizardSeen(): boolean {
   try {
     return localStorage.getItem(STARTUP_WIZARD_KEY) === "1";
   } catch {
@@ -75,7 +70,7 @@ function dependencyLogs(entries: LogEntry[]): LogEntry[] {
         entry.message.includes("dependency") ||
         entry.message.includes("pip"),
     )
-    .slice(-8);
+    .slice(-200);
 }
 
 function delay(ms: number): Promise<void> {
@@ -86,6 +81,9 @@ export function InitializationWizard({
   snapshot,
   onSnapshot,
   onOpenTab,
+  onPreparingChange,
+  webuiState,
+  onReloadWebui,
 }: InitializationWizardProps): React.JSX.Element | null {
   const [seen, setSeen] = useState(readStartupWizardSeen);
   const [busy, setBusy] = useState(false);
@@ -101,6 +99,7 @@ export function InitializationWizard({
   const autoStartRequested = useRef(false);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupRunId = useRef(0);
+  const handingOff = useRef(false);
   const agreementPending = !snapshot.startupAgreement.isConfirmed;
   const service = maibotServiceFrom(snapshot);
   const logs = useMemo(
@@ -110,9 +109,11 @@ export function InitializationWizard({
   const running = service?.status === "running";
   const ready = running && service?.health === "ready";
   const starting = service?.status === "starting";
-  const statusAnimating = busy || starting || (running && !ready);
+  const statusAnimating = busy || starting || (running && (!ready || webuiState === "loading"));
   const open = !agreementPending && !seen;
-  const status = initializationStatus(service, busy, preparation);
+  const status = ready && webuiState !== "ready"
+    ? { progress: 96, detail: "正在加载 MaiBot 首页" }
+    : initializationStatus(service, busy, preparation);
   const restartDownloadVisible = step === "core" && starting && !running;
 
   useEffect(() => {
@@ -168,13 +169,6 @@ export function InitializationWizard({
     markStartupWizardSeen();
     setSeen(true);
   }, []);
-  const preventWizardDismiss = useCallback((event: { preventDefault: () => void }) => {
-    event.preventDefault();
-  }, []);
-  const ignoreWizardOpenChange = useCallback((_next: boolean) => {
-    // Runtime readiness and Core setup status own this flow; dismissing the dialog does not complete it.
-  }, []);
-
   const runMaiCoreStartup = useCallback(
     async ({
       repairFirst,
@@ -200,10 +194,6 @@ export function InitializationWizard({
           return;
         }
         await waitForMaiBotWebUi();
-        if (startupRunId.current === runId) {
-          onOpenTab("maibot");
-          setStep("webui");
-        }
       } catch (nextError) {
         if (startupRunId.current === runId) {
           setError(messageFromError(nextError));
@@ -215,7 +205,7 @@ export function InitializationWizard({
         }
       }
     },
-    [onOpenTab, refreshSnapshot, waitForMaiBotWebUi],
+    [refreshSnapshot, waitForMaiBotWebUi],
   );
 
   const startMaiCore = useCallback(async () => {
@@ -324,11 +314,23 @@ export function InitializationWizard({
   }, [startMaiCore]);
 
   useEffect(() => {
-    if (!open || step !== "core" || !ready) return;
-    // A Core already running when the shell mounts needs the same handoff.
-    onOpenTab("maibot");
-    setStep("webui");
-  }, [onOpenTab, open, ready, step]);
+    if (!open || step !== "core" || !ready || webuiState !== "ready" || handingOff.current) return;
+    handingOff.current = true;
+    let cancelled = false;
+    // Defer outside the effect so reduced-motion fallback can also flush safely.
+    void Promise.resolve().then(() => transitionStartupScene(async () => {
+      if (cancelled) return;
+      flushSync(() => {
+        onOpenTab("maibot");
+        setStep("webui");
+      });
+    })).catch((nextError: unknown) => {
+      if (cancelled) return;
+      handingOff.current = false;
+      setError(messageFromError(nextError));
+    });
+    return () => { cancelled = true; handingOff.current = false; };
+  }, [onOpenTab, open, ready, step, webuiState]);
 
   useEffect(() => {
     if (!open || step !== "webui" || !ready) return;
@@ -337,64 +339,17 @@ export function InitializationWizard({
     return watchSetupCompletion(() => init.getMaiBotSetupStatus(), close);
   }, [close, open, ready, step]);
 
+  useLayoutEffect(() => {
+    onPreparingChange(!seen && step === "core");
+  }, [onPreparingChange, seen, step]);
+
   // MaiBot owns its setup UI; no host overlay or duplicate completion button.
-  if (step === "webui") return null;
+  if (!open || step === "webui") return null;
 
-  return (
-    <Dialog open={open} onOpenChange={ignoreWizardOpenChange}>
-      <DialogContent
-        onEscapeKeyDown={preventWizardDismiss}
-        onFocusOutside={preventWizardDismiss}
-        onInteractOutside={preventWizardDismiss}
-        onPointerDownOutside={preventWizardDismiss}
-        showCloseButton={false}
-        size="lg"
-      >
-        <DialogHeader
-          title={
-            <span className="text-3xl font-bold tracking-normal">准备麦麦运行环境</span>
-          }
-          tone="default"
-        />
-
-        <DialogBody className="space-y-4">
-          {step === "core" ? (
-            <>
-              <section className="rounded-lg border border-border bg-muted/40 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                      首次启动会准备 Python 环境、安装 MaiBot 及依赖，完成验证和初始化后启动。
-                    </p>
-                  </div>
-                  <Badge
-                    className={`min-w-[7rem] justify-center rounded-md px-4 py-2 text-sm font-bold tracking-wide shadow-md ring-2 ${
-                      ready ? "ring-primary/30" : "ring-warning/40"
-                    }`}
-                    dot
-                    variant={
-                      ready
-                        ? "success"
-                        : running || starting || busy
-                          ? "warning"
-                          : "secondary"
-                    }
-                  >
-                    {ready
-                      ? "WebUI 已就绪"
-                      : running
-                        ? "等待 WebUI"
-                        : starting || busy
-                          ? "初始化中"
-                          : "准备中"}
-                  </Badge>
-                </div>
-
-                <div className="mt-4 flex items-end gap-3">
-                <label className="grid min-w-0 flex-1 gap-1.5 text-xs font-medium">
-                  依赖源
+  const sourceSelector = (
                   <select
-                    className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    aria-label="Python 依赖源"
+                    className="h-8 w-24 max-w-[8rem] shrink-0 rounded-md border border-input bg-background px-2 text-xs font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                     disabled={
                       !pythonDeps ||
                       sourceSaving ||
@@ -432,85 +387,24 @@ export function InitializationWizard({
                       </option>
                     ))}
                   </select>
-                </label>
+  );
 
-                {restartDownloadVisible ? (
-                    <Button
-                      className="h-9 shrink-0"
-                      disabled={
-                        !pythonDeps || sourceSaving || downloadRestarting
-                      }
-                      onClick={() => void restartDependencyDownload()}
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      {downloadRestarting ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <RotateCcw />
-                      )}
-                      {downloadRestarting ? "正在重新下载" : "重新开始下载"}
-                    </Button>
-                ) : null}
-                </div>
-
-                <div className="mt-4 space-y-2">
-                  <Progress value={status.progress} />
-                  <p className="text-xs text-muted-foreground">
-                    {status.detail}
-                    {statusAnimating ? statusEllipsis : ""}
-                  </p>
-                </div>
-              </section>
-
-              <section className="p-4">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase text-muted-foreground">
-                  {ready ? (
-                    <CheckCircle2 className="size-3.5 text-success" />
-                  ) : (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  )}
-                  安装进度
-                </div>
-                <div className="mt-3 max-h-48 space-y-1 overflow-auto rounded-md border border-border p-3">
-                  {logs.length > 0 ? (
-                    logs.map((entry) => (
-                      <p
-                        className="font-mono text-[11px] leading-relaxed text-muted-foreground"
-                        key={entry.id}
-                      >
-                        {entry.message}
-                      </p>
-                    ))
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      初始化开始后，环境准备、MaiBot 和依赖的安装日志会显示在这里。
-                    </p>
-                  )}
-                </div>
-              </section>
-            </>
-          ) : null}
-
-          {error ? (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
-              <ShieldAlert className="size-3.5 shrink-0" />
-              <span>{error}</span>
-            </div>
-          ) : null}
-
-        </DialogBody>
-
-        {step === "core" && error && !busy && !starting ? (
-          <DialogFooter>
-            <Button onClick={retry} size="sm">
-              <RotateCcw />
-              重试
-            </Button>
-          </DialogFooter>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+  return (
+    <InitializationPage
+      status={`${status.detail}${statusAnimating ? statusEllipsis : ""}`}
+      progress={status.progress}
+      active={statusAnimating}
+      error={error || (ready && webuiState === "error" ? "MaiBot 首页加载失败，请重新加载。" : service?.status === "error" ? service.error || service.detail || "MaiBot 启动失败" : null)}
+      sourceSelector={sourceSelector}
+      logs={logs}
+      actions={restartDownloadVisible || (error && !busy && !starting) || (ready && webuiState === "error") ? <>
+        {ready && webuiState === "error" ? <Button onClick={onReloadWebui} size="sm"><RotateCcw />重新加载首页</Button> : null}
+        {restartDownloadVisible ? <Button disabled={!pythonDeps || sourceSaving || downloadRestarting} onClick={() => void restartDependencyDownload()} size="sm" variant="outline">
+          {downloadRestarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+          {downloadRestarting ? "正在重新下载" : "重新开始下载"}
+        </Button> : null}
+        {error && !busy && !starting ? <Button onClick={retry} size="sm"><RotateCcw />重试</Button> : null}
+      </> : undefined}
+    />
   );
 }

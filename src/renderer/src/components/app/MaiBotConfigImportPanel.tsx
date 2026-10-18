@@ -93,7 +93,7 @@ export function MaiBotConfigImportPanel({ disabled = false }: { disabled?: boole
   };
 
   return (
-        <Card>
+        <Card variant="flat">
           <CardHeader>
             <div className="flex items-start gap-3">
               <span className="retro-control grid size-9 shrink-0 place-items-center text-primary">

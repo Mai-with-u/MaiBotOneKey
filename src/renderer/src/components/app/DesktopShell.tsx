@@ -39,7 +39,7 @@ import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance, usesRetroStructure } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { DependencyPreparationNotice } from "./DependencyPreparationNotice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -51,9 +51,10 @@ import { Toaster } from "@/components/ui/sonner";
 import maiMascotImage from "@/assets/mai2.png";
 import { MessagePlatformPanel } from "./MessagePlatformPanel";
 import { MillenniumStatusPanel, type MillenniumServicePhase } from "./MillenniumStatusPanel";
-import { InitializationWizard } from "./InitializationWizard";
+import { MaiBotOverviewCard } from "./MaiBotOverviewCard";
+import { InitializationWizard, readStartupWizardSeen } from "./InitializationWizard";
 import { SettingsStatusPanel } from "./SettingsStatusPanel";
-import { StartupAgreementDialog } from "./StartupAgreementDialog";
+import { StartupAgreementPage } from "./StartupAgreementPage";
 import { TerminalPanel } from "./TerminalPanel";
 import { Titlebar } from "./Titlebar";
 import { WebviewPanel } from "./WebviewPanel";
@@ -112,122 +113,6 @@ function isDependencyPreparationLog(entry: LogEntry): boolean {
       entry.message.includes("dependency needs install") ||
       entry.message.includes("removed legacy Python dependency directory")
     )
-  );
-}
-
-function dependencyPreparationProgress(
-  service: ServiceDescriptor | undefined,
-  logs: LogEntry[],
-): number {
-  if (service?.status === "error") {
-    return 100;
-  }
-  if (service?.status === "running" && service.health === "ready") {
-    return 100;
-  }
-  if (service?.status === "running") {
-    return 92;
-  }
-
-  const messages = logs.map((entry) => entry.message).join("\n");
-  if (/dependency upgrade completed|依赖检查完成/iu.test(messages) || service?.detail?.includes("依赖检查完成")) {
-    return 86;
-  }
-  if (/Installing collected packages|pip is writing|pip install using/iu.test(messages)) {
-    return 68;
-  }
-  if (/dependency needs install|checking MaiBot dependencies|检查 MaiBot/iu.test(messages)) {
-    return 46;
-  }
-  if (/copying bundled Python|portable Python ready|python-env/iu.test(messages)) {
-    return 28;
-  }
-  return service?.status === "starting" ? 18 : 0;
-}
-
-function dependencyPreparationTitle(service: ServiceDescriptor | undefined): string {
-  if (service?.status === "error") {
-    return "MaiBot 依赖准备失败";
-  }
-  if (service?.status === "running") {
-    return "MaiBot 依赖准备完成";
-  }
-  return "正在准备 MaiBot 启动环境";
-}
-
-function DependencyMigrationCard({
-  logs,
-  service,
-}: {
-  logs: LogEntry[];
-  service: ServiceDescriptor | undefined;
-}): React.JSX.Element | null {
-  const runStartedAt = service?.startedAt ?? (service?.status === "starting" ? Date.now() - 5 * 60 * 1000 : undefined);
-  const scopedLogs = runStartedAt === undefined
-    ? logs
-    : logs.filter((entry) => entry.timestamp >= runStartedAt - 1000);
-  const visible =
-    service?.status === "starting" &&
-    (
-      service.detail?.includes("依赖") ||
-      scopedLogs.length > 0
-    );
-  const failed = service?.status === "error" && (
-    service.error?.includes("依赖") ||
-    service.detail?.includes("依赖") ||
-    scopedLogs.length > 0
-  );
-  if (!visible && !failed) {
-    return null;
-  }
-
-  const progress = dependencyPreparationProgress(service, scopedLogs);
-  const recentLogs = scopedLogs.slice(-8);
-
-  return (
-    <section
-      aria-live="polite"
-      data-failed={failed ? "true" : undefined}
-      className="dependency-migration-card fixed bottom-4 right-4 z-40 w-[min(420px,calc(100vw-2rem))] overflow-hidden p-4 text-popover-foreground"
-    >
-      <div className="flex items-start gap-3">
-        <div
-          className={cn(
-            "dependency-migration-icon mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border",
-            failed ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-primary/20 bg-primary/10 text-primary",
-          )}
-        >
-          <Loader2 className={cn("size-4", !failed && "animate-spin")} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="truncate text-sm font-semibold">
-              {dependencyPreparationTitle(service)}
-            </h2>
-            <span className="font-mono text-xs text-muted-foreground">
-              {Math.round(progress)}%
-            </span>
-          </div>
-          <Progress
-            className={cn("mt-2", failed && "[&_[data-slot=progress-indicator]]:bg-destructive")}
-            value={progress}
-          />
-          <div className="dependency-migration-log mt-3 min-h-32 max-h-40 space-y-1 overflow-auto rounded-md border p-2">
-            {recentLogs.length > 0 ? (
-              recentLogs.map((entry) => (
-                <p className="font-mono text-[11px] leading-relaxed text-muted-foreground" key={entry.id}>
-                  {entry.message}
-                </p>
-              ))
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                正在创建 python-env，随后会安装缺失依赖。
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -1211,6 +1096,8 @@ function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | nul
 export function DesktopShell(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState("maibot");
+  const [preparing, setPreparing] = useState(() => !readStartupWizardSeen());
+  const [maiBotPageState, setMaiBotPageState] = useState<"loading" | "ready" | "error">("loading");
   const openMessagePlatformFromWebui = useCallback(() => setActiveTab("message-platform"), []);
   const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
   const [maibotCoreHost, setMaibotCoreHost] = useState<HTMLDivElement | null>(null);
@@ -1221,6 +1108,10 @@ export function DesktopShell(): React.JSX.Element {
   }));
   const [maibotWebviewPath, setMaibotWebviewPath] = useState<string | null>("/");
   const [maibotWebviewNavigationRequest, setMaibotWebviewNavigationRequest] = useState(0);
+  const reloadStartupWebui = useCallback(() => {
+    setMaiBotPageState("loading");
+    setMaibotWebviewNavigationRequest((current) => current + 1);
+  }, []);
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -1310,7 +1201,7 @@ export function DesktopShell(): React.JSX.Element {
   );
   const maibotService = serviceById.get("maibot");
   const dependencyMigrationLogs = useMemo(
-    () => (snapshot?.recentLogs ?? []).filter(isDependencyPreparationLog).slice(-12),
+    () => (snapshot?.recentLogs ?? []).filter(isDependencyPreparationLog).slice(-200),
     [snapshot?.recentLogs],
   );
   // Process startup precedes HTTP readiness. Keep the status page until the
@@ -1825,7 +1716,12 @@ export function DesktopShell(): React.JSX.Element {
     />
   );
 
-  if (floatingMode) {
+  const agreementPending = Boolean(snapshot && !snapshot.startupAgreement.isConfirmed);
+  // Until the first snapshot arrives, neither agreement nor preparation is known.
+  const onboarding = !snapshot || preparing || agreementPending;
+  const preloadMaiBot = preparing && !agreementPending && maibotService?.status === "running" && maibotService.health === "ready";
+
+  if (floatingMode && !onboarding) {
     return (
       <TooltipProvider delayDuration={250}>
         <FloatingShell
@@ -1862,22 +1758,23 @@ export function DesktopShell(): React.JSX.Element {
           <Titlebar
             serviceStatus={maibotService?.status}
             coreHostRef={setMaibotCoreHost}
+            brand={onboarding ? <MaiBotOverviewCard localVersion={snapshot?.moduleVersions.maibotLocal} launcherVersion={snapshot?.appVersion ?? "0.7.0"} retro={useRetroChrome} /> : undefined}
             appVersion={snapshot?.appVersion ?? "0.1.0"}
             retro={useRetroChrome}
-            navigation={navigationTabs}
-            toolbar={(
+            navigation={onboarding ? undefined : navigationTabs}
+            toolbar={!onboarding && (
               <div className="ml-3 flex min-w-0 flex-1 items-center">
                 <div className={cn("min-w-0 flex-1", webviewToolbarActive ? "flex h-full items-center" : "hidden")} ref={setWebviewToolbarHost} />
               </div>
             )}
-            actions={(
+            actions={!onboarding && (
               <>
                 {toolbarActions}
               </>
             )}
           />
 
-          {actionError ? (
+          {!onboarding && actionError ? (
             <div className="flex shrink-0 items-center gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive" role="alert">
               <span className="min-w-0 flex-1 break-words">{actionError}</span>
               <Button aria-label="关闭错误提示" className="size-6" onClick={() => setActionError(null)} size="icon-sm" variant="ghost">
@@ -1886,8 +1783,35 @@ export function DesktopShell(): React.JSX.Element {
             </div>
           ) : null}
 
+          {snapshot && agreementPending ? (
+            <StartupAgreementPage onSnapshot={setSnapshot} snapshot={snapshot} />
+          ) : null}
+          {snapshot ? (
+            <InitializationWizard
+              onOpenTab={selectTab}
+              onSnapshot={setSnapshot}
+              onPreparingChange={setPreparing}
+              webuiState={maiBotPageState}
+              onReloadWebui={reloadStartupWebui}
+              snapshot={snapshot}
+            />
+          ) : (
+            <main className="grid min-h-0 flex-1 place-items-center p-5" aria-busy={!actionError} aria-label="正在读取启动状态">
+              {actionError ? <div role="alert" className="grid max-w-md justify-items-center gap-3 text-sm">
+                <p className="break-words text-destructive">{actionError}</p>
+                <Button size="sm" onClick={() => {
+                setActionError(null);
+                void refreshSnapshot().catch((error) => setActionError(errorMessage(error)));
+                }}>重试</Button>
+              </div> : <span role="status" className="sr-only">正在读取启动状态</span>}
+            </main>
+          )}
           {/* Main */}
-          <main className="flex min-h-0 flex-1 flex-col">
+          {!onboarding || preloadMaiBot ? <main
+            className="flex min-h-0 flex-1 flex-col"
+            inert={onboarding}
+            style={onboarding ? { position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" } : { viewTransitionName: "startup-screen" }}
+          >
             <div className="relative min-h-0 flex-1 overflow-hidden">
             <TabsContent
               forceMount
@@ -1896,7 +1820,7 @@ export function DesktopShell(): React.JSX.Element {
               className={tabPageTransitionClassName}
               style={tabPageTransitionStyle("message-platform", activeTab, tabPageOrder)}
             >
-              {snapshot ? (
+              {snapshot && !onboarding ? (
                 <MessagePlatformPanel
                   coreToolbarTarget={maibotCoreHost}
                   updateToolbarTarget={maibotUpdateHost}
@@ -1929,6 +1853,8 @@ export function DesktopShell(): React.JSX.Element {
             >
               {maibotWebviewAvailable ? (
                 <WebviewPanel
+                  onLoadStateChange={setMaiBotPageState}
+                  animateLoad={!preparing}
                   active={activeTab === "maibot"}
                   onWebuiIdentity={rememberWebuiIdentity}
                   onMessagePlatformRequest={openMessagePlatformFromWebui}
@@ -1991,20 +1917,12 @@ export function DesktopShell(): React.JSX.Element {
               )}
             </TabsContent>
             </div>
-        </main>
+        </main> : null}
           </Tabs>
 
-        {snapshot ? (
-          <StartupAgreementDialog onSnapshot={setSnapshot} snapshot={snapshot} />
-        ) : null}
-        {snapshot ? (
-          <InitializationWizard
-            onOpenTab={selectTab}
-            onSnapshot={setSnapshot}
-            snapshot={snapshot}
-          />
-        ) : null}
-          <DependencyMigrationCard logs={dependencyMigrationLogs} service={maibotService} />
+
+
+          {!onboarding ? <DependencyPreparationNotice logs={dependencyMigrationLogs} service={maibotService} /> : null}
           <Toaster />
         </div>
       </div>

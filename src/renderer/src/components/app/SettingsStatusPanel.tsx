@@ -1,7 +1,7 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { MaiBotConfigImportPanel } from "./MaiBotConfigImportPanel";
 import { ResourcePathEditor } from "./ResourcePathEditor";
-import { RESOURCE_SCOPE_NOTE, useResourcePathWorkflow } from "./ResourcePathWorkflow";
+import { useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
   AlertTriangle,
   ChevronDown,
@@ -30,7 +30,9 @@ import {
 import type { ComponentProps, CSSProperties } from "react";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Switch } from "radix-ui";
+import { Switch } from "@/components/ui/switch";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { SettingsSection } from "@/components/ui/surface";
 import type {
   DesktopSnapshot,
   AppIconId,
@@ -420,7 +422,7 @@ function PathField({
 
 function AppearanceAccentControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
   return (
-    <div className="settings-section grid gap-2 bg-card p-3">
+    <SettingsSection className="grid gap-2">
       <div className="min-w-0">
         <p className="text-sm font-medium">主题色</p>
         <p className="mt-1 text-xs text-muted-foreground">用于按钮、重点数字和选中状态。</p>
@@ -448,13 +450,13 @@ function AppearanceAccentControl({ appearance }: { appearance: AppearanceApi }):
           </button>
         ))}
       </div>
-    </div>
+    </SettingsSection>
   );
 }
 
 function AppearanceFontControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
   return (
-    <div className="settings-section grid gap-2 bg-card p-3">
+    <SettingsSection className="grid gap-2">
       <div className="min-w-0">
         <p className="text-sm font-medium">字体</p>
         <p className="mt-1 text-xs text-muted-foreground">调整界面文字的整体气质。</p>
@@ -482,13 +484,13 @@ function AppearanceFontControl({ appearance }: { appearance: AppearanceApi }): R
           </label>
         ))}
       </RadioGroup>
-    </div>
+    </SettingsSection>
   );
 }
 
 function AppearanceScaleControl({ appearance }: { appearance: AppearanceApi }): React.JSX.Element {
   return (
-    <div className="settings-section grid gap-2 bg-card p-3">
+    <SettingsSection className="grid gap-2">
       <div className="min-w-0">
         <p className="text-sm font-medium">界面密度</p>
         <p className="mt-1 text-xs text-muted-foreground">控制字号和控件间距。</p>
@@ -516,7 +518,7 @@ function AppearanceScaleControl({ appearance }: { appearance: AppearanceApi }): 
           </label>
         ))}
       </RadioGroup>
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -526,7 +528,8 @@ function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }):
     : WINDOW_CORNER_RADIUS_MIN;
 
   return (
-    <label className="settings-section grid gap-2 bg-card p-3">
+    <SettingsSection asChild>
+    <label className="grid gap-2">
       <span className="flex items-center justify-between gap-3">
         <span className="min-w-0">
           <span className="block text-sm font-medium">窗口圆角</span>
@@ -549,6 +552,7 @@ function AppearanceRadiusControl({ appearance }: { appearance: AppearanceApi }):
         <span>{WINDOW_CORNER_RADIUS_MAX}px</span>
       </span>
     </label>
+    </SettingsSection>
   );
 }
 
@@ -1277,7 +1281,7 @@ export function SettingsStatusPanel({
 
               <TabsContent className="settings-content" value="general">
                 <div className="settings-pair-grid">
-                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
+                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <Settings className="size-4" />
@@ -1285,34 +1289,16 @@ export function SettingsStatusPanel({
                     <p className="min-w-0 text-sm font-medium">窗口关闭</p>
                   </div>
 
-                  <RadioGroup
+                  <SegmentedControl
                     aria-label="窗口关闭行为"
-                    className="settings-option-list settings-option-inline grid w-full grid-cols-3 gap-0 bg-background/70 text-xs sm:w-auto"
-                    onValueChange={(value) => {
-                      if (isClosePreference(value)) {
-                        saveClosePreference(value);
-                      }
-                    }}
+                    className="w-full sm:w-auto"
                     value={closePreference}
-                  >
-                    {closePreferenceOptions.map((option) => (
-                      <label
-                        className={cn(
-                          "flex h-8 min-w-0 cursor-pointer items-center justify-center px-2.5 font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/40",
-                          closePreference === option.value
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                        )}
-                        key={option.value}
-                      >
-                        <RadioGroupItem className="sr-only" value={option.value} />
-                        <span className="truncate">{option.label}</span>
-                      </label>
-                    ))}
-                  </RadioGroup>
-                </div>
+                    onValueChange={saveClosePreference}
+                    options={closePreferenceOptions}
+                  />
+                </SettingsSection>
 
-                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
+                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <TerminalSquare className="size-4" />
@@ -1356,10 +1342,10 @@ export function SettingsStatusPanel({
                       px
                     </label>
                   </div>
-                </div>
+                </SettingsSection>
                 </div>
 
-                <div className="settings-section grid gap-3 bg-destructive/5 p-3">
+                <SettingsSection className="grid gap-3" data-tone="danger">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-destructive/10 text-destructive">
@@ -1409,11 +1395,11 @@ export function SettingsStatusPanel({
                       </dl>
                     </div>
                   ) : null}
-                </div>
+                </SettingsSection>
 
                 {environmentServicesPanel}
 
-                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
+                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                       <Wrench className="size-4" />
@@ -1425,18 +1411,15 @@ export function SettingsStatusPanel({
                       </p>
                     </div>
                   </div>
-                  <Switch.Root
+                  <Switch
                       aria-label="启用开发者模式"
                       checked={developerModeEnabled}
-                      className="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent bg-input transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=checked]:bg-primary"
                       onCheckedChange={updateDeveloperMode}
-                  >
-                    <Switch.Thumb className="pointer-events-none block size-4 translate-x-0 rounded-full bg-background shadow-sm transition-transform data-[state=checked]:translate-x-4" />
-                  </Switch.Root>
-                </div>
+                   />
+                </SettingsSection>
 
 
-                <div className="settings-section flex items-center gap-3 overflow-x-auto bg-muted/40 p-3">
+                <SettingsSection className="flex items-center gap-3 overflow-x-auto">
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Network className="size-4" />
@@ -1449,17 +1432,14 @@ export function SettingsStatusPanel({
                       {networkProxyDraft.enabled ? "已启用" : "未启用"}
                     </Badge>
                     <label className="flex shrink-0 items-center gap-2 text-sm">
-                      <Switch.Root
+                      <Switch
                         aria-label="启用本机代理"
                         checked={networkProxyDraft.enabled}
-                        className="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent bg-input transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary"
                         disabled={busy !== null}
                         onCheckedChange={(checked) =>
                           setNetworkProxyDraft((current) => ({ ...current, enabled: checked }))
                         }
-                      >
-                        <Switch.Thumb className="pointer-events-none block size-4 translate-x-0 rounded-full bg-background shadow-sm transition-transform data-[state=checked]:translate-x-4" />
-                      </Switch.Root>
+                       />
                       启用本机代理
                     </label>
                     <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -1498,9 +1478,9 @@ export function SettingsStatusPanel({
                       {busy === "network-proxy" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                       保存代理设置
                     </Button>
-                </div>
+                </SettingsSection>
 
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1555,11 +1535,11 @@ export function SettingsStatusPanel({
                       正在读取源列表
                     </div>
                   )}
-                </div>
+                </SettingsSection>
               </TabsContent>
 
               <TabsContent className="settings-content" value="appearance">
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1608,9 +1588,9 @@ export function SettingsStatusPanel({
                       </label>
                     ))}
                   </RadioGroup>
-                </div>
+                </SettingsSection>
 
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1724,10 +1704,10 @@ export function SettingsStatusPanel({
                       ))}
                     </RadioGroup>
                   ) : null}
-                </div>
+                </SettingsSection>
 
                 <div className="settings-pair-grid">
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1737,13 +1717,10 @@ export function SettingsStatusPanel({
                     </div>
                     <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm">
                       跟随 MaiBot
-                      <Switch.Root
+                      <Switch
                         checked={appearance.followMaiBot}
-                        className="inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent bg-input transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=checked]:bg-primary"
                         onCheckedChange={appearance.setFollowMaiBot}
-                      >
-                        <Switch.Thumb className="pointer-events-none block size-4 translate-x-0 rounded-full bg-background shadow-sm transition-transform data-[state=checked]:translate-x-4" />
-                      </Switch.Root>
+                       />
                     </label>
                   </div>
 
@@ -1769,9 +1746,9 @@ export function SettingsStatusPanel({
                       ))}
                     </RadioGroup>
                   ) : null}
-                </div>
+                </SettingsSection>
 
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1802,11 +1779,11 @@ export function SettingsStatusPanel({
                       </label>
                     ))}
                   </RadioGroup>
-                </div>
+                </SettingsSection>
                 </div>
 
                 {appearance.mode === "future-retro" ? (
-                  <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                  <SettingsSection className="grid gap-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1836,11 +1813,11 @@ export function SettingsStatusPanel({
                       <AppearanceRadiusControl appearance={appearance} />
                       <AppearanceScaleControl appearance={appearance} />
                     </div>
-                  </div>
+                  </SettingsSection>
                 ) : null}
 
                 {appearance.mode === "millennium" ? (
-                  <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                  <SettingsSection className="grid gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Palette className="size-4" />
@@ -1854,11 +1831,11 @@ export function SettingsStatusPanel({
                       <AppearanceRadiusControl appearance={appearance} />
                       <AppearanceScaleControl appearance={appearance} />
                     </div>
-                  </div>
+                  </SettingsSection>
                 ) : null}
 
                 {appearance.mode === "modern" ? (
-                  <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                  <SettingsSection className="grid gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                         <Palette className="size-4" />
@@ -1874,10 +1851,10 @@ export function SettingsStatusPanel({
                       <AppearanceScaleControl appearance={appearance} />
                     </div>
                     <AppearanceRadiusControl appearance={appearance} />
-                  </div>
+                  </SettingsSection>
                 ) : null}
 
-                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-card p-3">
+                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">外观设置</p>
                     <p className="mt-1 text-xs text-muted-foreground">调整会立即生效，并自动保存在本机浏览器存储中。</p>
@@ -1888,11 +1865,11 @@ export function SettingsStatusPanel({
                       恢复默认外观
                     </Button>
                   </div>
-                </div>
+                </SettingsSection>
               </TabsContent>
 
               <TabsContent className="settings-content" value="paths">
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1908,9 +1885,8 @@ export function SettingsStatusPanel({
                     <Badge variant="secondary">唯一实例</Badge>
                   </div>
                   <div className="grid gap-2">
-                    <p className="rounded-md bg-muted p-3 text-xs leading-relaxed text-muted-foreground">{RESOURCE_SCOPE_NOTE}</p>
                     {editableRuntimeResourcePathConfigs.map((config) => (
-                      <div className="settings-section grid gap-3 bg-card p-3" key={config.key}>
+                      <SettingsSection className="grid gap-3" key={config.key}>
                       <ResourcePathEditor
                         blocked={resourceMoveBlocked || busy !== null || resourceWorkflow.busyKey !== null}
                         busy={resourceWorkflow.busyKey === config.key}
@@ -1933,7 +1909,7 @@ export function SettingsStatusPanel({
                           />
                         ))}
                         {config.key === "maibot" ? <MaiBotConfigImportPanel disabled={maibotDataBlocked || Boolean(snapshot.runtimeOperation) || busy !== null || resourceWorkflow.busyKey !== null} /> : null}
-                      </div>
+                      </SettingsSection>
                     ))}
                   </div>
                   {resourceMoveBlocked ? (
@@ -1941,7 +1917,7 @@ export function SettingsStatusPanel({
                       {snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请完成或取消后再操作。` : "请先停止所有服务，再操作组件目录。"}
                     </div>
                   ) : null}
-                </div>
+                </SettingsSection>
                 <div className="settings-pair-grid">
                   <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
                   <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />
@@ -1951,7 +1927,7 @@ export function SettingsStatusPanel({
 
               {developerModeEnabled ? (
               <TabsContent className="settings-content" value="debug">
-                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
+                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <Smartphone className="size-4 shrink-0 text-primary" />
                     <div className="min-w-0">
@@ -1963,12 +1939,12 @@ export function SettingsStatusPanel({
                     {busy === "mini-mode" ? <Loader2 className="animate-spin" /> : <Smartphone />}
                     {miniMode ? "退出迷你模式" : "进入迷你模式"}
                   </Button>
-                </div>
+                </SettingsSection>
                 <p className="text-xs text-muted-foreground">
                   调试配置用于本地开发和排查启动链路；修改后会影响之后启动的服务。
                 </p>
 
-                <div className="settings-section grid gap-3 bg-muted/40 p-3">
+                <SettingsSection className="grid gap-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -2015,7 +1991,7 @@ export function SettingsStatusPanel({
                       <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />
                     ) : null}
                   </label>
-                </div>
+                </SettingsSection>
 
               </TabsContent>
               ) : null}

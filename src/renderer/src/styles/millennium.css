@@ -228,12 +228,13 @@
 
 :root[data-appearance-mode="millennium"] .app-titlebar {
   background-color: var(--mil-panel);
-  background-image: var(--mil-speck);
-  background-size: 5px 5px;
-  border-bottom-color: var(--mil-line);
-  box-shadow:
-    inset 0 2px 0 var(--mil-hi),
-    0 3px 0 var(--mil-drop);
+  /* 底线用同一层背景绘制，避免系统缩放将 border 取整后与页签错位。 */
+  background-image: linear-gradient(var(--mil-line), var(--mil-line)), var(--mil-speck);
+  background-size: 100% 2px, 5px 5px;
+  background-position: left bottom, left top;
+  background-repeat: no-repeat, repeat;
+  border-bottom: 0;
+  box-shadow: inset 0 2px 0 var(--mil-hi);
 }
 
 /* 电源指示灯：点一下切换日间 / 夜间 */
@@ -290,9 +291,10 @@
 :root[data-appearance-mode="millennium"] .retro-tabs.retro-folder-tabs [role="tab"]::before {
   background: var(--mil-key-side);
   border: 2px solid var(--mil-line);
+  border-bottom: 0;
   border-radius: 0;
-  /* 自己带一条底线，压在标题栏描边的位置上，避免缩放取整时露出一像素缝 */
-  bottom: -2px;
+  /* 未选中页签停在共用底线之前，不再向下越界补边。 */
+  bottom: 2px;
   box-shadow: inset 2px 2px 0 var(--mil-hi);
   transform: none;
 }
@@ -318,8 +320,8 @@
   background-size: 5px 5px;
   border-bottom: 0;
   border-color: var(--mil-line);
-  /* 盖住标题栏的描边和厚度，和页面接上 */
-  bottom: -5px;
+  /* 选中页签覆盖底线，恰好止于标题栏底沿，无负偏移。 */
+  bottom: 0;
   box-shadow:
     inset 0 4px 0 var(--mil-on),
     inset 2px 0 0 var(--mil-hi),
@@ -458,31 +460,7 @@
   width: 30px;
 }
 
-/* Two-line update tabs keep symmetric padding instead of the compact keycap offset. */
-:root[data-appearance-mode="millennium"] [data-slot="update-tab"][aria-pressed] {
-  padding-block: 0.75rem;
-}
-
 /* ---------- 凸起的塑料模块 ---------- */
-
-:root[data-appearance-mode="millennium"] [data-slot="choice-card"][aria-pressed] {
-  border: 2px solid var(--mil-line);
-  background-color: var(--mil-panel);
-  box-shadow: var(--mil-bevel);
-  color: var(--mil-ink);
-  padding-bottom: 0.75rem;
-}
-
-:root[data-appearance-mode="millennium"] [data-slot="choice-card"][aria-pressed="true"] {
-  background-color: var(--mil-on);
-  box-shadow: inset 3px 3px 0 var(--mil-on-side);
-  color: var(--mil-on-ink);
-}
-
-:root[data-appearance-mode="millennium"] [data-slot="choice-card"]:focus-visible {
-  outline: 2px solid var(--mil-on-side);
-  outline-offset: 2px;
-}
 
 :root[data-appearance-mode="millennium"] .retro-panel,
 :root[data-appearance-mode="millennium"] .settings-section {

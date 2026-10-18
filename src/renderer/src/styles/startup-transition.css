@@ -1,0 +1,24 @@
+.startup-agreement-title,
+#initialization-title { view-transition-name: startup-title; }
+.agreement-document,
+.initialization-computer { view-transition-name: startup-screen; }
+.agreement-consent,
+.initialization-page [data-slot="progress"] { view-transition-name: startup-progress; }
+.startup-agreement-continue,
+.startup-source { view-transition-name: startup-action; }
+
+/* Keep the window chrome still; shared regions change position and dimensions. */
+::view-transition-old(root) { display: none; }
+::view-transition-new(root) { animation: none; }
+::view-transition-group(startup-title),
+::view-transition-group(startup-screen),
+::view-transition-group(startup-progress),
+::view-transition-group(startup-action) {
+  animation-duration: 650ms;
+  animation-timing-function: cubic-bezier(.22, 1, .36, 1);
+}
+::view-transition-old(startup-title),
+::view-transition-new(startup-title) { height: 100%; object-fit: contain; object-position: left center; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*) { animation-duration: 0s; }
+}

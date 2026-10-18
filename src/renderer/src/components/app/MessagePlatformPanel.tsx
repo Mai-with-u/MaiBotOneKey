@@ -1,3 +1,7 @@
+import { MaiBotOverviewCard } from "./MaiBotOverviewCard";
+import { ChoiceCard } from "@/components/ui/choice-card";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { DataPanel } from "@/components/ui/surface";
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { normalizeQqAccount } from "@shared/qq-account";
 import { MESSAGE_PLATFORM_GUIDE_EVENT, MESSAGE_PLATFORM_GUIDE_REQUEST_KEY } from "@/lib/message-platform-guide";
@@ -118,17 +122,6 @@ function valueOrFallback(value: string | undefined): string {
   return value && value.trim().length > 0 ? value : "未读取";
 }
 
-function formatMaiBotSelectedTarget(snapshot: DesktopSnapshot): string | undefined {
-  const target = snapshot.moduleVersions.maibotSelectedTarget;
-  if (!target) {
-    return undefined;
-  }
-  const channel = snapshot.moduleVersions.maibotSelectedChannel;
-  const channelLabel = channel === "stable" ? "正式版" : "自定义版本";
-  const targetLabel = `PyPI ${target.name}`;
-  return `${channelLabel} / ${targetLabel}`;
-}
-
 function versionAsTag(version: string | undefined): string | undefined {
   const trimmed = version?.trim();
   if (!trimmed) {
@@ -188,10 +181,8 @@ function launcherDownloadProgressValue(progress: LauncherUpdateDownloadProgress)
 
 function LauncherDownloadProgressDetails({
   progress,
-  retro,
 }: {
   progress: LauncherUpdateDownloadProgress;
-  retro: boolean;
 }): React.JSX.Element {
   const value = launcherDownloadProgressValue(progress);
   const percentText =
@@ -206,7 +197,7 @@ function LauncherDownloadProgressDetails({
     : formatDownloadBytes(progress.receivedBytes);
 
   return (
-    <div className={cn(retro ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+    <DataPanel className="grid gap-2 text-xs">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="min-w-0 truncate font-medium">
           {launcherDownloadPhaseLabels[progress.phase]}
@@ -219,7 +210,7 @@ function LauncherDownloadProgressDetails({
         <span className="min-w-0 truncate">{progress.assetName ?? "准备下载更新安装包"}</span>
         <span className="shrink-0 font-mono tabular-nums">{byteText}</span>
       </div>
-    </div>
+    </DataPanel>
   );
 }
 
@@ -569,27 +560,6 @@ function SolidUpgradeIcon(): React.JSX.Element {
   );
 }
 
-function MaiBotOverviewCard({
-  localVersion,
-  launcherVersion,
-  retro,
-}: {
-  localVersion: string | undefined;
-  launcherVersion: string;
-  retro: boolean;
-}): React.JSX.Element {
-  return (
-    <div className="flex h-8 items-center gap-2 whitespace-nowrap">
-      <span className={cn("font-bold leading-none", retro && "retro-title")}>
-        MaiBot
-      </span>
-      <div className="flex flex-col items-start gap-0.5 font-mono text-primary">
-        <span className="text-xs font-semibold leading-none" title="MaiBot 版本">{valueOrFallback(localVersion)}</span>
-        <span className="text-[9px] leading-none" title="一键包版本">v{launcherVersion}</span>
-      </div>
-    </div>
-  );
-}
 interface DroppedMascot {
   id: number;
   src: string;
@@ -1183,7 +1153,6 @@ export function MessagePlatformPanel({
     snapshot.moduleVersions.maibotLatestStableTag,
     snapshot.moduleVersions.maibotLocal,
   ) > 0;
-  const maibotSelectedTarget = formatMaiBotSelectedTarget(snapshot);
   const maibotHistoryTags = useMemo(
     () => maibotTags.filter((tag) => !/^Easy/iu.test(tag.name)),
     [maibotTags],
@@ -1859,20 +1828,14 @@ export function MessagePlatformPanel({
                     {selectedProtocol === "snowluma" ? "使用 SnowLuma 注入 QQ 进程。" : selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
                   </p>
                 </div>
-                <div aria-label="QQ 协议端" className="grid w-full grid-cols-3 overflow-hidden rounded-md border border-border sm:w-auto" role="group">
-                  {([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方 QQ 适配器" }] as const).map((option) => (
-                    <button
-                      aria-pressed={selectedProtocol === option.value}
-                      className={cn("px-4 py-2 text-xs font-semibold transition-colors", selectedProtocol === option.value ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-accent", "disabled:cursor-not-allowed disabled:opacity-50")}
-                      disabled={busy !== null || (qqBackendBusy && option.value !== currentProtocol)}
-                      key={option.value}
-                      onClick={() => setSelectedProtocol(option.value)}
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                <SegmentedControl
+                  aria-label="QQ 协议端"
+                  className="w-full sm:w-auto"
+                  value={selectedProtocol}
+                  onValueChange={setSelectedProtocol}
+                  disabled={busy !== null}
+                  options={([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方 QQ 适配器" }] as const).map((option) => ({ ...option, disabled: qqBackendBusy && option.value !== currentProtocol }))}
+                />
                 <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount))))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
                   {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
                   保存协议端
@@ -1981,32 +1944,23 @@ export function MessagePlatformPanel({
                   description: "直连 QQ 开放平台，无需 QQ 客户端，使用 AppID 和 AppSecret 配置。",
                 },
               ] as const).map((option) => (
-                <button
-                  data-slot="choice-card"
-                  aria-pressed={messagePlatformBackend === option.backend}
-                  className={cn(
-                    cn(useRetroStyle ? "rounded-sm" : "rounded-lg", "relative border p-3 pt-9 text-left transition-colors"),
-                    messagePlatformBackend === option.backend
-                      ? "border-primary bg-primary/10 text-foreground"
-                      : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
-                  )}
+                <ChoiceCard
+                  selected={messagePlatformBackend === option.backend}
+                  layout="stack"
+                  title={option.title}
+                  description={option.description}
                   disabled={busy === "message-platform:setup"}
                   key={option.backend}
                   onClick={() => {
                     setMessagePlatformBackend(option.backend);
                     setError(null);
-
                   }}
-                  type="button"
-                >
-                  {option.backend === "snowluma" || option.backend === "official" ? (
-                    <span className="absolute -left-2 -top-3 rounded-sm border border-primary-foreground/20 bg-primary px-3 py-1.5 text-xs font-bold leading-none text-primary-foreground shadow-sm">
+                  badge={option.backend === "snowluma" || option.backend === "official" ? (
+                    <span className="rounded-sm bg-primary px-2 py-1 text-xs font-bold leading-none text-primary-foreground">
                       {option.backend === "official" ? "稳定" : "推荐"}
                     </span>
-                  ) : null}
-                  <span className="block text-sm font-semibold">{option.title}</span>
-                  <span className="mt-1 block text-xs leading-relaxed">{option.description}</span>
-                </button>
+                  ) : undefined}
+                />
               ))}
             </div>
             {messagePlatformBackend !== "official" ? <label className="grid gap-1.5 text-xs font-medium">
@@ -2118,74 +2072,24 @@ export function MessagePlatformPanel({
               <X className="size-4" />
             </button>
             <div className="grid grid-cols-2 gap-2 py-5 pl-5 pr-14">
-              <button
-                aria-pressed={updateDialog === "maibot"}
-                data-slot="update-tab"
-                className={cn(
-                  "flex min-w-0 items-center justify-between gap-3 border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                  useRetroStyle ? "rounded-sm" : "rounded-lg",
-                  updateDialog === "maibot"
-                    ? "border-primary bg-primary/10 text-foreground shadow-sm"
-                    : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50",
-                )}
+              <ChoiceCard
+                selected={updateDialog === "maibot"}
                 disabled={busy !== null}
                 onClick={openMaiBotUpdate}
-                type="button"
-              >
-                <span className="flex min-w-0 items-center gap-3">
-                  <span className={cn(
-                    "grid size-8 shrink-0 place-items-center",
-                    updateDialog === "maibot" ? "bg-foreground/10 text-inherit" : "bg-primary/10 text-primary",
-                  )}>
-                    <Radar className="size-4" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold">MaiBot 更新</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] opacity-70">
-                      {valueOrFallback(snapshot.moduleVersions.maibotLocal)} → {valueOrFallback(snapshot.moduleVersions.maibotLatestStableTag)}
-                    </span>
-                  </span>
-                </span>
-                {maibotUpdateAvailable ? (
-                  <span className={cn("shrink-0 bg-warning px-1.5 py-1 text-[10px] font-semibold leading-none text-warning-foreground", useRetroStyle ? "rounded-none" : "rounded-sm")}>
-                    有更新
-                  </span>
-                ) : null}
-              </button>
-              <button
-                aria-pressed={updateDialog === "launcher"}
-                data-slot="update-tab"
-                className={cn(
-                  "flex min-w-0 items-center justify-between gap-3 border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                  useRetroStyle ? "rounded-sm" : "rounded-lg",
-                  updateDialog === "launcher"
-                    ? "border-primary bg-primary/10 text-foreground shadow-sm"
-                    : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:bg-muted/50",
-                )}
+                icon={<Radar />}
+                title="MaiBot 更新"
+                description={<>{valueOrFallback(snapshot.moduleVersions.maibotLocal)} → {valueOrFallback(snapshot.moduleVersions.maibotLatestStableTag)}</>}
+                badge={maibotUpdateAvailable ? <span className="shrink-0 bg-warning px-1.5 py-1 text-[10px] font-semibold leading-none text-warning-foreground">有更新</span> : undefined}
+              />
+              <ChoiceCard
+                selected={updateDialog === "launcher"}
                 disabled={busy !== null}
                 onClick={openLauncherUpdate}
-                type="button"
-              >
-                <span className="flex min-w-0 items-center gap-3">
-                  <span className={cn(
-                    "grid size-8 shrink-0 place-items-center",
-                    updateDialog === "launcher" ? "bg-foreground/10 text-inherit" : "bg-primary/10 text-primary",
-                  )}>
-                    <PackageCheck className="size-4" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold">启动器更新</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] opacity-70">
-                      {valueOrFallback(launcherCurrentTag)} → {valueOrFallback(launcherLatestTag)}
-                    </span>
-                  </span>
-                </span>
-                {launcherUpdateAvailable ? (
-                  <span className={cn("shrink-0 bg-warning px-1.5 py-1 text-[10px] font-semibold leading-none text-warning-foreground", useRetroStyle ? "rounded-none" : "rounded-sm")}>
-                    有更新
-                  </span>
-                ) : null}
-              </button>
+                icon={<PackageCheck />}
+                title="启动器更新"
+                description={<>{valueOrFallback(launcherCurrentTag)} → {valueOrFallback(launcherLatestTag)}</>}
+                badge={launcherUpdateAvailable ? <span className="shrink-0 bg-warning px-1.5 py-1 text-[10px] font-semibold leading-none text-warning-foreground">有更新</span> : undefined}
+              />
             </div>
             <DialogTitle className="sr-only">{updateDialog === "launcher" ? "启动器更新" : "MaiBot 更新"}</DialogTitle>
           </div>
@@ -2214,7 +2118,7 @@ export function MessagePlatformPanel({
                     </Button>
                   </div>
                 ) : null}
-                <div className={cn(useRetroStyle ? "retro-control grid gap-2 p-3 text-xs" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs")}>
+                <DataPanel className="grid gap-2 text-xs">
                   <DetailRow label="本地版本" value={launcherCurrentTag} retro={useRetroStyle} />
                   <DetailRow label="最新版本" value={launcherLatestTag} retro={useRetroStyle} />
                   {launcherUsesFallbackAsset ? (
@@ -2225,7 +2129,7 @@ export function MessagePlatformPanel({
                   <DetailRow label="安装包" value={launcherUpdateInfo?.assetName} retro={useRetroStyle} />
                   <DetailRow label="大小" value={formatFileSize(launcherUpdateInfo?.assetSize)} retro={useRetroStyle} />
                   <DetailRow label="更新源" value={launcherUpdateInfo?.source ?? snapshot.appLatestSource} retro={useRetroStyle} />
-                </div>
+                </DataPanel>
                 {launcherUsesFallbackAsset ? (
                   <div className={cn(useRetroStyle ? "retro-control grid gap-1 p-3 text-xs" : "grid gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-100")}>
                     <p className="font-medium">最新版本暂不可下载</p>
@@ -2235,13 +2139,13 @@ export function MessagePlatformPanel({
                   </div>
                 ) : null}
                 {launcherDownloadProgress ? (
-                  <LauncherDownloadProgressDetails progress={launcherDownloadProgress} retro={useRetroStyle} />
+                  <LauncherDownloadProgressDetails progress={launcherDownloadProgress} />
                 ) : null}
                 {launcherUpdateInfo?.releaseNotes ? (
-                  <div className={cn(useRetroStyle ? "retro-control grid gap-2 p-3" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3")}>
+                  <DataPanel className="grid gap-2">
                     <p className="text-xs font-medium">更新说明</p>
                     <MarkdownRenderer className="max-h-48 overflow-auto break-words pr-1 text-xs" content={launcherUpdateInfo.releaseNotes} />
-                  </div>
+                  </DataPanel>
                 ) : null}
               </DialogBody>
               <DialogFooter>
@@ -2279,9 +2183,8 @@ export function MessagePlatformPanel({
                 {error}
               </div>
             ) : null}
-            <div className={cn(useRetroStyle ? "retro-control grid gap-2 p-3 text-sm" : "grid gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm")}>
+            <DataPanel className="grid gap-2 text-sm">
               <DetailRow label="本地版本" value={snapshot.moduleVersions.maibotLocal} retro={useRetroStyle} valueClassName={cn("text-base", !useRetroStyle && "text-primary")} />
-              <DetailRow label="上次更新版本" value={maibotSelectedTarget} retro={useRetroStyle} valueClassName="text-base" />
               <div className="my-1 border-t border-border/70" />
               <div className="flex min-w-0 items-center justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">目标版本</span>
@@ -2322,7 +2225,7 @@ export function MessagePlatformPanel({
               {snapshot.moduleVersions.maibotRemoteError ? (
                 <DetailRow label="远端错误" value={snapshot.moduleVersions.maibotRemoteError} retro={useRetroStyle} />
               ) : null}
-            </div>
+            </DataPanel>
             {maibotUpdateBlocked ? (
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroStyle ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再执行更新。
@@ -2441,7 +2344,11 @@ export function MessagePlatformPanel({
                   ? "更新中"
                   : maibotTargetIsCurrent
                     ? "重新安装当前版本"
-                    : selectedMaiBotTarget?.type === "package" && snapshot.moduleVersions.maibotDeploymentMode === "source" ? "迁移到 PyPI" : "安装 / 修复"}
+                    : snapshot.moduleVersions.maibotDeploymentMode === "source" ? "迁移到 PyPI"
+                      : !snapshot.moduleVersions.maibotLocal ? "安装 MaiBot"
+                        : compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal) > 0 ? "更新 MaiBot"
+                          : compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal) < 0 ? "切换到所选版本"
+                            : "重新安装当前版本"}
               </Button>
               {snapshot.moduleVersions.maibotCanRollback ? <Button
                 disabled={busy !== null || maibotUpdateBlocked}

@@ -21,11 +21,11 @@ const buttonVariants = cva(
           "border border-border bg-card text-foreground/85 hover:bg-accent hover:text-accent-foreground",
       },
       size: {
-        default: "h-9 px-3.5 text-sm [&_svg]:size-4",
-        sm: "h-8 px-3 text-xs [&_svg]:size-3.5",
-        lg: "h-10 px-5 text-sm [&_svg]:size-4",
-        icon: "size-9 [&_svg]:size-4",
-        "icon-sm": "size-8 [&_svg]:size-3.5",
+        default: "h-[var(--control-height)] px-3.5 text-sm [&_svg]:size-4",
+        sm: "h-[var(--control-height-sm)] px-3 text-xs [&_svg]:size-3.5",
+        lg: "h-[var(--control-height-lg)] px-5 text-sm [&_svg]:size-4",
+        icon: "size-[var(--control-height)] p-0 [&_svg]:size-4",
+        "icon-sm": "size-[var(--control-height-sm)] p-0 [&_svg]:size-3.5",
       },
     },
     defaultVariants: {
@@ -72,6 +72,7 @@ export function Button({
       data-variant={variant ?? "default"}
       data-has-label={hasTextChild(children) ? "true" : undefined}
       data-slot="button"
+      data-control-size={size ?? "default"}
       {...props}
     >
       {children}

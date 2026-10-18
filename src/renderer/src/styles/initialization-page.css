@@ -1,0 +1,34 @@
+.initialization-computer .mil-launch-computer { display: block; height: auto; width: 100%; }
+.initialization-computer {
+  max-width: 22rem;
+  --mil-crt: #263129;
+  --mil-crt-ink: #ece5d2;
+  --mil-crt-dim: #7d8676;
+  --mil-crt-amber: #e8b545;
+  --mil-crt-grid: #3b4934;
+  --mil-crt-noise: #5b675f;
+}
+/* The same computer illustration follows the active palette in every appearance. */
+:root:not([data-appearance-mode="millennium"]) .initialization-computer {
+  --mil-panel: var(--card);
+  --mil-line: var(--border);
+  --mil-hi: var(--background);
+  --mil-lo: var(--muted);
+  --mil-key: var(--secondary);
+  --mil-plate: var(--foreground);
+  --mil-plate-ink: var(--background);
+  --mil-vent: var(--muted-foreground);
+  --mil-hot: var(--primary);
+  --mil-hot-side: var(--primary);
+  --mil-hot-ink: var(--primary-foreground);
+  --mil-on: var(--success);
+  --mil-danger: var(--destructive);
+}
+.initialization-computer .mil-launch-screen-text { font-family: var(--font-mono); font-weight: 700; }
+.initialization-computer .mil-launch-led[data-tone="amber"] { fill: var(--mil-crt-amber); }
+.initialization-computer .mil-launch-led[data-tone="green"] { fill: var(--success); }
+.initialization-computer .mil-launch-led[data-tone="red"] { fill: var(--destructive); }
+@media (max-height: 650px) {
+  .initialization-computer { max-width: 15rem; }
+  .initialization-page > div { gap: .75rem; padding-block: .5rem; }
+}

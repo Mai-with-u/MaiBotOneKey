@@ -120,12 +120,12 @@ function ScreenContent({ phase }: { phase: MillenniumServicePhase }): React.JSX.
   }
 }
 
-function MillenniumComputer({
+export function MillenniumComputer({
   phase,
-  game,
+  game = null,
 }: {
   phase: MillenniumServicePhase;
-  game: ReturnType<typeof useFlappyGame>["state"] | null;
+  game?: ReturnType<typeof useFlappyGame>["state"] | null;
 }): React.JSX.Element {
   const display = PHASE_DISPLAY[phase];
   const svgId = useId().replace(/:/gu, "");

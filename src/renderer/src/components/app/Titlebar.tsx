@@ -18,6 +18,7 @@ interface TitlebarProps {
   actions?: ReactNode;
   toolbar?: ReactNode;
   coreHostRef?: (element: HTMLDivElement | null) => void;
+  brand?: ReactNode;
 }
 
 function useWindowState(): WindowState {
@@ -153,6 +154,7 @@ export function Titlebar({
   actions,
   toolbar,
   coreHostRef,
+  brand,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
   const state = useWindowState();
@@ -196,18 +198,18 @@ export function Titlebar({
           isMac ? "justify-center px-3" : "px-1",
         )}
       >
-        {coreHostRef ? (
+        {brand ?? (coreHostRef ? (
           <div data-app-region="no-drag" ref={coreHostRef} />
         ) : (
           <div className="flex flex-col gap-0.5">
             <span className={cn("retro-title truncate leading-none", retro ? "text-lg" : "text-base")}>MaiBot OK</span>
             <span className="retro-value text-[9px] leading-none text-primary" title="一键包版本">v{appVersion}</span>
           </div>
-        )}
+        ))}
       </div>
 
       {navigation ? (
-        <div className="app-titlebar-navigation ml-2 min-w-0 self-end pt-1" data-app-region="no-drag">
+        <div className="app-titlebar-navigation ml-2 flex min-w-0 self-end pt-1" data-app-region="no-drag">
           {navigation}
         </div>
       ) : null}

@@ -3,6 +3,7 @@ import { CheckCircle2, FolderOpen, Loader2 } from "lucide-react";
 import type { ResourcePathMode, RuntimeResourcePathConfig, RuntimeResourcePathKey } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Input } from "@/components/ui/input";
 
 export function ResourcePathEditor({ config, busy, blocked, onOpenPath, onBrowse, onPrepare }: {
@@ -23,9 +24,13 @@ export function ResourcePathEditor({ config, busy, blocked, onOpenPath, onBrowse
         <Button aria-label={`打开 ${config.label} 当前目录`} onClick={() => onOpenPath(config.value)} size="icon" variant="ghost"><FolderOpen /></Button>
       </div>
       <label className="grid gap-1 text-xs">当前使用目录<Input readOnly monospace value={config.value} aria-label={`${config.label} 当前目录`} /></label>
-      <div className="flex flex-wrap gap-2" role="group" aria-label={`${config.label} 操作方式`}>
-        {([{ value: "existing", label: "使用已有目录" }, { value: "copy", label: "复制迁移" }] as const).map((option) => <Button key={option.value} size="sm" variant={mode === option.value ? "secondary" : "ghost"} aria-pressed={mode === option.value} disabled={busy || blocked} onClick={() => setMode(option.value)}>{option.label}</Button>)}
-      </div>
+      <SegmentedControl
+        aria-label={`${config.label} 操作方式`}
+        value={mode}
+        onValueChange={setMode}
+        disabled={busy || blocked}
+        options={[{ value: "existing", label: "使用已有目录" }, { value: "copy", label: "复制迁移" }]}
+      />
       <p className="text-xs text-muted-foreground">{mode === "copy" ? "复制当前组件的程序、配置和数据到空目录，成功后切换，原目录保留。" : "直接使用已安装的组件目录，不复制当前数据。"}</p>
       <label className="grid gap-1 text-xs">目标目录<Input monospace value={target} disabled={busy || blocked} onChange={(event) => setTarget(event.target.value)} placeholder="输入完整目录路径，或点击浏览目录" aria-label={`${config.label} 目标目录`} /></label>
       <div className="flex flex-wrap justify-end gap-2">

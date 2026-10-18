@@ -83,6 +83,7 @@ interface DialogHeaderProps {
   tone?: "default" | "primary" | "warning" | "danger";
   title: React.ReactNode;
   description?: React.ReactNode;
+  actions?: React.ReactNode;
   /** @deprecated Radix 现在自管理 id，传值会被忽略。 */
   titleId?: string;
   className?: string;
@@ -100,6 +101,7 @@ export function DialogHeader({
   tone = "default",
   title,
   description,
+  actions,
   titleId: _titleId,
   className,
 }: DialogHeaderProps): React.JSX.Element {
@@ -121,7 +123,7 @@ export function DialogHeader({
           {icon}
         </span>
       ) : null}
-      <div className="min-w-0 flex-1 pr-8">
+      <div className={cn("min-w-0 flex-1 pr-8", actions && "pr-0")}>
         <DialogPrimitive.Title className="text-base font-semibold leading-tight tracking-tight">
           {title}
         </DialogPrimitive.Title>
@@ -131,6 +133,7 @@ export function DialogHeader({
           </DialogPrimitive.Description>
         ) : null}
       </div>
+      {actions ? <div className="flex shrink-0 items-center gap-2 self-center">{actions}</div> : null}
     </div>
   );
 }

@@ -16,6 +16,8 @@ import { READ_MAIBOT_CONTENT_SCRIPT, waitForWebviewContent } from "@/lib/webview
 import { isMessagePlatformRequest } from "@/lib/webui-host-message";
 
 interface WebviewPanelProps {
+  onLoadStateChange?: (state: LoadState) => void;
+  animateLoad?: boolean;
   readMaiBotAppearance?: boolean;
   loadingFallback?: ReactNode;
   title: string;
@@ -85,6 +87,8 @@ function withCacheBust(value: string, token: number): string {
 }
 
 export function WebviewPanel({
+  onLoadStateChange,
+  animateLoad = true,
   readMaiBotAppearance = false,
   loadingFallback,
   title,
@@ -108,6 +112,7 @@ export function WebviewPanel({
   const reloadTriggerRef = useRef<WebviewPanelProps["reloadTrigger"]>(reloadTrigger);
   const navigationTargetAttemptedRef = useRef(false);
   const [loadState, setLoadStateValue] = useState<LoadState>("loading");
+  useEffect(() => { onLoadStateChange?.(loadState); }, [loadState, onLoadStateChange]);
   const setLoadState = useCallback((state: LoadState) => {
     loadStateRef.current = state;
     setLoadStateValue(state);
@@ -512,9 +517,7 @@ export function WebviewPanel({
           // React drops unknown boolean attributes; Electron needs this attribute present.
           allowpopups={"" as unknown as boolean}
           // Keep webview in DOM while its first document loads.
-          className={`absolute inset-0 size-full bg-background transition-opacity duration-200 ${
-            showWebview ? "opacity-100" : "opacity-0"
-          }`}
+          className={cn("absolute inset-0 size-full bg-background", animateLoad && "transition-opacity duration-200", showWebview ? "opacity-100" : "opacity-0")}
           key={webviewUrl}
           partition="persist:maibot-webui"
           preload={onMessagePlatformRequest ? window.maibotDesktop?.webuiPreloadUrl : undefined}

@@ -1,19 +1,15 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { Loader2, Power, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
+import { transitionStartupScene } from "@/lib/startup-transition";
+import "@/styles/startup-transition.css";
 import type { DesktopSnapshot } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
-interface StartupAgreementDialogProps {
+interface StartupAgreementPageProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
 }
@@ -26,10 +22,10 @@ function hasScrolledToBottom(element: HTMLDivElement): boolean {
   return element.scrollTop + element.clientHeight >= element.scrollHeight - 8;
 }
 
-export function StartupAgreementDialog({
+export function StartupAgreementPage({
   snapshot,
   onSnapshot,
-}: StartupAgreementDialogProps): React.JSX.Element | null {
+}: StartupAgreementPageProps): React.JSX.Element | null {
   const agreement = snapshot.startupAgreement;
   const [accepted, setAccepted] = useState(false);
   const [hasReadAll, setHasReadAll] = useState(false);
@@ -53,7 +49,7 @@ export function StartupAgreementDialog({
 
   const refreshSnapshot = useCallback(async () => {
     const nextSnapshot = await getDesktopSnapshot();
-    onSnapshot(nextSnapshot);
+    flushSync(() => onSnapshot(nextSnapshot));
   }, [onSnapshot]);
 
   const acceptAgreements = useCallback(async () => {
@@ -64,8 +60,10 @@ export function StartupAgreementDialog({
     setBusy("accept");
     setError(null);
     try {
-      await window.maibotDesktop?.agreements.confirm();
-      await refreshSnapshot();
+      await transitionStartupScene(async () => {
+        await window.maibotDesktop?.agreements.confirm();
+        await refreshSnapshot();
+      });
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
@@ -101,22 +99,14 @@ export function StartupAgreementDialog({
   }
 
   return (
-    <Dialog open={!agreement.isConfirmed}>
-      <DialogContent
-        size="lg"
-        showCloseButton={false}
-        onEscapeKeyDown={(event) => event.preventDefault()}
-        onPointerDownOutside={(event) => event.preventDefault()}
-      >
-        <DialogHeader
-          description="首次启动前需要阅读并同意 MaiBot 的协议文件，下拉以阅读。"
-          title="MaiBot 协议确认"
-          tone="primary"
-        />
-
-        <DialogBody className="space-y-4">
+    <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 pt-6 pb-10 sm:px-8 sm:pb-12" aria-labelledby="startup-agreement-title">
+      <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4">
+        <h1 id="startup-agreement-title" className="startup-agreement-title shrink-0 text-xl font-semibold">MaiBot 协议确认</h1>
           <ScrollArea
-            className="agreement-document h-[min(56vh,560px)] rounded-lg border border-border bg-muted/30 px-4 py-3"
+            aria-label="协议正文"
+            role="region"
+            tabIndex={0}
+            className="agreement-document flex-1 rounded-lg border border-border bg-muted/30 px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onScroll={handleScroll}
             ref={handleViewportReady}
           >
@@ -139,7 +129,7 @@ export function StartupAgreementDialog({
             </div>
           </ScrollArea>
 
-          <label className="agreement-consent flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground/85">
+          <label className="agreement-consent flex shrink-0 items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-foreground/85">
             <input
               checked={accepted}
               className="mt-0.5 size-3.5 accent-primary disabled:opacity-40"
@@ -154,23 +144,21 @@ export function StartupAgreementDialog({
           </label>
 
           {error ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
+            <div role="alert" className="shrink-0 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">
               {error}
             </div>
           ) : null}
-        </DialogBody>
-
-        <DialogFooter className="justify-between">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 pt-2">
           <Button disabled={busy !== null} onClick={declineAgreements} size="sm" variant="ghost">
             {busy === "decline" ? <Loader2 className="animate-spin" /> : <Power />}
             不同意并退出
           </Button>
-          <Button disabled={!canAccept} onClick={acceptAgreements} size="sm">
+          <Button className="startup-agreement-continue" disabled={!canAccept} onClick={acceptAgreements} size="sm">
             {busy === "accept" ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
             同意并继续
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </div>
+    </main>
   );
 }

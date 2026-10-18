@@ -421,96 +421,6 @@
   background-image: none;
 }
 
-.dependency-migration-card {
-  isolation: isolate;
-  background: color-mix(in oklab, var(--popover) 68%, transparent);
-  box-shadow: 0 18px 44px color-mix(in oklab, var(--foreground) 16%, transparent);
-  backdrop-filter: blur(22px) saturate(1.28);
-  -webkit-backdrop-filter: blur(22px) saturate(1.28);
-}
-
-.dependency-migration-card[data-failed="true"] {
-  background: color-mix(in oklab, var(--popover) 76%, var(--destructive) 8%);
-}
-
-.dependency-migration-icon {
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 7px 18px color-mix(in oklab, var(--foreground) 8%, transparent);
-  backdrop-filter: blur(10px) saturate(1.16);
-  -webkit-backdrop-filter: blur(10px) saturate(1.16);
-}
-
-.dependency-migration-log {
-  border-color: color-mix(in oklab, var(--border) 58%, transparent);
-  background: color-mix(in oklab, var(--muted) 42%, transparent);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.2),
-    inset 0 8px 22px color-mix(in oklab, var(--foreground) 4%, transparent);
-  backdrop-filter: blur(12px) saturate(1.08);
-  -webkit-backdrop-filter: blur(12px) saturate(1.08);
-}
-
-.dark .dependency-migration-card {
-  background: color-mix(in oklab, var(--popover) 62%, transparent);
-  box-shadow: 0 18px 48px rgb(0 0 0 / 0.34);
-}
-
-:root[data-appearance-mode="future-retro"] .dependency-migration-card {
-  background-color: rgb(246 232 211 / 0.62);
-  background-image: var(--retro-paper-texture-layer);
-  background-size: 165px 165px;
-  box-shadow: 0 18px 42px var(--retro-shadow);
-  backdrop-filter: blur(20px) saturate(1.18);
-  -webkit-backdrop-filter: blur(20px) saturate(1.18);
-}
-
-:root[data-appearance-mode="future-retro"] .dependency-migration-log {
-  border-color: color-mix(in oklab, var(--retro-line) 72%, transparent);
-  background: rgb(243 227 204 / 0.36);
-  box-shadow:
-    inset 0 1px 0 rgb(255 248 226 / 0.42),
-    inset 0 9px 24px rgb(73 48 22 / 0.045);
-}
-
-:root.dark[data-appearance-mode="future-retro"] .dependency-migration-card {
-  background-color: rgb(43 33 28 / 0.62);
-  background-image: var(--retro-paper-texture-layer);
-  box-shadow: 0 18px 48px rgb(0 0 0 / 0.34);
-}
-
-:root.dark[data-appearance-mode="future-retro"] .dependency-migration-log {
-  border-color: var(--retro-line);
-  background: rgb(17 9 6 / 0.34);
-  box-shadow:
-    inset 0 1px 0 rgb(255 229 190 / 0.08),
-    inset 0 9px 24px rgb(0 0 0 / 0.14);
-}
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .dependency-migration-card {
-    background: var(--popover);
-  }
-
-  .dependency-migration-log {
-    background: var(--muted);
-  }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .dependency-migration-card {
-    background: color-mix(in oklab, var(--popover) 96%, transparent);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .dependency-migration-log,
-  .dependency-migration-icon {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-}
-
 .retro-shell::before {
   content: "";
   position: absolute;
@@ -681,16 +591,16 @@
   background-image: none;
 }
 
-:root[data-appearance-mode="future-retro"] .retro-shell [class~="bg-card"],
-:root[data-appearance-mode="future-retro"] .retro-shell [class*="bg-card/"],
+:root[data-appearance-mode="future-retro"] .retro-shell [class~="bg-card"]:not([data-slot="button"]),
+:root[data-appearance-mode="future-retro"] .retro-shell [class*="bg-card/"]:not([data-slot="button"]),
 :root[data-appearance-mode="future-retro"] .retro-shell [class~="bg-muted"],
 :root[data-appearance-mode="future-retro"] .retro-shell [class*="bg-muted/"] {
   background-color: transparent !important;
   background-image: none !important;
 }
 
-:root[data-appearance-mode="future-retro"] .retro-shell [class*="rounded"][class~="border"][class~="bg-card"],
-:root[data-appearance-mode="future-retro"] .retro-shell [class*="rounded"][class~="border"][class*="bg-card/"],
+:root[data-appearance-mode="future-retro"] .retro-shell [class*="rounded"][class~="border"][class~="bg-card"]:not([data-slot="button"]),
+:root[data-appearance-mode="future-retro"] .retro-shell [class*="rounded"][class~="border"][class*="bg-card/"]:not([data-slot="button"]),
 :root[data-appearance-mode="future-retro"] .retro-shell [class*="rounded"][class~="border"][class~="bg-muted"],
 :root[data-appearance-mode="future-retro"] .retro-shell [class*="rounded"][class~="border"][class*="bg-muted/"] {
   background-color: var(--retro-recessed) !important;
