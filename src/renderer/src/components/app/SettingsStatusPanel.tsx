@@ -582,7 +582,7 @@ function ServiceDetail({
   );
 
   return (
-    <div className="border-t border-border pt-3">
+    <div className="min-w-0 border-t border-border pt-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -623,7 +623,7 @@ function ServiceDetail({
         </code>
       ) : null}
       {commandConfig ? (
-        <div className="mt-3 grid gap-2 border-t border-border pt-3">
+        <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 border-t border-border pt-3">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <p className="text-xs font-medium text-foreground">启动命令</p>
@@ -1869,7 +1869,7 @@ export function SettingsStatusPanel({
               </TabsContent>
 
               <TabsContent className="settings-content" value="paths">
-                <SettingsSection className="grid gap-3">
+                <SettingsSection className="grid grid-cols-1 gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -1884,9 +1884,9 @@ export function SettingsStatusPanel({
                     </div>
                     <Badge variant="secondary">唯一实例</Badge>
                   </div>
-                  <div className="grid gap-2">
+                  <div className="grid min-w-0 grid-cols-1 gap-2">
                     {editableRuntimeResourcePathConfigs.map((config) => (
-                      <SettingsSection className="grid gap-3" key={config.key}>
+                      <SettingsSection className="grid grid-cols-1 gap-3" key={config.key}>
                       <ResourcePathEditor
                         blocked={resourceMoveBlocked || busy !== null || resourceWorkflow.busyKey !== null}
                         busy={resourceWorkflow.busyKey === config.key}
