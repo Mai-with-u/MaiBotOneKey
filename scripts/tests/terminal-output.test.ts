@@ -104,6 +104,43 @@ test("history stays bounded and clear does not reuse live sequence numbers", () 
   expect(history.append("x", 90, 32).sequence).toBe(3);
 });
 
+test("hidden terminals skip queued and background output, then restore the latest history exactly once", async () => {
+  const terminal = new RecordingTerminal();
+  const output = new TerminalOutput(terminal);
+  output.push(event(1, "queued before hiding"));
+  output.setSuspended(true);
+  for (let sequence = 2; sequence <= 10_000; sequence++) output.push(event(sequence, "background"));
+  await output.flush();
+  expect(terminal.writes).toEqual([]);
+  expect(output.busy).toBe(false);
+
+  output.setSuspended(false);
+  const restore = output.restore(async () => ({
+    chunks: [event(10_000, "latest history")], lastSequence: 10_000, cols: 100, rows: 32, startedAt: 1,
+  }), () => {});
+  output.push(event(10_000, "overlap"));
+  output.push(event(10_001, "live"));
+  await restore;
+  await output.flush();
+  expect(terminal.writes.map(({ data }) => data)).toEqual(["latest history", "live"]);
+});
+
+test("hiding during a history request cancels replay even if the terminal reopens before it resolves", async () => {
+  const terminal = new RecordingTerminal();
+  const output = new TerminalOutput(terminal);
+  let resolve!: (snapshot: PtyBufferSnapshot) => void;
+  const restore = output.restore(() => new Promise((done) => { resolve = done; }), () => {});
+  output.setSuspended(true);
+  output.setSuspended(false);
+  resolve({ chunks: [event(1, "outdated")], lastSequence: 1, cols: 100, rows: 32, startedAt: 1 });
+  await expect(restore).rejects.toThrow("Terminal replay suspended");
+  expect(terminal.writes).toEqual([]);
+  await output.restore(async () => ({
+    chunks: [event(2, "latest")], lastSequence: 2, cols: 100, rows: 32, startedAt: 1,
+  }), () => {});
+  expect(terminal.writes.map(({ data }) => data)).toEqual(["latest"]);
+});
+
 test("real xterm retains full-width colored Chinese panels across live output and reconnect", async () => {
   const terminal = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
   terminal.loadAddon(new Unicode11Addon());

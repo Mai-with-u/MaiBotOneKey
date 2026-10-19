@@ -249,6 +249,8 @@ export function TerminalPanel({
   const panesRef = useRef(new Map<string, HTMLDivElement>());
   const bridgeRef = useRef<typeof window.maibotDesktop | null>(null);
   const activeSessionIdRef = useRef(activeSessionId);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const closedSessionIdsRef = useRef(new Set<string>());
   const prePtyNoticeRef = useRef(new Map<ServiceId, string>());
   const recentLogsRef = useRef<LogEntry[]>(recentLogs);
@@ -349,7 +351,7 @@ export function TerminalPanel({
 
   const fitTerminal = useCallback((sessionId: string) => {
     const instance = terminalsRef.current.get(sessionId);
-    if (!instance?.opened) {
+    if (!instance?.opened || instance.output.suspended) {
       return;
     }
     if (instance.output.busy) {
@@ -423,6 +425,7 @@ export function TerminalPanel({
       const output = new TerminalOutput(terminal, () => {
         if (terminalsRef.current.get(sessionId)?.needsFit) scheduleFitTerminal(sessionId);
       });
+      output.setSuspended(!activeRef.current || document.hidden || sessionId !== activeSessionIdRef.current);
 
       const disposables: Disposable[] = [
         terminal.registerLinkProvider(createTerminalLinkProvider(terminal, maibotRoot)),
@@ -523,6 +526,7 @@ export function TerminalPanel({
       }
 
       const message = service.detail || "正在启动；后台会先检查并更新依赖，完成后再创建 PTY";
+      if (getTerminal(item.sessionId).output.suspended) continue;
       if (prePtyNoticeRef.current.get(item.serviceId) === message) {
         continue;
       }
@@ -549,21 +553,48 @@ export function TerminalPanel({
     async (sessionId: string, force = false) => {
       const bridge = bridgeRef.current;
       const instance = getTerminal(sessionId);
-      if (!bridge?.pty || (!force && instance.bufferLoaded)) {
+      if (!bridge?.pty || instance.output.suspended || (!force && instance.bufferLoaded)) {
         return;
       }
 
       try {
+        // A previous replay may have been interrupted by hiding the window.
+        await instance.output.flush().catch(() => undefined);
+        if (instance.output.suspended) return;
         await instance.output.restore(() => bridge.pty.getBuffer(sessionId), () => writeStoredSystemLogs(sessionId));
         await instance.output.flush();
+        if (instance.output.suspended) return;
         instance.bufferLoaded = true;
+        const pane = panesRef.current.get(sessionId);
+        if (pane) pane.style.visibility = "";
+        instance.terminal.scrollToBottom();
         scheduleFitTerminal(sessionId);
       } catch {
         instance.bufferLoaded = false;
+        const pane = panesRef.current.get(sessionId);
+        if (pane && !instance.output.suspended) pane.style.visibility = "";
       }
     },
     [getTerminal, writeStoredSystemLogs, scheduleFitTerminal],
   );
+
+  useEffect(() => {
+    const syncVisibility = (): void => {
+      for (const [sessionId, instance] of terminalsRef.current) {
+        const suspended = !active || document.hidden || sessionId !== activeTerminal.sessionId;
+        if (suspended === instance.output.suspended) continue;
+        instance.output.setSuspended(suspended);
+        instance.bufferLoaded = false;
+        // Keep replay off screen so opening the terminal shows the completed latest state.
+        const pane = panesRef.current.get(sessionId);
+        if (pane) pane.style.visibility = "hidden";
+        if (!suspended) void loadSessionBuffer(sessionId);
+      }
+    };
+    syncVisibility();
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => document.removeEventListener("visibilitychange", syncVisibility);
+  }, [active, activeTerminal.sessionId, loadSessionBuffer]);
 
   const refreshSessions = useCallback(async () => {
     const bridge = window.maibotDesktop;
@@ -627,14 +658,16 @@ export function TerminalPanel({
             endedAt: Date.now(),
           });
         }
-        writeSystemLine(getTerminal(event.sessionId).terminal, `process exited with code ${event.exitCode}`);
+        const instance = getTerminal(event.sessionId);
+        if (!instance.output.suspended) writeSystemLine(instance.terminal, `process exited with code ${event.exitCode}`);
         notifySessionsChanged();
       }),
       bridge.pty.onError((event) => {
         if (closedSessionIdsRef.current.has(event.sessionId)) {
           return;
         }
-        writeSystemLine(getTerminal(event.sessionId).terminal, `error: ${event.message}`);
+        const instance = getTerminal(event.sessionId);
+        if (!instance.output.suspended) writeSystemLine(instance.terminal, `error: ${event.message}`);
       }),
       bridge.pty.onSnapshot((snapshot) => {
         if (closedSessionIdsRef.current.has(snapshot.id)) {
@@ -658,8 +691,9 @@ export function TerminalPanel({
         if (writtenSystemLogIdsRef.current.has(entry.id)) {
           return;
         }
-        writtenSystemLogIdsRef.current.add(entry.id);
         const sessionId = `service:${serviceId}`;
+        if (getTerminal(sessionId).output.suspended) return;
+        writtenSystemLogIdsRef.current.add(entry.id);
         writeSystemLine(getTerminal(sessionId).terminal, entry.message);
       }),
     ];
@@ -677,6 +711,7 @@ export function TerminalPanel({
       if (!serviceId || entry.stream !== "system" || writtenSystemLogIdsRef.current.has(entry.id)) {
         continue;
       }
+      if (getTerminal(`service:${serviceId}`).output.suspended) continue;
       writtenSystemLogIdsRef.current.add(entry.id);
       writeSystemLine(getTerminal(`service:${serviceId}`).terminal, entry.message);
     }

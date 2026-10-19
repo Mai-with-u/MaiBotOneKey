@@ -16,12 +16,21 @@ export class TerminalOutput {
   private queued = 0;
   private startedAt = 0;
   private sequence = 0;
+  private generation = 0;
+  suspended = false;
   applyingSize = false;
 
   constructor(private readonly terminal: OutputTerminal, private readonly onIdle: () => void = () => {}) {}
 
   get busy(): boolean {
     return this.loading !== null || this.queued > 0;
+  }
+
+  setSuspended(suspended: boolean): void {
+    if (this.suspended === suspended) return;
+    this.suspended = suspended;
+    this.generation++;
+    this.pending = [];
   }
 
   async flush(): Promise<void> {
@@ -45,6 +54,8 @@ export class TerminalOutput {
   }
 
   push(event: PtyDataEvent): void {
+    // The main process retains the history; do not accumulate a second queue here.
+    if (this.suspended) return;
     if (this.loading) {
       this.pending.push(event);
       return;
@@ -56,8 +67,11 @@ export class TerminalOutput {
     }
     if (event.sequence <= this.sequence) return;
     this.sequence = event.sequence;
+    const generation = this.generation;
     this.queued++;
-    this.tail = this.tail.then(() => this.write(event)).finally(() => {
+    this.tail = this.tail.then(() => {
+      if (generation === this.generation) return this.write(event);
+    }).finally(() => {
       this.queued--;
       if (!this.busy) this.onIdle();
     });
@@ -76,8 +90,14 @@ export class TerminalOutput {
   }
 
   private async replay(fetch: () => Promise<PtyBufferSnapshot | null>, beforeReplay: () => void): Promise<void> {
+    const generation = this.generation;
+    const checkVisible = (): void => {
+      if (this.suspended || generation !== this.generation) throw new Error("Terminal replay suspended");
+    };
+    checkVisible();
     const snapshot = await fetch();
     await this.tail;
+    checkVisible();
     if (!snapshot) return;
     this.terminal.reset();
     this.startedAt = snapshot.startedAt;
@@ -87,7 +107,11 @@ export class TerminalOutput {
     beforeReplay();
     // Drain desktop log writes before changing the geometry for the PTY stream.
     await new Promise<void>((resolve) => this.terminal.write("", resolve));
-    for (const chunk of snapshot.chunks) await this.write(chunk);
+    for (const chunk of snapshot.chunks) {
+      checkVisible();
+      await this.write(chunk);
+    }
+    checkVisible();
     this.resize(snapshot.cols, snapshot.rows);
   }
 }
