@@ -1,6 +1,6 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { watchSetupCompletion } from "@/lib/setup-completion";
-import { initializationStatus } from "@/lib/initialization-status";
+import { canRestartDependencyDownload, initializationStatus } from "@/lib/initialization-status";
 import {
   Loader2,
   RotateCcw,
@@ -114,7 +114,7 @@ export function InitializationWizard({
   const status = ready && webuiState !== "ready"
     ? { progress: 96, detail: "正在加载 MaiBot 首页" }
     : initializationStatus(service, busy, preparation);
-  const restartDownloadVisible = step === "core" && starting && !running;
+  const restartDownloadVisible = step === "core" && canRestartDependencyDownload(service, preparation);
 
   useEffect(() => {
     if (!open || step !== "core") return;

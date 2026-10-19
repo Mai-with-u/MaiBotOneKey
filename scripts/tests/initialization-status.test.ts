@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { initializationStatus } from "../../src/renderer/src/lib/initialization-status";
+import { canRestartDependencyDownload, initializationStatus } from "../../src/renderer/src/lib/initialization-status";
 import type { MaiBotModuleUpdateProgress, ServiceDescriptor } from "../../src/shared/contracts";
 
 function progress(phase: MaiBotModuleUpdateProgress["phase"], label: string, percent: number): MaiBotModuleUpdateProgress {
@@ -29,4 +29,18 @@ test("service errors and actual startup details take precedence over stale insta
   expect(initializationStatus({ status: "error", error: "启动失败" } as ServiceDescriptor, true, old).detail).toBe("启动失败");
   expect(initializationStatus({ status: "starting", detail: "正在检查依赖" } as ServiceDescriptor, true).detail).toBe("正在检查依赖");
   expect(initializationStatus(undefined, false, old).progress).toBe(0);
+});
+
+test("restart download disappears before Core startup even while service remains starting", () => {
+  const starting = { status: "starting" } as ServiceDescriptor;
+  expect(canRestartDependencyDownload(starting, null)).toBe(false);
+  for (const phase of ["installing", "installing-dependencies"] as const) {
+    expect(canRestartDependencyDownload(starting, progress(phase, "安装中", 40))).toBe(true);
+  }
+  for (const phase of ["preparing", "validating", "switching", "completed", "failed"] as const) {
+    expect(canRestartDependencyDownload(starting, progress(phase, "准备启动 Core", 100))).toBe(false);
+  }
+  for (const status of ["stopped", "running", "error"] as const) {
+    expect(canRestartDependencyDownload({ status } as ServiceDescriptor, progress("installing", "旧安装进度", 30))).toBe(false);
+  }
 });

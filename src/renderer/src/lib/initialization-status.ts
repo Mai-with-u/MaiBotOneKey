@@ -1,5 +1,13 @@
 import type { MaiBotModuleUpdateProgress, ServiceDescriptor } from "@shared/contracts";
 
+export function canRestartDependencyDownload(
+  service: ServiceDescriptor | undefined,
+  preparation: MaiBotModuleUpdateProgress | null,
+): boolean {
+  return service?.status === "starting"
+    && (preparation?.phase === "installing" || preparation?.phase === "installing-dependencies");
+}
+
 export function initializationStatus(
   service: ServiceDescriptor | undefined,
   busy: boolean,
