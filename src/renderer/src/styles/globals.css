@@ -906,6 +906,13 @@ body,
   contain: paint;
 }
 
+/* Transparent native windows need space inside their bounds for a CSS shadow. */
+:root[data-appearance-mode="modern"]:not([data-window-shadow="false"]) #root {
+  margin: 12px;
+  height: calc(100% - 24px);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.22), 0 0 0 1px rgb(0 0 0 / 0.08);
+}
+
 :root[data-floating-glass-collapsed="true"] #root {
   border-radius: 0;
 }

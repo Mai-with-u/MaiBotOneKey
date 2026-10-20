@@ -220,6 +220,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function syncWindowShadow(state: WindowState): void {
+  document.documentElement.dataset.windowShadow =
+    state.isMaximized || state.isFullScreen || state.isMiniMode || state.isFloating ? "false" : "true";
+}
+
 const resizeHandles: Array<{ edge: WindowResizeEdge; className: string }> = [
   { edge: "top", className: "inset-x-3 top-0 h-1.5 cursor-ns-resize" },
   { edge: "right", className: "inset-y-3 right-0 w-1.5 cursor-ew-resize" },
@@ -1174,11 +1179,13 @@ export function DesktopShell(): React.JSX.Element {
     });
     window.maibotDesktop?.window.getState().then((state) => {
       if (mounted) {
+        syncWindowShadow(state);
         setFloatingMode(state.isFloating === true);
         setFloatingEdge(state.floatingEdge ?? null);
       }
     });
     const offWindowState = window.maibotDesktop?.window.onState((state) => {
+      syncWindowShadow(state);
       if (typeof state.isFloating === "boolean") {
         setFloatingMode(state.isFloating);
       }
@@ -1343,6 +1350,7 @@ export function DesktopShell(): React.JSX.Element {
   }, []);
 
   const syncWindowState = useCallback((state: WindowState) => {
+    syncWindowShadow(state);
     setFloatingMode(state.isFloating === true);
     setFloatingEdge(state.floatingEdge ?? null);
   }, []);
@@ -1744,7 +1752,7 @@ export function DesktopShell(): React.JSX.Element {
       <WindowResizeHandles />
       <div
         className={cn(
-          "relative flex h-screen min-h-0 flex-col overflow-hidden text-foreground",
+          "relative flex h-full min-h-0 flex-col overflow-hidden text-foreground",
           "bg-background",
           useRetroChrome && "retro-shell",
         )}
