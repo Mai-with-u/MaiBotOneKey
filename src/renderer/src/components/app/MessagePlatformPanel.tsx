@@ -4,6 +4,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DataPanel } from "@/components/ui/surface";
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { normalizeQqAccount } from "@shared/qq-account";
+import { maiBotUpdateErrorSummary } from "@shared/maibot-update-error";
 import { MESSAGE_PLATFORM_GUIDE_EVENT, MESSAGE_PLATFORM_GUIDE_REQUEST_KEY } from "@/lib/message-platform-guide";
 import {
   AlertTriangle,
@@ -1697,13 +1698,9 @@ export function MessagePlatformPanel({
       toast.success("MaiBot 更新完成");
       await refreshSnapshot();
     } catch (nextError) {
-      const message = messageFromError(nextError);
+      const raw = messageFromError(nextError);
+      const message = maiBotUpdateErrorSummary(raw);
       setError(message);
-      setMaibotModuleUpdateLogs((current) => (
-        current.at(-1) === "更新未完成，请根据错误信息检查网络或更新源。"
-          ? current
-          : [...current, "更新未完成，请根据错误信息检查网络或更新源。"].slice(-20)
-      ));
       setMaibotModuleUpdateProgress((current) => current?.phase === "failed"
         ? current
         : {
@@ -1711,7 +1708,7 @@ export function MessagePlatformPanel({
             percent: current?.percent ?? 0,
             label: "MaiBot 更新失败",
             detail: message,
-            log: "更新未完成，请根据错误信息检查网络或更新源。",
+            errorDetails: raw,
             updatedAt: Date.now(),
           });
     } finally {
@@ -2231,12 +2228,13 @@ export function MessagePlatformPanel({
                 请先停止 MaiBot Core，再执行更新。
               </div>
             ) : null}
-            {maibotModuleUpdateProgress || maibotVersionFetchProgress ? <div className={cn("transition-[height] duration-200 motion-reduce:transition-none", maibotModuleUpdateProgress ? "h-40" : "h-20")}>
+            {maibotModuleUpdateProgress || maibotVersionFetchProgress ? <div className={cn("transition-[height] duration-200 motion-reduce:transition-none", maibotModuleUpdateProgress?.phase === "failed" ? "min-h-40" : maibotModuleUpdateProgress ? "h-40" : "h-20")}>
               {maibotModuleUpdateProgress ? (
                 <div
                   aria-live="polite"
                   className={cn(
-                    "grid h-full min-h-0 grid-rows-[auto_auto_auto_minmax(0,1fr)] gap-2 border px-3 py-2 text-xs",
+                    "grid min-h-0 gap-2 border px-3 py-2 text-xs",
+                    maibotModuleUpdateProgress.phase !== "failed" && "h-full grid-rows-[auto_auto_auto_minmax(0,1fr)]",
                     useRetroStyle ? "retro-control rounded-sm" : "rounded-lg",
                     maibotModuleUpdateProgress.phase === "failed"
                       ? "border-destructive/30 bg-destructive/10"
@@ -2271,7 +2269,7 @@ export function MessagePlatformPanel({
                   />
                   <p
                     className={cn(
-                      "truncate",
+                      "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
                       maibotModuleUpdateProgress.phase === "failed"
                         ? "text-destructive"
                         : "text-muted-foreground",
@@ -2280,7 +2278,16 @@ export function MessagePlatformPanel({
                   >
                     {maibotModuleUpdateProgress.detail ?? "正在执行更新任务。"}
                   </p>
-                  <div className="min-h-0 overflow-auto border-t border-border/60 pt-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+                  {maibotModuleUpdateProgress.phase === "failed" && maibotModuleUpdateProgress.errorDetails ? (
+                    <details className="min-w-0 text-muted-foreground">
+                      <summary className="cursor-pointer">查看技术详情（可选择并复制）</summary>
+                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] [overflow-wrap:anywhere]">
+                        {maibotModuleUpdateProgress.errorDetails}
+                        {maibotModuleUpdateProgress.cleanupWarning ? `\n\n清理提示：${maibotModuleUpdateProgress.cleanupWarning}` : ""}
+                      </pre>
+                    </details>
+                  ) : null}
+                  <div className="min-h-0 max-h-24 overflow-auto border-t border-border/60 pt-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
                     {maibotModuleUpdateLogs.length > 0 ? (
                       maibotModuleUpdateLogs.slice(-5).map((line, index) => (
                         <p className="break-words" key={`${index}-${line}`}>

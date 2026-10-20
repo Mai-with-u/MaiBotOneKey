@@ -1176,8 +1176,10 @@ print(json.dumps(corrupt, ensure_ascii=False))
           sourceUrl: index.url,
         };
       } catch (error) {
+        if (signal?.aborted) throw error;
         const detail = toDetail(error);
         failures.push(`[${index.label}] ${detail}`);
+        onOutput?.(`失败原因：${detail}`);
         onOutput?.(`pip install failed with ${index.label}; ${this.nextIndexHint(index.url)}`);
       }
     }
@@ -1259,6 +1261,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
     signal: AbortSignal | undefined,
     onOutput: PythonOutputHandler,
     extraEnv?: Record<string, string>,
+    timeoutMs = PIP_TIMEOUT_MS,
   ): Promise<string[]> {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) { reject(new Error("Python dependency install was cancelled")); return; }
@@ -1268,21 +1271,30 @@ print(json.dumps(corrupt, ensure_ascii=False))
         windowsHide: true,
         env: this.buildPythonProcessEnv(extraEnv),
       });
+      let termination: Promise<void> | undefined;
       const stopChild = (): void => {
+        if (termination) return;
         if (process.platform === "win32" && child.pid) {
-          execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => undefined);
+          termination = new Promise((resolve) => {
+            execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, (error) => {
+              if (error && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+              resolve();
+            });
+          });
         } else child.kill("SIGKILL");
       };
       signal?.addEventListener("abort", stopChild, { once: true });
       this.startupUpgradeChild = child;
       let settled = false;
       let processError: Error | undefined;
+      let timeoutError: Error | undefined;
       let stdoutBuffer = "";
       let stderrBuffer = "";
       const timeout = setTimeout(() => {
+        timeoutError = new Error(`Python command timed out after ${Math.round(timeoutMs / 1000)}s`);
         stopChild();
-        finish(new Error(`Python command timed out after ${Math.round(PIP_TIMEOUT_MS / 1000)}s`));
-      }, PIP_TIMEOUT_MS);
+        // Wait for close before rejecting so fallback/cleanup cannot race Python.
+      }, timeoutMs);
 
       const emitLine = (line: string): void => {
         const normalized = line.trimEnd();
@@ -1341,8 +1353,13 @@ print(json.dumps(corrupt, ensure_ascii=False))
         processError = error;
         if (!child.pid) finish(error);
       });
-      child.on("close", (code, signalName) => {
+      child.on("close", async (code, signalName) => {
+        // taskkill /T must also finish terminating installer subprocesses.
+        clearTimeout(timeout);
+        await termination;
+        flush();
         if (signal?.aborted) { finish(new Error("Python dependency install was cancelled")); return; }
+        if (timeoutError) { finish(new Error([timeoutError.message, ...output].join("\n"))); return; }
         if (processError) { finish(processError); return; }
         if (code === 0) {
           finish();

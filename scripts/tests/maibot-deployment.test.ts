@@ -259,6 +259,23 @@ test("package updates retain a previous environment and use paths relative to a 
   expect(manager.getState()!.packageVersion).toBe("1.3.9");
 });
 
+test("failed environment cleanup cannot hide dependency errors or change the active deployment", async () => {
+  const { instance, manager } = await fixture(false, "dependencies");
+  const original = { schema: 1, mode: "pypi", generation: "existing", packageVersion: "1.3.9", sourceUrl: "https://pypi.org/simple", installedAt: Date.now() };
+  await writeFile(deploymentFile(instance), JSON.stringify(original));
+  (manager as any).cleanupFailedInstall = async () => {
+    throw Object.assign(new Error("EPERM: unlink python.exe"), { code: "EPERM" });
+  };
+  const logs: string[] = [];
+  await expect(manager.install("1.3.11", (progress) => {
+    if (progress.log) logs.push(progress.log);
+    if (progress.cleanupWarning) logs.push(progress.cleanupWarning);
+  })).rejects.toThrow("dependency resolution failed");
+  expect(logs.some((line) => line.includes("EPERM"))).toBe(true);
+  expect(logs.some((line) => line.includes("dependency resolution failed"))).toBe(true);
+  expect(readMaiBotDeployment(instance)).toEqual(original);
+});
+
 test("cancelled installs do not change the active environment, and UI errors cannot undo a commit", async () => {
   const { instance, manager } = await fixture();
   await expect(manager.install("1.3.8", (progress) => { if (progress.phase === "installing") manager.cancel(); })).rejects.toThrow();

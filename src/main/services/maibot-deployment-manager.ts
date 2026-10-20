@@ -4,6 +4,7 @@ import { cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "n
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { MaiBotModuleUpdateProgress, ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
 import { PythonDependencyManager } from "./python-dependency-manager";
+import { explainMaiBotUpdateError } from "../../shared/maibot-update-error";
 import { SourceSettingsManager } from "./source-settings-manager";
 import { deploymentFile, isMaiBotPackageMode, maiBotEnvironmentRoot, readMaiBotDeployment, type MaiBotDeployment } from "./maibot-deployment-state";
 
@@ -86,7 +87,10 @@ export class MaiBotDeploymentManager {
     const snapshot = join(root, ".onekey", "snapshots", generation);
     const python = this.createEnvironment({ ...this.paths, pythonEnvRoot: environment });
     const output: string[] = [];
+    let stage = "准备独立 Python 环境";
+    let lastPercent = 0;
     const emit = (phase: MaiBotModuleUpdateProgress["phase"], percent: number, label: string, log?: string): void => {
+      if (phase !== "failed") { stage = label; lastPercent = percent; }
       if (log) output.push(log);
       try { onProgress?.({ phase, percent, label, detail: log, log, updatedAt: Date.now() }); } catch { /* UI listeners cannot invalidate a committed installation. */ }
     };
@@ -163,15 +167,37 @@ export class MaiBotDeploymentManager {
         after: actual, remote: installed.sourceUrl, changed: true, output, updatedAt: Date.now(), source: "remote" };
     } catch (error) {
       // Only init can have touched the instance. Failed downloads never replace the active record.
-      if (snapshotReady && initializationStarted) await this.restoreSnapshot(generation);
-      await rm(this.pendingFile(), { force: true });
-      await rm(environment, { recursive: true, force: true });
-      emit("failed", 0, "MaiBot 安装失败，原环境保留", String(error));
-      throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      let cleanupWarning: string | undefined;
+      if (snapshotReady && initializationStarted) {
+        try { await this.restoreSnapshot(generation); }
+        catch (restoreError) {
+          const message = `${explainMaiBotUpdateError(detail, stage)}\n配置恢复失败，请保留实例目录并联系维护者。`;
+          const errorDetails = `${detail}\n\n配置恢复错误：${String(restoreError)}`;
+          try { onProgress?.({ phase: "failed", percent: lastPercent, label: "MaiBot 更新失败", detail: message, errorDetails, log: message, updatedAt: Date.now() }); } catch { /* UI listener */ }
+          // Retain pending.json and the snapshot for startup recovery.
+          throw new Error(`${message}\n\n技术详情：${errorDetails}`, { cause: error });
+        }
+      }
+      try {
+        await this.cleanupFailedInstall(environment);
+      } catch (cleanupError) {
+        cleanupWarning = `未启用的新环境清理失败，原环境不受影响；残留文件不会用于启动。\n${String(cleanupError)}`;
+      }
+      const message = `${explainMaiBotUpdateError(detail, stage)}\n${before || sourceInstance ? "原版本未切换，可以继续使用。" : "新环境未启用，请处理后重新安装。"}`;
+      output.push(detail);
+      try { onProgress?.({ phase: "failed", percent: lastPercent, label: "MaiBot 更新失败", detail: message, errorDetails: detail, cleanupWarning, log: detail, updatedAt: Date.now() }); } catch { /* UI listener */ }
+      throw new Error(`${message}\n\n技术详情：${detail}`, { cause: error });
     }
   }
 
   private pendingFile(): string { return join(this.paths.maibotRoot, ".onekey", "pending.json"); }
+
+  private async cleanupFailedInstall(environment: string): Promise<void> {
+    await rm(this.pendingFile(), { force: true });
+    // Windows may briefly retain executable handles after the installer exits.
+    await rm(environment, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
 
   private async pruneUnusedGenerations(): Promise<void> {
     const current = this.getState();

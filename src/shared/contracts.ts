@@ -685,6 +685,9 @@ export interface MaiBotModuleUpdateProgress {
   percent: number;
   label: string;
   detail?: string;
+  /** 完整原始错误，供更新窗口展开查看和复制。 */
+  errorDetails?: string;
+  cleanupWarning?: string;
   /** 适合追加到前端更新记录中的单条阶段日志。 */
   log?: string;
   updatedAt: number;
