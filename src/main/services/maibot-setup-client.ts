@@ -9,6 +9,7 @@ export async function readMaiBotSetupStatus(
 ): Promise<MaiBotSetupStatus> {
   if (!token) throw new Error("MaiBot 首次配置状态暂不可用");
   const response = await request(new URL("/api/webui/setup/status", endpoint), {
+    cache: "no-store",
     headers: { Cookie: webuiSessionCookie(token) },
     signal: AbortSignal.timeout(5_000),
     redirect: "error",

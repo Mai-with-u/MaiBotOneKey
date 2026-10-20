@@ -766,6 +766,7 @@ async function fetchLauncherReleaseNotesInRange(
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch(ONEKEY_RELEASES_API_URL, {
+      cache: "no-store",
       headers: { Accept: "application/vnd.github+json" },
       signal: controller.signal,
     });
@@ -836,6 +837,7 @@ async function fetchMaiBotReleaseByTag(
   const url = `https://api.github.com/repos/Mai-with-u/MaiBot/releases/tags/${encodeURIComponent(tag)}`;
   try {
     const response = await fetch(url, {
+      cache: "no-store",
       headers: { Accept: "application/vnd.github+json" },
       signal: controller.signal,
     });
@@ -863,6 +865,7 @@ async function fetchOneKeyReleases(): Promise<GitHubReleasePayload[]> {
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch(ONEKEY_RELEASES_API_URL, {
+      cache: "no-store",
       headers: { Accept: "application/vnd.github+json" },
       signal: controller.signal,
     });
@@ -914,6 +917,7 @@ async function fetchLauncherUpdateInfo(
       release = mirror.latest;
     } else {
       const response = await fetch(ONEKEY_LATEST_RELEASE_API_URL, {
+        cache: "no-store",
         headers: { Accept: "application/vnd.github+json" },
         signal: controller.signal,
       });
@@ -1198,6 +1202,7 @@ async function fetchPypiVersionSummary(
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
     const response = await fetch(`https://pypi.org/pypi/${packageName}/json`, {
+      cache: "no-store",
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -1257,6 +1262,7 @@ export function registerAppIpc({
     "appLatestTag" | "appLatestSource"
   > = {};
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
+  let remoteVersionsInitialized = false;
   let initDependencyRefreshPromise: Promise<void> | null = null;
   let floatingMode = false;
   let miniMode = false;
@@ -1970,9 +1976,11 @@ export function registerAppIpc({
   };
 
   const scheduleRemoteModuleVersionsRefresh = (): void => {
-    if (remoteModuleVersionsRefreshPromise) {
+    // Local status polling must not repeatedly query external update services.
+    if (remoteVersionsInitialized || remoteModuleVersionsRefreshPromise) {
       return;
     }
+    remoteVersionsInitialized = true;
     remoteModuleVersionsRefreshPromise = Promise.all([
       readRemoteModuleVersions(),
       readRemoteAppVersion(),
@@ -1992,6 +2000,7 @@ export function registerAppIpc({
   };
 
   const refreshRemoteVersionsNow = async (): Promise<DesktopSnapshot> => {
+    remoteVersionsInitialized = true;
     if (remoteModuleVersionsRefreshPromise) {
       await remoteModuleVersionsRefreshPromise;
     } else {

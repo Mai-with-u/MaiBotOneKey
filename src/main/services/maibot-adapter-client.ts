@@ -23,6 +23,7 @@ export class MaiBotAdapterClient {
     let response: Response;
     try {
       response = await this.request(new URL(`/api/webui/plugins/${path}`, this.endpoint()), {
+        cache: "no-store",
         method: method ?? (config === undefined ? "GET" : "PUT"),
         headers: { Cookie: webuiSessionCookie(token), "Content-Type": "application/json" },
         body: config === undefined ? undefined : JSON.stringify({ config }),

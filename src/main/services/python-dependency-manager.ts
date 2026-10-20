@@ -341,6 +341,7 @@ async function fetchText(url: string): Promise<FetchTextResult> {
 
   try {
     const response = await fetch(url, {
+      cache: "no-store",
       headers: { Accept: SIMPLE_ACCEPT },
       signal: controller.signal,
     });
