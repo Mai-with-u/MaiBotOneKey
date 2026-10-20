@@ -1,8 +1,13 @@
+import { isWindowsLongPathError } from "./windows-long-path";
+
 /** Translate evidence in installer errors without guessing an unknown cause. */
 export function explainMaiBotUpdateError(detail: string, stage = "更新 MaiBot"): string {
   let reason: string;
   let action: string;
-  if (/cancelled|canceled|AbortError|aborted/iu.test(detail)) {
+  if (isWindowsLongPathError(detail)) {
+    reason = "安装文件路径超过 Windows 长度限制";
+    action = "请在弹窗中开启长路径支持，重启电脑后重新安装。更换 Python 包源无法解决此问题。";
+  } else if (/cancelled|canceled|AbortError|aborted/iu.test(detail)) {
     reason = "更新已取消";
     action = "需要时可以重新更新。";
   } else if (/timed?\s*out|timeout|ReadTimeout|ConnectTimeout/iu.test(detail)) {

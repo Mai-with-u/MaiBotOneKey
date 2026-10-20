@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { cp, lstat, mkdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isWindowsLongPathError } from "../../shared/windows-long-path";
 import type {
   ManagedPythonPackage,
   ManagedSourceEntry,
@@ -1178,6 +1179,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
       } catch (error) {
         if (signal?.aborted) throw error;
         const detail = toDetail(error);
+        if (process.platform === "win32" && isWindowsLongPathError(detail)) throw error;
         failures.push(`[${index.label}] ${detail}`);
         onOutput?.(`失败原因：${detail}`);
         onOutput?.(`pip install failed with ${index.label}; ${this.nextIndexHint(index.url)}`);

@@ -12,6 +12,8 @@ import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { fetchMirrorManifest, isOfficialLauncherDownloadUrl, withDownloadFallback } from "../services/launcher-update-mirror";
 import { resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
+import { isWindowsLongPathError } from "../../shared/windows-long-path";
+import { enableWindowsLongPaths, windowsLongPathsEnabled } from "../services/windows-long-path";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import {
   mkdir,
@@ -1933,11 +1935,41 @@ export function registerAppIpc({
     return update;
   };
 
+  let longPathRepairPrompt: Promise<void> | undefined;
+  const offerLongPathRepair = async (): Promise<void> => {
+    const show = (options: Electron.MessageBoxOptions) => {
+      const window = getMainWindow();
+      return window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+    };
+    if (await windowsLongPathsEnabled().catch(() => false)) {
+      await show({ type: "info", title: "Windows 长路径支持", message: "系统已开启长路径支持", detail: "请保存工作并重启 Windows 后重新安装。若重启后仍然失败，请将实例迁移到更短的目录，并提供完整错误日志。", buttons: ["知道了"] });
+      return;
+    }
+    const result = await show({ type: "warning", title: "安装路径过长", message: "是否开启 Windows 长路径支持？", detail: "安装依赖时文件路径超过了系统限制。开启将修改系统设置，随后 Windows 会请求管理员授权。完成后建议重启电脑，再重新安装。", buttons: ["开启长路径支持", "暂不开启"], defaultId: 0, cancelId: 1, noLink: true });
+    if (result.response !== 0) return;
+    try {
+      await enableWindowsLongPaths();
+      await show({ type: "info", title: "已开启长路径支持", message: "Windows 长路径支持已开启", detail: "请保存工作并重启 Windows，之后回到启动器重新安装。", buttons: ["知道了"] });
+    } catch {
+      await show({ type: "warning", title: "未能开启长路径支持", message: "设置未完成或管理员授权被取消", detail: "请重试并允许 Windows 管理员授权；如果电脑由组织管理，请联系管理员开启长路径支持。", buttons: ["知道了"] });
+    }
+  };
+  const withLongPathRepair = async <T,>(operation: () => Promise<T>): Promise<T> => {
+    try { return await operation(); }
+    catch (error) {
+      if (process.platform === "win32" && isWindowsLongPathError(error)) {
+        longPathRepairPrompt ??= offerLongPathRepair().finally(() => { longPathRepairPrompt = undefined; });
+        // Preserve the install error even if displaying the repair dialog fails.
+        await longPathRepairPrompt.catch(() => undefined);
+      }
+      throw error;
+    }
+  };
   const handleRuntimeMutation: typeof ipcMain.handle = (channel, listener) => {
-    ipcMain.handle(channel, (event, ...args) => resourceLocationManager.withRuntimeActivity(async () => listener(event, ...args)));
+    ipcMain.handle(channel, (event, ...args) => withLongPathRepair(() => resourceLocationManager.withRuntimeActivity(async () => listener(event, ...args))));
   };
   const handleDeploymentMutation: typeof ipcMain.handle = (channel, listener) => {
-    ipcMain.handle(channel, (event, ...args) => resourceLocationManager.withDeploymentOperation(async () => listener(event, ...args)));
+    ipcMain.handle(channel, (event, ...args) => withLongPathRepair(() => resourceLocationManager.withDeploymentOperation(async () => listener(event, ...args))));
   };
 
   const buildSnapshot = async (
