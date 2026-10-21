@@ -13,6 +13,13 @@ async function main(): Promise<void> {
   delete env.ELECTRON_RUN_AS_NODE;
   console.log("[dev:build] 构建本地 MaiBot Dashboard…");
   if (options.dryRun) { console.log(`[dev:build] ${dashboardRoot}`); return; }
+  if (!existsSync(resolve(dashboardRoot, "node_modules"))) {
+    console.log("[dev:build] 首次安装 Dashboard 依赖…");
+    const install = Bun.spawn([process.execPath, "install", ...(existsSync(resolve(dashboardRoot, "bun.lock")) ? ["--frozen-lockfile"] : [])], {
+      cwd: dashboardRoot, env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    });
+    if (await install.exited !== 0) throw new Error("Dashboard 依赖安装失败");
+  }
   const build = Bun.spawn([process.execPath, "run", "build"], {
     cwd: dashboardRoot,
     env,

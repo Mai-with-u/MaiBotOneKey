@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run scripts/dev/start-dev.ts --mode pypi",
     "dev:pypi": "bun run scripts/dev/start-dev.ts --mode pypi",
+    "dev:source:init": "bun run scripts/dev/init-maibot-source.ts",
     "dev:source": "bun run scripts/dev/start-dev.ts --mode source",
     "dev:source:webui": "bun run scripts/dev/start-dev.ts --mode source --local-dashboard",
     "dev:dev": "bun run scripts/dev/start-dev.ts --mode source --local-dashboard",
@@ -126,6 +127,7 @@
           "!**/*.pyc",
           "!MaiBot/.venv/**",
           "!MaiBot/**",
+          "!MaiBot-source/**",
           "!MaiBot/.pytest_cache/**",
           "!MaiBot/.ruff_cache/**",
           "!MaiBot/.mypy_cache/**",

@@ -22,14 +22,21 @@ bun run dev
 | `bun run dev:source:webui` | 本地源码 | 使用源码目录中的 `dashboard/dist` |
 | `bun run dev:dev` | `dev:source:webui` 的兼容别名 | 同上 |
 
-源码默认放在 `modules/MaiBot-source`，也可以指定已有 checkout（支持带空格的路径）：
+源码默认放在一键包工作目录下的 `modules/MaiBot-source`。首次准备和日常启动：
+
+```powershell
+bun run dev:source:init
+bun run dev:source
+```
+
+`dev:source:init` 首次克隆官方仓库的 `dev` 分支，同时保留其他远端分支引用；已有源码时只检查并复用，不覆盖本地修改。源码目录不会进入一键包安装包。也可以指定已有 checkout（支持带空格的路径）：
 
 ```powershell
 bun run dev:source --source "C:\path\MaiBot"
 
-# 同时调试源码中的 Dashboard
-bun run dev:build --source "C:\path\MaiBot"
-bun run dev:source:webui --source "C:\path\MaiBot"
+# 同时调试工作目录内源码中的 Dashboard（首次构建会安装前端依赖）
+bun run dev:build
+bun run dev:dev
 ```
 
 源码入口不会自动克隆、更新或覆盖代码，也不接受已经带有 `.onekey-deployment.json` 的 PyPI 实例目录。Python 直接运行该目录的 `bot.py`，编辑 Python 后在一键包中重启 Core 即可加载改动；编辑 Dashboard 后重新执行 `dev:build` 并刷新 WebUI。Electron/React 代码仍由 electron-vite 监听。

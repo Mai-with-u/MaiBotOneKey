@@ -37,7 +37,7 @@ export function assertSourceCheckout(root: string): string {
     || !existsSync(join(root, "bot.py")) || !statSync(join(root, "bot.py")).isFile()
     || !existsSync(join(root, "src")) || !statSync(join(root, "src")).isDirectory()
     || !existsSync(join(root, "pyproject.toml"))) {
-    throw new Error(`MaiBot 源码目录无效：${root}。请将源码放到 modules/MaiBot-source，或使用 bun run dev:source --source <源码目录>。`);
+    throw new Error(`MaiBot 源码目录无效：${root}。请先运行 bun run dev:source:init，或使用 bun run dev:source --source <源码目录>。`);
   }
   if (existsSync(join(root, ".onekey-deployment.json"))) throw new Error("该目录已用于 PyPI 部署，请选择独立的 MaiBot 源码 checkout，避免混用安装环境");
   return realpathSync(root);
