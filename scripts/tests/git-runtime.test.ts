@@ -8,6 +8,7 @@ import { resolveGitPath } from "../../src/main/services/git-runtime";
 import { InitManager } from "../../src/main/services/init-manager";
 import { ServiceManager } from "../../src/main/services/service-manager";
 import type { RuntimePaths } from "../../src/shared/contracts";
+import { version as launcherVersion } from "../../package.json";
 
 const bundled = resolve("runtime/git");
 const systemGit = Bun.which("git");
@@ -37,6 +38,8 @@ nativeTest("MaiBot gets bundled Git with no system Git and ignores a stale custo
     const pty = Object.assign(new EventEmitter(), {
       list: () => [], kill() {},
       start(request: { id: string; env: Record<string, string> }) {
+        expect(request.env.MAIBOT_ONEKEY).toBe("1");
+        expect(request.env.MAIBOT_ONEKEY_VERSION).toBe(launcherVersion);
         expect(request.env.GIT_PYTHON_GIT_EXECUTABLE).toBe(git);
         // The real child process must find Git using only the injected PATH.
         const child = Bun.spawnSync([process.env.ComSpec ?? "cmd.exe", "/d", "/c", "git --version"], {
@@ -54,6 +57,8 @@ nativeTest("MaiBot gets bundled Git with no system Git and ignores a stale custo
     await services.start("maibot");
     expect(started).toBe(true);
     expect(process.env.PATH).toBe("");
+    expect(process.env.MAIBOT_ONEKEY).toBe(originalEnv.MAIBOT_ONEKEY);
+    expect(process.env.MAIBOT_ONEKEY_VERSION).toBe(originalEnv.MAIBOT_ONEKEY_VERSION);
   } finally {
     services?.dispose();
     process.env = originalEnv;

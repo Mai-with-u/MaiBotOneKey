@@ -29,6 +29,7 @@ import { PythonDependencyManager } from "./python-dependency-manager";
 import { SnowLumaWebuiAuth } from "./snowluma-webui-auth";
 import { defaultServiceStartupSettings, isLocalDashboardDevLaunch } from "./service-startup-defaults";
 import { prepareSnowLumaEntry } from "./snowluma-auto-inject";
+import { version as launcherVersion } from "../../../package.json";
 
 interface ServiceDefinition {
   id: ServiceId;
@@ -223,13 +224,12 @@ function createServiceSpecificEnv(
   serviceId: ServiceId,
   startupSettings: ServiceStartupSettings,
 ): Record<string, string> {
-  if (serviceId === "maibot" && startupSettings.useLocalDashboard) {
-    return {
-      [LOCAL_DASHBOARD_ENV_NAME]: "1",
-    };
-  }
-
-  return {};
+  if (serviceId !== "maibot") return {};
+  return {
+    MAIBOT_ONEKEY: "1",
+    MAIBOT_ONEKEY_VERSION: launcherVersion,
+    ...(startupSettings.useLocalDashboard ? { [LOCAL_DASHBOARD_ENV_NAME]: "1" } : {}),
+  };
 }
 
 function killWindowsProcessTree(pid: number, force: boolean): Promise<void> {
