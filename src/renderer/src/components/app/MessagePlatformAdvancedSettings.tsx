@@ -1,4 +1,5 @@
 import { normalizeQqAccount } from "@shared/qq-account";
+import { isSnowLumaUpgradeAvailable } from "@shared/snowluma-version";
 import { Download, Loader2, RefreshCw, Save, Settings } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -10,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isValidPortText, readQqWebuiPort, saveQqWebuiPort } from "@/lib/qq-webui-port";
 import { cn } from "@/lib/utils";
+import { useSnowLumaUpgradeDebug } from "@/lib/use-snowluma-upgrade-debug";
 
 const qqBackendOptions: Array<{ value: QqBackend; label: string }> = [
   { value: "napcat", label: "NapCat" },
@@ -54,6 +56,10 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
+  const [upgradeSnowLumaOnly, setUpgradeSnowLumaOnly] = useState(false);
+  const [forceSnowLumaUpgrade] = useSnowLumaUpgradeDebug();
+  const snowLumaUpgradeAvailable = (snapshot.initState.qqProtocol ?? snapshot.initState.qqBackend) === "snowluma"
+    && (forceSnowLumaUpgrade || isSnowLumaUpgradeAvailable(snapshot.moduleVersions.snowlumaLocal, snapshot.moduleVersions.snowlumaBundled));
   const readBackendPort = (backend: QqBackend): string => readQqWebuiPort(backend,
     backend === snapshot.initState.qqBackend ? snapshot.services.find((service) => service.id === "napcat")?.url : undefined);
   const [qqWebuiPorts, setQqWebuiPorts] = useState<Record<QqBackend, string>>(() => ({
@@ -118,17 +124,19 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     setBusy("qq-components:upgrade");
     setError(null);
     try {
-      const result = await window.maibotDesktop?.protocols.upgradeQqComponents();
+      const bridge = window.maibotDesktop;
+      if (!bridge) throw new Error("无法连接启动器");
+      const result = await bridge.protocols.upgradeQqComponents(upgradeSnowLumaOnly ? "snowluma" : undefined);
       setConfirmQqComponentsUpgradeOpen(false);
       const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
-      toast.success(`NapCat / SnowLuma 已重新安装，保留 ${preservedCount} 项配置与数据`);
+      toast.success(`${upgradeSnowLumaOnly ? "SnowLuma 已升级" : "NapCat / SnowLuma 已重新安装"}，保留 ${preservedCount} 项配置与数据`);
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [qqComponentsChangeBlocked, refreshSnapshot]);
+  }, [qqComponentsChangeBlocked, refreshSnapshot, upgradeSnowLumaOnly]);
 
   const saveQqWebuiPorts = useCallback(() => {
     if (!qqWebuiPortsValid) {
@@ -177,13 +185,19 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
 
   return (
     <>
-      <Button disabled={disabled || busy !== null} onClick={() => {
+      <Button className="order-1 ml-auto" disabled={disabled || busy !== null} onClick={() => {
         setQqWebuiPorts({ napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma") });
         setError(null);
         setOpen(true);
       }} size="sm" variant="outline">
         <Settings />高级设置
       </Button>
+      {snowLumaUpgradeAvailable ? <Button
+        disabled={disabled || busy !== null || qqComponentsChangeBlocked}
+        onClick={() => { setError(null); setUpgradeSnowLumaOnly(true); setConfirmQqComponentsUpgradeOpen(true); }}
+        size="sm"
+        title={`${snapshot.moduleVersions.snowlumaLocal} → ${snapshot.moduleVersions.snowlumaBundled}`}
+      ><Download />升级 SnowLuma</Button> : null}
       <Dialog open={open} onOpenChange={(next) => { if (busy === null) setOpen(next); }}>
         <DialogContent aria-describedby={undefined} className="grid-rows-[minmax(0,1fr)_auto]" size="lg">
           <DialogTitle className="sr-only">消息平台高级设置</DialogTitle>
@@ -331,6 +345,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                     disabled={busy !== null || qqComponentsChangeBlocked}
                     onClick={() => {
                       setError(null);
+                      setUpgradeSnowLumaOnly(false);
                       setConfirmQqComponentsUpgradeOpen(true);
                     }}
                     variant="secondary"
@@ -355,9 +370,11 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     >
       <DialogContent size="md">
       <DialogHeader
-        description="这会用一键包内置的 NapCat 与 SnowLuma 程序文件覆盖现有组件。"
+        description={upgradeSnowLumaOnly
+          ? `SnowLuma ${snapshot.moduleVersions.snowlumaLocal} → ${snapshot.moduleVersions.snowlumaBundled}，使用一键包内置版本升级。`
+          : "这会用一键包内置的 NapCat 与 SnowLuma 程序文件覆盖现有组件。"}
         icon={<Download className="size-4" />}
-        title="确认重新安装？"
+        title={upgradeSnowLumaOnly ? "确认升级 SnowLuma？" : "确认重新安装？"}
         tone="warning"
       />
       <DialogBody className="space-y-3 text-sm">
@@ -382,7 +399,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
           variant="secondary"
         >
           {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
-          重新安装
+          {upgradeSnowLumaOnly ? "升级 SnowLuma" : "重新安装"}
         </Button>
       </DialogFooter>
       </DialogContent>

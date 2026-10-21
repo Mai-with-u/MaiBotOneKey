@@ -110,11 +110,12 @@ export class ProtocolComponentManager {
     };
   }
 
-  async upgradeQqComponents(): Promise<QqComponentUpgradeResult> {
-    await this.cleanupQqComponentProcesses();
+  async upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> {
+    if (component !== undefined && component !== "napcat" && component !== "snowluma") throw new Error("未知协议端组件");
+    await this.cleanupQqComponentProcesses(component);
 
     const components: QqComponentUpgradeEntry[] = [];
-    if (existsSync(join(this.paths.bundledModulesRoot, "napcat"))) {
+    if (component !== "snowluma" && existsSync(join(this.paths.bundledModulesRoot, "napcat"))) {
       components.push(
         await this.upgradeBundledComponent({
           id: "napcat",
@@ -124,7 +125,7 @@ export class ProtocolComponentManager {
         }),
       );
     }
-    components.push(
+    if (component !== "napcat") components.push(
       await this.upgradeBundledComponent({
         id: "snowluma",
         name: "SnowLuma",
@@ -135,12 +136,12 @@ export class ProtocolComponentManager {
     return { components, upgradedAt: Date.now() };
   }
 
-  private async cleanupQqComponentProcesses(): Promise<void> {
+  private async cleanupQqComponentProcesses(component?: QqComponentUpgradeId): Promise<void> {
     if (process.platform !== "win32") {
       return;
     }
 
-    const targetRoots = [this.paths.napcatRoot, this.paths.snowlumaRoot]
+    const targetRoots = (component === "snowluma" ? [this.paths.snowlumaRoot] : component === "napcat" ? [this.paths.napcatRoot] : [this.paths.napcatRoot, this.paths.snowlumaRoot])
       .filter((path) => path.trim().length > 0)
       .map((path) => resolve(path));
     if (targetRoots.length === 0) {

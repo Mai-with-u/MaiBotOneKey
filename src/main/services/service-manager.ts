@@ -670,6 +670,7 @@ export class ServiceManager extends EventEmitter {
           PATH: [root, join(root, "Scripts"), join(root, "bin"), process.env.PATH ?? process.env.Path ?? ""].join(delimiter) });
       }
       if (serviceId === "napcat" && this.initManager.getQqBackendSync() === "snowluma") {
+        mergedEnv.SNOWLUMA_WEBUI_TARGET = "maibot";
         Object.assign(mergedEnv, await this.snowLumaWebuiAuth.prepareEnvironment());
       }
       if (serviceEnv[LOCAL_DASHBOARD_ENV_NAME]) {

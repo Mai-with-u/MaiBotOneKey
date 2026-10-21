@@ -294,6 +294,8 @@ export interface LocalChatStateEvent {
 export type LocalChatEvent = LocalChatMessageEvent | LocalChatStateEvent;
 
 export interface ModuleRuntimeVersions {
+  snowlumaLocal?: string;
+  snowlumaBundled?: string;
   maibotLocal?: string;
   maibotLocalSource?: "pyproject" | "pypi" | "unknown";
   maibotDeploymentMode?: "source" | "pypi";
@@ -902,7 +904,7 @@ export interface DesktopBridge {
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
     resetSnowLuma: () => Promise<SnowLumaResetResult>;
-    upgradeQqComponents: () => Promise<QqComponentUpgradeResult>;
+    upgradeQqComponents: (component?: QqComponentUpgradeId) => Promise<QqComponentUpgradeResult>;
   };
   adapters: {
     syncQqConnections: () => Promise<InitRepairResult>;

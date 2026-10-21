@@ -35,6 +35,7 @@ import type {
   MaiBotStorageCleanupTarget,
   MaiBotStorageStats,
   QqComponentUpgradeResult,
+  QqComponentUpgradeId,
   QqBackend,
   QqProtocol,
   QqProtocolOptions,
@@ -820,7 +821,7 @@ export class InitManager {
   }
 
   resetSnowLumaComponent(): Promise<SnowLumaResetResult> { return this.protocolComponents.resetSnowLumaComponent(); }
-  upgradeQqComponents(): Promise<QqComponentUpgradeResult> { return this.protocolComponents.upgradeQqComponents(); }
+  upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> { return this.protocolComponents.upgradeQqComponents(component); }
   getQqBackendSync() { return this.protocols.getQqBackendSync(); }
   async getMaiBotSetupStatus() {
     // Read the active instance's latest token on every request, including after password changes.

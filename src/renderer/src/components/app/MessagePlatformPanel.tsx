@@ -1831,7 +1831,7 @@ export function MessagePlatformPanel({
                   value={selectedProtocol}
                   onValueChange={setSelectedProtocol}
                   disabled={busy !== null}
-                  options={([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方 QQ 适配器" }] as const).map((option) => ({ ...option, disabled: qqBackendBusy && option.value !== currentProtocol }))}
+                  options={([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方QQ" }] as const).map((option) => ({ ...option, disabled: qqBackendBusy && option.value !== currentProtocol }))}
                 />
                 <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount))))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
                   {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
@@ -1840,9 +1840,6 @@ export function MessagePlatformPanel({
                 {qqBackendBusy ? <p className="w-full text-xs text-muted-foreground">{snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请稍候。` : "请先停止当前 QQ 协议端，再切换。"}</p> : null}
                 {error && !messagePlatformDialogOpen ? <p className="w-full text-xs text-destructive">{error}</p> : null}
               </section>
-              <div className="mt-4 flex justify-end">
-                <MessagePlatformAdvancedSettings snapshot={snapshot} refreshSnapshot={refreshSnapshot} disabled={busy !== null} />
-              </div>
               {currentProtocol === "napcat" ? (
                 <aside className={cn("mt-4 space-y-4 !border-0 !bg-amber-100 p-5 !text-amber-950 dark:!bg-amber-950 dark:!text-amber-100", useRetroStyle ? "retro-panel" : "rounded-lg")}>
                   <h2 className="flex items-center gap-2 text-xl font-bold">
@@ -1855,6 +1852,9 @@ export function MessagePlatformPanel({
                   </div>
                 </aside>
               ) : null}
+              <div className="mt-4 flex items-center gap-4">
+                <MessagePlatformAdvancedSettings snapshot={snapshot} refreshSnapshot={refreshSnapshot} disabled={busy !== null} />
+              </div>
             </>
           ) : null}
         </div>

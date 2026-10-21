@@ -1,4 +1,5 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
+import { useSnowLumaUpgradeDebug } from "@/lib/use-snowluma-upgrade-debug";
 import { MaiBotConfigImportPanel } from "./MaiBotConfigImportPanel";
 import { ResourcePathEditor } from "./ResourcePathEditor";
 import { useResourcePathWorkflow } from "./ResourcePathWorkflow";
@@ -751,6 +752,7 @@ export function SettingsStatusPanel({
   };
   const [error, setError] = useState<string | null>(null);
   const [activeSettingsTab, setActiveSettingsTab] = useState("general");
+  const [forceSnowLumaUpgrade, setForceSnowLumaUpgrade] = useSnowLumaUpgradeDebug();
   const [developerModeEnabled, setDeveloperModeEnabled] = useState(
     () => localStorage.getItem(DEVELOPER_MODE_STORAGE_KEY) === "true",
   );
@@ -1927,6 +1929,17 @@ export function SettingsStatusPanel({
 
               {developerModeEnabled ? (
               <TabsContent className="settings-content" value="debug">
+                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">始终显示 SnowLuma 升级按钮</p>
+                    <p className="text-xs text-muted-foreground">忽略版本判断，立即显示消息平台页面的升级按钮；点击仍会执行实际升级。</p>
+                  </div>
+                  <Switch
+                    aria-label="始终显示 SnowLuma 升级按钮"
+                    checked={forceSnowLumaUpgrade}
+                    onCheckedChange={setForceSnowLumaUpgrade}
+                  />
+                </SettingsSection>
                 <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <Smartphone className="size-4 shrink-0 text-primary" />

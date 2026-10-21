@@ -14,6 +14,7 @@ import { fetchMirrorManifest, isOfficialLauncherDownloadUrl, withDownloadFallbac
 import { resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
 import { isWindowsLongPathError } from "../../shared/windows-long-path";
 import { enableWindowsLongPaths, windowsLongPathsEnabled } from "../services/windows-long-path";
+import { readSnowLumaVersion } from "../services/snowluma-version";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import {
   mkdir,
@@ -1851,6 +1852,10 @@ export function registerAppIpc({
 
   const readLocalModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
+    [versions.snowlumaLocal, versions.snowlumaBundled] = await Promise.all([
+      readSnowLumaVersion(paths.snowlumaRoot),
+      readSnowLumaVersion(join(paths.bundledModulesRoot, "SnowLuma")),
+    ]);
     const maibotRoot = paths.maibotRoot;
 
     const deployment = readMaiBotDeployment(maibotRoot);
@@ -2327,7 +2332,8 @@ export function registerAppIpc({
 
   handleRuntimeMutation(
     "protocols:upgradeQqComponents",
-    async (): Promise<QqComponentUpgradeResult> => {
+    async (_event, component?: import("../../shared/contracts").QqComponentUpgradeId): Promise<QqComponentUpgradeResult> => {
+      if (component !== undefined && component !== "napcat" && component !== "snowluma") throw new Error("未知协议端组件");
       await serviceManager.refresh();
       if (serviceManager.snapshot().some((service) => service.id === "napcat" && isRuntimeBusy(service))) {
         throw new Error(
@@ -2335,7 +2341,7 @@ export function registerAppIpc({
         );
       }
 
-      const result = await initManager.upgradeQqComponents();
+      const result = await initManager.upgradeQqComponents(component);
       serviceManager.reloadRuntimePaths();
       const summary = result.components
         .map(
