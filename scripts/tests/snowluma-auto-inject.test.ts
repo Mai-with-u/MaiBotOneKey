@@ -15,7 +15,10 @@ const bundle = () => readFile(resolve("modules/SnowLuma/index.mjs"), "utf8");
 test("installed bundle monitors only the target, retries failures, and stops on shutdown", async () => {
   const source = prepareRuntime(await bundle(), "2814567326");
   const start = source.indexOf("  const targetUin =");
-  const end = source.indexOf("oneBotManager.bind(bridgeManager);", start);
+  const end = ["oneBotManager.bind(bridgeManager);", "const notificationManager ="]
+    .map((marker) => source.indexOf(marker, start)).filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+  expect(end).toBeGreaterThan(start);
   let nextScan: () => Promise<void> = async () => {};
   let now = 0;
   let fail = false;
