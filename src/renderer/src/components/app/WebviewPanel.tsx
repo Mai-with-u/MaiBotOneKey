@@ -16,6 +16,7 @@ import { READ_MAIBOT_CONTENT_SCRIPT, waitForWebviewContent } from "@/lib/webview
 import { isMessagePlatformRequest } from "@/lib/webui-host-message";
 
 interface WebviewPanelProps {
+  guestCss?: string;
   onLoadStateChange?: (state: LoadState) => void;
   animateLoad?: boolean;
   readMaiBotAppearance?: boolean;
@@ -44,6 +45,7 @@ type WebviewElement = HTMLElement & {
   getURL?: () => string;
   loadURL?: (url: string) => Promise<void> | void;
   setZoomFactor?: (factor: number) => void;
+  insertCSS?: (css: string) => Promise<string>;
 };
 
 type DidFailLoadEvent = Event & {
@@ -87,6 +89,7 @@ function withCacheBust(value: string, token: number): string {
 }
 
 export function WebviewPanel({
+  guestCss,
   onLoadStateChange,
   animateLoad = true,
   readMaiBotAppearance = false,
@@ -288,6 +291,7 @@ export function WebviewPanel({
       }
       if (event.type === "dom-ready") {
         domReadyRef.current = true;
+        if (guestCss) void webview.insertCSS?.(guestCss).catch(() => undefined);
       }
       applyZoom();
       const liveUrl = readLiveWebviewUrl();
@@ -382,7 +386,7 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [applyZoom, handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, onMessagePlatformRequest, readLiveWebviewUrl, readMaiBotAppearance, reloadKey, syncCurrentUrl, url, setLoadState]);
+  }, [applyZoom, guestCss, handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, onMessagePlatformRequest, readLiveWebviewUrl, readMaiBotAppearance, reloadKey, syncCurrentUrl, url, setLoadState]);
 
   useEffect(() => {
     if (loadState !== "loading") return;
