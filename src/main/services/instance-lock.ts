@@ -1,3 +1,4 @@
+import { isLockOwnerAlive } from "./lock-owner";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RuntimePaths } from "../../shared/contracts";
@@ -23,19 +24,6 @@ function readLockPayload(lockPath: string): LockPayload | undefined {
   }
 }
 
-function isProcessAlive(pid: number | undefined): boolean {
-  if (!pid || pid === process.pid) {
-    return false;
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "EPERM";
-  }
-}
 
 export function acquireInstallInstanceLock(paths: RuntimePaths): InstallInstanceLock {
   mkdirSync(paths.userDataRoot, { recursive: true });
@@ -70,7 +58,7 @@ export function acquireInstallInstanceLock(paths: RuntimePaths): InstallInstance
       }
 
       const existing = readLockPayload(lockPath);
-      if (isProcessAlive(existing?.pid)) {
+      if (isLockOwnerAlive(existing)) {
         return {
           acquired: false,
           lockPath,

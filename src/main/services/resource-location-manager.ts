@@ -1,3 +1,4 @@
+import { isLockOwnerAlive } from "./lock-owner";
 import { RESOURCE_PATH_CANCELLED_MESSAGE } from "../../shared/resource-path-operation";
 import { EventEmitter } from "node:events";
 import { createHash, randomUUID } from "node:crypto";
@@ -73,18 +74,6 @@ function isPathNestedEitherWay(left: string, right: string): boolean {
   return isPathInside(left, right) || isPathInside(right, left);
 }
 
-function isProcessAlive(pid: number | undefined): boolean {
-  if (!pid || pid === process.pid) {
-    return false;
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
 
 function readLockPayload(lockPath: string): ResourceLockPayload | undefined {
   try {
@@ -246,7 +235,7 @@ export class ResourceLocationManager extends EventEmitter {
   }
   private assertNotInUse(target: string): void {
     const existing = readLockPayload(join(target, RESOURCE_LOCK_FILE));
-    if (this.lockEnabled && isProcessAlive(existing?.pid)) throw new Error(`目标目录正在被另一个启动器使用（PID ${existing?.pid}）。`);
+    if (this.lockEnabled && isLockOwnerAlive(existing)) throw new Error(`目标目录正在被另一个启动器使用（PID ${existing?.pid}）。`);
   }
   private async assertEmptyTarget(target: string): Promise<void> {
     if (!existsSync(target)) return;
@@ -489,7 +478,7 @@ export class ResourceLocationManager extends EventEmitter {
         }
 
         const existing = readLockPayload(lockPath);
-        if (isProcessAlive(existing?.pid)) {
+        if (isLockOwnerAlive(existing)) {
           return { acquired: false, existing };
         }
 

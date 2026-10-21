@@ -11,6 +11,7 @@ import {
   Tray,
 } from "electron";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AppIconId } from "../shared/contracts";
@@ -41,16 +42,58 @@ import { ServiceManager } from "./services/service-manager";
 import { SourceSettingsManager } from "./services/source-settings-manager";
 import { isWindowVisuallyMaximized } from "./window-state";
 
+let startupLogRoot: string | undefined;
+let fatalErrorReported = false;
+
+function reportStartupFailure(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const details = error instanceof Error ? error.stack ?? message : message;
+  let logResult: string;
+  try {
+    const root = startupLogRoot ?? join(app.getPath("appData"), "MaiBotOneKeyDesktop", "logs");
+    mkdirSync(root, { recursive: true });
+    const logPath = join(root, "desktop.log");
+    appendFileSync(logPath, `[${new Date().toISOString()}] [system] 启动失败: ${details}\n`);
+    logResult = `日志：${logPath}`;
+  } catch (logError) {
+    logResult = `日志写入失败：${String(logError)}`;
+  }
+  console.error("MaiBot OneKey 启动失败", details);
+  dialog.showErrorBox("MaiBot OneKey 启动失败", `${message}\n\n${logResult}`);
+}
+
+// Install before constructing managers so early synchronous failures are visible too.
+function handleFatalError(error: unknown): void {
+  if (fatalErrorReported) return;
+  fatalErrorReported = true;
+  try { reportStartupFailure(error); }
+  finally { app.exit(1); }
+}
+process.on("uncaughtException", handleFatalError);
+process.on("unhandledRejection", handleFatalError);
+
 const runtimePaths = (() => {
   try {
     return configureRuntimePaths();
   } catch (error) {
-    dialog.showErrorBox("无法加载组件目录配置", error instanceof Error ? error.message : String(error));
-    app.exit(1);
+    handleFatalError(error);
     throw error;
   }
 })();
-const instanceLock = acquireInstallInstanceLock(runtimePaths);
+startupLogRoot = runtimePaths.logsRoot;
+// Electron's OS-managed lock is released on crashes and can notify the running window.
+if (!app.requestSingleInstanceLock()) {
+  reportStartupFailure("MaiBot OneKey 已在运行，已向已有进程发送显示窗口请求。若窗口未出现，请检查系统托盘或任务管理器中的启动器进程。");
+  app.exit(0);
+}
+app.on("second-instance", () => {
+  if (app.isReady() && mainWindow) showMainWindow();
+});
+
+const instanceLock = (() => {
+  try { return acquireInstallInstanceLock(runtimePaths); }
+  catch (error) { reportStartupFailure(error); app.exit(1); throw error; }
+})();
 const runtimeOperationLock = new RuntimeOperationLock();
 const resourceLocationManager = new ResourceLocationManager(
   runtimePaths,
@@ -61,9 +104,17 @@ const resourceLocationManager = new ResourceLocationManager(
     if (active.length) throw new Error(`请先停止所有服务，再操作组件目录：${active.map((service) => service.name).join("、")}`);
   },
 );
-const resourceLock = instanceLock.acquired
-  ? resourceLocationManager.acquireInitialLock()
-  : { acquired: true };
+const resourceLock = (() => {
+  try {
+    return instanceLock.acquired ? resourceLocationManager.acquireInitialLock() : { acquired: true };
+  } catch (error) {
+    resourceLocationManager.release();
+    instanceLock.release();
+    reportStartupFailure(error);
+    app.exit(1);
+    throw error;
+  }
+})();
 const logStore = new LogStore(runtimePaths);
 const initManager = new InitManager(runtimePaths);
 const networkProxyManager = new NetworkProxyManager(runtimePaths);
@@ -406,12 +457,30 @@ function createMainWindow(): BrowserWindow {
     });
   });
 
+  window.webContents.on("render-process-gone", (_event, details) => {
+    if (quitRequested) return;
+    reportStartupFailure(`启动器界面进程已退出：${details.reason}（退出码 ${details.exitCode}）。请重新启动启动器。`);
+    process.exitCode = 1;
+    requestQuit();
+  });
+  window.webContents.on("preload-error", (_event, preloadPath, error) => {
+    reportStartupFailure(new Error(`无法加载窗口预加载脚本 ${preloadPath}：${error.message}`));
+    process.exitCode = 1;
+    requestQuit();
+  });
+
+  const onLoadFailure = (error: unknown): void => {
+    if (quitRequested) return;
+    reportStartupFailure(error);
+    process.exitCode = 1;
+    requestQuit();
+  };
   if (process.env.ELECTRON_RENDERER_URL) {
-    window.loadURL(process.env.ELECTRON_RENDERER_URL).catch(() => undefined);
+    void window.loadURL(process.env.ELECTRON_RENDERER_URL).catch(onLoadFailure);
   } else {
     window
       .loadFile(join(__dirname, "../renderer/index.html"))
-      .catch(() => undefined);
+      .catch(onLoadFailure);
   }
 
   return window;
@@ -515,19 +584,17 @@ function createTray(): Tray {
 }
 
 if (!instanceLock.acquired || !resourceLock.acquired) {
-  if (!resourceLock.acquired) {
-    logStore.append(
-      "desktop",
-      "system",
-      `runtime resource path is locked by pid ${resourceLock.existing?.pid ?? "unknown"}`,
-    );
-  }
+  const owner = !instanceLock.acquired ? instanceLock.existing : resourceLock.existing;
+  const location = !instanceLock.acquired ? instanceLock.lockPath : resourceLock.existing?.path;
+  reportStartupFailure(`启动目录被占用或无法清理残留锁文件。\n进程 PID：${owner?.pid ?? "未知"}\n路径：${location ?? runtimePaths.userDataRoot}\n请检查已有启动器进程及目录写入权限。`);
   resourceLocationManager.release();
+  instanceLock.release();
   serviceManager.dispose();
   ptySessionManager.dispose();
   app.quit();
 } else {
   app.whenReady().then(async () => {
+    logStore.append("desktop", "system", `启动 MaiBot OneKey，PID ${process.pid}`);
     cleanupLauncherUpdateDownloadsOnStartup();
     await cleanupMaiBotPrivacyLeakOnStartup();
     await initManager
@@ -592,6 +659,10 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
         showMainWindow();
       }
     });
+  }).catch((error: unknown) => {
+    reportStartupFailure(error);
+    process.exitCode = 1;
+    requestQuit();
   });
 
   app.on("window-all-closed", () => {
