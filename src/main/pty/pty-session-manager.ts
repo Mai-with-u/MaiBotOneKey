@@ -19,6 +19,7 @@ import type {
 } from "../../shared/contracts";
 import { decodePtyData, encodePtyInput, getNodePtyEncoding, getWindowsCodePage } from "./encoding";
 import { PtyOutputHistory } from "./output-history";
+import { mergeProcessEnvironment } from "../process-environment";
 
 const MIN_COLS = 5;
 const MIN_ROWS = 5;
@@ -162,24 +163,14 @@ function resolveCommand(request: PtyStartRequest, encoding: PtyEncoding): Resolv
 }
 
 function createEnvironment(extraEnv: Record<string, string> | undefined): Record<string, string> {
-  const source = {
-    ...process.env,
+  return mergeProcessEnvironment(process.env, {
     TERM: process.platform === "win32" ? "xterm-256color" : (process.env.TERM ?? "xterm-256color"),
     COLORTERM: "truecolor",
     FORCE_COLOR: "1",
     PYTHONIOENCODING: "utf-8",
     PYTHONUTF8: "1",
     ...extraEnv,
-  };
-  const env: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(source)) {
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-
-  return env;
+  });
 }
 
 function toUnpackedAsarPath(path: string): string {

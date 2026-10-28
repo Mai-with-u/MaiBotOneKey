@@ -30,6 +30,7 @@ import { SnowLumaWebuiAuth } from "./snowluma-webui-auth";
 import { defaultServiceStartupSettings, isLocalDashboardDevLaunch } from "./service-startup-defaults";
 import { prepareSnowLumaEntry } from "./snowluma-auto-inject";
 import { version as launcherVersion } from "../../../package.json";
+import { mergeProcessEnvironment } from "../process-environment";
 
 interface ServiceDefinition {
   id: ServiceId;
@@ -208,16 +209,7 @@ function isLivePtyStatus(status: PtySessionSnapshot["status"]): boolean {
 }
 
 function createServiceEnv(extraEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (!extraEnv) {
-    return env;
-  }
-
-  for (const [key, value] of Object.entries(extraEnv)) {
-    env[key] = value;
-  }
-
-  return env;
+  return mergeProcessEnvironment(process.env, extraEnv);
 }
 
 function createServiceSpecificEnv(
@@ -718,6 +710,7 @@ export class ServiceManager extends EventEmitter {
           mergedEnv.PATH = [dirname(git), mergedEnv.PATH ?? process.env.PATH ?? process.env.Path ?? ""].join(delimiter);
           mergedEnv.GIT_PYTHON_GIT_EXECUTABLE = git;
         }
+        this.logs.append("maibot", "system", git ? `Git executable: ${git}` : "Git unavailable: bundled and system Git checks failed");
       }
       this.logs.append(
         serviceId,
