@@ -1,3 +1,4 @@
+import { startupLogs } from "@/lib/startup-logs";
 import { requestMessagePlatformGuide } from "@/lib/message-platform-guide";
 import {
   ChevronDown,
@@ -20,7 +21,6 @@ import { toast } from "sonner";
 import type {
   CodexPetOption,
   DesktopSnapshot,
-  LogEntry,
   LocalChatConnectionState,
   LocalChatEvent,
   LocalChatMessageEvent,
@@ -98,22 +98,6 @@ function tabPageTransitionStyle(
     transform: `translate3d(${offset}%, 0, 0)`,
     zIndex: active ? 1 : 0,
   };
-}
-
-function isDependencyPreparationLog(entry: LogEntry): boolean {
-  return (
-    entry.source === "maibot" &&
-    entry.stream === "system" &&
-    (
-      entry.message.includes("startup dependency upgrade") ||
-      entry.message.includes("MaiBot preparation:") ||
-      entry.message.includes("portable Python") ||
-      entry.message.includes("python-env") ||
-      entry.message.includes("pip install") ||
-      entry.message.includes("dependency needs install") ||
-      entry.message.includes("removed legacy Python dependency directory")
-    )
-  );
 }
 
 interface WebviewEntryTarget {
@@ -1208,7 +1192,7 @@ export function DesktopShell(): React.JSX.Element {
   );
   const maibotService = serviceById.get("maibot");
   const dependencyMigrationLogs = useMemo(
-    () => (snapshot?.recentLogs ?? []).filter(isDependencyPreparationLog).slice(-200),
+    () => startupLogs(snapshot?.recentLogs ?? []),
     [snapshot?.recentLogs],
   );
   // Process startup precedes HTTP readiness. Keep the status page until the

@@ -1,3 +1,4 @@
+import { startupLogs } from "@/lib/startup-logs";
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { watchSetupCompletion } from "@/lib/setup-completion";
 import { canRestartDependencyDownload, initializationStatus } from "@/lib/initialization-status";
@@ -10,7 +11,6 @@ import { flushSync } from "react-dom";
 import { transitionStartupScene } from "@/lib/startup-transition";
 import type {
   DesktopSnapshot,
-  LogEntry,
   MaiBotModuleUpdateProgress,
   PythonEnvironmentState,
   PythonPackageSourcePreset,
@@ -60,19 +60,6 @@ function maibotServiceFrom(
   return snapshot.services?.find((service) => service.id === "maibot");
 }
 
-function dependencyLogs(entries: LogEntry[]): LogEntry[] {
-  return entries
-    .filter((entry) => entry.source === "maibot" && entry.stream === "system")
-    .filter(
-      (entry) =>
-        entry.message.includes("startup dependency upgrade") ||
-        entry.message.includes("MaiBot preparation:") ||
-        entry.message.includes("dependency") ||
-        entry.message.includes("pip"),
-    )
-    .slice(-200);
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -103,7 +90,7 @@ export function InitializationWizard({
   const agreementPending = !snapshot.startupAgreement.isConfirmed;
   const service = maibotServiceFrom(snapshot);
   const logs = useMemo(
-    () => dependencyLogs(snapshot.recentLogs ?? []),
+    () => startupLogs(snapshot.recentLogs ?? []),
     [snapshot.recentLogs],
   );
   const running = service?.status === "running";
