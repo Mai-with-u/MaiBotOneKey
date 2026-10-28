@@ -62,10 +62,13 @@ test("dev:dev starts checked despite saved false, allows manual changes and rese
     process.env[LOCAL_DASHBOARD_DEV_ENV] = "1";
     const dev = createManager();
     expect(dev.getStartupSettings().useLocalDashboard).toBe(true);
-    await dev.saveStartupSettings({ useLocalDashboard: false });
+    await dev.saveStartupSettings({ useLocalDashboard: false, autoStartServices: true });
     expect(dev.getStartupSettings().useLocalDashboard).toBe(false);
+    expect(createManager().getStartupSettings().autoStartServices).toBe(true);
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).autoStartServices).toBe(true);
     await dev.saveStartupSettings(defaultServiceStartupSettings());
     expect(dev.getStartupSettings().useLocalDashboard).toBe(true);
+    expect(createManager().getStartupSettings().autoStartServices).toBe(false);
 
     delete process.env[LOCAL_DASHBOARD_DEV_ENV];
     expect(defaultServiceStartupSettings().useLocalDashboard).toBe(false);

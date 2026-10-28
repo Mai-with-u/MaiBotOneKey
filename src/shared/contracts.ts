@@ -135,6 +135,9 @@ export interface TerminalSettings {
 
 export interface ServiceStartupSettings {
   useLocalDashboard: boolean;
+  autoStartServices?: boolean;
+  /** Undefined when login items are unsupported or this is a development build. */
+  openAtLogin?: boolean;
 }
 
 export type FloatingMascotMode = "maibot" | "codex-pet";

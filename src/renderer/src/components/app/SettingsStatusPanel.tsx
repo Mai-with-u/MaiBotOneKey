@@ -1283,6 +1283,29 @@ export function SettingsStatusPanel({
 
               <TabsContent className="settings-content" value="general">
                 <div className="settings-pair-grid">
+                <SettingsSection className="grid gap-4">
+                  <p className="text-sm font-medium">启动设置</p>
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block text-sm">登录后自动启动一键包</span>
+                      <span className="block text-xs text-muted-foreground">{serviceStartupSettings.openAtLogin === undefined
+                        ? "仅支持 Windows 和 macOS 正式安装版。"
+                        : "登录系统后打开一键包。"}</span>
+                    </span>
+                    <Checkbox aria-label="登录后自动启动一键包" checked={serviceStartupSettings.openAtLogin === true}
+                      disabled={busy !== null || serviceStartupSettings.openAtLogin === undefined}
+                      onCheckedChange={(checked) => void saveServiceStartupSettings({ ...serviceStartupSettings, openAtLogin: checked === true })} />
+                  </label>
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block text-sm">一键包启动后自动启动服务</span>
+                      <span className="block text-xs text-muted-foreground">下次打开生效，准备就绪后启动 MaiBot 和已配置的 QQ 协议端。</span>
+                    </span>
+                    <Checkbox aria-label="一键包启动后自动启动服务" checked={serviceStartupSettings.autoStartServices === true}
+                      disabled={busy !== null}
+                      onCheckedChange={(checked) => void saveServiceStartupSettings({ ...serviceStartupSettings, autoStartServices: checked === true })} />
+                  </label>
+                </SettingsSection>
                 <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">

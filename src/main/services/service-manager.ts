@@ -96,6 +96,7 @@ interface StoredTerminalSettingsFile {
 interface StoredServiceStartupSettingsFile {
   version: 1;
   useLocalDashboard?: boolean;
+  autoStartServices?: boolean;
 }
 
 const STOP_FORCE_AFTER_MS = 10_000;
@@ -394,6 +395,7 @@ class ServiceStartupSettingsStore {
   async set(settings: ServiceStartupSettings): Promise<ServiceStartupSettings> {
     this.cache = {
       useLocalDashboard: settings.useLocalDashboard === true,
+      autoStartServices: settings.autoStartServices === true,
     };
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(
@@ -406,11 +408,13 @@ class ServiceStartupSettingsStore {
 
   private read(): ServiceStartupSettings {
     // Development entry points explicitly choose the initial Dashboard source.
-    if (isLocalDashboardDevLaunch() || process.env.MAIBOT_ONEKEY_DEV_LOCAL_DASHBOARD === "0") return defaultServiceStartupSettings();
+    const forceDashboard = isLocalDashboardDevLaunch() || process.env.MAIBOT_ONEKEY_DEV_LOCAL_DASHBOARD === "0";
     try {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as StoredServiceStartupSettingsFile;
       return {
-        useLocalDashboard: raw.useLocalDashboard ?? defaultServiceStartupSettings().useLocalDashboard,
+        useLocalDashboard: forceDashboard ? defaultServiceStartupSettings().useLocalDashboard
+          : raw.useLocalDashboard ?? defaultServiceStartupSettings().useLocalDashboard,
+        autoStartServices: raw.autoStartServices === true,
       };
     } catch {
       return defaultServiceStartupSettings();

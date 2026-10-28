@@ -15,6 +15,7 @@ import { resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
 import { isWindowsLongPathError } from "../../shared/windows-long-path";
 import { enableWindowsLongPaths, windowsLongPathsEnabled } from "../services/windows-long-path";
 import { readSnowLumaVersion } from "../services/snowluma-version";
+import { LauncherAutoStart, readOpenAtLogin, saveOpenAtLogin } from "../services/launcher-startup";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import {
   mkdir,
@@ -1977,6 +1978,24 @@ export function registerAppIpc({
     ipcMain.handle(channel, (event, ...args) => withLongPathRepair(() => resourceLocationManager.withDeploymentOperation(async () => listener(event, ...args))));
   };
 
+  const readStartupSettings = (): ServiceStartupSettings => ({
+    ...serviceManager.getStartupSettings(),
+    openAtLogin: readOpenAtLogin(app),
+  });
+  const autoStart = new LauncherAutoStart(serviceManager.getStartupSettings().autoStartServices === true,
+    async () => {
+      logStore.append("desktop", "system", "启动器就绪，自动启动服务");
+      await withLongPathRepair(() => resourceLocationManager.withRuntimeActivity(() => serviceManager.startAll()));
+      await broadcastSnapshot();
+    },
+    (error) => {
+      logStore.append("desktop", "system", `自动启动服务失败: ${String(error)}`);
+      showMainWindow();
+      dialog.showErrorBox("自动启动服务失败", error instanceof Error ? error.message : String(error));
+    });
+  const cancelAutoStart = (): void => autoStart.cancel();
+  app.on("before-quit", cancelAutoStart);
+
   const buildSnapshot = async (
     options: { refreshDependencies?: boolean } = {},
   ): Promise<DesktopSnapshot> => ({
@@ -1986,7 +2005,7 @@ export function registerAppIpc({
     serviceCommands: await serviceManager.getCommandConfigs(),
     runtimeResourcePathConfigs: resourceLocationManager.getPathConfigs(),
     terminalSettings: serviceManager.getTerminalSettings(),
-    serviceStartupSettings: serviceManager.getStartupSettings(),
+    serviceStartupSettings: readStartupSettings(),
     launcherUiSettings: launcherUiSettingsManager.getSettings(),
     appIconSettings: appIconManager.getSettings(),
     codexPetSettings: await codexPetManager.getSettings(),
@@ -2005,11 +2024,13 @@ export function registerAppIpc({
   });
 
   const broadcastSnapshot = async (): Promise<void> => {
+    const snapshot = await buildSnapshot();
+    autoStart.consider(snapshot);
     const window = getMainWindow();
     if (!window || window.isDestroyed()) {
       return;
     }
-    window.webContents.send("desktop:snapshot", await buildSnapshot());
+    window.webContents.send("desktop:snapshot", snapshot);
   };
 
   const scheduleRemoteModuleVersionsRefresh = (): void => {
@@ -2142,6 +2163,8 @@ export function registerAppIpc({
   resourceLocationManager.on("progress", onResourceProgress);
 
   const resetLauncherStores = async (): Promise<void> => {
+    autoStart.cancel();
+    saveOpenAtLogin(app, false);
     for (const service of serviceManager.snapshot()) {
       await serviceManager.resetCommandConfig(service.id);
     }
@@ -2246,6 +2269,7 @@ export function registerAppIpc({
   ipcMain.handle("desktop:getSnapshot", async (): Promise<DesktopSnapshot> => {
     await serviceManager.refresh();
     const snapshot = await buildSnapshot();
+    autoStart.consider(snapshot);
     scheduleInitDependencyRefresh();
     scheduleRemoteModuleVersionsRefresh();
     return snapshot;
@@ -3103,6 +3127,7 @@ export function registerAppIpc({
   ipcMain.handle(
     "services:start",
     async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
+      autoStart.cancel();
       const descriptor = await serviceManager.start(serviceId);
       await broadcastSnapshot();
       return descriptor;
@@ -3112,6 +3137,7 @@ export function registerAppIpc({
   ipcMain.handle(
     "services:stop",
     async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
+      autoStart.cancel();
       const descriptor = await serviceManager.stop(serviceId);
       await broadcastSnapshot();
       return descriptor;
@@ -3121,6 +3147,7 @@ export function registerAppIpc({
   ipcMain.handle(
     "services:restart",
     async (_event, serviceId: ServiceId): Promise<ServiceDescriptor> => {
+      autoStart.cancel();
       const descriptor = await serviceManager.restart(serviceId);
       await broadcastSnapshot();
       return descriptor;
@@ -3130,6 +3157,7 @@ export function registerAppIpc({
   ipcMain.handle(
     "services:startAll",
     async (): Promise<ServiceDescriptor[]> => {
+      autoStart.cancel();
       try {
         return await serviceManager.startAll();
       } finally {
@@ -3139,6 +3167,7 @@ export function registerAppIpc({
   );
 
   ipcMain.handle("services:stopAll", async (): Promise<ServiceDescriptor[]> => {
+    autoStart.cancel();
     const services = await serviceManager.stopAll();
     await broadcastSnapshot();
     return services;
@@ -3189,13 +3218,16 @@ export function registerAppIpc({
       _event,
       settings: ServiceStartupSettings,
     ): Promise<ServiceStartupSettings> => {
-      const config = await serviceManager.saveStartupSettings(settings);
+      if (!settings || typeof settings.useLocalDashboard !== "boolean" ||
+        (settings.autoStartServices !== undefined && typeof settings.autoStartServices !== "boolean") ||
+        (settings.openAtLogin !== undefined && typeof settings.openAtLogin !== "boolean")) throw new Error("无效的启动设置");
+      if (settings.openAtLogin !== undefined && settings.openAtLogin !== readOpenAtLogin(app)) saveOpenAtLogin(app, settings.openAtLogin);
+      await serviceManager.saveStartupSettings(settings);
+      const config = readStartupSettings();
       logStore.append(
         "desktop",
         "system",
-        config.useLocalDashboard
-          ? "MaiBot Core startup will use local Dashboard build"
-          : "MaiBot Core startup will use installed Dashboard package",
+        `启动设置：登录自启=${config.openAtLogin === true}，自动启动服务=${config.autoStartServices === true}，本地 Dashboard=${config.useLocalDashboard}`,
       );
       await broadcastSnapshot();
       return config;
@@ -3369,9 +3401,13 @@ export function registerAppIpc({
     (): WindowState => readManagedWindowState(getMainWindow()),
   );
 
+  void broadcastSnapshot().catch((error) => logStore.append("desktop", "system", `启动状态检查失败: ${String(error)}`));
+
   return {
     localChatAdapter,
     dispose: () => {
+      autoStart.cancel();
+      app.off("before-quit", cancelAutoStart);
       resourceLocationManager.off("operation-change", onResourceOperation);
       resourceLocationManager.off("progress", onResourceProgress);
       localChatAdapter.dispose();

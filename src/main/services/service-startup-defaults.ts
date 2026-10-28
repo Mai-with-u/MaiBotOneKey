@@ -25,7 +25,7 @@ export function isLocalDashboardDevLaunch(env: NodeJS.ProcessEnv = process.env):
 }
 
 export function defaultServiceStartupSettings(): ServiceStartupSettings {
-  return { useLocalDashboard: isLocalDashboardDevLaunch() };
+  return { useLocalDashboard: isLocalDashboardDevLaunch(), autoStartServices: false };
 }
 
 export function resolvePythonEnvironmentRoot(
