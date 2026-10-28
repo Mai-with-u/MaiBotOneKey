@@ -10,6 +10,7 @@
     ShowUninstDetails hide
   !else
     !include "${BUILD_RESOURCES_DIR}\installer\pages.nsh"
+    !include "${BUILD_RESOURCES_DIR}\installer\instance-page.nsh"
   !endif
 !macroend
 
@@ -24,6 +25,7 @@
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW MaiModeShow
 !macroend
 !macro customPageAfterChangeDir
+  Page custom MaiInstancePage MaiInstanceLeave
   ; Leave the existing instFilesPre directory normalization intact.
   ShowInstDetails hide
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW MaiProgressShow

@@ -278,14 +278,17 @@ async function waitForPort(port: number, timeoutMs = 18_000): Promise<boolean> {
 }
 
 class ServiceCommandStore {
+  private readonly protocolStore?: ServiceCommandStore;
   private readonly path: string;
   private cache: StoredCommandFile | null = null;
 
-  constructor(private readonly paths: RuntimePaths) {
-    this.path = join(paths.userDataRoot, COMMAND_CONFIG_FILE);
+  constructor(private readonly paths: RuntimePaths, overridePath?: string) {
+    this.path = overridePath ?? join(paths.userDataRoot, COMMAND_CONFIG_FILE);
+    if (!overridePath && paths.protocolSettingsRoot && paths.protocolSettingsRoot !== paths.userDataRoot) this.protocolStore = new ServiceCommandStore(paths, join(paths.protocolSettingsRoot, COMMAND_CONFIG_FILE));
   }
 
   async get(serviceId: ServiceId): Promise<StoredServiceCommand | undefined> {
+    if (serviceId === "napcat" && this.protocolStore) return this.protocolStore.get(serviceId);
     const command = (await this.read()).services[serviceId];
     if (!command) {
       return undefined;
@@ -299,6 +302,7 @@ class ServiceCommandStore {
   }
 
   async set(serviceId: ServiceId, command: StoredServiceCommand): Promise<void> {
+    if (serviceId === "napcat" && this.protocolStore) return this.protocolStore.set(serviceId, command);
     const file = await this.read();
     file.services[serviceId] = {
       commandLine: command.commandLine
@@ -309,6 +313,7 @@ class ServiceCommandStore {
   }
 
   async reset(serviceId: ServiceId): Promise<void> {
+    if (serviceId === "napcat" && this.protocolStore) return this.protocolStore.reset(serviceId);
     const file = await this.read();
     delete file.services[serviceId];
     await this.write(file);
@@ -451,7 +456,7 @@ export class ServiceManager extends EventEmitter {
     private readonly operationLock = new RuntimeOperationLock(),
   ) {
     super();
-    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(paths.snowlumaRoot, paths.userDataRoot);
+    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(paths.snowlumaRoot, paths.protocolSettingsRoot ?? paths.userDataRoot);
     this.commandStore = new ServiceCommandStore(paths);
     this.terminalSettingsStore = new TerminalSettingsStore(paths);
     this.startupSettingsStore = new ServiceStartupSettingsStore(paths);
@@ -1009,7 +1014,7 @@ export class ServiceManager extends EventEmitter {
   }
 
   reloadRuntimePaths(): void {
-    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(this.paths.snowlumaRoot, this.paths.userDataRoot);
+    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(this.paths.snowlumaRoot, this.paths.protocolSettingsRoot ?? this.paths.userDataRoot);
     this.definitions = this.createDefinitions();
     this.emit("snapshot", this.snapshot());
   }

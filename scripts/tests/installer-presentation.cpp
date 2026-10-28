@@ -41,6 +41,10 @@ int main() {
     child(directory, L"Static", 1020);
     child(directory, L"Static", 1023);
     child(directory, L"Static", 1024);
+    HWND instancePage = child(parent, L"Static", 2030);
+    HWND instancePathEdit = child(instancePage, L"Edit", 1100);
+    HWND instanceBrowse = child(instancePage, L"Button", 1101);
+    HWND instanceNote = child(instancePage, L"Static", 1102);
     Initialize(parent, L"test", 2052);
     bool passed = true;
     passed &= (GetWindowLongPtrW(parent, GWL_STYLE) & (WS_CAPTION | WS_THICKFRAME | WS_BORDER)) == 0;
@@ -60,6 +64,10 @@ int main() {
         StylePage(parent, directory, 2);
         passed &= bounds(directory, parent, 278, 148, 394) && bounds(path, directory, 0, 16, 292);
         passed &= !shown(GetDlgItem(directory, 1006));
+        StylePage(parent, instancePage, 5);
+        passed &= bounds(instancePathEdit, instancePage, 0, 16, 292);
+        passed &= bounds(instanceBrowse, instancePage, 302, 16, 92);
+        passed &= bounds(instanceNote, instancePage, 0, 70, 394);
         StylePage(parent, mode, 1);
         passed &= bounds(mode, parent, 278, 148, 394) && shown(GetDlgItem(parent, 1038));
     }

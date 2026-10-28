@@ -274,6 +274,11 @@ const desktopBridge: DesktopBridge = {
       onIpc("services:snapshot", callback),
   },
   resources: {
+    listInstances: () => ipcRenderer.invoke("instances:list"),
+    createInstance: (request) => ipcRenderer.invoke("instances:create", request),
+    selectInstance: (id) => ipcRenderer.invoke("instances:select", id),
+    renameInstance: (id, name) => ipcRenderer.invoke("instances:rename", id, name),
+    removeInstance: (id) => ipcRenderer.invoke("instances:remove", id),
     choosePath: (key: RuntimeResourcePathKey, mode: ResourcePathMode) => ipcRenderer.invoke("resources:choosePath", key, mode) as Promise<string | null>,
     inspectPath: (key: RuntimeResourcePathKey, path: string, mode: ResourcePathMode) => ipcRenderer.invoke("resources:inspectPath", key, path, mode) as Promise<ResourcePathPlan>,
     applyPath: (plan: ResourcePathPlan) => ipcRenderer.invoke("resources:applyPath", plan) as Promise<RuntimeResourcePathChangeResult>,

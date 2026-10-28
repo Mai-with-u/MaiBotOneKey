@@ -8,6 +8,10 @@ import {
   shell,
 } from "electron";
 import { spawn } from "node:child_process";
+import { InstanceRegistry } from "../services/instance-registry";
+import { INSTANCE_RELAUNCH_ARG } from "../services/development-instances";
+import { DEV_RESTART_FILE_ENV } from "../../shared/development-restart";
+import type { InstanceCreateRequest } from "../../shared/contracts";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { fetchMirrorManifest, isOfficialLauncherDownloadUrl, withDownloadFallback } from "../services/launcher-update-mirror";
@@ -16,7 +20,7 @@ import { isWindowsLongPathError } from "../../shared/windows-long-path";
 import { enableWindowsLongPaths, windowsLongPathsEnabled } from "../services/windows-long-path";
 import { readSnowLumaVersion } from "../services/snowluma-version";
 import { LauncherAutoStart, readOpenAtLogin, saveOpenAtLogin } from "../services/launcher-startup";
-import { createWriteStream, existsSync, type WriteStream } from "node:fs";
+import { createWriteStream, existsSync, writeFileSync, type WriteStream } from "node:fs";
 import {
   mkdir,
   readdir,
@@ -2166,6 +2170,7 @@ export function registerAppIpc({
     autoStart.cancel();
     saveOpenAtLogin(app, false);
     for (const service of serviceManager.snapshot()) {
+      if (paths.protocolSettingsRoot && service.id === "napcat") continue;
       await serviceManager.resetCommandConfig(service.id);
     }
     await serviceManager.saveTerminalSettings({
@@ -2182,7 +2187,7 @@ export function registerAppIpc({
       const config = resourceLocationManager
         .getPathConfigs()
         .find((item) => item.key === key);
-      if (config?.customized) {
+      if (config?.customized && !paths.instanceRegistryRoot) {
         await resourceLocationManager.resetPath(key);
       }
     }
@@ -2197,6 +2202,7 @@ export function registerAppIpc({
 
     const removedEntries: string[] = [];
     for (const fileName of LAUNCHER_SETTING_FILES) {
+      if (paths.instanceRegistryRoot && ["resource-paths.json", "resource-location.json"].includes(fileName)) continue;
       removedEntries.push(
         ...(await removeExistingPath(join(paths.userDataRoot, fileName))),
       );
@@ -2216,6 +2222,7 @@ export function registerAppIpc({
 
   const resetLauncherAll = async (): Promise<LauncherResetResult> => {
     assertServicesStoppedForResourceMove();
+    if (paths.instanceRegistryRoot) throw new Error("多实例模式不支持按公共资源根目录清空全部文件。请使用“重置 MaiBot 数据”；移除实例只删除登记并保留文件。");
     const root = paths.defaultResourceRoot;
     if (
       samePath(root, paths.installRoot) ||
@@ -3248,6 +3255,43 @@ export function registerAppIpc({
       return result.canceled ? null : result.filePaths[0] ?? null;
     });
   });
+  const instanceRegistry = paths.instanceRegistryRoot ? new InstanceRegistry(paths.instanceRegistryRoot) : undefined;
+  const requireRegistry = (): InstanceRegistry => {
+    if (!instanceRegistry) throw new Error("实例索引尚未初始化，请完全退出并重新启动。");
+    return instanceRegistry;
+  };
+  ipcMain.handle("instances:list", () => instanceRegistry?.snapshot() ?? null);
+  ipcMain.handle("instances:create", (_event, request: InstanceCreateRequest) => resourceLocationManager.withPathOperation(async () => requireRegistry().create(request, [paths.installRoot])));
+  ipcMain.handle("instances:rename", (_event, id: string, name: string) => resourceLocationManager.withPathOperation(async () => {
+    const state = requireRegistry().rename(id, name);
+    if (id === paths.activeInstanceId) { paths.activeInstanceName = name.trim(); getMainWindow()?.setTitle(`MaiBot OneKey · ${paths.activeInstanceName}`); }
+    await broadcastSnapshot();
+    return state;
+  }));
+  ipcMain.handle("instances:remove", (_event, id: string) => resourceLocationManager.withPathOperation(async () => requireRegistry().remove(id)));
+  ipcMain.handle("instances:select", (_event, id: string) => resourceLocationManager.withPathOperation(async () => {
+    assertServicesStoppedForResourceMove();
+    const registry = requireRegistry();
+    if (id === paths.activeInstanceId) return;
+    const target = registry.snapshot().instances.find(item => item.id === id);
+    if (!target) throw new Error("实例不存在。");
+    const window = getMainWindow();
+    const options: Electron.MessageBoxOptions = { type: "question", title: "切换实例", message: `切换到“${target.name}”并重启启动器？`, detail: "当前服务必须已停止。重启后将加载目标实例自己的配置。", buttons: ["切换并重启", "取消"], defaultId: 1, cancelId: 1 };
+    const answer = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+    if (answer.response !== 0) return;
+    autoStart.cancel();
+    const restartFile = !app.isPackaged && process.env.ELECTRON_RENDERER_URL ? process.env[DEV_RESTART_FILE_ENV] : undefined;
+    if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL && !restartFile) throw new Error("当前开发进程不支持完整重启，请退出后使用 bun run dev 重新启动，再切换实例。");
+    registry.select(id);
+    try {
+      if (restartFile) writeFileSync(restartFile, "restart", { flag: "wx" });
+      else app.relaunch({ args: [...process.argv.slice(1).filter(arg => arg !== INSTANCE_RELAUNCH_ARG), INSTANCE_RELAUNCH_ARG] });
+    } catch (error) {
+      if (paths.activeInstanceId) registry.select(paths.activeInstanceId);
+      throw error;
+    }
+    app.quit();
+  }));
   ipcMain.handle("resources:inspectPath", (_event, key: RuntimeResourcePathKey, path: string, mode: ResourcePathMode): Promise<ResourcePathPlan> => resourceLocationManager.inspectPath(key, path, mode));
   ipcMain.handle("resources:applyPath", async (_event, plan: ResourcePathPlan): Promise<RuntimeResourcePathChangeResult> => {
     const result = await resourceLocationManager.applyPlan(plan);

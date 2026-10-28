@@ -1,4 +1,6 @@
 import { isLockOwnerAlive } from "./lock-owner";
+import { InstanceRegistry } from "./instance-registry";
+import { SHARED_PROTOCOLS_FILE, readSharedProtocols } from "./shared-protocols";
 import { RESOURCE_PATH_CANCELLED_MESSAGE } from "../../shared/resource-path-operation";
 import { EventEmitter } from "node:events";
 import { createHash, randomUUID } from "node:crypto";
@@ -134,7 +136,7 @@ export class ResourceLocationManager extends EventEmitter {
   getPathConfigs(): RuntimeResourcePathConfig[] {
     return RESOURCE_KEYS.map((key) => {
       const value = this.getPath(key), defaultValue = this.getDefaultPath(key);
-      return { key, label: labelForKey(key), value, defaultValue, customized: !samePath(value, defaultValue) };
+      return { key, label: `${labelForKey(key)}${this.paths.instanceRegistryRoot && key !== "maibot" ? "（启动器共用）" : ""}`, value, defaultValue, customized: !samePath(value, defaultValue) };
     });
   }
 
@@ -204,7 +206,15 @@ export class ResourceLocationManager extends EventEmitter {
   }
   private assertCanUsePathSet(key: RuntimeResourcePathKey, paths: RuntimeResourcePathMap): void {
     this.assertUniquePathSet(paths);
+    if (this.paths.instanceRegistryRoot && this.paths.activeInstanceId) {
+      new InstanceRegistry(this.paths.instanceRegistryRoot).assertAvailable(paths, this.paths.activeInstanceId, []);
+    }
     const target = paths[key];
+    if (this.paths.instanceRegistryRoot && !samePath(target, this.getPath(key))) {
+      for (const protectedRoot of [this.paths.instanceRegistryRoot, ...(!samePath(target, this.getDefaultPath(key)) ? [this.paths.installRoot] : [])]) {
+        if (samePath(target, protectedRoot) || isPathNestedEitherWay(target, protectedRoot)) throw new Error("组件目录不能包含程序或启动器配置，也不能放入这些目录内。");
+      }
+    }
     if (!samePath(target, this.getDefaultPath(key)) && (samePath(this.paths.bundledModulesRoot, target) || isPathNestedEitherWay(this.paths.bundledModulesRoot, target))) {
       throw new Error("不能使用一键包内置 modules 模板目录及其上级或子目录。");
     }
@@ -413,7 +423,7 @@ export class ResourceLocationManager extends EventEmitter {
   private legacyLocationPath(): string { return join(this.paths.userDataRoot, LEGACY_RESOURCE_LOCATION_FILE); }
   private async readStores(): Promise<Map<string, Buffer | undefined>> {
     const result = new Map<string, Buffer | undefined>();
-    for (const path of [this.locationPath(), this.legacyLocationPath()]) {
+    for (const path of [this.locationPath(), this.legacyLocationPath(), ...(this.paths.instanceRegistryRoot ? [join(this.paths.instanceRegistryRoot, SHARED_PROTOCOLS_FILE)] : [])]) {
       try { result.set(path, await readFile(path)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; result.set(path, undefined); }
     }
     return result;
@@ -435,9 +445,14 @@ export class ResourceLocationManager extends EventEmitter {
     }
   }
   private async writePathSet(paths: RuntimeResourcePathMap): Promise<void> {
-    const customized = Object.fromEntries(RESOURCE_KEYS.filter((key) => !samePath(paths[key], this.getDefaultPath(key))).map((key) => [key, paths[key]]));
+    const customized = Object.fromEntries(RESOURCE_KEYS.filter((key) => (!this.paths.instanceRegistryRoot || key === "maibot") && !samePath(paths[key], this.getDefaultPath(key))).map((key) => [key, paths[key]]));
     const payload: StoredResourcePathsFile = { version: 1, paths: customized, updatedAt: Date.now() };
     await this.atomicWrite(this.locationPath(), `${JSON.stringify(payload, null, 2)}\n`);
+    if (this.paths.instanceRegistryRoot) {
+      const shared = readSharedProtocols(this.paths.instanceRegistryRoot);
+      if (!shared) throw new Error("启动器共享协议端配置缺失。");
+      await this.atomicWrite(join(this.paths.instanceRegistryRoot, SHARED_PROTOCOLS_FILE), JSON.stringify({ ...shared, paths: { napcat: paths.napcat, snowluma: paths.snowluma } }, null, 2));
+    }
     try { await unlink(this.legacyLocationPath()); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
 

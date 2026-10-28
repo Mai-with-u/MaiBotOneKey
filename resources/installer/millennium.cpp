@@ -303,6 +303,9 @@ extern "C" __declspec(dllexport) void __cdecl StylePage(HWND parent,HWND page,in
         control(page,1019,0,16,292,32); control(page,1001,302,16,92,32);
         // Space requirements belong to one quiet metadata row below the path.
         control(page,1023,0,84,190,24); control(page,1024,200,84,194,24);
+    } else if(phase==5) {
+        control(page,1100,0,16,292,32); control(page,1101,302,16,92,32);
+        control(page,1102,0,70,394,120);
     } else if(phase==3) {
         SetWindowTextW(GetDlgItem(parent,1038),L"MaiBot OneKey"); ShowWindow(GetDlgItem(page,1006),SW_HIDE);
         control(page,1004,0,8,394,22); control(page,1027,0,44,138,28);

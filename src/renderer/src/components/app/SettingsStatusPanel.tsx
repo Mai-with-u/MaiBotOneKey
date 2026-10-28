@@ -2,6 +2,7 @@ import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { useSnowLumaUpgradeDebug } from "@/lib/use-snowluma-upgrade-debug";
 import { MaiBotConfigImportPanel } from "./MaiBotConfigImportPanel";
 import { ResourcePathEditor } from "./ResourcePathEditor";
+import { InstanceManagerPanel } from "./InstanceManagerPanel";
 import { useResourcePathWorkflow } from "./ResourcePathWorkflow";
 import {
   AlertTriangle,
@@ -45,7 +46,6 @@ import type {
   ServiceCommandConfig,
   ServiceCommandUpdate,
   ServiceDescriptor,
-  ServiceHealth,
   ServiceStatus,
   ManagedSourceEntry,
   SourceSettings,
@@ -109,14 +109,6 @@ const statusVariant: Record<ServiceStatus, ComponentProps<typeof Badge>["variant
   running: "success",
   stopping: "warning",
   error: "danger",
-};
-
-const healthText: Record<ServiceHealth, string> = {
-  unknown: "未检测",
-  checking: "检测中",
-  ready: "端口就绪",
-  unreachable: "不可达",
-  conflict: "端口冲突",
 };
 
 const sourceGroupMeta: Record<SourceSettingsGroup, { title: string; description: string; urlLabel: string }> = {
@@ -590,21 +582,14 @@ function ServiceDetail({
             <Badge dot variant={statusVariant[service.status]}>
               {statusText[service.status]}
             </Badge>
-            <Badge variant={service.health === "ready" ? "success" : service.health === "conflict" ? "danger" : "secondary"}>
-              {healthText[service.health]}
-            </Badge>
           </div>
           <p className="mt-2 break-all font-mono text-[11px] leading-relaxed text-muted-foreground" title={service.url}>
             {service.url}
           </p>
         </div>
-        <Badge variant={service.managed ? "success" : "outline"}>
-          {service.managed
-            ? `${service.terminalMode === "external" ? "外部" : "内嵌"} PID ${service.pid ?? "-"}`
-            : "未托管"}
-        </Badge>
-        {service.desired ? <Badge variant="warning">守护中</Badge> : null}
       </div>
+      <details className="group/service mt-3">
+        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium [&::-webkit-details-marker]:hidden"><TerminalSquare className="size-4" />运行详情与启动命令<ChevronDown className="ml-auto size-4 group-open/service:rotate-180" /></summary>
       <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] sm:grid-cols-4">
         {[
           ["监听端口", service.ports.join(" / ") || "未记录"],
@@ -676,6 +661,7 @@ function ServiceDetail({
           </div>
         </div>
       ) : null}
+      </details>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {service.logPath ? (
           <Button onClick={() => onOpenPath(service.logPath ?? "")} size="sm" variant="outline">
@@ -1379,7 +1365,7 @@ export function SettingsStatusPanel({
                       <div className="min-w-0">
                         <p className="text-sm font-medium">重置数据</p>
                         <p className="text-xs text-muted-foreground">
-                          可重置启动器设置、MaiBot 数据或所有数据。重置所有数据会删除运行时资源目录，数据删除不可恢复。
+                          {snapshot.paths.instanceRegistryRoot ? "重置仅作用于当前实例。组件目录和实例登记保持不变；如需从列表移除实例，请前往实例管理。" : "可重置启动器设置、MaiBot 数据或所有数据。重置所有数据会删除运行时资源目录，数据删除不可恢复。"}
                         </p>
                       </div>
                     </div>
@@ -1392,10 +1378,10 @@ export function SettingsStatusPanel({
                         <Trash2 className="size-4" />
                         重置 MaiBot 数据
                       </Button>
-                      <Button disabled={busy !== null || resourceMoveBlocked} onClick={() => setConfirmLauncherFullResetOpen(true)} size="sm" variant="destructive">
+                      {!snapshot.paths.instanceRegistryRoot && <Button disabled={busy !== null || resourceMoveBlocked} onClick={() => setConfirmLauncherFullResetOpen(true)} size="sm" variant="destructive">
                         <Trash2 className="size-4" />
                         重置所有数据
-                      </Button>
+                      </Button>}
                     </div>
                   </div>
                   {lastMaiBotDataReset ? (
@@ -1894,55 +1880,59 @@ export function SettingsStatusPanel({
               </TabsContent>
 
               <TabsContent className="settings-content" value="paths">
-                <SettingsSection className="grid grid-cols-1 gap-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <HardDrive className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">实例管理</p>
-                        <p className="text-xs text-muted-foreground">
-                          使用已有目录只切换指向；复制迁移要求空目标目录，成功后保留原目录。
-                        </p>
-                      </div>
-                    </div>
-                    <Badge variant="secondary">唯一实例</Badge>
-                  </div>
-                  <div className="grid min-w-0 grid-cols-1 gap-2">
-                    {editableRuntimeResourcePathConfigs.map((config) => (
-                      <SettingsSection className="grid grid-cols-1 gap-3" key={config.key}>
-                      <ResourcePathEditor
-                        blocked={resourceMoveBlocked || busy !== null || resourceWorkflow.busyKey !== null}
-                        busy={resourceWorkflow.busyKey === config.key}
-                        config={config}
-                        onOpenPath={openPath}
-                        onBrowse={resourceWorkflow.browse}
-                        onPrepare={resourceWorkflow.prepare}
-                      />
-                        {services.filter((service) => service.id === "maibot"
-                          ? config.key === "maibot"
-                          : config.key === (initState.qqBackend ?? "napcat")).map((service) => (
-                          <ServiceDetail
-                            commandBusy={busy === `command:${service.id}`}
-                            commandConfig={serviceCommands.find((command) => command.serviceId === service.id)}
-                            key={service.id}
-                            onOpenPath={openPath}
-                            onResetCommand={resetCommandConfig}
-                            onSaveCommand={saveCommandConfig}
-                            service={service}
-                          />
+                <div className="settings-pair-grid">
+                  {(["maibot", "protocols"] as const).map((column) => (
+                    <div className="grid min-w-0 content-start gap-4" key={column}>
+                      {column === "maibot" ? (
+                        <InstanceManagerPanel blocked={resourceMoveBlocked || busy !== null || resourceWorkflow.busyKey !== null} />
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 px-1 py-2">
+                          <Network className="size-5 text-primary" />
+                          <h3 className="text-base font-semibold">消息平台</h3>
+                          <Badge variant="outline">所有实例共用</Badge>
+                        </div>
+                      )}
+                      {editableRuntimeResourcePathConfigs
+                        .filter((config) => column === "maibot" ? config.key === "maibot" : config.key !== "maibot")
+                        .map((config) => (
+                          <SettingsSection className="grid grid-cols-1 gap-3" key={config.key}>
+                            <ResourcePathEditor
+                              blocked={resourceMoveBlocked || busy !== null || resourceWorkflow.busyKey !== null}
+                              busy={resourceWorkflow.busyKey === config.key}
+                              config={config}
+                              onOpenPath={openPath}
+                              onBrowse={resourceWorkflow.browse}
+                              onPrepare={resourceWorkflow.prepare}
+                            />
+                            {services.filter((service) => service.id === "maibot"
+                              ? config.key === "maibot"
+                              : config.key === (initState.qqBackend ?? "napcat")).map((service) => (
+                              <ServiceDetail
+                                commandBusy={busy === `command:${service.id}`}
+                                commandConfig={serviceCommands.find((command) => command.serviceId === service.id)}
+                                key={service.id}
+                                onOpenPath={openPath}
+                                onResetCommand={resetCommandConfig}
+                                onSaveCommand={saveCommandConfig}
+                                service={service}
+                              />
+                            ))}
+                            {config.key === "maibot" ? (
+                              <details className="group/import border-t border-border pt-3">
+                                <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium [&::-webkit-details-marker]:hidden"><Download className="size-4" />导入配置<ChevronDown className="ml-auto size-4 group-open/import:rotate-180" /></summary>
+                                <div className="pt-3"><MaiBotConfigImportPanel disabled={maibotDataBlocked || Boolean(snapshot.runtimeOperation) || busy !== null || resourceWorkflow.busyKey !== null} /></div>
+                              </details>
+                            ) : null}
+                          </SettingsSection>
                         ))}
-                        {config.key === "maibot" ? <MaiBotConfigImportPanel disabled={maibotDataBlocked || Boolean(snapshot.runtimeOperation) || busy !== null || resourceWorkflow.busyKey !== null} /> : null}
-                      </SettingsSection>
-                    ))}
-                  </div>
-                  {resourceMoveBlocked ? (
-                    <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
-                      {snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请完成或取消后再操作。` : "请先停止所有服务，再操作组件目录。"}
                     </div>
-                  ) : null}
-                </SettingsSection>
+                  ))}
+                </div>
+              {resourceMoveBlocked ? (
+                <div className="rounded-md border border-warning/40 bg-warning/15 px-3 py-2 text-xs text-foreground">
+                  {snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请完成或取消后再操作。` : "请先停止所有服务，再操作组件目录。"}
+                </div>
+              ) : null}
                 <div className="settings-pair-grid">
                   <PathField label="用户数据目录" onOpen={openPath} value={snapshot.paths.userDataRoot} />
                   <PathField label="一键包安装目录" onOpen={openPath} value={snapshot.paths.installRoot} />

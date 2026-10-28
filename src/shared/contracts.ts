@@ -180,6 +180,10 @@ export interface NetworkProxySettings {
 }
 
 export interface RuntimePaths {
+  protocolSettingsRoot?: string;
+  instanceRegistryRoot?: string;
+  activeInstanceId?: string;
+  activeInstanceName?: string;
   /** Explicit local development selection; packaged applications retain instance compatibility. */
   maibotDevMode?: "pypi" | "source";
   installRoot: string;
@@ -197,6 +201,28 @@ export interface RuntimePaths {
   runtimeRoot: string;
   pythonEnvRoot: string;
   logsRoot: string;
+}
+
+export interface LauncherInstance {
+  development?: { mode: "pypi" | "source"; pythonRoot: string; localDashboard: boolean };
+  id: string;
+  name: string;
+  settingsRoot: string;
+  resourceRoot: string;
+  paths: Record<RuntimeResourcePathKey, string>;
+  legacy?: boolean;
+  attached?: boolean;
+}
+export interface LauncherInstanceState {
+  version: 1;
+  ignoredLegacyRoots?: string[];
+  activeId: string;
+  instances: LauncherInstance[];
+}
+export interface InstanceCreateRequest {
+  name: string;
+  mode: "new" | "existing";
+  paths: { maibot: string; napcat?: string; snowluma?: string };
 }
 
 export interface LocalChatClientInfo {
@@ -971,6 +997,11 @@ export interface DesktopBridge {
     onSnapshot: (callback: (services: ServiceDescriptor[]) => void) => () => void;
   };
   resources: {
+    listInstances: () => Promise<LauncherInstanceState | null>;
+    createInstance: (request: InstanceCreateRequest) => Promise<LauncherInstanceState>;
+    selectInstance: (id: string) => Promise<void>;
+    renameInstance: (id: string, name: string) => Promise<LauncherInstanceState>;
+    removeInstance: (id: string) => Promise<LauncherInstanceState>;
     choosePath: (key: RuntimeResourcePathKey, mode: ResourcePathMode) => Promise<string | null>;
     inspectPath: (key: RuntimeResourcePathKey, path: string, mode: ResourcePathMode) => Promise<ResourcePathPlan>;
     applyPath: (plan: ResourcePathPlan) => Promise<RuntimeResourcePathChangeResult>;

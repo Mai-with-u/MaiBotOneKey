@@ -36,7 +36,7 @@ function uniquePaths(paths: string[]): string[] {
 
 /** Owns protocol configuration only. No MaiBot paths, plugin files, or runtime APIs. */
 export class ProtocolBackendManager {
-  constructor(private readonly paths: Pick<RuntimePaths, "userDataRoot" | "napcatRoot" | "snowlumaRoot" | "bundledModulesRoot">) {}
+  constructor(private readonly paths: Pick<RuntimePaths, "userDataRoot" | "protocolSettingsRoot" | "napcatRoot" | "snowlumaRoot" | "bundledModulesRoot">) {}
   getQqBackendSync(): QqBackend {
     try {
       const parsed = JSON.parse(readFileSync(this.qqBackendPath(), "utf8")) as { backend?: unknown };
@@ -261,7 +261,7 @@ export class ProtocolBackendManager {
 
 
   private qqBackendPath(): string {
-    return join(this.paths.userDataRoot, QQ_BACKEND_FILE);
+    return join(this.paths.protocolSettingsRoot ?? this.paths.userDataRoot, QQ_BACKEND_FILE);
   }
 
   getQqBackendAccounts(): Partial<Record<QqBackend, string>> {
@@ -270,7 +270,7 @@ export class ProtocolBackendManager {
   }
 
   private messagePlatformPath(): string {
-    return join(this.paths.userDataRoot, MESSAGE_PLATFORM_FILE);
+    return join(this.paths.protocolSettingsRoot ?? this.paths.userDataRoot, MESSAGE_PLATFORM_FILE);
   }
 
   private readMessagePlatformStore(): StoredMessagePlatformFile | undefined {

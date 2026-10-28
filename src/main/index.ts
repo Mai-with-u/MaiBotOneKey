@@ -1,4 +1,5 @@
 import { RuntimeOperationLock } from "./services/runtime-operation-lock";
+import { prepareDevPythonEnvironment } from "../../scripts/dev/prepare-python-environment";
 import {
   app,
   BrowserWindow,
@@ -97,7 +98,7 @@ const instanceLock = (() => {
 const runtimeOperationLock = new RuntimeOperationLock();
 const resourceLocationManager = new ResourceLocationManager(
   runtimePaths,
-  app.isPackaged,
+  app.isPackaged || Boolean(runtimePaths.instanceRegistryRoot),
   runtimeOperationLock,
   () => {
     const active = serviceManager.snapshot().filter((service) => service.managed || ["starting", "running", "stopping"].includes(service.status));
@@ -313,7 +314,7 @@ async function cleanupMaiBotPrivacyLeakOnStartup(): Promise<void> {
 
 async function upgradeQqComponentsAfterLauncherUpdate(): Promise<void> {
   const statePath = join(
-    runtimePaths.userDataRoot,
+    runtimePaths.protocolSettingsRoot ?? runtimePaths.userDataRoot,
     QQ_COMPONENT_UPGRADE_STATE_FILE,
   );
   const currentVersion = app.getVersion();
@@ -389,7 +390,7 @@ function broadcastWindowState(window: BrowserWindow): void {
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    title: "MaiBot OneKey",
+    title: runtimePaths.activeInstanceName ? `MaiBot OneKey · ${runtimePaths.activeInstanceName}` : "MaiBot OneKey",
     width: 1280,
     height: 800,
     minWidth: 1000,
@@ -594,6 +595,9 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
   app.quit();
 } else {
   app.whenReady().then(async () => {
+    if (!app.isPackaged && runtimePaths.maibotDevMode === "source") {
+      await prepareDevPythonEnvironment(join(runtimePaths.runtimeRoot, "python"), runtimePaths.pythonEnvRoot);
+    }
     logStore.append("desktop", "system", `启动 MaiBot OneKey，PID ${process.pid}`);
     cleanupLauncherUpdateDownloadsOnStartup();
     await cleanupMaiBotPrivacyLeakOnStartup();

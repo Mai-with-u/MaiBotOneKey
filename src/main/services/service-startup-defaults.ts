@@ -5,6 +5,13 @@ import { createHash } from "node:crypto";
 export const LOCAL_DASHBOARD_DEV_ENV = "MAIBOT_ONEKEY_DEV_LOCAL_DASHBOARD";
 export const DEV_MODE_ENV = "MAIBOT_ONEKEY_DEV_MODE";
 export const DEV_SOURCE_ENV = "MAIBOT_ONEKEY_DEV_SOURCE";
+export const DEV_INSTANCES_ENV = "MAIBOT_ONEKEY_DEV_INSTANCES";
+export function developmentInstanceRoot(installRoot: string, appDataRoot: string, isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (isPackaged || env[DEV_INSTANCES_ENV] !== "1") return undefined;
+  if (env[DEV_MODE_ENV] === "source") throw new Error("多实例测试请使用 bun run dev:instances，不要与固定源码模式混用。");
+  const scope = createHash("sha256").update(installRoot).digest("hex").slice(0, 12);
+  return join(appDataRoot, "MaiBotOneKeyDesktop", "dev-instances", scope);
+}
 export type DevelopmentMode = "pypi" | "source";
 
 export function developmentRuntimeProfile(installRoot: string, isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): {
