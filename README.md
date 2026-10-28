@@ -1,8 +1,30 @@
 # MaiBot OneKey Desktop
 
-MaiBot OneKey 的 Electron 桌面壳。当前桌面版负责初始化检查、服务启动/停止、单安装目录单实例、日志/状态展示，以及 MaiBot WebUI、NapCat WebUI、PTY 终端、设置状态页的统一入口。
+MaiBot OneKey 的 Electron 桌面壳。当前桌面版负责初始化检查、服务启动/停止、多实例管理（一次运行一个）、日志/状态展示，以及 MaiBot WebUI、NapCat WebUI、PTY 终端、设置状态页的统一入口。
 
 旧的 `.bat` 和根目录 Python 启动入口已经清理，普通用户入口统一为 Windows 安装包。
+
+设置 → 通用 → 启动设置提供「登录后自动启动一键包」和「一键包启动后自动启动服务」两个独立开关，默认关闭。自动启动服务从下次打开生效，等待初始化、协议确认和 QQ 配置就绪；用户手动操作服务后，本次会话不再自动启动。登录自启仅支持 Windows 和 macOS 正式安装版，需用户登录系统；QQ 客户端仍需保持可登录状态。
+
+## 实例与存放位置
+
+Windows 安装器可选择首个实例的存放位置，留空使用原默认位置。该选项只用于新用户初始化；升级优先保留已有实例。选择的位置必须可写、为空且独立于程序安装目录。首次初始化会在所选位置的 `modules/MaiBot`、`modules/napcat`、`modules/SnowLuma` 下准备组件。
+
+「设置 → 实例管理」管理的是 MaiBot 实例：新建或接入只需选择 MaiBot 目录。一个启动器固定绑定一个 NapCat 目录和一个 SnowLuma 目录，所有 MaiBot 实例共用协议端、QQ 账号配置及协议端启动命令；切换 MaiBot 不更换协议端绑定。不要求统一实例文件夹，各路径均支持「使用已有目录」和「复制迁移」，复制成功后保留源文件。切换实例前停止服务，确认后重启启动器。
+
+共享协议端路径保存于实例索引旁的 `shared-protocols.json`，账号及协议端设置保存在 `protocol-settings/`。升级旧的多组件实例索引时，一次性采用当前选中实例的协议端绑定，并保留原始索引备份 `instances-before-shared-protocols.json`；其他旧协议端目录原地保留，不自动合并或删除。此后修改 NapCat 或 SnowLuma 路径对所有 MaiBot 实例生效。
+
+实例索引保存在 `%APPDATA%/MaiBotOneKeyDesktop/launcher/instances.json`，新实例的启动器设置保存在其下的 `profiles/<实例ID>`；程序安装路径不再决定实例身份。旧版安装的默认目录、`resource-paths.json` 自定义组件路径和 `resource-location.json` 整体目录配置原地接入，旧设置文件不搬动、不覆盖。开发模式使用独立索引，保留原调试路径，不读写正式版实例索引。
+
+移除实例只删除登记，组件文件和运行设置均保留。重置设置保留实例路径；多实例模式提供当前 MaiBot 数据重置，不再提供按公共根目录清空所有文件的操作，避免误删分散存放的其他内容。
+
+### 在开发模式测试多实例
+
+直接运行 `bun run dev` 即可使用多实例，列表默认包含「默认 PyPI 实例」和「源码调试实例」。两者沿用原开发目录、配置和独立运行环境；未准备源码时，先执行 `bun run dev:source:init`。普通启动选择 PyPI 实例，`dev:source` / `dev:dev` 选择源码实例；在界面中切换后的重启保留所选实例。使用 `--source` 的独立 checkout 会额外登记为源码实例。默认开发实例可改名，但不能移除。
+
+关闭原来的开发进程，运行 `bun run dev:instances`。此命令启用与安装版相同的实例管理，使用 `%APPDATA%/MaiBotOneKeyDesktop/dev-instances/<工作目录哈希>/` 下的隔离索引、设置和默认实例，不导入正式版或普通开发模式的数据。新建空目录实例后，可测试切换重启、独立配置、改名、组件迁移和移除登记；接入已有实例时建议选择测试副本。`bun run dev:instances --dry-run` 只打印启动方式，不打开 Electron。
+
+安装器的目录选择页仍需通过 Windows 安装包测试；上述开发命令用于应用内多实例流程，不模拟安装器。
 
 ## 开发
 
@@ -41,7 +63,7 @@ bun run dev:dev
 
 源码入口不会自动克隆、更新或覆盖代码，也不接受已经带有 `.onekey-deployment.json` 的 PyPI 实例目录。Python 直接运行该目录的 `bot.py`，编辑 Python 后在一键包中重启 Core 即可加载改动；编辑 Dashboard 后重新执行 `dev:build` 并刷新 WebUI。Electron/React 代码仍由 electron-vite 监听。
 
-每份源码使用独立的 `.cache/dev-source/<源码路径hash>/python-env`，首次从干净的基础 Python 创建，随后复用已安装依赖；启动器设置、日志和协议端可写文件也与 PyPI 模式隔离。配置、数据和插件位于所选源码 checkout 内。源码调试期间禁用一键包对核心的安装、更新及源码目录迁移，更新源码请直接操作该仓库。
+每份源码使用独立的 `.cache/dev-source/<源码路径hash>/python-env`，首次从干净的基础 Python 创建，随后复用已安装依赖；MaiBot 运行设置和日志与 PyPI 实例隔离，NapCat、SnowLuma 及其账号配置由启动器共用。配置、数据和插件位于所选源码 checkout 内。源码调试期间禁用一键包对核心的安装、更新及源码目录迁移，更新源码请直接操作该仓库。
 
 命令指定本次启动的 Dashboard 初始选择，仍可在设置中手动调整。`dev:source:webui` 不自动构建，缺少 `dist/index.html` 会提示执行对应的 `dev:build`。所有启动变体支持 `--dry-run`，只验证并打印运行目录，不打开 Electron。
 
