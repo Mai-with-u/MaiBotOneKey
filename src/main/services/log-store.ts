@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { appendFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { plainLogMessage } from "../../shared/plain-log-message";
 import type { LogEntry, LogSource, LogStream, RuntimePaths } from "../../shared/contracts";
 
 const MAX_BUFFERED_LOGS = 1000;
@@ -25,7 +26,7 @@ export class LogStore extends EventEmitter {
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       source,
       stream,
-      message: message.replace(/\r?\n$/, ""),
+      message: plainLogMessage(message).replace(/\r?\n$/, ""),
       timestamp: Date.now(),
     };
 

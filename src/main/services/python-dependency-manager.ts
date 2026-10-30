@@ -1314,7 +1314,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
         for (const part of parts) {
           emitLine(part);
           if (/Installing collected packages/iu.test(part)) {
-            emitLine("pip is writing package files; this step can be quiet for a while");
+            emitLine("pip 正在写入包文件，这一步可能暂时没有输出。 / pip is writing package files; this step can be quiet for a while");
           }
         }
         if (stream === "stdout") {
