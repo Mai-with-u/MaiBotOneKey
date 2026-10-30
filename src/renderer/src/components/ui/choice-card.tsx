@@ -20,14 +20,17 @@ export function ChoiceCard({ selected, icon, title, description, badge, layout =
       className={cn("flex min-w-0 items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50", layout === "stack" && "flex-col items-start justify-start", className)}
       {...props}
     >
-      <span className="flex min-w-0 items-center gap-3">
+      <span className={cn("flex min-w-0 items-center gap-3", layout === "stack" && "w-full")}>
         {icon ? <span data-slot="choice-card-icon" className="grid size-8 shrink-0 place-items-center [&_svg]:size-4">{icon}</span> : null}
-        <span className="min-w-0">
-          <span className="block text-sm font-semibold">{title}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-start justify-between gap-2">
+            <span className="min-w-0 text-sm font-semibold">{title}</span>
+            {layout === "stack" && badge ? <span className="shrink-0">{badge}</span> : null}
+          </span>
           {description ? <span className={cn("mt-0.5 block opacity-70", layout === "row" ? "truncate font-mono text-[10px]" : "text-xs leading-relaxed")}>{description}</span> : null}
         </span>
       </span>
-      {badge}
+      {layout === "row" ? badge : null}
     </button>
   );
 }

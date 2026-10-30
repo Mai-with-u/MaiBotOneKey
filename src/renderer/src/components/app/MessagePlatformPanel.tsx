@@ -1102,7 +1102,7 @@ export function MessagePlatformPanel({
   const [officialAppSecret, setOfficialAppSecret] = useState("");
   const [mascotIntroOpen, setMascotIntroOpen] = useState(false);
   const [, setMascotClickCount] = useState(0);
-  const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqBackend | "official">("napcat");
+  const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqProtocol>("official");
   const currentProtocol = snapshot.initState.qqProtocol ?? snapshot.initState.qqBackend ?? "napcat";
   const [selectedProtocol, setSelectedProtocol] = useState<QqProtocol>(currentProtocol);
   useEffect(() => {
@@ -1517,7 +1517,7 @@ export function MessagePlatformPanel({
     }
   }, []);
 
-  const openMessagePlatformDialog = useCallback((backend: QqBackend = snapshot.initState.qqBackend) => {
+  const openMessagePlatformDialog = useCallback((backend: QqProtocol = "official") => {
     setError(null);
 
     setMessagePlatformBackend(backend);
@@ -1953,7 +1953,7 @@ export function MessagePlatformPanel({
                     setError(null);
                   }}
                   badge={option.backend === "snowluma" || option.backend === "official" ? (
-                    <span className="rounded-sm bg-primary px-2 py-1 text-xs font-bold leading-none text-primary-foreground">
+                    <span className="inline-flex rounded-sm bg-primary px-2 py-1 text-xs font-bold leading-none text-primary-foreground">
                       {option.backend === "official" ? "稳定" : "推荐"}
                     </span>
                   ) : undefined}
