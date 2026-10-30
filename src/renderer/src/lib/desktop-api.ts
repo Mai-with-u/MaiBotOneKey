@@ -17,7 +17,7 @@ export function validateDesktopSnapshot(value: unknown): DesktopSnapshot {
   const init = snapshot.initState as Record<string, unknown>;
   const agreement = snapshot.startupAgreement as Record<string, unknown>;
   if (typeof init.isReady !== "boolean" || typeof init.messagePlatformConfigured !== "boolean" || !Array.isArray(init.checks)) throw new Error("初始化状态格式错误");
-  if (typeof agreement.isConfirmed !== "boolean" || !Array.isArray(agreement.documents)) throw new Error("启动协议状态格式错误");
+  if (typeof agreement.isDismissed !== "boolean" || !Array.isArray(agreement.documents)) throw new Error("启动协议状态格式错误");
   return value as DesktopSnapshot;
 }
 

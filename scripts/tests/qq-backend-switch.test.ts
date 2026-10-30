@@ -42,7 +42,6 @@ test("start-all continues with MaiBot after a SnowLuma port conflict and reports
   const { paths, manager } = await fixture();
   await manager.setQqBackend("snowluma");
   manager.hasMessagePlatformConfigured = () => true;
-  manager.assertAgreementsConfirmed = async () => {};
   const pty = Object.assign(new EventEmitter(), { list: () => [] });
   const services = new ServiceManager(paths, manager, { append() {}, getServiceLogPath: (id: string) => join(paths.logsRoot, `${id}.log`) } as any, pty as any);
   const attempts: ServiceId[] = [];
@@ -63,7 +62,6 @@ test("start-all continues with MaiBot after a SnowLuma port conflict and reports
 test("start-all reports both service failures after attempting both services", async () => {
   const { paths, manager } = await fixture();
   manager.hasMessagePlatformConfigured = () => true;
-  manager.assertAgreementsConfirmed = async () => {};
   const pty = Object.assign(new EventEmitter(), { list: () => [] });
   const services = new ServiceManager(paths, manager, { append() {}, getServiceLogPath: (id: string) => join(paths.logsRoot, `${id}.log`) } as any, pty as any);
   const attempts: ServiceId[] = [];
@@ -296,7 +294,6 @@ for (const backend of ["napcat", "snowluma"] as const) {
       const single = await services.start("napcat");
       expect(single.status).toBe("stopped");
       expect(single.error).toBeUndefined();
-      manager.assertAgreementsConfirmed = async () => {};
       const originalStart = services.start.bind(services);
       const starts: ServiceId[] = [];
       services.start = async (id) => { starts.push(id); return id === "maibot" ? services.snapshot().find((service) => service.id === id)! : originalStart(id); };

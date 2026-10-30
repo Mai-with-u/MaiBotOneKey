@@ -152,7 +152,7 @@ export function createPreviewSnapshot(): DesktopSnapshot {
     ],
   },
   startupAgreement: {
-    isConfirmed: true,
+    isDismissed: true,
     documents: [],
   },
   recentLogs: [],

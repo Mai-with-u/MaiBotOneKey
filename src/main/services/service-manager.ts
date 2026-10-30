@@ -494,7 +494,6 @@ export class ServiceManager extends EventEmitter {
   async startAll(): Promise<ServiceDescriptor[]> {
     this.operationLock.assertCanStart();
     const missingAccount = this.requestMissingQqAccount();
-    await this.initManager.assertAgreementsConfirmed();
     const serviceIds: ServiceId[] = missingAccount || this.initManager.getQqProtocolSync() === "official" ? ["maibot"] : ["napcat", "maibot"];
     const failures: string[] = [];
     for (const serviceId of serviceIds) {
@@ -565,9 +564,6 @@ export class ServiceManager extends EventEmitter {
     const sessionId = serviceSessionId(serviceId);
     const existingSession = this.pty.list().find((session) => session.id === sessionId);
 
-    if (serviceId === "maibot") {
-      await this.initManager.assertAgreementsConfirmed();
-    }
     if (serviceId === "napcat" && this.initManager.getQqProtocolSync() === "official") {
       throw new Error("当前选择的是官方 QQ 适配器，请在 MaiBot 中配置并启用。");
     }
@@ -612,7 +608,6 @@ export class ServiceManager extends EventEmitter {
           (progress) => this.setState(serviceId, { ...this.getState(serviceId), detail: progress.label }),
         );
         await this.initManager.ensureServiceReady("maibot");
-        await this.initManager.assertAgreementsConfirmed();
         if (!this.getState(serviceId).desired) return this.toDescriptor(definition, this.getState(serviceId));
         this.definitions = this.createDefinitions();
         definition = this.getDefinition(serviceId);

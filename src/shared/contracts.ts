@@ -488,20 +488,17 @@ export interface AgreementDocument {
   title: string;
   fileName: string;
   sourcePath: string;
-  confirmPath: string;
   content: string;
-  hash: string;
   exists: boolean;
-  confirmed: boolean;
   error?: string;
 }
 
 export interface StartupAgreementState {
-  isConfirmed: boolean;
+  isDismissed: boolean;
   documents: AgreementDocument[];
 }
 
-export interface StartupAgreementConfirmResult {
+export interface StartupAgreementDismissResult {
   state: StartupAgreementState;
   changedFiles: string[];
 }
@@ -942,7 +939,7 @@ export interface DesktopBridge {
   };
   agreements: {
     getState: () => Promise<StartupAgreementState>;
-    confirm: () => Promise<StartupAgreementConfirmResult>;
+    dismiss: () => Promise<StartupAgreementDismissResult>;
   };
   modules: {
     refreshVersions: () => Promise<DesktopSnapshot>;

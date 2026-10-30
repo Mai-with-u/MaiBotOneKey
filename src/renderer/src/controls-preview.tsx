@@ -89,13 +89,13 @@ function AgreementPreview(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState(() => {
     const state = createPreviewSnapshot();
     state.startupAgreement = {
-      isConfirmed: false,
+      isDismissed: false,
       documents: (["privacy", "eula"] as const).map((id) => ({
         id,
-        title: id === "privacy" ? "隐私政策" : "最终用户许可协议",
-        fileName: `${id}.md`, sourcePath: "", confirmPath: "", hash: "preview",
-        content: `# ${id === "privacy" ? "隐私政策" : "最终用户许可协议"}（布局演示）\n\n` + Array.from({ length: 12 }, (_, index) => `### ${index + 1}. 演示条目\n\n此处用于预览协议页面的排版和滚动效果，正式页面会显示当前 MaiBot 的完整协议文件。`).join("\n\n"),
-        exists: true, confirmed: false,
+        title: id === "privacy" ? "隐私说明" : "使用须知",
+        fileName: `${id}.md`, sourcePath: "",
+        content: `# ${id === "privacy" ? "隐私说明" : "使用须知"}（布局演示）\n\n` + Array.from({ length: 12 }, (_, index) => `### ${index + 1}. 演示条目\n\n此处用于预览协议页面的排版和滚动效果，正式页面会显示当前 MaiBot 的完整协议文件。`).join("\n\n"),
+        exists: true,
       })),
     };
     return state;

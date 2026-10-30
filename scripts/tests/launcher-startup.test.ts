@@ -5,23 +5,22 @@ import { defaultServiceStartupSettings } from "../../src/main/services/service-s
 const ready = () => ({
   serviceStartupSettings: { useLocalDashboard: false, autoStartServices: true },
   initState: { isReady: true, messagePlatformConfigured: true, qqProtocol: "snowluma" },
-  startupAgreement: { isConfirmed: true },
+  startupAgreement: { isDismissed: true },
   services: [], runtimeOperation: undefined,
 }) as any;
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-test("auto-start waits for initialization, agreement, QQ configuration and resource operations, then runs once", async () => {
+test("auto-start waits for initialization, QQ configuration and resource operations, then runs once", async () => {
   let starts = 0;
   const controller = new LauncherAutoStart(true, async () => { starts++; }, (error) => { throw error; });
   for (const patch of [
     { initState: { ...ready().initState, isReady: false } },
-    { startupAgreement: { isConfirmed: false } },
     { initState: { ...ready().initState, messagePlatformConfigured: false } },
     { runtimeOperation: "迁移目录" },
   ]) controller.consider({ ...ready(), ...patch });
   await flush();
   expect(starts).toBe(0);
-  controller.consider(ready());
+  controller.consider({ ...ready(), startupAgreement: { isDismissed: false } });
   controller.consider(ready());
   await flush();
   expect(starts).toBe(1);

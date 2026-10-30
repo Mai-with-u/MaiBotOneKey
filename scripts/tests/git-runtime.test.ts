@@ -30,7 +30,6 @@ nativeTest("MaiBot gets bundled Git with no system Git and ignores a stale custo
     const paths = { maibotDevMode: "source", installRoot: root, userDataRoot: root, maibotRoot: root,
       runtimeRoot, bundledModulesRoot: root, napcatRoot: root, snowlumaRoot: root, logsRoot: root } as RuntimePaths;
     const init = new InitManager(paths);
-    init.assertAgreementsConfirmed = async () => {};
     init.getAgreementEnvVars = async () => ({});
     const git = await init.getGitPath();
     expect(git).toBe(join(runtimeRoot, "git/cmd/git.exe"));

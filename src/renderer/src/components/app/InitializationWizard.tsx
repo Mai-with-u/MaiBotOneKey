@@ -87,7 +87,7 @@ export function InitializationWizard({
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupRunId = useRef(0);
   const handingOff = useRef(false);
-  const agreementPending = !snapshot.startupAgreement.isConfirmed;
+  const agreementPending = !snapshot.startupAgreement.isDismissed;
   const service = maibotServiceFrom(snapshot);
   const logs = useMemo(
     () => startupLogs(snapshot.recentLogs ?? []),

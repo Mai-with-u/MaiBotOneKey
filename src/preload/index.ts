@@ -67,7 +67,7 @@ import type {
   SnowLumaResetResult,
   SourceSettings,
   SourceSettingsUpdate,
-  StartupAgreementConfirmResult,
+  StartupAgreementDismissResult,
   StartupAgreementState,
   SystemPerformanceSnapshot,
   TerminalSettings,
@@ -179,7 +179,7 @@ const desktopBridge: DesktopBridge = {
   },
   agreements: {
     getState: () => ipcRenderer.invoke("agreements:getState") as Promise<StartupAgreementState>,
-    confirm: () => ipcRenderer.invoke("agreements:confirm") as Promise<StartupAgreementConfirmResult>,
+    dismiss: () => ipcRenderer.invoke("agreements:dismiss") as Promise<StartupAgreementDismissResult>,
   },
   modules: {
     refreshVersions: () =>

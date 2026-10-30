@@ -276,9 +276,9 @@ test("service startup blocks directory operations even before starting state is 
   const { root, paths, manager, gate } = await fixture();
   const init = new InitManager(paths); let finish!: () => void;
   const waiting = new Promise<void>((resolve) => { finish = resolve; });
-  init.assertAgreementsConfirmed = async () => { await waiting; throw new Error("end test startup"); };
   const pty = Object.assign(new EventEmitter(), { list: () => [] });
   const services = new ServiceManager(paths, init, { append() {}, getServiceLogPath: (id: string) => join(paths.logsRoot, `${id}.log`) } as any, pty as any, undefined, gate);
+  (services as any).resolveStartCommand = async () => { await waiting; throw new Error("end test startup"); };
   const startup = services.start("maibot"); void startup.catch(() => {});
   try {
     expect(services.snapshot().every((service) => service.status === "stopped")).toBe(true);

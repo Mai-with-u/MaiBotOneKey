@@ -93,7 +93,7 @@ import type {
   SourceSettings,
   SourceSettingsUpdate,
   SystemPerformanceSnapshot,
-  StartupAgreementConfirmResult,
+  StartupAgreementDismissResult,
   StartupAgreementState,
   TerminalSettings,
   WindowResizeEdge,
@@ -2487,13 +2487,13 @@ export function registerAppIpc({
   );
 
   ipcMain.handle(
-    "agreements:confirm",
-    async (): Promise<StartupAgreementConfirmResult> => {
-      const result = await initManager.confirmAgreements();
+    "agreements:dismiss",
+    async (): Promise<StartupAgreementDismissResult> => {
+      const result = await initManager.dismissAgreements();
       logStore.append(
         "desktop",
         "system",
-        `Startup agreements confirmed, changed ${result.changedFiles.length} files.`,
+        `Startup notice dismissed, changed ${result.changedFiles.length} files.`,
       );
       await broadcastSnapshot();
       return result;

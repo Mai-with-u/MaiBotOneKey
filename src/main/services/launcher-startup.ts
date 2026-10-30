@@ -21,7 +21,7 @@ export function saveOpenAtLogin(app: LoginItemApp, enabled: boolean, platform = 
   if (readOpenAtLogin(app, platform) !== enabled) throw new Error("系统未应用登录启动设置，请检查系统启动项是否被禁用");
 }
 
-type StartupSnapshot = Pick<DesktopSnapshot, "initState" | "startupAgreement" | "services" | "runtimeOperation" | "serviceStartupSettings">;
+type StartupSnapshot = Pick<DesktopSnapshot, "initState" | "services" | "runtimeOperation" | "serviceStartupSettings">;
 
 /** One attempt per launcher session. A manual service operation takes precedence. */
 export class LauncherAutoStart {
@@ -42,7 +42,7 @@ export class LauncherAutoStart {
     }
     const init = snapshot.initState;
     const configured = init.qqProtocol === "official" ? init.qqOfficialConfigured : init.messagePlatformConfigured;
-    if (snapshot.runtimeOperation || !init.isReady || !configured || !snapshot.startupAgreement.isConfirmed) return;
+    if (snapshot.runtimeOperation || !init.isReady || !configured) return;
     this.cancel();
     void Promise.resolve().then(this.start).catch(this.onError);
   }

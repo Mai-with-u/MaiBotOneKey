@@ -320,3 +320,20 @@ test("an interrupted initializer is recovered from its snapshot before the next 
   expect(await readFile(join(instance, "config", "bot_config.toml"), "utf8")).toBe("original config");
   expect(manager.getState()!.generation).toBe(current.generation);
 });
+
+
+test("startup notice can be dismissed with missing documents and stays dismissed after document updates", async () => {
+  const { paths, instance } = await fixture(true);
+  paths.bundledModulesRoot = join(paths.installRoot, "bundled");
+  const init = new InitManager(paths);
+  expect((await init.getAgreementState()).isDismissed).toBe(false);
+  expect((await init.dismissAgreements()).state.isDismissed).toBe(true);
+  const record = JSON.parse(await readFile(join(paths.userDataRoot, "agreement.json"), "utf8"));
+  expect(record.dismissedAt).toBeNumber();
+  expect(record.confirmedAt).toBeUndefined();
+  expect(record.hashes).toBeUndefined();
+  await writeFile(join(instance, "EULA.md"), "updated notice");
+  expect((await new InitManager(paths).getAgreementState()).isDismissed).toBe(true);
+  await writeFile(join(paths.userDataRoot, "agreement.json"), JSON.stringify({ version: 1, hashes: { eula: "old" } }));
+  expect((await new InitManager(paths).getAgreementState()).isDismissed).toBe(true);
+});

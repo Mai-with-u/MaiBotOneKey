@@ -42,7 +42,7 @@ import type {
   RuntimePaths,
   ServiceId,
   SnowLumaResetResult,
-  StartupAgreementConfirmResult,
+  StartupAgreementDismissResult,
   StartupAgreementState,
 } from "../../shared/contracts";
 
@@ -629,8 +629,8 @@ function storageCategory(
 }
 
 const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName: string; envVar: string }> = [
-  { id: "eula", title: "最终用户许可协议", fileName: "EULA.md", envVar: "EULA_AGREE" },
-  { id: "privacy", title: "隐私政策", fileName: "PRIVACY.md", envVar: "PRIVACY_AGREE" },
+  { id: "eula", title: "使用须知", fileName: "EULA.md", envVar: "EULA_AGREE" },
+  { id: "privacy", title: "隐私说明", fileName: "PRIVACY.md", envVar: "PRIVACY_AGREE" },
 ];
 
 const AGREEMENT_STORE_FILE = "agreement.json";
@@ -713,11 +713,6 @@ function buildMaiBotWebUiEndpoint(
   }
 }
 
-interface StoredAgreementFile {
-  version: 1;
-  hashes: Partial<Record<AgreementDocumentId, string>>;
-  confirmedAt?: number;
-}
 
 function checkFile(path: string, label: string, id: string): InitCheck {
   if (existsSync(path)) {
@@ -912,55 +907,18 @@ export class InitManager {
   }
 
   async getAgreementState(): Promise<StartupAgreementState> {
-    const stored = await this.readAgreementStore();
-    const documents = await Promise.all(
-      AGREEMENT_FILES.map((agreement) => this.readAgreementDocument(agreement, stored)),
-    );
-    return {
-      isConfirmed: documents.every((document) => document.exists && document.confirmed),
-      documents,
-    };
+    const documents = await Promise.all(AGREEMENT_FILES.map((agreement) => this.readAgreementDocument(agreement)));
+    return { isDismissed: existsSync(this.agreementStorePath()), documents };
   }
 
-  async confirmAgreements(): Promise<StartupAgreementConfirmResult> {
-    const state = await this.getAgreementState();
-    const missing = state.documents.find((document) => !document.exists);
-    if (missing) {
-      throw new Error(`${missing.title} 文件缺失: ${missing.sourcePath}`);
-    }
-
-    const hashes: Partial<Record<AgreementDocumentId, string>> = {};
-    for (const document of state.documents) {
-      hashes[document.id] = document.hash;
-    }
-
+  async dismissAgreements(): Promise<StartupAgreementDismissResult> {
     const storePath = this.agreementStorePath();
-    const payload: StoredAgreementFile = {
-      version: 1,
-      hashes,
-      confirmedAt: Date.now(),
-    };
     await mkdir(dirname(storePath), { recursive: true });
-    await writeFile(storePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-
-    return {
-      state: await this.getAgreementState(),
-      changedFiles: [storePath],
-    };
+    await writeFile(storePath, `${JSON.stringify({ dismissedAt: Date.now() })}\n`, "utf8");
+    return { state: await this.getAgreementState(), changedFiles: [storePath] };
   }
 
-  async assertAgreementsConfirmed(): Promise<void> {
-    const state = await this.getAgreementState();
-    if (!state.isConfirmed) {
-      throw new Error("请先阅读并同意 MaiBot EULA 与隐私政策。");
-    }
-  }
-
-  /**
-   * Calculate the latest EULA / PRIVACY MD5 and inject it as environment variables on each MaiBot start.
-   * MaiBot bot.py reads `EULA_AGREE` and `PRIVACY_AGREE`; matching the current file hash means accepted.
-   * When agreements change, the hash changes automatically and MaiBot will trigger confirmation again.
-   */
+  // Older MaiBot cores still require these hashes to start without terminal input.
   async getAgreementEnvVars(): Promise<Record<string, string>> {
     const env: Record<string, string> = {};
     for (const agreement of AGREEMENT_FILES) {
@@ -1749,27 +1707,6 @@ export class InitManager {
     return join(this.paths.userDataRoot, AGREEMENT_STORE_FILE);
   }
 
-  private async readAgreementStore(): Promise<StoredAgreementFile | undefined> {
-    const storePath = this.agreementStorePath();
-    if (!existsSync(storePath)) {
-      return undefined;
-    }
-    try {
-      const raw = await readFile(storePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<StoredAgreementFile>;
-      if (!parsed || typeof parsed !== "object" || !parsed.hashes) {
-        return undefined;
-      }
-      return {
-        version: 1,
-        hashes: parsed.hashes,
-        confirmedAt: typeof parsed.confirmedAt === "number" ? parsed.confirmedAt : undefined,
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
   async ensureModulesReady(onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
     return [
       ...(await this.ensureServiceReady("maibot", onProgress)),
@@ -2200,39 +2137,29 @@ export class InitManager {
       fileName: string;
       envVar: string;
     },
-    stored: StoredAgreementFile | undefined,
   ): Promise<AgreementDocument> {
     const sourcePath = this.agreementSourcePath(fileName);
-    const confirmPath = this.agreementStorePath();
     if (!existsSync(sourcePath)) {
       return {
         id,
         title,
         fileName,
         sourcePath,
-        confirmPath,
         content: "",
-        hash: "",
         exists: false,
-        confirmed: false,
         error: `${fileName} 文件缺失`,
       };
     }
 
     try {
       const content = await readFile(sourcePath, "utf8");
-      const hash = md5Utf8(content);
-      const confirmed = stored?.hashes?.[id] === hash;
       return {
         id,
         title,
         fileName,
         sourcePath,
-        confirmPath,
         content,
-        hash,
         exists: true,
-        confirmed,
       };
     } catch (error) {
       return {
@@ -2240,11 +2167,8 @@ export class InitManager {
         title,
         fileName,
         sourcePath,
-        confirmPath,
         content: "",
-        hash: "",
         exists: false,
-        confirmed: false,
         error: toDetail(error),
       };
     }

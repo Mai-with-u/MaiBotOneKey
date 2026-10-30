@@ -1708,7 +1708,7 @@ export function DesktopShell(): React.JSX.Element {
     />
   );
 
-  const agreementPending = Boolean(snapshot && !snapshot.startupAgreement.isConfirmed);
+  const agreementPending = Boolean(snapshot && !snapshot.startupAgreement.isDismissed);
   // Until the first snapshot arrives, neither agreement nor preparation is known.
   const onboarding = !snapshot || preparing || agreementPending;
   const preloadMaiBot = preparing && !agreementPending && maibotService?.status === "running" && maibotService.health === "ready";

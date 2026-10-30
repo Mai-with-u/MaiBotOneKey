@@ -1,5 +1,6 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { useSnowLumaUpgradeDebug } from "@/lib/use-snowluma-upgrade-debug";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MaiBotConfigImportPanel } from "./MaiBotConfigImportPanel";
 import { ResourcePathEditor } from "./ResourcePathEditor";
 import { InstanceManagerPanel } from "./InstanceManagerPanel";
@@ -1268,6 +1269,17 @@ export function SettingsStatusPanel({
               </TabsList>
 
               <TabsContent className="settings-content" value="general">
+                <details className="mb-4 rounded-md border border-border p-3">
+                  <summary className="cursor-pointer text-sm font-medium">使用须知与隐私说明</summary>
+                  <div className="mt-3 max-h-96 space-y-6 overflow-auto">
+                    {snapshot.startupAgreement.documents.map((document) => (
+                      <section key={document.id}>
+                        <h3 className="mb-2 text-sm font-medium">{document.title}</h3>
+                        {document.exists ? <MarkdownRenderer content={document.content} /> : <p className="text-xs text-muted-foreground">{document.error}</p>}
+                      </section>
+                    ))}
+                  </div>
+                </details>
                 <div className="settings-pair-grid">
                 <SettingsSection className="grid gap-4">
                   <p className="text-sm font-medium">启动设置</p>

@@ -5,9 +5,9 @@ import { createPreviewSnapshot } from "../../src/renderer/src/lib/desktop-previe
 test("complete snapshots retain their version, paths and unconfirmed agreements", () => {
   const snapshot = createPreviewSnapshot();
   snapshot.appVersion = "0.6.1";
-  snapshot.startupAgreement.isConfirmed = false;
+  snapshot.startupAgreement.isDismissed = false;
   expect(validateDesktopSnapshot(snapshot)).toBe(snapshot);
-  expect(validateDesktopSnapshot(snapshot).startupAgreement.isConfirmed).toBe(false);
+  expect(validateDesktopSnapshot(snapshot).startupAgreement.isDismissed).toBe(false);
 });
 test("incomplete production snapshots fail instead of receiving preview defaults", () => {
   const snapshot = createPreviewSnapshot();
