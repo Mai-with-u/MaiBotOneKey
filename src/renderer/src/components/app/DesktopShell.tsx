@@ -4,7 +4,6 @@ import {
   ChevronDown,
   Fish,
   FolderOpen,
-  Home,
   Info,
   MessageSquare,
   Loader2,
@@ -15,27 +14,17 @@ import {
   Unplug,
   X,
 } from "lucide-react";
-import { type CSSProperties, type FocusEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type FocusEvent, type PointerEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
-  CodexPetOption,
   DesktopSnapshot,
-  LocalChatConnectionState,
-  LocalChatEvent,
-  LocalChatMessageEvent,
   ServiceDescriptor,
   ServiceId,
   WindowState,
   WindowResizeEdge,
 } from "@shared/contracts";
-import {
-  WEBUI_CHAT_SESSION_ID,
-  WEBUI_CHAT_USER_ID_STORAGE_KEY,
-  WEBUI_CHAT_USER_NAME_STORAGE_KEY,
-} from "@shared/local-chat-defaults";
 import { getDesktopSnapshot, validateDesktopSnapshot } from "@/lib/desktop-api";
-import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { useAppearance, usesRetroStructure } from "@/lib/use-appearance";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -48,7 +37,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
-import maiMascotImage from "@/assets/mai2.png";
 import { MessagePlatformPanel } from "./MessagePlatformPanel";
 import { MillenniumStatusPanel, type MillenniumServicePhase } from "./MillenniumStatusPanel";
 import { MaiBotOverviewCard } from "./MaiBotOverviewCard";
@@ -65,17 +53,6 @@ function isServiceProcessActive(service: ServiceDescriptor): boolean {
 
 const MAIBOT_DEFAULT_WEBUI_URL = "http://127.0.0.1:8001";
 const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
-const CODEX_PET_ATLAS_COLUMNS = 8;
-const CODEX_PET_ATLAS_ROWS = 9;
-const CODEX_PET_CELL_WIDTH = 192;
-const CODEX_PET_CELL_HEIGHT = 208;
-type CodexPetMotion = "idle" | "waving" | "running-right" | "running-left";
-const CODEX_PET_MOTION_CONFIG: Record<CodexPetMotion, { row: number; durations: number[] }> = {
-  idle: { row: 0, durations: [280, 110, 110, 140, 140, 320] },
-  "running-right": { row: 1, durations: [120, 120, 120, 120, 120, 120, 120, 220] },
-  "running-left": { row: 2, durations: [120, 120, 120, 120, 120, 120, 120, 220] },
-  waving: { row: 3, durations: [140, 140, 140, 280] },
-};
 const toolbarMenuItemClassName =
   "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const retroTopActionIconClassName =
@@ -139,74 +116,13 @@ function createMaibotWebviewTarget(url: string, targetPath: string): WebviewEntr
   }
 }
 
-function selectedCodexPetOption(snapshot: DesktopSnapshot | null): CodexPetOption | null {
-  if (snapshot?.launcherUiSettings.floatingMascotMode !== "codex-pet") {
-    return null;
-  }
-  const options = snapshot.codexPetSettings.options;
-  return options.find((option) => option.id === snapshot.launcherUiSettings.floatingCodexPetId) ?? options[0] ?? null;
-}
-
-function CodexPetSprite({
-  pet,
-  height,
-  motion = "idle",
-  className,
-}: {
-  pet: CodexPetOption;
-  height: number;
-  motion?: CodexPetMotion;
-  className?: string;
-}): React.JSX.Element {
-  const width = Math.round((height * CODEX_PET_CELL_WIDTH) / CODEX_PET_CELL_HEIGHT);
-  const config = CODEX_PET_MOTION_CONFIG[motion];
-  const [frameIndex, setFrameIndex] = useState(0);
-
-  useEffect(() => {
-    setFrameIndex(0);
-  }, [motion, pet.spritesheetUrl]);
-
-  useEffect(() => {
-    const duration = config.durations[frameIndex] ?? config.durations[0] ?? 140;
-    const timeout = window.setTimeout(() => {
-      setFrameIndex((current) => (current + 1) % config.durations.length);
-    }, duration);
-    return () => window.clearTimeout(timeout);
-  }, [config.durations, frameIndex]);
-
-  return (
-    <span
-      aria-label={pet.displayName}
-      className={cn("codex-pet-sprite block shrink-0 overflow-hidden select-none", className)}
-      role="img"
-      style={{
-        "--codex-pet-frame-width": `${width}px`,
-        width,
-        height,
-      } as CSSProperties}
-    >
-      <img
-        alt=""
-        className="codex-pet-sprite-frame block h-full max-w-none select-none"
-        draggable={false}
-        src={pet.spritesheetUrl}
-        style={{
-          width: width * CODEX_PET_ATLAS_COLUMNS,
-          height: height * CODEX_PET_ATLAS_ROWS,
-          transform: `translate(${-frameIndex * width}px, ${-config.row * height}px)`,
-        }}
-      />
-    </span>
-  );
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function syncWindowShadow(state: WindowState): void {
   document.documentElement.dataset.windowShadow =
-    state.isMaximized || state.isFullScreen || state.isMiniMode || state.isFloating ? "false" : "true";
+    state.isMaximized || state.isFullScreen || state.isMiniMode ? "false" : "true";
 }
 
 const resizeHandles: Array<{ edge: WindowResizeEdge; className: string }> = [
@@ -525,502 +441,6 @@ function MaiBotWebuiStatusPanel({
   );
 }
 
-function FloatingShell({
-  appVersion,
-  edge,
-  maibotService,
-  codexPet,
-  onRestore,
-  onWindowState,
-  useNativeGlass,
-  webuiChatIdentity,
-}: {
-  appVersion: string;
-  edge: "left" | "right" | null;
-  maibotService: ServiceDescriptor | undefined;
-  codexPet: CodexPetOption | null;
-  onRestore: () => void;
-  onWindowState: (state: WindowState) => void;
-  useNativeGlass: boolean;
-  webuiChatIdentity: { userId?: string; userName?: string };
-}): React.JSX.Element {
-  const dragRef = useRef<{
-    offsetX: number;
-    offsetY: number;
-    startScreenX: number;
-    startScreenY: number;
-    lastScreenX: number;
-    moved: boolean;
-    pointerId: number;
-  } | null>(null);
-  const dragRequestPendingRef = useRef(false);
-  const dragPointRef = useRef<{
-    clientX: number;
-    clientY: number;
-  } | null>(null);
-  const dragFrameRef = useRef<number | null>(null);
-  const suppressNextClickRef = useRef(false);
-  const [petMotion, setPetMotion] = useState<CodexPetMotion>("idle");
-  const [bubbleOpen, setBubbleOpen] = useState(false);
-  const [bubbleDraft, setBubbleDraft] = useState("");
-  const [bubbleMessages, setBubbleMessages] = useState<LocalChatMessageEvent[]>([]);
-  const [bubbleState, setBubbleState] = useState<LocalChatConnectionState>("idle");
-  const [bubbleError, setBubbleError] = useState<string | null>(null);
-  const [bubbleSending, setBubbleSending] = useState(false);
-  const bubbleChatRequest = useMemo(() => ({
-    client: {
-      type: "floating" as const,
-      name: "MaiBot OneKey",
-      version: appVersion,
-    },
-    sessionId: WEBUI_CHAT_SESSION_ID,
-    userId: webuiChatIdentity.userId,
-    userName: webuiChatIdentity.userName,
-  }), [appVersion, webuiChatIdentity.userId, webuiChatIdentity.userName]);
-
-  const updateFloatingState = useCallback((state?: WindowState) => {
-    if (state) {
-      onWindowState(state);
-    }
-  }, [onWindowState]);
-
-  useEffect(() => {
-    const glassCollapsed = useNativeGlass && !bubbleOpen;
-    document.documentElement.dataset.floatingGlassCollapsed = glassCollapsed ? "true" : "false";
-    document.documentElement.dataset.floatingBubbleOpen = bubbleOpen ? "true" : "false";
-    void window.maibotDesktop?.window.setFloatingGlassEffect(glassCollapsed);
-    return () => {
-      document.documentElement.dataset.floatingGlassCollapsed = "false";
-      document.documentElement.dataset.floatingBubbleOpen = "false";
-      void window.maibotDesktop?.window.setFloatingGlassEffect(false);
-    };
-  }, [bubbleOpen, useNativeGlass]);
-
-  useEffect(() => {
-    void window.maibotDesktop?.window.setFloatingBubbleExpanded(bubbleOpen);
-    return () => {
-      void window.maibotDesktop?.window.setFloatingBubbleExpanded(false);
-    };
-  }, [bubbleOpen]);
-
-  useEffect(() => {
-    if (!bubbleOpen) {
-      return undefined;
-    }
-    if (maibotService?.status !== "running") {
-      setBubbleState("idle");
-      setBubbleError(maibotService?.status === "starting" ? "MaiBot Core 正在启动" : "请先启动 MaiBot Core");
-      return undefined;
-    }
-    const bridge = window.maibotDesktop?.localChat;
-    const unsubscribe = bridge?.onEvent((event: LocalChatEvent) => {
-      if ("type" in event) {
-        if (event.sessionId && event.sessionId !== bubbleChatRequest.sessionId) {
-          return;
-        }
-        setBubbleState(event.state);
-        if (event.state === "connected") {
-          setBubbleError(null);
-        }
-        return;
-      }
-      if (event.sessionId && event.sessionId !== bubbleChatRequest.sessionId) {
-        return;
-      }
-      setBubbleSending(false);
-      setBubbleMessages((current) => appendFloatingChatMessage(current, event));
-    });
-
-    setBubbleState("connecting");
-    setBubbleError(null);
-    void bridge?.connect(bubbleChatRequest)
-      .then(async (state) => {
-        setBubbleState(state);
-        if (state !== "connected") {
-          setBubbleError("聊天服务还没准备好");
-          return;
-        }
-        const history = await bridge.listMessages(bubbleChatRequest);
-        setBubbleMessages(history.slice(-6));
-      })
-      .catch((error) => {
-        setBubbleState("error");
-        setBubbleError(localChatErrorMessage(error));
-      });
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [bubbleChatRequest, bubbleOpen, maibotService?.status]);
-
-  const startBubbleMaiBotCore = useCallback(() => {
-    if (!maibotService || maibotService.status === "starting" || maibotService.status === "stopping") {
-      return;
-    }
-    setBubbleError(null);
-    void window.maibotDesktop?.services.start("maibot").catch((error) => {
-      setBubbleError(localChatErrorMessage(error));
-    });
-  }, [maibotService]);
-
-  const suppressNextClickBriefly = useCallback(() => {
-    suppressNextClickRef.current = true;
-    window.setTimeout(() => {
-      suppressNextClickRef.current = false;
-    }, 250);
-  }, []);
-
-  const expandFromClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    if (suppressNextClickRef.current) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    setBubbleOpen((current) => !current);
-  }, []);
-
-  const sendBubbleMessage = useCallback(() => {
-    const content = bubbleDraft.trim();
-    if (!content || bubbleSending || bubbleState !== "connected") {
-      return;
-    }
-    setBubbleDraft("");
-    setBubbleSending(true);
-    setBubbleError(null);
-    void window.maibotDesktop?.localChat
-      .send({ ...bubbleChatRequest, content })
-      .then((sent) => {
-        if (sent) {
-          setBubbleMessages((current) => appendFloatingChatMessage(current, sent));
-        }
-      })
-      .catch((error) => {
-        setBubbleDraft(content);
-        setBubbleError(localChatErrorMessage(error));
-      })
-      .finally(() => setBubbleSending(false));
-  }, [bubbleChatRequest, bubbleDraft, bubbleSending, bubbleState]);
-
-  const handlePetPointerEnter = useCallback(() => {
-    if (!dragRef.current) {
-      setPetMotion("waving");
-    }
-  }, []);
-
-  const handlePetPointerLeave = useCallback(() => {
-    if (!dragRef.current) {
-      setPetMotion("idle");
-    }
-  }, []);
-
-  const settlePetMotion = useCallback((target: HTMLElement) => {
-    setPetMotion(target.matches(":hover") ? "waving" : "idle");
-  }, []);
-
-  const flushDragMove = useCallback(() => {
-    if (dragFrameRef.current !== null) {
-      window.cancelAnimationFrame(dragFrameRef.current);
-      dragFrameRef.current = null;
-    }
-    if (dragRequestPendingRef.current) {
-      return;
-    }
-    const point = dragPointRef.current;
-    if (!point) {
-      return;
-    }
-    dragPointRef.current = null;
-    dragRequestPendingRef.current = true;
-    void window.maibotDesktop?.window
-      .moveFloatingTo(point.clientX, point.clientY)
-      .then(updateFloatingState)
-      .finally(() => {
-        dragRequestPendingRef.current = false;
-        flushDragMove();
-      });
-  }, [updateFloatingState]);
-
-  const scheduleDragMove = useCallback(() => {
-    if (dragFrameRef.current !== null) {
-      return;
-    }
-    dragFrameRef.current = window.requestAnimationFrame(() => {
-      dragFrameRef.current = null;
-      flushDragMove();
-    });
-  }, [flushDragMove]);
-
-  const startDrag = useCallback((event: PointerEvent<HTMLElement>) => {
-    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-    dragRef.current = {
-      offsetX: event.clientX,
-      offsetY: event.clientY,
-      startScreenX: event.screenX,
-      startScreenY: event.screenY,
-      lastScreenX: event.screenX,
-      moved: false,
-      pointerId: event.pointerId,
-    };
-    dragPointRef.current = null;
-    setPetMotion("running-right");
-  }, []);
-
-  const cancelDrag = useCallback((event: PointerEvent<HTMLElement>) => {
-    const current = dragRef.current;
-    if (!current || current.pointerId !== event.pointerId) {
-      return;
-    }
-    dragRef.current = null;
-    dragPointRef.current = null;
-    if (dragFrameRef.current !== null) {
-      window.cancelAnimationFrame(dragFrameRef.current);
-      dragFrameRef.current = null;
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    settlePetMotion(event.currentTarget);
-  }, [settlePetMotion]);
-
-  const drag = useCallback((event: PointerEvent<HTMLElement>) => {
-    const current = dragRef.current;
-    if (!current || current.pointerId !== event.pointerId) {
-      return;
-    }
-    if (event.pointerType === "mouse" && (event.buttons & 1) !== 1) {
-      cancelDrag(event);
-      return;
-    }
-    const movedDistance = Math.hypot(event.screenX - current.startScreenX, event.screenY - current.startScreenY);
-    if (movedDistance < 4) {
-      return;
-    }
-    if (event.screenX === current.startScreenX && event.screenY === current.startScreenY) {
-      return;
-    }
-    current.moved = true;
-    const deltaX = event.screenX - current.lastScreenX;
-    if (deltaX < -1) {
-      setPetMotion("running-left");
-    } else if (deltaX > 1) {
-      setPetMotion("running-right");
-    }
-    current.lastScreenX = event.screenX;
-    dragPointRef.current = {
-      clientX: current.offsetX,
-      clientY: current.offsetY,
-    };
-    scheduleDragMove();
-  }, [cancelDrag, scheduleDragMove]);
-
-  const finishDrag = useCallback((event: PointerEvent<HTMLElement>) => {
-    const current = dragRef.current;
-    if (!current || current.pointerId !== event.pointerId) {
-      return;
-    }
-    dragRef.current = null;
-    dragPointRef.current = null;
-    if (dragFrameRef.current !== null) {
-      window.cancelAnimationFrame(dragFrameRef.current);
-      dragFrameRef.current = null;
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    if (current.moved) {
-      suppressNextClickBriefly();
-      void window.maibotDesktop?.window.finishFloatingDrag().then(updateFloatingState);
-    }
-    settlePetMotion(event.currentTarget);
-  }, [settlePetMotion, suppressNextClickBriefly, updateFloatingState]);
-
-  if (edge) {
-    return (
-      <div
-        className={cn(
-          "flex h-screen cursor-grab select-none items-center justify-center bg-transparent active:cursor-grabbing",
-          edge === "left" ? "pl-0.5" : "pr-0.5",
-        )}
-        data-floating-shell="true"
-        onClick={expandFromClick}
-        onPointerCancel={(event) => finishDrag(event)}
-        onPointerDown={startDrag}
-        onPointerEnter={handlePetPointerEnter}
-        onPointerLeave={handlePetPointerLeave}
-        onPointerMove={drag}
-        onPointerUp={(event) => finishDrag(event)}
-        title="拖动悬浮条，点击展开"
-      >
-        <div
-          className="floating-collapsed-surface grid h-24 w-6 place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl"
-        >
-          {codexPet ? (
-            <CodexPetSprite className="max-w-none" height={56} motion={petMotion} pet={codexPet} />
-          ) : (
-            <img
-              alt=""
-              className="h-14 max-w-none select-none object-cover"
-              draggable={false}
-              src={maiMascotImage}
-            />
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        "floating-collapsed-root h-screen bg-transparent",
-        bubbleOpen ? "relative" : useNativeGlass ? "grid place-items-start" : "grid place-items-center",
-      )}
-      data-floating-shell="true"
-    >
-      {bubbleOpen ? (
-        <div className="floating-pet-chat absolute inset-0 bg-transparent">
-          <div className="absolute bottom-[94px] right-[70px] flex w-[254px] flex-col items-end gap-1.5">
-            {bubbleError ? (
-              <div className="floating-chat-bubble floating-chat-bubble-bot text-destructive">
-                <div>{bubbleError}</div>
-                {maibotService && maibotService.status !== "running" && maibotService.status !== "stopping" ? (
-                  <button
-                    className="mt-1 text-[11px] font-semibold underline underline-offset-2"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      startBubbleMaiBotCore();
-                    }}
-                    type="button"
-                  >
-                    启动 MaiBot Core
-                  </button>
-                ) : null}
-              </div>
-            ) : bubbleMessages.length > 0 ? (
-              bubbleMessages.slice(-3).map((message) => (
-                <div
-                  className={cn(
-                    "floating-chat-bubble",
-                    message.role === "user" ? "floating-chat-bubble-user" : "floating-chat-bubble-bot",
-                  )}
-                  key={message.id}
-                >
-                  {message.content || (message.role === "bot" ? "……" : "")}
-                </div>
-              ))
-            ) : (
-              <div className="floating-chat-bubble floating-chat-bubble-bot">
-                {bubbleState === "connecting" ? "正在连接聊天服务……" : "直接和麦麦说话。"}
-              </div>
-            )}
-            {bubbleSending ? (
-              <div className="floating-chat-bubble floating-chat-bubble-bot">麦麦正在想……</div>
-            ) : null}
-          </div>
-          <div className="absolute bottom-2 left-2 w-[252px]">
-            <form
-              className="floating-pet-chat-input flex items-center gap-1.5 rounded-full px-2 py-1.5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                sendBubbleMessage();
-              }}
-            >
-              <button
-                aria-label="返回启动器"
-                className="grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-background/45 hover:text-foreground"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setBubbleOpen(false);
-                  onRestore();
-                }}
-                title="返回启动器"
-                type="button"
-              >
-                <Home className="size-3.5" />
-              </button>
-              <input
-                className="h-7 min-w-0 flex-1 bg-transparent px-1 text-xs outline-none placeholder:text-muted-foreground"
-                onChange={(event) => setBubbleDraft(event.target.value)}
-                placeholder={bubbleState === "connected" ? "直接输入..." : maibotService?.status === "running" ? "等待聊天服务" : "先启动 MaiBot Core"}
-                value={bubbleDraft}
-              />
-              <Button className="h-7 rounded-full px-2 text-xs" disabled={!bubbleDraft.trim() || bubbleSending || bubbleState !== "connected"} size="sm" type="submit">
-                发送
-              </Button>
-            </form>
-          </div>
-          <button
-            className="absolute bottom-2 right-2 grid size-20 cursor-grab place-items-center border-0 bg-transparent p-0 active:cursor-grabbing"
-            data-app-region="no-drag"
-            onClick={expandFromClick}
-            onPointerCancel={(event) => finishDrag(event)}
-            onPointerDown={startDrag}
-            onPointerEnter={handlePetPointerEnter}
-            onPointerLeave={handlePetPointerLeave}
-            onPointerMove={drag}
-            onPointerUp={(event) => finishDrag(event)}
-            title="收起气泡"
-            type="button"
-          >
-            {codexPet ? (
-              <CodexPetSprite className="drop-shadow-xl" height={78} motion={petMotion} pet={codexPet} />
-            ) : (
-              <img alt="" className="w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
-            )}
-          </button>
-        </div>
-      ) : (
-        <button
-          className={cn(
-            useNativeGlass
-              ? "floating-glass-stack relative h-[86px] w-20 cursor-grab appearance-none rounded-none border-0 bg-transparent p-0 shadow-none outline-none active:cursor-grabbing"
-              : "floating-collapsed-surface relative grid size-20 cursor-grab place-items-center overflow-hidden rounded-full border border-primary/30 bg-card shadow-xl active:cursor-grabbing",
-          )}
-          data-app-region="no-drag"
-          onClick={expandFromClick}
-          onPointerCancel={(event) => finishDrag(event)}
-          onPointerDown={startDrag}
-          onPointerEnter={handlePetPointerEnter}
-          onPointerLeave={handlePetPointerLeave}
-          onPointerMove={drag}
-          onPointerUp={(event) => finishDrag(event)}
-          title="打开悬浮菜单"
-          type="button"
-        >
-          {useNativeGlass ? (
-            <>
-              <span className="floating-glass-pane grid h-20 w-20 place-items-center overflow-hidden">
-                {codexPet ? (
-                  <CodexPetSprite className="relative mt-1 drop-shadow-xl" height={78} motion={petMotion} pet={codexPet} />
-                ) : (
-                  <img alt="" className="relative mt-3 w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
-                )}
-              </span>
-              <span className="floating-glass-bars" aria-hidden="true" />
-            </>
-          ) : (
-            <>
-              <span className="floating-collapsed-glow absolute inset-x-3 bottom-1 h-7 rounded-full bg-primary/20 blur-md" />
-              {codexPet ? (
-                <CodexPetSprite className="relative mt-1 drop-shadow-xl" height={78} motion={petMotion} pet={codexPet} />
-              ) : (
-                <img alt="" className="relative mt-3 w-20 select-none drop-shadow-xl" draggable={false} src={maiMascotImage} />
-              )}
-            </>
-          )}
-        </button>
-      )}
-    </div>
-  );
-}
-
 const RETRO_TAB_ITEM_SELECTOR = "[data-retro-tab-item='true']";
 
 function retroTabItemForValue(list: HTMLElement, value: string): HTMLElement | null {
@@ -1058,17 +478,6 @@ function syncRetroTabDividers(list: HTMLElement | null): void {
   list.style.setProperty("--retro-tab-divider-background", layers.join(", "));
 }
 
-function appendFloatingChatMessage(
-  messages: LocalChatMessageEvent[],
-  message: LocalChatMessageEvent,
-): LocalChatMessageEvent[] {
-  const existingIndex = messages.findIndex((item) => item.id === message.id);
-  if (existingIndex >= 0) {
-    return messages.map((item, index) => (index === existingIndex ? { ...item, ...message } : item)).slice(-6);
-  }
-  return [...messages, message].slice(-6);
-}
-
 function moveRetroTabIndicator(list: HTMLElement | null, item: HTMLElement | null): void {
   if (!list || !item) {
     list?.style.setProperty("--retro-tab-indicator-opacity", "0");
@@ -1091,10 +500,6 @@ export function DesktopShell(): React.JSX.Element {
   const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
   const [maibotCoreHost, setMaibotCoreHost] = useState<HTMLDivElement | null>(null);
   const [maibotUpdateHost, setMaibotUpdateHost] = useState<HTMLDivElement | null>(null);
-  const [webuiChatIdentity, setWebuiChatIdentity] = useState<{ userId?: string; userName?: string }>(() => ({
-    userId: window.localStorage.getItem(WEBUI_CHAT_USER_ID_STORAGE_KEY) ?? undefined,
-    userName: window.localStorage.getItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY) ?? undefined,
-  }));
   const [maibotWebviewPath, setMaibotWebviewPath] = useState<string | null>("/");
   const [maibotWebviewNavigationRequest, setMaibotWebviewNavigationRequest] = useState(0);
   const reloadStartupWebui = useCallback(() => {
@@ -1104,30 +509,9 @@ export function DesktopShell(): React.JSX.Element {
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [floatingMode, setFloatingMode] = useState(false);
-  const [floatingEdge, setFloatingEdge] = useState<"left" | "right" | null>(null);
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const useRetroChrome = usesRetroStructure(appearance.mode);
-
-  const rememberWebuiIdentity = useCallback((identity: { userId?: string; userName?: string }) => {
-    if (!identity.userId && !identity.userName) {
-      return;
-    }
-    setWebuiChatIdentity((current) => {
-      const next = {
-        userId: identity.userId ?? current.userId,
-        userName: identity.userName ?? current.userName,
-      };
-      if (next.userId) {
-        window.localStorage.setItem(WEBUI_CHAT_USER_ID_STORAGE_KEY, next.userId);
-      }
-      if (next.userName) {
-        window.localStorage.setItem(WEBUI_CHAT_USER_NAME_STORAGE_KEY, next.userName);
-      }
-      return next;
-    });
-  }, []);
 
   const refreshSnapshot = useCallback(async () => {
     const next = await getDesktopSnapshot();
@@ -1164,16 +548,10 @@ export function DesktopShell(): React.JSX.Element {
     window.maibotDesktop?.window.getState().then((state) => {
       if (mounted) {
         syncWindowShadow(state);
-        setFloatingMode(state.isFloating === true);
-        setFloatingEdge(state.floatingEdge ?? null);
       }
     });
     const offWindowState = window.maibotDesktop?.window.onState((state) => {
       syncWindowShadow(state);
-      if (typeof state.isFloating === "boolean") {
-        setFloatingMode(state.isFloating);
-      }
-      setFloatingEdge(state.floatingEdge ?? null);
     });
 
     return () => {
@@ -1208,7 +586,6 @@ export function DesktopShell(): React.JSX.Element {
   const qqBackendService = serviceById.get("napcat");
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
-  const floatingCodexPet = selectedCodexPetOption(snapshot);
   const messagePlatformConfigured = Boolean(
     snapshot?.initState.messagePlatformConfigured,
   );
@@ -1267,8 +644,6 @@ export function DesktopShell(): React.JSX.Element {
   useEffect(() => window.maibotDesktop?.onQqAccountSetupRequired((backend) => {
     setActionError(null);
     setActiveTab("message-platform");
-    setFloatingMode(false);
-    void window.maibotDesktop?.window.setFloatingMode(false);
     requestMessagePlatformGuide(backend);
   }), []);
 
@@ -1317,28 +692,6 @@ export function DesktopShell(): React.JSX.Element {
       }),
     [runServiceAction],
   );
-  const enterFloatingMode = useCallback(() => {
-    setFloatingEdge(null);
-    void window.maibotDesktop?.window.setFloatingMode(true).then((state) => {
-      setFloatingMode(state.isFloating === true);
-      setFloatingEdge(state.floatingEdge ?? null);
-    });
-  }, []);
-
-  const restoreMainWindow = useCallback(() => {
-    setFloatingEdge(null);
-    void window.maibotDesktop?.window.setFloatingMode(false).then((state) => {
-      setFloatingMode(state.isFloating === true);
-      setFloatingEdge(state.floatingEdge ?? null);
-    });
-  }, []);
-
-  const syncWindowState = useCallback((state: WindowState) => {
-    syncWindowShadow(state);
-    setFloatingMode(state.isFloating === true);
-    setFloatingEdge(state.floatingEdge ?? null);
-  }, []);
-
   const selectTab = useCallback((value: string) => {
     if (value === "maibot") {
       // Returning to the tab must preserve the guest's current document and route.
@@ -1713,24 +1066,6 @@ export function DesktopShell(): React.JSX.Element {
   const onboarding = !snapshot || preparing || agreementPending;
   const preloadMaiBot = preparing && !agreementPending && maibotService?.status === "running" && maibotService.health === "ready";
 
-  if (floatingMode && !onboarding) {
-    return (
-      <TooltipProvider delayDuration={250}>
-        <FloatingShell
-          appVersion={snapshot?.appVersion ?? "0.1.0"}
-          codexPet={floatingCodexPet}
-          edge={floatingEdge}
-          maibotService={maibotService}
-          onRestore={restoreMainWindow}
-          onWindowState={syncWindowState}
-          useNativeGlass={useRetroChrome}
-          webuiChatIdentity={webuiChatIdentity}
-        />
-        <Toaster />
-      </TooltipProvider>
-    );
-  }
-
   return (
     <TooltipProvider delayDuration={250}>
       <WindowResizeHandles />
@@ -1817,7 +1152,6 @@ export function DesktopShell(): React.JSX.Element {
                   coreToolbarTarget={maibotCoreHost}
                   updateToolbarTarget={maibotUpdateHost}
                   active={activeTab === "message-platform"}
-                  onEnterFloatingMode={enterFloatingMode}
                   onOpenPluginConfig={openPluginConfig}
                   onOpenTerminalSession={openTerminalSession}
                   onSnapshot={setSnapshot}
@@ -1848,7 +1182,6 @@ export function DesktopShell(): React.JSX.Element {
                   onLoadStateChange={setMaiBotPageState}
                   animateLoad={!preparing}
                   active={activeTab === "maibot"}
-                  onWebuiIdentity={rememberWebuiIdentity}
                   onMessagePlatformRequest={openMessagePlatformFromWebui}
                   readMaiBotAppearance
                   loadingFallback={maibotWebuiStatusPanel}

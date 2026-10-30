@@ -898,12 +898,6 @@
   background: var(--mil-key-hover);
 }
 
-/* ---------- 悬浮收起态：底部三色条换成这套配色 ---------- */
-
-:root[data-appearance-mode="millennium"] .floating-glass-bars {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='6' viewBox='0 0 80 6' shape-rendering='crispEdges'%3E%3Crect x='0' y='0' width='80' height='2' fill='%238fd6a0'/%3E%3Crect x='0' y='2' width='80' height='2' fill='%23ffd84a'/%3E%3Crect x='0' y='4' width='80' height='2' fill='%23f08a5d'/%3E%3C/svg%3E");
-}
-
 /* ---------- 标题栏图标跟随键面文字色 ---------- */
 
 :root[data-appearance-mode="millennium"] .retro-titlebar-actions [data-variant] svg {

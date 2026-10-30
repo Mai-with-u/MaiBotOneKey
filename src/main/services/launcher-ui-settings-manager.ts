@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
-  FloatingMascotMode,
   LauncherUiSettings,
   RuntimePaths,
   TopStartActionMode,
@@ -52,21 +51,8 @@ export class LauncherUiSettingsManager {
 
 function defaultLauncherUiSettings(): LauncherUiSettings {
   return {
-    floatingMascotMode: "maibot",
     topStartActionMode: "ask",
   };
-}
-
-function normalizeFloatingMascotMode(value: unknown): FloatingMascotMode {
-  return value === "codex-pet" ? "codex-pet" : "maibot";
-}
-
-function normalizeCodexPetId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return /^[A-Za-z0-9._-]{1,80}$/u.test(trimmed) ? trimmed : undefined;
 }
 
 function normalizeTopStartActionMode(value: unknown): TopStartActionMode {
@@ -75,8 +61,6 @@ function normalizeTopStartActionMode(value: unknown): TopStartActionMode {
 
 function normalizeLauncherUiSettings(value: Partial<LauncherUiSettings>): LauncherUiSettings {
   return {
-    floatingMascotMode: normalizeFloatingMascotMode(value.floatingMascotMode),
-    floatingCodexPetId: normalizeCodexPetId(value.floatingCodexPetId),
     topStartActionMode: normalizeTopStartActionMode(value.topStartActionMode),
   };
 }

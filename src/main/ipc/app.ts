@@ -102,7 +102,6 @@ import type {
 import { InitManager } from "../services/init-manager";
 import { readMaiBotDeployment } from "../services/maibot-deployment-state";
 import type { AppIconManager } from "../services/app-icon-manager";
-import type { CodexPetManager } from "../services/codex-pet-manager";
 import { LogStore } from "../services/log-store";
 import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { LauncherUiSettingsManager } from "../services/launcher-ui-settings-manager";
@@ -151,12 +150,6 @@ const REMOVE_RETRY_OPTIONS = {
 const NORMAL_MINIMUM_SIZE = { width: 1000, height: 680 };
 const NORMAL_DEFAULT_SIZE = { width: 1100, height: 720 };
 const NORMAL_RESTORE_MARGIN = 48;
-const FLOATING_BALL_SIZE = { width: 96, height: 96 };
-const FLOATING_GLASS_SIZE = { width: 80, height: 86 };
-const FLOATING_BUBBLE_SIZE = { width: 360, height: 260 };
-const FLOATING_STRIP_SIZE = { width: 28, height: 112 };
-const FLOATING_EDGE_SNAP_DISTANCE = 18;
-const TRANSPARENT_WINDOW_BACKGROUND = "#00000000";
 const WINDOW_RESIZE_EDGES = new Set<WindowResizeEdge>([
   "top",
   "right",
@@ -221,7 +214,6 @@ interface RegisterAppIpcOptions {
   serviceManager: ServiceManager;
   logStore: LogStore;
   appIconManager: AppIconManager;
-  codexPetManager: CodexPetManager;
   applyAppIcon: () => void;
   getMainWindow: () => BrowserWindow | null;
   requestQuit: () => void;
@@ -242,8 +234,6 @@ export interface RegisteredAppIpcDisposables {
 
 function readWindowState(
   window: BrowserWindow | null,
-  isFloating = false,
-  floatingEdgeSide: "left" | "right" | null = null,
   isShellMaximized = false,
 ): WindowState {
   if (!window || window.isDestroyed()) {
@@ -251,9 +241,6 @@ function readWindowState(
       isMaximized: false,
       isFullScreen: false,
       isFocused: false,
-      isFloating,
-      isFloatingCollapsed: Boolean(floatingEdgeSide),
-      floatingEdge: floatingEdgeSide ?? undefined,
     };
   }
 
@@ -261,9 +248,6 @@ function readWindowState(
     isMaximized: isShellMaximized || isWindowVisuallyMaximized(window),
     isFullScreen: window.isFullScreen(),
     isFocused: window.isFocused(),
-    isFloating,
-    isFloatingCollapsed: Boolean(floatingEdgeSide),
-    floatingEdge: floatingEdgeSide ?? undefined,
   };
 }
 
@@ -1258,7 +1242,6 @@ export function registerAppIpc({
   serviceManager,
   logStore,
   appIconManager,
-  codexPetManager,
   applyAppIcon,
   getMainWindow,
   requestQuit,
@@ -1272,14 +1255,9 @@ export function registerAppIpc({
   let remoteModuleVersionsRefreshPromise: Promise<void> | null = null;
   let remoteVersionsInitialized = false;
   let initDependencyRefreshPromise: Promise<void> | null = null;
-  let floatingMode = false;
   let miniMode = false;
   let miniRestoreBounds: Electron.Rectangle | null = null;
   let miniRestoreMaximized = false;
-  let floatingBubbleExpanded = false;
-  let floatingEdgeSide: "left" | "right" | null = null;
-  let floatingGlassEffect = false;
-  let normalBounds: Electron.Rectangle | null = null;
   let shellMaximized = false;
   let shellRestoreBounds: Electron.Rectangle | null = null;
   let resizeState: WindowResizeState | null = null;
@@ -1291,138 +1269,22 @@ export function registerAppIpc({
 
   const readManagedWindowState = (window: BrowserWindow | null): WindowState =>
     ({
-      ...readWindowState(window, floatingMode, floatingEdgeSide, shellMaximized),
+      ...readWindowState(window, shellMaximized),
       isMiniMode: miniMode,
     });
 
   const sendWindowState = (window: BrowserWindow | null): WindowState => {
-    if (window && floatingMode) {
-      ensureFloatingAlwaysOnTop(window);
-    }
     const state = readManagedWindowState(window);
     window?.webContents.send("desktop:window-state", state);
     return state;
   };
 
-  const clampFloatingBounds = (
-    bounds: Electron.Rectangle,
-  ): Electron.Rectangle => {
-    const display = screen.getDisplayMatching(bounds);
-    const workArea = display.workArea;
-    return {
-      x: Math.min(
-        Math.max(bounds.x, workArea.x),
-        workArea.x + workArea.width - bounds.width,
-      ),
-      y: Math.min(
-        Math.max(bounds.y, workArea.y),
-        workArea.y + workArea.height - bounds.height,
-      ),
-      width: bounds.width,
-      height: bounds.height,
-    };
-  };
-
-  const floatingBounds = (
-    window: BrowserWindow,
-    size: { width: number; height: number },
-  ): Electron.Rectangle => {
-    const display = screen.getDisplayMatching(window.getBounds());
-    return {
-      x: Math.round(
-        display.workArea.x + display.workArea.width - size.width - 18,
-      ),
-      y: Math.round(
-        display.workArea.y + display.workArea.height - size.height - 18,
-      ),
-      width: size.width,
-      height: size.height,
-    };
-  };
-
-  const isFloatingGlassCollapsed = (): boolean =>
-    floatingMode &&
-    floatingGlassEffect &&
-    !floatingBubbleExpanded &&
-    !floatingEdgeSide;
-
-  const activeFloatingSize = (): { width: number; height: number } =>
-    floatingEdgeSide
-      ? FLOATING_STRIP_SIZE
-      : floatingBubbleExpanded
-          ? FLOATING_BUBBLE_SIZE
-          : isFloatingGlassCollapsed()
-            ? FLOATING_GLASS_SIZE
-            : FLOATING_BALL_SIZE;
-
-  const withActiveFloatingSize = (
-    bounds: Electron.Rectangle,
-  ): Electron.Rectangle => {
-    const size = activeFloatingSize();
-    return {
-      x: bounds.x,
-      y: bounds.y,
-      width: size.width,
-      height: size.height,
-    };
-  };
-
   const restoreNormalWindowChrome = (window: BrowserWindow): void => {
-    applyFloatingBackgroundMaterial(window, false);
     window.setResizable(false);
     window.setMaximizable(true);
     window.setMinimumSize(
       miniMode ? 1 : NORMAL_MINIMUM_SIZE.width,
       miniMode ? 1 : NORMAL_MINIMUM_SIZE.height,
-    );
-  };
-
-  const applyFloatingBackgroundMaterial = (
-    window: BrowserWindow,
-    enabled: boolean,
-  ): void => {
-    if (process.platform !== "win32" || typeof window.setBackgroundMaterial !== "function") {
-      window.setBackgroundColor(TRANSPARENT_WINDOW_BACKGROUND);
-      return;
-    }
-    try {
-      window.setBackgroundMaterial(enabled ? "acrylic" : "none");
-    } catch {
-      // Older Windows builds can reject acrylic even when Electron exposes the API.
-    } finally {
-      window.setBackgroundColor(TRANSPARENT_WINDOW_BACKGROUND);
-    }
-  };
-
-  const ensureFloatingAlwaysOnTop = (window: BrowserWindow): void => {
-    if (!floatingMode || window.isDestroyed()) {
-      return;
-    }
-    window.setAlwaysOnTop(true, "screen-saver");
-    window.moveTop();
-  };
-
-  const syncFloatingBackgroundMaterial = (window: BrowserWindow): void => {
-    applyFloatingBackgroundMaterial(window, isFloatingGlassCollapsed());
-    ensureFloatingAlwaysOnTop(window);
-  };
-
-  const resizeFloatingToActiveSize = (
-    window: BrowserWindow,
-    animate: boolean,
-  ): void => {
-    const currentBounds = window.getBounds();
-    const size = activeFloatingSize();
-    window.setBounds(
-      clampFloatingBounds({
-        x: Math.round(currentBounds.x + (currentBounds.width - size.width) / 2),
-        y: Math.round(
-          currentBounds.y + (currentBounds.height - size.height) / 2,
-        ),
-        width: size.width,
-        height: size.height,
-      }),
-      animate,
     );
   };
 
@@ -1539,7 +1401,7 @@ export function registerAppIpc({
       return readManagedWindowState(window);
     }
     if (
-      floatingMode || miniMode ||
+      miniMode ||
       isShellWindowMaximized(window) ||
       window.isFullScreen() ||
       !WINDOW_RESIZE_EDGES.has(edge)
@@ -1565,7 +1427,7 @@ export function registerAppIpc({
     }
     if (
       !resizeState ||
-      floatingMode || miniMode ||
+      miniMode ||
       isShellWindowMaximized(window) ||
       window.isFullScreen()
     ) {
@@ -1606,63 +1468,9 @@ export function registerAppIpc({
     return sendWindowState(getMainWindow());
   };
 
-  const applyFloatingMode = (enabled: boolean): WindowState => {
-    const window = getMainWindow();
-    if (!window || window.isDestroyed()) {
-      return readManagedWindowState(window);
-    }
-
-    if (enabled && !floatingMode) {
-      resizeState = null;
-      normalBounds = isShellWindowMaximized(window)
-        ? getShellRestoreBounds(window)
-        : window.getBounds();
-      shellMaximized = false;
-      shellRestoreBounds = null;
-      if (window.isMaximized()) {
-        window.unmaximize();
-      }
-      floatingMode = true;
-      floatingBubbleExpanded = false;
-      floatingEdgeSide = null;
-      window.setMinimumSize(1, 1);
-      window.setResizable(false);
-      ensureFloatingAlwaysOnTop(window);
-      syncFloatingBackgroundMaterial(window);
-      window.setBounds(floatingBounds(window, FLOATING_BALL_SIZE), true);
-      window.show();
-      window.focus();
-      return sendWindowState(window);
-    }
-
-    if (!enabled) {
-      resizeState = null;
-      const shouldRestoreBounds = floatingMode;
-      floatingMode = false;
-      floatingBubbleExpanded = false;
-      floatingEdgeSide = null;
-      syncFloatingBackgroundMaterial(window);
-      window.setAlwaysOnTop(false);
-      restoreNormalWindowChrome(window);
-      if (shouldRestoreBounds) {
-        window.setBounds(
-          normalBounds ?? { x: 80, y: 80, ...NORMAL_DEFAULT_SIZE },
-          true,
-        );
-      }
-      normalBounds = null;
-      window.show();
-      window.focus();
-      return sendWindowState(window);
-    }
-
-    return sendWindowState(window);
-  };
-
   const applyMiniMode = (enabled: boolean): WindowState => {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) return readManagedWindowState(window);
-    if (floatingMode) applyFloatingMode(false);
     if (miniMode === enabled) return sendWindowState(window);
     resizeState = null;
     if (enabled) {
@@ -1684,174 +1492,6 @@ export function registerAppIpc({
       miniRestoreMaximized = false;
     }
     window.show();
-    return sendWindowState(window);
-  };
-
-  const applyFloatingGlassEffect = (enabled: boolean): WindowState => {
-    const window = getMainWindow();
-    if (!window || window.isDestroyed()) {
-      return readManagedWindowState(window);
-    }
-    floatingGlassEffect = enabled;
-    if (floatingMode && !floatingEdgeSide) {
-      resizeFloatingToActiveSize(window, true);
-    }
-    syncFloatingBackgroundMaterial(window);
-    ensureFloatingAlwaysOnTop(window);
-    return sendWindowState(window);
-  };
-
-  const applyFloatingBubbleExpanded = (expanded: boolean): WindowState => {
-    const window = getMainWindow();
-    if (!window || window.isDestroyed()) {
-      return readManagedWindowState(window);
-    }
-    if (!floatingMode) {
-      return sendWindowState(window);
-    }
-    if (floatingBubbleExpanded === expanded) {
-      return sendWindowState(window);
-    }
-    floatingBubbleExpanded = expanded;
-    if (expanded) {
-      floatingEdgeSide = null;
-    }
-    resizeFloatingToActiveSize(window, true);
-    syncFloatingBackgroundMaterial(window);
-    ensureFloatingAlwaysOnTop(window);
-    return sendWindowState(window);
-  };
-
-  const moveFloatingBy = (deltaX: number, deltaY: number): WindowState => {
-    const window = getMainWindow();
-    if (!window || window.isDestroyed()) {
-      return readManagedWindowState(window);
-    }
-    if (!floatingMode) {
-      return sendWindowState(window);
-    }
-
-    const currentBounds = window.getBounds();
-    if (floatingEdgeSide) {
-      const previousEdgeSide = floatingEdgeSide;
-      floatingEdgeSide = null;
-      const nextSize = activeFloatingSize();
-      const undockedBounds = {
-        x:
-          previousEdgeSide === "left"
-            ? currentBounds.x
-            : currentBounds.x + currentBounds.width - nextSize.width,
-        y: currentBounds.y,
-        width: nextSize.width,
-        height: nextSize.height,
-      };
-      window.setBounds(clampFloatingBounds(undockedBounds), false);
-      syncFloatingBackgroundMaterial(window);
-    }
-
-    const bounds = window.getBounds();
-    window.setBounds(
-      clampFloatingBounds({
-        x: bounds.x + Math.round(deltaX),
-        y: bounds.y + Math.round(deltaY),
-        width: activeFloatingSize().width,
-        height: activeFloatingSize().height,
-      }),
-      false,
-    );
-    return sendWindowState(window);
-  };
-
-  const moveFloatingTo = (offsetX: number, offsetY: number): WindowState => {
-    const window = getMainWindow();
-    if (!window || window.isDestroyed()) {
-      return readManagedWindowState(window);
-    }
-    if (!floatingMode) {
-      return sendWindowState(window);
-    }
-
-    const wasEdgeDocked = Boolean(floatingEdgeSide);
-    if (floatingEdgeSide) {
-      floatingEdgeSide = null;
-      const currentBounds = window.getBounds();
-      const nextSize = activeFloatingSize();
-      window.setBounds(
-        clampFloatingBounds({
-          x: currentBounds.x,
-          y: currentBounds.y,
-          width: nextSize.width,
-          height: nextSize.height,
-        }),
-        false,
-      );
-      syncFloatingBackgroundMaterial(window);
-    }
-
-    const size = activeFloatingSize();
-    const cursorPoint = screen.getCursorScreenPoint();
-    const safeOffsetX = wasEdgeDocked
-      ? Math.round(size.width / 2)
-      : Math.min(Math.max(Math.round(offsetX), 0), size.width);
-    const safeOffsetY = wasEdgeDocked
-      ? Math.round(size.height / 2)
-      : Math.min(Math.max(Math.round(offsetY), 0), size.height);
-    window.setBounds(
-      clampFloatingBounds({
-        x: Math.round(cursorPoint.x) - safeOffsetX,
-        y: Math.round(cursorPoint.y) - safeOffsetY,
-        width: size.width,
-        height: size.height,
-      }),
-      false,
-    );
-    return sendWindowState(window);
-  };
-
-  const finishFloatingDrag = (): WindowState => {
-    const window = getMainWindow();
-    if (!window || window.isDestroyed()) {
-      return readManagedWindowState(window);
-    }
-    if (!floatingMode) {
-      return sendWindowState(window);
-    }
-
-    const currentBounds = withActiveFloatingSize(window.getBounds());
-    const display = screen.getDisplayMatching(currentBounds);
-    const workArea = display.workArea;
-    const isNearLeft =
-      currentBounds.x <= workArea.x + FLOATING_EDGE_SNAP_DISTANCE;
-    const isNearRight =
-      currentBounds.x + currentBounds.width >=
-      workArea.x + workArea.width - FLOATING_EDGE_SNAP_DISTANCE;
-
-    if (isNearLeft || isNearRight) {
-      floatingEdgeSide = isNearLeft ? "left" : "right";
-      const x =
-        floatingEdgeSide === "left"
-          ? workArea.x
-          : workArea.x + workArea.width - FLOATING_STRIP_SIZE.width;
-      window.setBounds(
-        clampFloatingBounds({
-          x,
-          y: currentBounds.y,
-          width: FLOATING_STRIP_SIZE.width,
-          height: FLOATING_STRIP_SIZE.height,
-        }),
-        true,
-      );
-      syncFloatingBackgroundMaterial(window);
-      return sendWindowState(window);
-    }
-
-    floatingEdgeSide = null;
-    window.setBounds(
-      clampFloatingBounds(withActiveFloatingSize(currentBounds)),
-      true,
-    );
-    syncFloatingBackgroundMaterial(window);
-    ensureFloatingAlwaysOnTop(window);
     return sendWindowState(window);
   };
 
@@ -2012,7 +1652,6 @@ export function registerAppIpc({
     serviceStartupSettings: readStartupSettings(),
     launcherUiSettings: launcherUiSettingsManager.getSettings(),
     appIconSettings: appIconManager.getSettings(),
-    codexPetSettings: await codexPetManager.getSettings(),
     networkProxySettings: networkProxyManager.getSettings(),
     appVersion: app.getVersion(),
     appLatestTag: remoteAppVersionCache.appLatestTag,
@@ -3384,39 +3023,6 @@ export function registerAppIpc({
   ipcMain.handle(
     "desktop:window:setMiniMode",
     (_event, enabled: boolean): WindowState => applyMiniMode(enabled === true),
-  );
-
-  ipcMain.handle(
-    "desktop:window:setFloatingMode",
-    (_event, enabled: boolean): WindowState => applyFloatingMode(enabled),
-  );
-
-  ipcMain.handle(
-    "desktop:window:setFloatingGlassEffect",
-    (_event, enabled: boolean): WindowState =>
-      applyFloatingGlassEffect(enabled),
-  );
-
-  ipcMain.handle(
-    "desktop:window:setFloatingBubbleExpanded",
-    (_event, expanded: boolean): WindowState =>
-      applyFloatingBubbleExpanded(expanded),
-  );
-
-  ipcMain.handle(
-    "desktop:window:moveFloatingBy",
-    (_event, deltaX: number, deltaY: number): WindowState =>
-      moveFloatingBy(deltaX, deltaY),
-  );
-  ipcMain.handle(
-    "desktop:window:moveFloatingTo",
-    (_event, offsetX: number, offsetY: number): WindowState =>
-      moveFloatingTo(offsetX, offsetY),
-  );
-
-  ipcMain.handle(
-    "desktop:window:finishFloatingDrag",
-    (): WindowState => finishFloatingDrag(),
   );
 
   ipcMain.handle(

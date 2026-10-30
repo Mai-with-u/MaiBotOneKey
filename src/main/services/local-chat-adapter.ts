@@ -91,7 +91,7 @@ function normalizeClientInfo(value: unknown): LocalChatClientInfo {
   const raw = asRecord(value);
   const type = asString(raw?.type);
   const normalizedType =
-    type === "webui" || type === "floating" || type === "launcher"
+    type === "webui" || type === "launcher"
       ? type
       : "launcher";
   return {

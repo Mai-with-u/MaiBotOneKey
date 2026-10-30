@@ -30,7 +30,7 @@ import {
   Trash2,
   Wrench,
 } from "lucide-react";
-import type { ComponentProps, CSSProperties } from "react";
+import type { ComponentProps } from "react";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
@@ -42,7 +42,6 @@ import type {
   InitCheckStatus,
   LogEntry,
   MaiBotDataResetResult,
-  LauncherUiSettings,
   NetworkProxySettings,
   ServiceCommandConfig,
   ServiceCommandUpdate,
@@ -67,7 +66,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import maiMascotImage from "@/assets/mai2.png";
 import {
   CLOSE_PREFERENCE_CHANGE_EVENT,
   getClosePreference,
@@ -323,46 +321,12 @@ const defaultNetworkProxySettings: NetworkProxySettings = {
   port: 7890,
 };
 
-const defaultLauncherUiSettings: LauncherUiSettings = {
-  floatingMascotMode: "maibot",
-  topStartActionMode: "ask",
-};
-const CODEX_PET_PREVIEW_COLUMNS = 8;
-const CODEX_PET_PREVIEW_ROWS = 9;
-const CODEX_PET_PREVIEW_WIDTH = 38;
-const CODEX_PET_PREVIEW_HEIGHT = 42;
 
 const STARTUP_WIZARD_STORAGE_KEY = "maibot-startup-wizard-seen";
 const DEVELOPER_MODE_STORAGE_KEY = "maibot-developer-mode-enabled";
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function CodexPetPreview({ url, label }: { url: string; label: string }): React.JSX.Element {
-  return (
-    <span
-      aria-label={label}
-      className="codex-pet-sprite block shrink-0 overflow-hidden"
-      role="img"
-      style={{
-        "--codex-pet-frame-width": `${CODEX_PET_PREVIEW_WIDTH}px`,
-        width: CODEX_PET_PREVIEW_WIDTH,
-        height: CODEX_PET_PREVIEW_HEIGHT,
-      } as CSSProperties}
-    >
-      <img
-        alt=""
-        className="codex-pet-sprite-frame block h-full max-w-none select-none"
-        draggable={false}
-        src={url}
-        style={{
-          width: CODEX_PET_PREVIEW_WIDTH * CODEX_PET_PREVIEW_COLUMNS,
-          height: CODEX_PET_PREVIEW_HEIGHT * CODEX_PET_PREVIEW_ROWS,
-        }}
-      />
-    </span>
-  );
 }
 
 function formatTime(timestamp?: number): string {
@@ -762,11 +726,7 @@ export function SettingsStatusPanel({
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs;
   const terminalSettings = snapshot.terminalSettings ?? { useEmbeddedTerminal: true, fontSize: 12 };
   const serviceStartupSettings = snapshot.serviceStartupSettings ?? { useLocalDashboard: false };
-  const launcherUiSettings = { ...defaultLauncherUiSettings, ...snapshot.launcherUiSettings };
   const appIconSettings = snapshot.appIconSettings ?? { selectedIconId: "sprout" as AppIconId, options: [] };
-  const codexPetOptions = snapshot.codexPetSettings?.options ?? [];
-  const selectedCodexPet =
-    codexPetOptions.find((option) => option.id === launcherUiSettings.floatingCodexPetId) ?? codexPetOptions[0];
   const networkProxySettings = snapshot.networkProxySettings ?? defaultNetworkProxySettings;
   const [networkProxyDraft, setNetworkProxyDraft] = useState<NetworkProxySettings>(networkProxySettings);
   const [sourceSettings, setSourceSettings] = useState<SourceSettings | null>(null);
@@ -1101,26 +1061,6 @@ export function SettingsStatusPanel({
   const updateSourceGroup = useCallback((group: SourceSettingsGroup, entries: ManagedSourceEntry[]) => {
     setSourceSettingsDraft((current) => current ? { ...current, [group]: entries } : current);
   }, []);
-
-  const saveLauncherUiSettings = useCallback(
-    async (settings: LauncherUiSettings) => {
-      setBusy("launcher-ui-settings");
-      setError(null);
-      try {
-        const nextLauncherUiSettings = await window.maibotDesktop?.launcher.saveUiSettings(settings);
-        if (nextLauncherUiSettings) {
-          onSnapshot({ ...snapshot, launcherUiSettings: nextLauncherUiSettings });
-          toast.success("界面设置已保存");
-        }
-        await refreshSnapshot();
-      } catch (nextError) {
-        setError(messageFromError(nextError));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [onSnapshot, refreshSnapshot, snapshot],
-  );
 
   const selectAppIcon = useCallback(
     async (iconId: AppIconId) => {
@@ -1613,121 +1553,7 @@ export function SettingsStatusPanel({
                   </RadioGroup>
                 </SettingsSection>
 
-                <SettingsSection className="grid gap-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
-                        <ImageIcon className="size-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">悬浮球形象</p>
-                        <p className="text-xs text-muted-foreground">
-                          {launcherUiSettings.floatingMascotMode === "codex-pet" && selectedCodexPet
-                            ? `悬浮球收起时展示 Codex 桌宠：${selectedCodexPet.displayName}`
-                            : "悬浮球收起时展示启动器默认麦麦头像。"}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge variant={launcherUiSettings.floatingMascotMode === "codex-pet" ? "success" : "secondary"}>
-                      {launcherUiSettings.floatingMascotMode === "codex-pet" ? "Codex 桌宠" : "默认头像"}
-                    </Badge>
-                  </div>
 
-                  <RadioGroup
-                    className="settings-option-list grid gap-0 md:grid-cols-2"
-                    disabled={busy !== null}
-                    onValueChange={(value) =>
-                      void saveLauncherUiSettings({
-                        ...launcherUiSettings,
-                        floatingMascotMode: value === "codex-pet" ? "codex-pet" : "maibot",
-                        floatingCodexPetId: selectedCodexPet?.id,
-                      })
-                    }
-                    value={launcherUiSettings.floatingMascotMode}
-                  >
-                    <label
-                      className={cn(
-                        "settings-choice flex min-w-0 cursor-pointer items-center gap-3 p-3 transition-colors",
-                        launcherUiSettings.floatingMascotMode === "maibot"
-                          ? "settings-choice-selected bg-primary/10 text-foreground"
-                          : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                        busy !== null && "cursor-not-allowed opacity-70",
-                      )}
-                    >
-                      <span className="grid size-12 shrink-0 place-items-center rounded-md border border-border bg-background">
-                        <img alt="" className="size-10 object-contain" draggable={false} src={maiMascotImage} />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium">默认麦麦头像</span>
-                        <span className="mt-1 block text-xs leading-relaxed">沿用当前悬浮球外观。</span>
-                      </span>
-                      <RadioGroupItem disabled={busy !== null} value="maibot" />
-                    </label>
-                    <label
-                      className={cn(
-                        "settings-choice flex min-w-0 cursor-pointer items-center gap-3 p-3 transition-colors",
-                        launcherUiSettings.floatingMascotMode === "codex-pet"
-                          ? "settings-choice-selected bg-primary/10 text-foreground"
-                          : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                        (busy !== null || codexPetOptions.length === 0) && "cursor-not-allowed opacity-70",
-                      )}
-                    >
-                      <span className="grid size-12 shrink-0 place-items-center rounded-md border border-border bg-background">
-                        {selectedCodexPet ? (
-                          <CodexPetPreview label={selectedCodexPet.displayName} url={selectedCodexPet.spritesheetUrl} />
-                        ) : (
-                          <ImageIcon className="size-5 text-muted-foreground" />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium">Codex 桌宠</span>
-                        <span className="mt-1 block text-xs leading-relaxed">
-                          {selectedCodexPet ? selectedCodexPet.displayName : "未在 Codex pets 目录发现可用桌宠。"}
-                        </span>
-                      </span>
-                      <RadioGroupItem disabled={busy !== null || codexPetOptions.length === 0} value="codex-pet" />
-                    </label>
-                  </RadioGroup>
-
-                  {codexPetOptions.length > 0 ? (
-                    <RadioGroup
-                      className="settings-option-list grid gap-0 md:grid-cols-2"
-                      disabled={busy !== null || launcherUiSettings.floatingMascotMode !== "codex-pet"}
-                      onValueChange={(value) =>
-                        void saveLauncherUiSettings({
-                          ...launcherUiSettings,
-                          floatingMascotMode: "codex-pet",
-                          floatingCodexPetId: value,
-                        })
-                      }
-                      value={selectedCodexPet?.id}
-                    >
-                      {codexPetOptions.map((option) => (
-                        <label
-                          className={cn(
-                            "settings-choice flex min-w-0 cursor-pointer items-center gap-3 p-3 transition-colors",
-                            selectedCodexPet?.id === option.id && launcherUiSettings.floatingMascotMode === "codex-pet"
-                              ? "settings-choice-selected bg-primary/10 text-foreground"
-                              : "bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                            (busy !== null || launcherUiSettings.floatingMascotMode !== "codex-pet") && "cursor-not-allowed opacity-70",
-                          )}
-                          key={option.id}
-                        >
-                          <span className="grid size-12 shrink-0 place-items-center rounded-md border border-border bg-background">
-                            <CodexPetPreview label={option.displayName} url={option.spritesheetUrl} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-sm font-medium">{option.displayName}</span>
-                            <span className="mt-1 line-clamp-2 block text-xs leading-relaxed">
-                              {option.description ?? option.id}
-                            </span>
-                          </span>
-                          <RadioGroupItem disabled={busy !== null || launcherUiSettings.floatingMascotMode !== "codex-pet"} value={option.id} />
-                        </label>
-                      ))}
-                    </RadioGroup>
-                  ) : null}
-                </SettingsSection>
 
                 <div className="settings-pair-grid">
                 <SettingsSection className="grid gap-3">

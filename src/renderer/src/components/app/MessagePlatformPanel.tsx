@@ -677,12 +677,10 @@ function alphaBoundsForImage(src: string): Promise<ImageAlphaBounds> {
 }
 
 function ElasticMascot({
-  onLongPress,
   onSecretTap,
   placement = "fixed",
   className,
 }: {
-  onLongPress: () => void;
   onSecretTap: () => void;
   placement?: "fixed" | "retro-column";
   className?: string;
@@ -705,8 +703,6 @@ function ElasticMascot({
     vq: 0,
   });
   const pointerRef = useRef({ x: 0, y: 0, t: 0 });
-  const longPressTimerRef = useRef<number | null>(null);
-  const longPressTriggeredRef = useRef(false);
   const [pose, setPose] = useState({
     x: 0,
     y: 0,
@@ -936,24 +932,12 @@ function ElasticMascot({
     kick(-5, -4, 1.2);
   }, [kick]);
 
-  const clearLongPress = useCallback(() => {
-    if (longPressTimerRef.current !== null) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  }, []);
-
   const onPointerLeave = useCallback(() => {
-    clearLongPress();
     pointerRef.current.t = 0;
     kick(4, 2, 0.8);
-  }, [clearLongPress, kick]);
+  }, [kick]);
 
   const onClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (longPressTriggeredRef.current) {
-      longPressTriggeredRef.current = false;
-      return;
-    }
     spawnDrop(event.clientX);
     kick((Math.random() - 0.5) * 8, -7, 1.1);
     onSecretTap();
@@ -968,19 +952,6 @@ function ElasticMascot({
     kick((Math.random() - 0.5) * 8, -7, 1.1);
     onSecretTap();
   }, [kick, onSecretTap, spawnDrop]);
-
-  const onPointerDown = useCallback(() => {
-    clearLongPress();
-    longPressTriggeredRef.current = false;
-    longPressTimerRef.current = window.setTimeout(() => {
-      longPressTriggeredRef.current = true;
-      onLongPress();
-    }, 650);
-  }, [clearLongPress, onLongPress]);
-
-  const onPointerUp = useCallback(() => {
-    clearLongPress();
-  }, [clearLongPress]);
 
   const stretch = Math.max(-0.1, Math.min(0.16, pose.stretch));
   const squash = Math.max(-0.12, Math.min(0.12, pose.squash));
@@ -1004,12 +975,9 @@ function ElasticMascot({
       data-mascot-stage="true"
       onClick={onClick}
       onKeyDown={onKeyDown}
-      onPointerCancel={onPointerUp}
-      onPointerDown={onPointerDown}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
       onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
       ref={stageRef}
       role="button"
       style={placement === "fixed"
@@ -1066,7 +1034,6 @@ export function MessagePlatformPanel({
   onSnapshot,
   onOpenPluginConfig,
   onOpenTerminalSession,
-  onEnterFloatingMode,
   onStartService,
   onStopService,
   serviceActionBusy,
@@ -1078,7 +1045,6 @@ export function MessagePlatformPanel({
   onSnapshot: (snapshot: DesktopSnapshot) => void;
   onOpenPluginConfig: (pluginId: string) => void;
   onOpenTerminalSession: (sessionId: string) => void;
-  onEnterFloatingMode: () => void;
   onStartService: (id: ServiceId) => void;
   onStopService: (id: ServiceId) => void;
   serviceActionBusy: string | null;
@@ -1862,13 +1828,12 @@ export function MessagePlatformPanel({
           <div className="absolute bottom-6 right-6 h-24 w-[104px]">
             <ElasticMascot
               className="!h-24 !w-[104px]"
-              onLongPress={onEnterFloatingMode}
               onSecretTap={handleMascotSecretTap}
               placement="retro-column"
             />
           </div>
         ) : (
-          <ElasticMascot onLongPress={onEnterFloatingMode} onSecretTap={handleMascotSecretTap} />
+          <ElasticMascot onSecretTap={handleMascotSecretTap} />
         )}
       </div>
       <Dialog open={mascotIntroOpen} onOpenChange={setMascotIntroOpen}>

@@ -108,7 +108,6 @@ export function createPreviewSnapshot(): DesktopSnapshot {
     useLocalDashboard: false,
   },
   launcherUiSettings: {
-    floatingMascotMode: "maibot",
     topStartActionMode: "ask",
   },
   appIconSettings: {
@@ -130,9 +129,6 @@ export function createPreviewSnapshot(): DesktopSnapshot {
         description: "使用更近景、更圆润的橙团小芽头像。",
       },
     ],
-  },
-  codexPetSettings: {
-    options: [],
   },
   networkProxySettings: {
     enabled: false,

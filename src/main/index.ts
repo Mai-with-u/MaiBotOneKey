@@ -23,10 +23,6 @@ import { InitManager } from "./services/init-manager";
 import { acquireInstallInstanceLock } from "./services/instance-lock";
 import { AppIconManager } from "./services/app-icon-manager";
 import {
-  CODEX_PET_ASSET_SCHEME,
-  CodexPetManager,
-} from "./services/codex-pet-manager";
-import {
   cleanupLauncherUpdateDownloads,
   type LauncherUpdateCleanupResult,
 } from "./services/launcher-update-cleanup";
@@ -140,7 +136,6 @@ const serviceManager = new ServiceManager(
   runtimeOperationLock,
 );
 const appIconManager = new AppIconManager(runtimePaths, app.isPackaged);
-const codexPetManager = new CodexPetManager();
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -153,15 +148,6 @@ const APP_ICON_ASSET_SCHEME = "maibot-app-icon";
 protocol.registerSchemesAsPrivileged([
   {
     scheme: APP_ICON_ASSET_SCHEME,
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      corsEnabled: true,
-    },
-  },
-  {
-    scheme: CODEX_PET_ASSET_SCHEME,
     privileges: {
       standard: true,
       secure: true,
@@ -184,28 +170,6 @@ function registerAppIconResourceProtocol(): void {
     APP_ICON_ASSET_SCHEME,
     async (request: Request): Promise<Response> => {
       const target = resolveAppIconAssetPath(request.url);
-      if (!target) {
-        return new Response("Forbidden", { status: 403 });
-      }
-
-      try {
-        const fileStat = await stat(target);
-        if (!fileStat.isFile()) {
-          return new Response("Not found", { status: 404 });
-        }
-        return net.fetch(pathToFileURL(target).toString());
-      } catch {
-        return new Response("Not found", { status: 404 });
-      }
-    },
-  );
-}
-
-function registerCodexPetResourceProtocol(): void {
-  protocol.handle(
-    CODEX_PET_ASSET_SCHEME,
-    async (request: Request): Promise<Response> => {
-      const target = await codexPetManager.resolveSpritesheetAsset(request.url);
       if (!target) {
         return new Response("Forbidden", { status: 403 });
       }
@@ -615,7 +579,6 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
         logStore.append("napcat", "system", `failed to restore stale QQ package.json patch on startup: ${String(error)}`);
       });
     registerAppIconResourceProtocol();
-    registerCodexPetResourceProtocol();
     await networkProxyManager.applyStoredSettings().catch((error: unknown) => {
       logStore.append(
         "desktop",
@@ -645,7 +608,6 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
       serviceManager,
       logStore,
       appIconManager,
-      codexPetManager,
       applyAppIcon,
       getMainWindow: () => mainWindow,
       requestQuit,

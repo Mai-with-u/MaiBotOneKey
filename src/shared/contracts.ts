@@ -140,12 +140,9 @@ export interface ServiceStartupSettings {
   openAtLogin?: boolean;
 }
 
-export type FloatingMascotMode = "maibot" | "codex-pet";
 export type TopStartActionMode = "ask" | "maibot-only" | "with-qq-backend";
 
 export interface LauncherUiSettings {
-  floatingMascotMode: FloatingMascotMode;
-  floatingCodexPetId?: string;
   topStartActionMode: TopStartActionMode;
 }
 
@@ -161,17 +158,6 @@ export interface AppIconOption {
 export interface AppIconSettings {
   selectedIconId: AppIconId;
   options: AppIconOption[];
-}
-
-export interface CodexPetOption {
-  id: string;
-  displayName: string;
-  description?: string;
-  spritesheetUrl: string;
-}
-
-export interface CodexPetSettings {
-  options: CodexPetOption[];
 }
 
 export interface NetworkProxySettings {
@@ -226,7 +212,7 @@ export interface InstanceCreateRequest {
 }
 
 export interface LocalChatClientInfo {
-  type?: "webui" | "floating" | "launcher";
+  type?: "webui" | "launcher";
   name?: string;
   version?: string;
 }
@@ -354,7 +340,6 @@ export interface DesktopSnapshot {
   serviceStartupSettings: ServiceStartupSettings;
   launcherUiSettings: LauncherUiSettings;
   appIconSettings: AppIconSettings;
-  codexPetSettings: CodexPetSettings;
   networkProxySettings: NetworkProxySettings;
   appVersion: string;
   appLatestTag?: string;
@@ -434,9 +419,6 @@ export interface WindowState {
   isMaximized: boolean;
   isFullScreen: boolean;
   isFocused: boolean;
-  isFloating?: boolean;
-  isFloatingCollapsed?: boolean;
-  floatingEdge?: "left" | "right";
 }
 
 export type WindowResizeEdge =
@@ -905,13 +887,7 @@ export interface DesktopBridge {
     minimize: () => Promise<void>;
     toggleMaximize: () => Promise<WindowState>;
     close: () => Promise<void>;
-    setFloatingMode: (enabled: boolean) => Promise<WindowState>;
     setMiniMode: (enabled: boolean) => Promise<WindowState>;
-    setFloatingGlassEffect: (enabled: boolean) => Promise<WindowState>;
-    setFloatingBubbleExpanded: (expanded: boolean) => Promise<WindowState>;
-    moveFloatingBy: (deltaX: number, deltaY: number) => Promise<WindowState>;
-    moveFloatingTo: (offsetX: number, offsetY: number) => Promise<WindowState>;
-    finishFloatingDrag: () => Promise<WindowState>;
     startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) => Promise<WindowState>;
     resizeTo: (screenX: number, screenY: number) => Promise<WindowState>;
     finishResize: () => Promise<WindowState>;

@@ -130,18 +130,6 @@ const desktopBridge: DesktopBridge = {
     minimize: () => ipcRenderer.invoke("desktop:window:minimize") as Promise<void>,
     toggleMaximize: () => ipcRenderer.invoke("desktop:window:toggleMaximize") as Promise<WindowState>,
     close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
-    setFloatingMode: (enabled: boolean) =>
-      ipcRenderer.invoke("desktop:window:setFloatingMode", enabled) as Promise<WindowState>,
-    setFloatingGlassEffect: (enabled: boolean) =>
-      ipcRenderer.invoke("desktop:window:setFloatingGlassEffect", enabled) as Promise<WindowState>,
-    setFloatingBubbleExpanded: (expanded: boolean) =>
-      ipcRenderer.invoke("desktop:window:setFloatingBubbleExpanded", expanded) as Promise<WindowState>,
-    moveFloatingBy: (deltaX: number, deltaY: number) =>
-      ipcRenderer.invoke("desktop:window:moveFloatingBy", deltaX, deltaY) as Promise<WindowState>,
-    moveFloatingTo: (offsetX: number, offsetY: number) =>
-      ipcRenderer.invoke("desktop:window:moveFloatingTo", offsetX, offsetY) as Promise<WindowState>,
-    finishFloatingDrag: () =>
-      ipcRenderer.invoke("desktop:window:finishFloatingDrag") as Promise<WindowState>,
     startResize: (edge: WindowResizeEdge, screenX: number, screenY: number) =>
       ipcRenderer.invoke("desktop:window:startResize", edge, screenX, screenY) as Promise<WindowState>,
     resizeTo: (screenX: number, screenY: number) =>
