@@ -12,7 +12,7 @@ import {
   Tray,
 } from "electron";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AppIconId } from "../shared/contracts";
@@ -38,25 +38,22 @@ import { ResourceLocationManager } from "./services/resource-location-manager";
 import { ServiceManager } from "./services/service-manager";
 import { SourceSettingsManager } from "./services/source-settings-manager";
 import { isWindowVisuallyMaximized } from "./window-state";
+import { describeStartupFailure, writeStartupFailureLog } from "./services/startup-failure";
 
 let startupLogRoot: string | undefined;
 let fatalErrorReported = false;
 
 function reportStartupFailure(error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
+  const { title, message } = describeStartupFailure(error);
   const details = error instanceof Error ? error.stack ?? message : message;
-  let logResult: string;
-  try {
-    const root = startupLogRoot ?? join(app.getPath("appData"), "MaiBotOneKeyDesktop", "logs");
-    mkdirSync(root, { recursive: true });
-    const logPath = join(root, "desktop.log");
-    appendFileSync(logPath, `[${new Date().toISOString()}] [system] 启动失败: ${details}\n`);
-    logResult = `日志：${logPath}`;
-  } catch (logError) {
-    logResult = `日志写入失败：${String(logError)}`;
-  }
+  const roots: string[] = [];
+  // Even resolving the normal log location may fail during early startup.
+  try { roots.push(startupLogRoot ?? join(app.getPath("appData"), "MaiBotOneKeyDesktop", "logs")); }
+  catch { /* Use the independent temporary directory below. */ }
+  roots.push(join(tmpdir(), "MaiBotOneKeyDesktop", "startup-logs"));
+  const logResult = writeStartupFailureLog(error, roots);
   console.error("MaiBot OneKey 启动失败", details);
-  dialog.showErrorBox("MaiBot OneKey 启动失败", `${message}\n\n${logResult}`);
+  dialog.showErrorBox(title, `${message}\n\n${logResult}`);
 }
 
 // Install before constructing managers so early synchronous failures are visible too.
