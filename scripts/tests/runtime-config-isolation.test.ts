@@ -56,20 +56,20 @@ test("WebUI never borrows bundled instance ports or credentials, even when activ
   const maibotRoot = join(root, "active");
   const bundledModulesRoot = join(root, "bundled");
   for (const base of [maibotRoot, join(bundledModulesRoot, "MaiBot")]) {
-    await mkdir(join(base, "config"), { recursive: true });
-    await mkdir(join(base, "data"), { recursive: true });
+    await mkdir(join(base, "host"), { recursive: true });
+    await mkdir(join(base, "host"), { recursive: true });
   }
-  await writeFile(join(bundledModulesRoot, "MaiBot", "config", "bot_config.toml"), '[webui]\nhost="127.0.0.1"\nport=18999\n');
-  await writeFile(join(bundledModulesRoot, "MaiBot", "data", "webui.json"), '{"access_token":"other-instance"}');
+  await writeFile(join(bundledModulesRoot, "MaiBot", "host", "config.toml"), '[webui]\nhosts=["127.0.0.1"]\nport=18999\n');
+  await writeFile(join(bundledModulesRoot, "MaiBot", "host", "webui.json"), '{"access_token":"other-instance"}');
   const manager = new InitManager({ maibotRoot, bundledModulesRoot, userDataRoot: root } as RuntimePaths);
   expect(manager.readMaiBotWebUiEndpointSync().port).not.toBe(18999);
   expect(await manager.readMaiBotWebUiToken()).toEqual({ exists: false });
-  await writeFile(join(maibotRoot, "config", "bot_config.toml"), "[broken");
-  await writeFile(join(maibotRoot, "data", "webui.json"), "{broken");
-  expect(manager.readMaiBotWebUiEndpointSync().fallbackReason).toContain("读取 WebUI 配置失败");
+  await writeFile(join(maibotRoot, "host", "config.toml"), "[broken");
+  await writeFile(join(maibotRoot, "host", "webui.json"), "{broken");
+  expect(() => manager.readMaiBotWebUiEndpointSync()).toThrow();
   expect((await manager.readMaiBotWebUiToken()).token).toBeUndefined();
-  await writeFile(join(maibotRoot, "config", "bot_config.toml"), '[webui]\nhost="127.0.0.1"\nport=18002\n');
-  await writeFile(join(maibotRoot, "data", "webui.json"), '{"access_token":"active-instance"}');
+  await writeFile(join(maibotRoot, "host", "config.toml"), '[webui]\nhosts=["127.0.0.1"]\nport=18002\n');
+  await writeFile(join(maibotRoot, "host", "webui.json"), '{"access_token":"active-instance"}');
   expect(manager.readMaiBotWebUiEndpointSync().port).toBe(18002);
   expect((await manager.readMaiBotWebUiToken()).token).toBe("active-instance");
 });

@@ -418,7 +418,7 @@ export class PythonDependencyManager {
     throw new Error(`读取 MaiBot PyPI 版本失败：\n${failures.join("\n")}`);
   }
 
-  async installMaiBot(version: string, pluginRequirements: string[], onOutput?: PythonOutputHandler, signal?: AbortSignal, constraints?: string, onPhase?: (phase: "core" | "dependencies") => void): Promise<PipInstallAttemptResult> {
+  async installMaiBot(version: string, onOutput?: PythonOutputHandler, signal?: AbortSignal, constraints?: string, onPhase?: (phase: "core" | "dependencies") => void): Promise<PipInstallAttemptResult> {
     if (!/^[0-9][a-zA-Z0-9.!+_-]*$/u.test(version)) throw new Error("无效的 MaiBot 包版本");
     const args = ["-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location", "--no-compile", "--timeout", "120", "--retries", "3", "--progress-bar", "off"];
     onPhase?.("core");
@@ -427,11 +427,10 @@ export class PythonDependencyManager {
     );
     signal?.throwIfAborted();
     onPhase?.("dependencies");
-    // Resolve the installed core's declared dependencies together with plugin
-    // requirements; the incomplete environment is never made active.
+    // Install only Core dependencies; Core manages plugin dependencies for all Bots.
     const dependencies = await this.installRequirementsIntoEnvironment(
       args,
-      [`maibot==${version}`, ...(constraints ? ["--constraint", constraints] : []), ...pluginRequirements.flatMap((path) => ["-r", path])], signal, onOutput,
+      [`maibot==${version}`, ...(constraints ? ["--constraint", constraints] : [])], signal, onOutput,
     );
     return { sourceUrl: core.sourceUrl, output: [...core.output, ...dependencies.output] };
   }

@@ -49,20 +49,9 @@ import type {
   LauncherUpdateInfo,
   LauncherResetResult,
   LogEntry,
-  LocalChatConnectionState,
-  LocalChatConnectRequest,
-  LocalChatMessageEvent,
-  LocalChatSendRequest,
-  MaiBotBackupExportResult,
-  MaiBotBackupImportResult,
-  MaiBotBackupProgress,
   MaiBotConfigFileName,
   MaiBotConfigImportResult,
-  MaiBotDataImportResult,
   MaiBotDataResetResult,
-  MaiBotStorageCleanupResult,
-  MaiBotStorageCleanupTarget,
-  MaiBotStorageStats,
   MaiBotUpdateInfo,
   MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
@@ -103,7 +92,6 @@ import { InitManager } from "../services/init-manager";
 import { readMaiBotDeployment } from "../services/maibot-deployment-state";
 import type { AppIconManager } from "../services/app-icon-manager";
 import { LogStore } from "../services/log-store";
-import { LocalChatAdapter } from "../services/local-chat-adapter";
 import { LauncherUiSettingsManager } from "../services/launcher-ui-settings-manager";
 import { getLauncherUpdateDownloadRoot } from "../services/launcher-update-cleanup";
 import { ModuleUpdater } from "../services/module-updater";
@@ -228,7 +216,6 @@ interface WindowResizeState {
 }
 
 export interface RegisteredAppIpcDisposables {
-  localChatAdapter: LocalChatAdapter;
   dispose: () => void;
 }
 
@@ -1247,6 +1234,15 @@ export function registerAppIpc({
   requestQuit,
   showMainWindow,
 }: RegisterAppIpcOptions): RegisteredAppIpcDisposables {
+  initManager.chooseBot = async (bots, purpose) => {
+    const result = await dialog.showMessageBox({
+      type: "question", title: purpose, message: "请选择本次操作的机器人",
+      detail: "仅操作所选机器人，不影响其他机器人。", buttons: [...bots.map((bot) => bot.name), "取消"],
+      cancelId: bots.length, defaultId: bots.length, noLink: true,
+    });
+    if (result.response === bots.length) throw new Error("已取消操作");
+    return bots[result.response];
+  };
   let remoteModuleVersionsCache: ModuleRuntimeVersions = {};
   let remoteAppVersionCache: Pick<
     DesktopSnapshot,
@@ -1265,7 +1261,6 @@ export function registerAppIpc({
     paths.userDataRoot,
     MAIBOT_UPDATE_SELECTION_FILE,
   );
-  let maiBotBackupAbortController: AbortController | null = null;
 
   const readManagedWindowState = (window: BrowserWindow | null): WindowState =>
     ({
@@ -1774,7 +1769,6 @@ export function registerAppIpc({
     }
   };
 
-  const localChatAdapter = new LocalChatAdapter(paths, initManager);
 
   const assertServicesStoppedForResourceMove = (): void => {
     const active = serviceManager
@@ -1907,11 +1901,6 @@ export function registerAppIpc({
     const window = getMainWindow();
     window?.webContents.send("logs:entry", entry);
   });
-  localChatAdapter.onEvent((event) => {
-    const window = getMainWindow();
-    window?.webContents.send("localChat:event", event);
-  });
-
   ipcMain.handle("desktop:getSnapshot", async (): Promise<DesktopSnapshot> => {
     await serviceManager.refresh();
     const snapshot = await buildSnapshot();
@@ -2225,206 +2214,6 @@ export function registerAppIpc({
     },
   );
 
-  ipcMain.handle(
-    "data:cancelMaibotBackupOperation",
-    async (): Promise<boolean> => {
-      if (!maiBotBackupAbortController) {
-        return false;
-      }
-      maiBotBackupAbortController.abort();
-      return true;
-    },
-  );
-
-  handleRuntimeMutation(
-    "data:exportMaibotBackup",
-    async (event): Promise<MaiBotBackupExportResult | null> => {
-      const sendProgress = (progress: MaiBotBackupProgress): void => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send("data:maibot-backup-progress", progress);
-        }
-      };
-      const maibot = serviceManager
-        .snapshot()
-        .find((service) => service.id === "maibot");
-      if (
-        maibot?.managed ||
-        maibot?.status === "starting" ||
-        maibot?.status === "running" ||
-        maibot?.status === "stopping"
-      ) {
-        throw new Error("Stop MaiBot Core before exporting a backup.");
-      }
-
-      const createdAt = new Date().toISOString().replace(/[:.]/gu, "-");
-      const mainWindow = getMainWindow();
-      const dialogOptions: Electron.SaveDialogOptions = {
-        title: "Export MaiBot backup",
-        defaultPath: `MaiBot-backup-${createdAt}.maibot-backup.tar.gz`,
-        filters: [
-          { name: "MaiBot backup", extensions: ["tar.gz", "tgz"] },
-          { name: "All files", extensions: ["*"] },
-        ],
-      };
-      const result = mainWindow
-        ? await dialog.showSaveDialog(mainWindow, dialogOptions)
-        : await dialog.showSaveDialog(dialogOptions);
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-      if (maiBotBackupAbortController) {
-        throw new Error("已有 MaiBot 迁移任务正在运行。");
-      }
-
-      const controller = new AbortController();
-      maiBotBackupAbortController = controller;
-      try {
-        const exportResult = await initManager.exportMaiBotBackup(
-          result.filePath,
-          app.getVersion(),
-          sendProgress,
-          controller.signal,
-        );
-        logStore.append(
-          "desktop",
-          "system",
-          `MaiBot backup exported: ${exportResult.filePath}`,
-        );
-        return exportResult;
-      } catch (error) {
-        const cancelled = error instanceof Error && error.name === "AbortError";
-        sendProgress({
-          operation: "export",
-          phase: cancelled ? "cancelled" : "failed",
-          percent: 100,
-          detail: cancelled ? "已取消导出，正在清理未完成的迁移包" : error instanceof Error ? error.message : String(error),
-          timestamp: Date.now(),
-        });
-        throw error;
-      } finally {
-        if (maiBotBackupAbortController === controller) {
-          maiBotBackupAbortController = null;
-        }
-      }
-    },
-  );
-
-  handleRuntimeMutation(
-    "data:importMaibotBackup",
-    async (event): Promise<MaiBotBackupImportResult | null> => {
-      const sendProgress = (progress: MaiBotBackupProgress): void => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send("data:maibot-backup-progress", progress);
-        }
-      };
-      const maibot = serviceManager
-        .snapshot()
-        .find((service) => service.id === "maibot");
-      if (
-        maibot?.managed ||
-        maibot?.status === "starting" ||
-        maibot?.status === "running" ||
-        maibot?.status === "stopping"
-      ) {
-        throw new Error("Stop MaiBot Core before importing a backup.");
-      }
-
-      const mainWindow = getMainWindow();
-      const dialogOptions: Electron.OpenDialogOptions = {
-        title: "Import MaiBot backup",
-        properties: ["openFile"],
-        filters: [
-          { name: "MaiBot backup", extensions: ["tar.gz", "tgz"] },
-          { name: "All files", extensions: ["*"] },
-        ],
-      };
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
-      if (result.canceled || result.filePaths.length === 0) {
-        return null;
-      }
-      if (maiBotBackupAbortController) {
-        throw new Error("已有 MaiBot 迁移任务正在运行。");
-      }
-
-      const controller = new AbortController();
-      maiBotBackupAbortController = controller;
-      try {
-        const importResult = await initManager.importMaiBotBackup(
-          result.filePaths[0],
-          sendProgress,
-          controller.signal,
-        );
-        logStore.append(
-          "desktop",
-          "system",
-          `MaiBot backup imported: ${importResult.sourcePath}`,
-        );
-        await broadcastSnapshot();
-        return importResult;
-      } catch (error) {
-        const cancelled = error instanceof Error && error.name === "AbortError";
-        sendProgress({
-          operation: "import",
-          phase: cancelled ? "cancelled" : "failed",
-          percent: 100,
-          detail: cancelled ? "已取消导入，必要时已回退原 data/config 目录" : error instanceof Error ? error.message : String(error),
-          timestamp: Date.now(),
-        });
-        throw error;
-      } finally {
-        if (maiBotBackupAbortController === controller) {
-          maiBotBackupAbortController = null;
-        }
-      }
-    },
-  );
-
-  handleRuntimeMutation(
-    "data:importMaibotDb",
-    async (): Promise<MaiBotDataImportResult | null> => {
-      const maibot = serviceManager
-        .snapshot()
-        .find((service) => service.id === "maibot");
-      if (
-        maibot?.managed ||
-        maibot?.status === "starting" ||
-        maibot?.status === "running" ||
-        maibot?.status === "stopping"
-      ) {
-        throw new Error("Stop MaiBot Core before importing the database.");
-      }
-
-      const mainWindow = getMainWindow();
-      const dialogOptions: Electron.OpenDialogOptions = {
-        title: "Import MaiBot database",
-        properties: ["openFile"],
-        filters: [
-          { name: "MaiBot database", extensions: ["db"] },
-          { name: "All files", extensions: ["*"] },
-        ],
-      };
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
-      if (result.canceled || result.filePaths.length === 0) {
-        return null;
-      }
-
-      const importResult = await initManager.importMaiBotDatabase(
-        result.filePaths[0],
-      );
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot.db imported: ${importResult.sourcePath} -> ${importResult.destPath}`,
-      );
-      await broadcastSnapshot();
-      return importResult;
-    },
-  );
-
   handleRuntimeMutation(
     "data:importMaibotConfig",
     async (
@@ -2474,42 +2263,6 @@ export function registerAppIpc({
       );
       await broadcastSnapshot();
       return importResult;
-    },
-  );
-
-  ipcMain.handle(
-    "data:getMaibotStorageStats",
-    async (): Promise<MaiBotStorageStats> => {
-      return initManager.getMaiBotStorageStats();
-    },
-  );
-
-  handleRuntimeMutation(
-    "data:cleanupMaibotStorage",
-    async (
-      _event,
-      target: MaiBotStorageCleanupTarget,
-    ): Promise<MaiBotStorageCleanupResult> => {
-      const maibot = serviceManager
-        .snapshot()
-        .find((service) => service.id === "maibot");
-      if (
-        maibot?.managed ||
-        maibot?.status === "starting" ||
-        maibot?.status === "running" ||
-        maibot?.status === "stopping"
-      ) {
-        throw new Error("Stop MaiBot Core before cleaning local data.");
-      }
-
-      const result = await initManager.cleanupMaiBotStorage(target);
-      logStore.append(
-        "desktop",
-        "system",
-        `MaiBot storage cleanup ${target}: ${result.removedEntries.length} entries, ${result.removedBytes} bytes`,
-      );
-      await broadcastSnapshot();
-      return result;
     },
   );
 
@@ -2948,40 +2701,6 @@ export function registerAppIpc({
     void broadcastSnapshot();
   });
 
-  ipcMain.handle(
-    "localChat:connect",
-    async (
-      _event,
-      request?: LocalChatConnectRequest,
-    ): Promise<LocalChatConnectionState> => {
-      return localChatAdapter.connect(request);
-    },
-  );
-
-  ipcMain.handle("localChat:disconnect", async (): Promise<void> => {
-    localChatAdapter.disconnect();
-  });
-
-  ipcMain.handle(
-    "localChat:send",
-    async (
-      _event,
-      request: LocalChatSendRequest,
-    ): Promise<LocalChatMessageEvent> => {
-      return localChatAdapter.send(request);
-    },
-  );
-
-  ipcMain.handle(
-    "localChat:listMessages",
-    async (
-      _event,
-      request?: LocalChatConnectRequest,
-    ): Promise<LocalChatMessageEvent[]> => {
-      return localChatAdapter.listMessages(request);
-    },
-  );
-
   ipcMain.handle("desktop:openLogsDirectory", async (): Promise<void> => {
     await mkdir(paths.logsRoot, { recursive: true });
     await shell.openPath(paths.logsRoot);
@@ -3054,13 +2773,11 @@ export function registerAppIpc({
   void broadcastSnapshot().catch((error) => logStore.append("desktop", "system", `启动状态检查失败: ${String(error)}`));
 
   return {
-    localChatAdapter,
     dispose: () => {
       autoStart.cancel();
       app.off("before-quit", cancelAutoStart);
       resourceLocationManager.off("operation-change", onResourceOperation);
       resourceLocationManager.off("progress", onResourceProgress);
-      localChatAdapter.dispose();
     },
   };
 }

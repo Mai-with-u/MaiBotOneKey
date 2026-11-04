@@ -14,15 +14,18 @@ function run(command: string, args: string[]): Promise<void> {
 }
 async function buildVariant(variant: "standard" | "snowluma"): Promise<void> {
   const { build, version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  const buildVersion = flags.includes("--dev") ? `${version}-dev` : version;
+  const channel = flags.includes("--dev") ? "dev" : "latest";
   const pythonRoot = join(root, "runtime", "python");
   if (!existsSync(join(pythonRoot, "python.exe"))) throw new Error("Missing Python runtime: " + pythonRoot);
-  const output = join(root, "release", variant);
+  const output = join(root, "release", ...(flags.includes("--dev") ? ["dev"] : []), variant);
   const configPath = join(root, ".codex-tmp", "electron-builder-" + variant + ".json");
-  const artifactName = "MaiBot-OK-" + version + "-win" + (variant === "snowluma" ? "-snowluma" : "") + ".exe";
+  const artifactName = "MaiBot-OK-" + buildVersion + "-win" + (variant === "snowluma" ? "-snowluma" : "") + ".exe";
   await mkdir(join(root, ".codex-tmp"), { recursive: true });
   await mkdir(join(root, "release"), { recursive: true });
   await writeFile(configPath, JSON.stringify({
     ...build,
+    extraMetadata: { ...build.extraMetadata, version: buildVersion },
     directories: { ...build.directories, output },
     win: { ...build.win, artifactName, ...(variant === "snowluma" ? { extraResources: [] } : {}) },
   }, null, 2));
@@ -38,17 +41,17 @@ async function buildVariant(variant: "standard" | "snowluma"): Promise<void> {
       await copyFile(join(output, artifactName + suffix), join(root, "release", artifactName + suffix));
     }
     if (variant === "standard") {
-      await copyFile(join(output, "latest.yml"), join(root, "release", "latest.yml"));
-      await copyFile(join(output, "latest.yml"), join(root, "release", "latest-win.yml"));
+      await copyFile(join(output, "latest.yml"), join(root, "release", `${channel}.yml`));
+      await copyFile(join(output, "latest.yml"), join(root, "release", `${channel}-win.yml`));
     } else {
-      await copyFile(join(output, "latest.yml"), join(root, "release", "latest-win-snowluma.yml"));
+      await copyFile(join(output, "latest.yml"), join(root, "release", `${channel}-win-snowluma.yml`));
     }
   } finally {
     await rm(configPath, { force: true });
   }
 }
 const flags = process.argv.slice(2);
-if (flags.some((flag) => !["--snowluma-only", "--standard-only"].includes(flag))) {
+if (flags.some((flag) => !["--snowluma-only", "--standard-only", "--dev"].includes(flag))) {
   throw new Error("Unsupported Windows packaging option: " + flags.join(" "));
 }
 await run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",

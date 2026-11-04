@@ -62,7 +62,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { localChatErrorMessage } from "@/lib/local-chat-error";
 import { QQ_OFFICIAL_ADAPTER_PLUGIN_ID } from "@shared/qq-official-adapter";
 import { resolveMaiBotUpdateTarget } from "@shared/maibot-update-target";
 import {
@@ -311,7 +310,7 @@ function compareVersionText(left: string | undefined, right: string | undefined)
 }
 
 function messageFromError(error: unknown): string {
-  return localChatErrorMessage(error);
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isLikelyNetworkError(error: unknown): boolean {

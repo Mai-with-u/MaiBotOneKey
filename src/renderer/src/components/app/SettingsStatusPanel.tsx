@@ -1886,7 +1886,7 @@ export function SettingsStatusPanel({
       >
         <DialogContent size="sm">
           <DialogHeader
-            description="此操作会清空 MaiBot Core 的 data 目录，包括数据库、记忆等运行时数据。"
+            description="此操作会清空所选机器人的数据，包括数据库和记忆；其他机器人与公共设置不受影响。"
             icon={<AlertTriangle className="size-4" />}
             title="确认重置 MaiBot 数据？"
             tone="warning"
@@ -1922,7 +1922,7 @@ export function SettingsStatusPanel({
       >
         <DialogContent size="sm">
           <DialogHeader
-            description="所有 MaiBot 运行时数据将被永久删除。此操作不可撤销。"
+            description="所选机器人的运行时数据将被永久删除。多个机器人时将在下一步选择目标，此操作不可撤销。"
             icon={<Trash2 className="size-4" />}
             title="再次确认：彻底清空 data 目录"
             tone="danger"

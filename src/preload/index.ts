@@ -15,21 +15,11 @@ import type {
   LauncherUpdateApplyResult,
   LauncherUpdateInfo,
   LogEntry,
-  LocalChatConnectionState,
-  LocalChatConnectRequest,
-  LocalChatEvent,
-  LocalChatMessageEvent,
-  LocalChatSendRequest,
   LauncherResetResult,
   LauncherUpdateDownloadProgress,
   MaiBotConfigFileName,
-  MaiBotBackupProgress,
   MaiBotConfigImportResult,
-  MaiBotDataImportResult,
   MaiBotDataResetResult,
-  MaiBotStorageCleanupResult,
-  MaiBotStorageCleanupTarget,
-  MaiBotStorageStats,
   MaiBotUpdateInfo,
   MaiBotModuleUpdateProgress,
   ManagedPythonPackageName,
@@ -73,8 +63,6 @@ import type {
   TerminalSettings,
   WindowResizeEdge,
   WindowState,
-  MaiBotBackupExportResult,
-  MaiBotBackupImportResult,
 } from "../shared/contracts";
 
 function onIpc<T>(channel: string, callback: (event: T) => void): () => void {
@@ -183,25 +171,11 @@ const desktopBridge: DesktopBridge = {
 
   },
   data: {
-    onMaiBotBackupProgress: (callback: (progress: MaiBotBackupProgress) => void) =>
-      onIpc("data:maibot-backup-progress", callback),
-    exportMaiBotBackup: () =>
-      ipcRenderer.invoke("data:exportMaibotBackup") as Promise<MaiBotBackupExportResult | null>,
-    importMaiBotBackup: () =>
-      ipcRenderer.invoke("data:importMaibotBackup") as Promise<MaiBotBackupImportResult | null>,
-    cancelMaiBotBackupOperation: () =>
-      ipcRenderer.invoke("data:cancelMaibotBackupOperation") as Promise<boolean>,
-    importMaiBotDatabase: () =>
-      ipcRenderer.invoke("data:importMaibotDb") as Promise<MaiBotDataImportResult | null>,
     importMaiBotConfig: (fileName: MaiBotConfigFileName) =>
       ipcRenderer.invoke(
         "data:importMaibotConfig",
         fileName,
       ) as Promise<MaiBotConfigImportResult | null>,
-    getMaiBotStorageStats: () =>
-      ipcRenderer.invoke("data:getMaibotStorageStats") as Promise<MaiBotStorageStats>,
-    cleanupMaiBotStorage: (target: MaiBotStorageCleanupTarget) =>
-      ipcRenderer.invoke("data:cleanupMaibotStorage", target) as Promise<MaiBotStorageCleanupResult>,
     resetMaiBotData: () =>
       ipcRenderer.invoke("data:resetMaibotData") as Promise<MaiBotDataResetResult>,
   },
@@ -278,16 +252,6 @@ const desktopBridge: DesktopBridge = {
     list: () => ipcRenderer.invoke("logs:list") as Promise<LogEntry[]>,
     clear: () => ipcRenderer.invoke("logs:clear") as Promise<void>,
     onEntry: (callback: (entry: LogEntry) => void) => onIpc("logs:entry", callback),
-  },
-  localChat: {
-    connect: (request?: LocalChatConnectRequest) =>
-      ipcRenderer.invoke("localChat:connect", request) as Promise<LocalChatConnectionState>,
-    disconnect: () => ipcRenderer.invoke("localChat:disconnect") as Promise<void>,
-    send: (request: LocalChatSendRequest) =>
-      ipcRenderer.invoke("localChat:send", request) as Promise<LocalChatMessageEvent>,
-    listMessages: (request?: LocalChatConnectRequest) =>
-      ipcRenderer.invoke("localChat:listMessages", request) as Promise<LocalChatMessageEvent[]>,
-    onEvent: (callback: (event: LocalChatEvent) => void) => onIpc("localChat:event", callback),
   },
   pty: {
     start: (request: PtyStartRequest) =>

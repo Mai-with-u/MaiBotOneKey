@@ -235,9 +235,9 @@ export class ResourceLocationManager extends EventEmitter {
     let valid: boolean, hint: string;
     if (key === "maibot") {
       const deployment = readMaiBotDeployment(path);
-      valid = deployment ? await file("config/bot_config.toml") && await file("config/model_config.toml")
+      valid = deployment ? (await file("host/registry.sqlite3") || (await file("config/bot_config.toml") && await file("config/model_config.toml")))
         : await file("bot.py") && await dir("src");
-      hint = "MaiBot 部署记录与 config 配置，或源码 bot.py 和 src";
+      hint = "MaiBot 部署记录与工作区（或旧版配置），或源码 bot.py 和 src";
     }
     else if (key === "snowluma") { valid = await file("index.mjs") && await dir("native") && (process.platform !== "win32" || await file("node.exe")); hint = "index.mjs、native 和配套运行时"; }
     else { valid = (await file("index.js") && (process.platform !== "win32" || await file("node.exe"))) || (await file("NapCatWinBootMain.exe") && await dir("napcat")) || (process.platform === "darwin" && await file("napcat-macos-launch.sh") && await dir("napcat")); hint = "NapCat 的入口和配套运行时"; }

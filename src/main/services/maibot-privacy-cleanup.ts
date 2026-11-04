@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { RuntimePaths } from "../../shared/contracts";
-import { LOCAL_CHAT_WEBUI_PROMPT_DIR } from "../../shared/local-chat-defaults";
+const LOCAL_CHAT_WEBUI_PROMPT_DIR = "webui_private_webui_user_onekey-local-user";
 
 const CLEANUP_VERSION = "0.4.12";
 const CLEANUP_STATE_FILE = "maibot-privacy-cleanup-0.4.12.json";

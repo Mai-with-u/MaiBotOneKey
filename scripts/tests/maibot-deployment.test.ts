@@ -33,10 +33,9 @@ async function fixture(source = false, failure?: "download" | "dependencies" | "
       await writeFile(join(staged.pythonEnvRoot, "maibot-python-env.json"), JSON.stringify({ version: 1 }));
       return [staged.pythonEnvRoot];
     },
-    async installMaiBot(version, requirements, _onOutput, signal, _constraints, onPhase) {
+    async installMaiBot(version, _onOutput, signal, _constraints, onPhase) {
       installedVersion = version;
       onPhase?.("core");
-      expect(requirements).toContain(join(instance, "plugins/example", "requirements.txt"));
       signal?.throwIfAborted();
       if (failure === "download") throw new Error("download failed");
       onPhase?.("dependencies");
@@ -49,6 +48,10 @@ async function fixture(source = false, failure?: "download" | "dependencies" | "
       if (args.includes("-c")) {
         if (failure === "probe") throw new Error("wrong imported package");
         return [JSON.stringify({ version: installedVersion })];
+      }
+      if (args.includes("host") && args.includes("list")) {
+        await mkdir(join(instance, "host"), { recursive: true });
+        await writeFile(join(instance, "host", "registry.sqlite3"), "generated registry");
       }
       if (args.includes("init")) {
         if (failure === "init") {
@@ -73,7 +76,7 @@ test("fresh instances use PyPI; source directories remain source until migration
 });
 
 test("first installation selects the latest compatible stable package and later starts do not query or upgrade", async () => {
-  const { manager } = await fixture();
+  const { manager, commands } = await fixture();
   let queries = 0;
   manager.getPython = () => ({
     async listMaiBotVersions() {
@@ -90,6 +93,8 @@ test("first installation selects the latest compatible stable package and later 
   await manager.ensureInstalled((progress) => labels.push(progress.label));
   expect(manager.getState()?.packageVersion).toBe("1.4.2");
   expect(labels).toContain("正在查询 MaiBot 最新正式版");
+  expect(commands.some((args) => args.includes("host") && args.includes("list"))).toBe(true);
+  expect(commands.some((args) => args.includes("init"))).toBe(false);
   await manager.ensureInstalled();
   expect(queries).toBe(1);
   expect(manager.getState()?.packageVersion).toBe("1.4.2");
@@ -336,4 +341,25 @@ test("startup notice can be dismissed with missing documents and stays dismissed
   expect((await new InitManager(paths).getAgreementState()).isDismissed).toBe(true);
   await writeFile(join(paths.userDataRoot, "agreement.json"), JSON.stringify({ version: 1, hashes: { eula: "old" } }));
   expect((await new InitManager(paths).getAgreementState()).isDismissed).toBe(true);
+});
+
+
+test("1.4 workspace snapshots restore public settings, nested Bots and registered external Bots", async () => {
+  const { manager, instance, commands } = await fixture(true);
+  const external = await mkdtemp(join(tmpdir(), "maibot-external-")); roots.push(external);
+  for (const directory of [join(instance, "host"), join(instance, "bots", "b", "data"), join(external, "data")]) await mkdir(directory, { recursive: true });
+  await writeFile(join(instance, "host", "config.toml"), "public settings");
+  await writeFile(join(instance, "bots", "b", "data", "message.txt"), "Bot B original");
+  await writeFile(join(external, "data", "message.txt"), "external original");
+  execFileSync("python", ["-c", "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute('CREATE TABLE bots(bot_id TEXT, name TEXT, directory TEXT, created_at TEXT)'); db.execute('INSERT INTO bots VALUES(?,?,?,?)', ('external', 'External', sys.argv[2], 'now')); db.execute('INSERT INTO bots VALUES(?,?,?,?)', ('b', 'B', 'bots/b', 'now')); db.commit(); db.close()", join(instance, "host", "registry.sqlite3"), external]);
+  manager.getPython = () => ({ getPythonPath: () => "python" }) as any;
+  await manager.install("1.4.0");
+  expect(commands.some((args) => args.includes("init"))).toBe(false);
+  await writeFile(join(instance, "host", "config.toml"), "changed public");
+  await writeFile(join(instance, "bots", "b", "data", "message.txt"), "changed B");
+  await writeFile(join(external, "data", "message.txt"), "changed external");
+  await manager.rollback();
+  expect(await readFile(join(instance, "host", "config.toml"), "utf8")).toBe("public settings");
+  expect(await readFile(join(instance, "bots", "b", "data", "message.txt"), "utf8")).toBe("Bot B original");
+  expect(await readFile(join(external, "data", "message.txt"), "utf8")).toBe("external original");
 });

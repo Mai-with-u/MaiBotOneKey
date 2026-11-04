@@ -1,6 +1,6 @@
 import { QQ_OFFICIAL_ADAPTER_PLUGIN_ID } from "../../shared/qq-official-adapter";
 import type { ProtocolConnection } from "./protocol-backend-manager";
-import { webuiSessionCookie } from "./local-chat-adapter";
+import type { MaiBotHostClient } from "./maibot-host-client";
 
 const ONEBOT_ADAPTER_ID = "maibot-team.snowluma-adapter";
 export type ManagedAdapter = "onebot" | "official";
@@ -8,35 +8,15 @@ type AdapterConfig = Record<string, unknown>;
 
 /** A narrow API consumer, with no plugin discovery, filesystem writes or offline fallback. */
 export class MaiBotAdapterClient {
-  officialConfigured: boolean | undefined;
   private mutation: Promise<unknown> = Promise.resolve();
 
-  constructor(
-    private readonly endpoint: () => string,
-    private readonly token: () => Promise<string | undefined>,
-    private readonly request: typeof fetch = fetch,
-  ) {}
+  private botId?: string;
+  constructor(private readonly host: MaiBotHostClient, private readonly selectBot: () => Promise<string>) {}
 
   private async call(path: string, config?: AdapterConfig, method?: string): Promise<Record<string, unknown>> {
-    const token = await this.token();
-    if (!token) throw new Error("请先启动 MaiBot Core 并完成 WebUI 初始化，再配置适配器。");
-    let response: Response;
-    try {
-      response = await this.request(new URL(`/api/webui/plugins/${path}`, this.endpoint()), {
-        cache: "no-store",
-        method: method ?? (config === undefined ? "GET" : "PUT"),
-        headers: { Cookie: webuiSessionCookie(token), "Content-Type": "application/json" },
-        body: config === undefined ? undefined : JSON.stringify({ config }),
-        signal: AbortSignal.timeout(8_000),
-        redirect: "error",
-      });
-    } catch {
-      throw new Error("MaiBot 适配器 API 不可达，请确认 Core 已启动；一键包不会直接修改插件配置。");
-    }
-    if (!response.ok) {
-      throw new Error(`MaiBot 适配器 API 返回 HTTP ${response.status}，请在 WebUI 检查适配器配置。`);
-    }
-    const result = await response.json() as Record<string, unknown>;
+    if (!this.botId) throw new Error("请先选择要配置的机器人");
+    const result = await this.host.call(`/api/host/bots/${encodeURIComponent(this.botId)}/proxy/api/webui/plugins/${path}`,
+      method ?? (config === undefined ? "GET" : "PUT"), config === undefined ? undefined : { config });
     if (result.success === false) throw new Error("MaiBot 拒绝了适配器配置操作，请在 WebUI 检查。");
     if (result.runtime_status === "config_error" || result.runtime_status === "failed") {
       throw new Error("MaiBot 已保存配置，但适配器运行失败，请在 WebUI 检查。");
@@ -45,7 +25,10 @@ export class MaiBotAdapterClient {
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutation.then(operation);
+    const result = this.mutation.then(async () => {
+      this.botId = await this.selectBot();
+      try { return await operation(); } finally { this.botId = undefined; }
+    });
     this.mutation = result.catch(() => {});
     return result;
   }
@@ -106,6 +89,5 @@ export class MaiBotAdapterClient {
       ...(credentials ? { qq_official: { app_id: credentials.appId.trim(), app_secret: credentials.appSecret.trim() } } : {}),
       plugin: { enabled: true },
     });
-    this.officialConfigured = true;
   }
 }

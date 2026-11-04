@@ -148,7 +148,7 @@ export class InstanceRegistry {
         if (existsSync(paths.maibot) && readdirSync(paths.maibot).length) throw new Error("新实例需要空组件目录；接入已有文件请使用“接入已有实例”。");
       } else {
         const root = paths.maibot;
-        if (!(existsSync(join(root, "bot.py")) && existsSync(join(root, "src"))) && !(existsSync(join(root, ".onekey-deployment.json")) && existsSync(join(root, "config", "bot_config.toml")) && existsSync(join(root, "config", "model_config.toml")))) throw new Error("所选 MaiBot 目录不是有效的源码或已部署实例。");
+        if (!(existsSync(join(root, "bot.py")) && existsSync(join(root, "src"))) && !(existsSync(join(root, ".onekey-deployment.json")) && (existsSync(join(root, "host", "registry.sqlite3")) || (existsSync(join(root, "config", "bot_config.toml")) && existsSync(join(root, "config", "model_config.toml")))))) throw new Error("所选 MaiBot 目录不是有效的源码或已部署实例。");
       }
       const id = randomUUID(), settingsRoot = join(this.root, "profiles", id);
       data.instances.push({ id, name: request.name.trim(), settingsRoot, resourceRoot: settingsRoot, paths, attached: request.mode === "existing" });

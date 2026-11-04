@@ -102,10 +102,8 @@ export function MaiBotConfigImportPanel({ disabled = false }: { disabled?: boole
               <div className="min-w-0 flex-1">
                 <CardTitle>导入 MaiBot 配置文件</CardTitle>
                 <CardDescription>
-                  覆盖 <code className="rounded bg-muted px-1 py-0.5 text-[11px]">MaiBot/config</code>
-                  目录下的 <code className="rounded bg-muted px-1 py-0.5 text-[11px]">bot_config.toml</code>
-                  或 <code className="rounded bg-muted px-1 py-0.5 text-[11px]">model_config.toml</code>。
-                  覆盖前会对原文件做时间戳备份。
+                  导入所选机器人的 bot_config.toml 或 model_config.toml，导入前备份原文件。
+                  公共设置保持不变，同名但不同配置的模型会自动区分。
                 </CardDescription>
               </div>
             </div>

@@ -1,7 +1,8 @@
+import { readWorkspaceBots } from "./maibot-workspace";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { MaiBotModuleUpdateProgress, ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
 import { PythonDependencyManager } from "./python-dependency-manager";
 import { explainMaiBotUpdateError } from "../../shared/maibot-update-error";
@@ -10,7 +11,13 @@ import { deploymentFile, isMaiBotPackageMode, maiBotEnvironmentRoot, readMaiBotD
 
 type Progress = (progress: MaiBotModuleUpdateProgress) => void;
 type DeploymentPython = Pick<PythonDependencyManager, "ensurePythonEnvironment" | "installMaiBot" | "execute">;
-const INSTANCE_STATE = ["config", "data", "plugins"] as const;
+const INSTANCE_STATE = ["config", "data", "plugins", "host", "bots"] as const;
+
+function initializationCommand(version: string, root: string): string[] {
+  const [major, minor] = version.split(".").map(Number);
+  const command = major > 1 || (major === 1 && minor >= 4) ? ["host", "list"] : ["init"];
+  return ["-I", "-m", "src.cli.tool", ...command, "--directory", root];
+}
 
 /** Environments are created at their final path; only the small deployment record is replaced. */
 export class MaiBotDeploymentManager {
@@ -28,8 +35,8 @@ export class MaiBotDeploymentManager {
     await this.recoverInterruptedInstall();
     if (this.getState()) {
       const root = this.paths.maibotRoot;
-      if (!existsSync(join(root, "config", "bot_config.toml")) || !existsSync(join(root, "config", "model_config.toml"))) {
-        await this.getPython().execute(["-I", "-m", "src.cli.tool", "init", "--directory", root]);
+      if (!existsSync(join(root, "host", "registry.sqlite3")) && (!existsSync(join(root, "config", "bot_config.toml")) || !existsSync(join(root, "config", "model_config.toml")))) {
+        await this.getPython().execute(initializationCommand(this.getState()!.packageVersion, root));
       }
       return;
     }
@@ -101,16 +108,10 @@ export class MaiBotDeploymentManager {
         sourceInstance ? `安装 MaiBot ${version}；保留原 Git 分支、源码和本地修改` : `MaiBot ${version}`);
       signal.throwIfAborted();
       await python.ensurePythonEnvironment((line) => emit("preparing", 10, "准备独立 Python 环境", line));
-      const pluginRequirements: string[] = [];
-      const plugins = await readdir(join(root, "plugins"), { withFileTypes: true }).catch(() => []);
-      for (const plugin of plugins) {
-        const path = join(root, "plugins", plugin.name, "requirements.txt");
-        if (plugin.isDirectory() && existsSync(path)) pluginRequirements.push(path);
-      }
       let installingDependencies = false;
       const lock = before?.packageVersion === version
         ? join(maiBotEnvironmentRoot(root, before.generation), "onekey-requirements.txt") : undefined;
-      const installed = await python.installMaiBot(version, pluginRequirements,
+      const installed = await python.installMaiBot(version,
         (line) => emit(installingDependencies ? "installing-dependencies" : "installing", installingDependencies ? 50 : 30,
           installingDependencies ? "正在安装依赖" : "正在安装 MaiBot", line), signal,
         lock && existsSync(lock) ? lock : undefined,
@@ -145,13 +146,31 @@ export class MaiBotDeploymentManager {
           present.push(name);
         }
       }
-      await writeFile(join(snapshot, "snapshot.json"), JSON.stringify({ present }));
+      // Registered Bots may live outside the workspace. Include their mutable state too.
+      const external: { botId: string; directory: string; present: string[] }[] = [];
+      const bots = existsSync(join(root, "host", "registry.sqlite3")) ? await readWorkspaceBots(root, this.getPython().getPythonPath()) : [];
+      for (const bot of bots) {
+        const rel = relative(root, bot.directory);
+        if (!rel || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) continue;
+        const entries: string[] = [];
+        for (const name of ["config", "data", "plugins"]) {
+          if (existsSync(join(bot.directory, name))) {
+            signal.throwIfAborted();
+            await cp(join(bot.directory, name), join(snapshot, "external", bot.bot_id, name), { recursive: true });
+            entries.push(name);
+          }
+        }
+        external.push({ botId: bot.bot_id, directory: bot.directory, present: entries });
+      }
+      await writeFile(join(snapshot, "snapshot.json"), JSON.stringify({ present, external }));
       snapshotReady = true;
       signal.throwIfAborted();
       await writeFile(this.pendingFile(), JSON.stringify({ generation }));
       initializationStarted = true;
       emit("validating", 85, "初始化实例（保留已有配置）");
-      await python.execute(["-I", "-m", "src.cli.tool", "init", "--directory", root], (line) => emit("validating", 86, "初始化实例", line), signal);
+      if (!existsSync(join(root, "host", "registry.sqlite3"))) {
+        await python.execute(initializationCommand(actual, root), (line) => emit("validating", 86, "初始化实例", line), signal);
+      }
       const packages = await python.execute(["-I", "-m", "pip", "freeze", "--all"], undefined, signal);
       await writeFile(join(environment, "onekey-requirements.txt"), `${packages.join("\n")}\n`);
       signal.throwIfAborted();
@@ -236,29 +255,44 @@ export class MaiBotDeploymentManager {
     maiBotEnvironmentRoot(this.paths.maibotRoot, generation); // Validate before resolving snapshot paths.
     const root = this.paths.maibotRoot;
     const snapshot = join(root, ".onekey", "snapshots", generation);
-    const record = JSON.parse(await readFile(join(snapshot, "snapshot.json"), "utf8")) as { present: string[] };
-    // Prepare every replacement before changing any live directory.
-    const transaction = join(root, ".onekey", `restore-${randomUUID()}`);
-    const swapped: string[] = [];
-    await mkdir(transaction, { recursive: true });
-    try {
-      for (const name of INSTANCE_STATE) {
-        if (record.present.includes(name)) await cp(join(snapshot, name), join(transaction, `new-${name}`), { recursive: true });
+    const record = JSON.parse(await readFile(join(snapshot, "snapshot.json"), "utf8")) as {
+      present: string[]; external?: { botId: string; directory: string; present: string[] }[];
+    };
+    const targets = INSTANCE_STATE.map((name) => ({ target: join(root, name), source: join(snapshot, name), present: record.present.includes(name) }));
+    if (record.external?.length) {
+      const bots = await readWorkspaceBots(snapshot, this.getPython().getPythonPath());
+      for (const external of record.external) {
+        const bot = bots.find((item) => item.bot_id === external.botId && item.directory === external.directory);
+        if (!bot) throw new Error("备份中的外部机器人目录与登记记录不一致，拒绝回滚");
+        for (const name of ["config", "data", "plugins"]) targets.push({
+          target: join(bot.directory, name), source: join(snapshot, "external", bot.bot_id, name), present: external.present.includes(name),
+        });
       }
-      for (const name of INSTANCE_STATE) {
-        if (existsSync(join(root, name))) await rename(join(root, name), join(transaction, `old-${name}`));
-        swapped.push(name);
-        if (record.present.includes(name)) await rename(join(transaction, `new-${name}`), join(root, name));
+    }
+    // Prepare every replacement before changing any live directory.
+    const transactionId = randomUUID();
+    // Stage beside each target so external Bots on another volume can be renamed atomically.
+    const staging = targets.map((entry, index) => join(dirname(entry.target), `.onekey-restore-${transactionId}-${index}`));
+    const swapped: number[] = [];
+    try {
+      for (const [index, entry] of targets.entries()) {
+        await mkdir(staging[index], { recursive: true });
+        if (entry.present) await cp(entry.source, join(staging[index], "new"), { recursive: true });
+      }
+      for (const [index, entry] of targets.entries()) {
+        if (existsSync(entry.target)) await rename(entry.target, join(staging[index], "old"));
+        swapped.push(index);
+        if (entry.present) await rename(join(staging[index], "new"), entry.target);
       }
       await commit?.();
     } catch (error) {
-      for (const name of swapped.reverse()) {
-        await rm(join(root, name), { recursive: true, force: true });
-        if (existsSync(join(transaction, `old-${name}`))) await rename(join(transaction, `old-${name}`), join(root, name));
+      for (const index of swapped.reverse()) {
+        await rm(targets[index].target, { recursive: true, force: true });
+        if (existsSync(join(staging[index], "old"))) await rename(join(staging[index], "old"), targets[index].target);
       }
       throw error;
     }
-    await rm(transaction, { recursive: true, force: true }).catch(() => undefined);
+    await Promise.all(staging.map((path) => rm(path, { recursive: true, force: true }).catch(() => undefined)));
   }
 
   async rollback(): Promise<void> {
