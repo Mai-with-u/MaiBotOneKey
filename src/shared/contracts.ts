@@ -216,6 +216,7 @@ export interface ModuleRuntimeVersions {
   maibotLocalSource?: "pyproject" | "pypi" | "unknown";
   maibotDeploymentMode?: "source" | "pypi";
   maibotCanRollback?: boolean;
+  maibotRollbackRestoresData?: boolean;
   maibotSelectedChannel?: "stable" | "custom";
   maibotSelectedTarget?: ModuleUpdateTarget;
   maibotSelectedAt?: number;

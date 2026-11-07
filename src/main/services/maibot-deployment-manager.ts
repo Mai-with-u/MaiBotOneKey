@@ -2,12 +2,12 @@ import { readWorkspaceBots } from "./maibot-workspace";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { MaiBotModuleUpdateProgress, ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
 import { PythonDependencyManager } from "./python-dependency-manager";
 import { explainMaiBotUpdateError } from "../../shared/maibot-update-error";
 import { SourceSettingsManager } from "./source-settings-manager";
-import { deploymentFile, isMaiBotPackageMode, maiBotEnvironmentRoot, readMaiBotDeployment, type MaiBotDeployment } from "./maibot-deployment-state";
+import { deploymentFile, isMaiBotPackageMode, maiBotEnvironmentRoot, readMaiBotDeployment, validGeneration, type MaiBotDeployment } from "./maibot-deployment-state";
 
 type Progress = (progress: MaiBotModuleUpdateProgress) => void;
 type DeploymentPython = Pick<PythonDependencyManager, "ensurePythonEnvironment" | "installMaiBot" | "execute">;
@@ -33,26 +33,31 @@ export class MaiBotDeploymentManager {
   async ensureInstalled(onProgress?: Progress): Promise<void> {
     if (!this.isPackageMode()) return;
     await this.recoverInterruptedInstall();
-    if (this.getState()) {
-      const root = this.paths.maibotRoot;
-      if (!existsSync(join(root, "host", "registry.sqlite3")) && (!existsSync(join(root, "config", "bot_config.toml")) || !existsSync(join(root, "config", "model_config.toml")))) {
-        await this.getPython().execute(initializationCommand(this.getState()!.packageVersion, root));
+    let deployment = this.getState();
+    if (!deployment) {
+      let version: string;
+      try {
+        onProgress?.({ phase: "preparing", percent: 2, label: "正在查询 MaiBot 最新正式版", updatedAt: Date.now() });
+        // listMaiBotVersions already applies PEP 440 ordering and Python compatibility checks.
+        const packages = await this.getPython().listMaiBotVersions();
+        const latest = packages.versions.find((item) => !item.isPrerelease && !item.isDev);
+        if (!latest) throw new Error("当前 Python 包源没有兼容的 MaiBot 正式版，请检查包源设置后重试");
+        version = latest.version;
+      } catch (error) {
+        onProgress?.({ phase: "failed", percent: 2, label: "查询 MaiBot 正式版失败", detail: String(error), updatedAt: Date.now() });
+        throw error;
       }
-      return;
+      await this.install(version, onProgress);
+      deployment = this.getState()!;
     }
-    let version: string;
-    try {
-      onProgress?.({ phase: "preparing", percent: 2, label: "正在查询 MaiBot 最新正式版", updatedAt: Date.now() });
-      // listMaiBotVersions already applies PEP 440 ordering and Python compatibility checks.
-      const packages = await this.getPython().listMaiBotVersions();
-      const latest = packages.versions.find((item) => !item.isPrerelease && !item.isDev);
-      if (!latest) throw new Error("当前 Python 包源没有兼容的 MaiBot 正式版，请检查包源设置后重试");
-      version = latest.version;
-    } catch (error) {
-      onProgress?.({ phase: "failed", percent: 2, label: "查询 MaiBot 正式版失败", detail: String(error), updatedAt: Date.now() });
-      throw error;
+    const root = this.paths.maibotRoot;
+    const command = initializationCommand(deployment.packageVersion, root);
+    const needsInitialization = command.includes("host")
+      ? !existsSync(join(root, "host", "registry.sqlite3"))
+      : !existsSync(join(root, "config", "bot_config.toml")) || !existsSync(join(root, "config", "model_config.toml"));
+    if (needsInitialization) {
+      await this.getPython().execute(command);
     }
-    await this.install(version, onProgress);
   }
 
   cancel(): boolean {
@@ -75,7 +80,7 @@ export class MaiBotDeploymentManager {
 
   private async save(state: MaiBotDeployment): Promise<void> {
     const path = deploymentFile(this.paths.maibotRoot);
-    await mkdir(this.paths.maibotRoot, { recursive: true });
+    await mkdir(dirname(path), { recursive: true });
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -84,14 +89,13 @@ export class MaiBotDeploymentManager {
   }
 
   private async installIntoNewEnvironment(version: string, signal: AbortSignal, onProgress?: Progress): Promise<ModuleUpdateResult> {
-    await this.recoverInterruptedInstall();
+    if (existsSync(this.pendingFile())) throw new Error("旧更新中断，请先启动 MaiBot 完成恢复，再更新程序包。");
     const before = this.getState();
     const generation = randomUUID();
     const root = this.paths.maibotRoot;
     // Migration never checks out a branch or modifies Git metadata/source files.
     const sourceInstance = !before && existsSync(join(root, "bot.py"));
     const environment = maiBotEnvironmentRoot(root, generation);
-    const snapshot = join(root, ".onekey", "snapshots", generation);
     const python = this.createEnvironment({ ...this.paths, pythonEnvRoot: environment });
     const output: string[] = [];
     let stage = "准备独立 Python 环境";
@@ -101,8 +105,6 @@ export class MaiBotDeploymentManager {
       if (log) output.push(log);
       try { onProgress?.({ phase, percent, label, detail: log, log, updatedAt: Date.now() }); } catch { /* UI listeners cannot invalidate a committed installation. */ }
     };
-    let snapshotReady = false;
-    let initializationStarted = false;
     try {
       emit("preparing", 5, sourceInstance ? "准备将源码实例迁移到 PyPI" : "准备独立 Python 环境",
         sourceInstance ? `安装 MaiBot ${version}；保留原 Git 分支、源码和本地修改` : `MaiBot ${version}`);
@@ -124,86 +126,39 @@ export class MaiBotDeploymentManager {
       await python.execute(["-I", "-m", "pip", "check"], (line) => emit("validating", 67, "检查依赖兼容性", line), signal);
       const probe = await python.execute(["-I", "-c", [
         "import json, pathlib, sys",
-        "from importlib.metadata import version",
+        "from importlib.metadata import distribution",
         "from packaging.version import Version",
-        "import src.cli.tool, src.common.paths",
-        "actual=version('maibot')",
+        "package=distribution('maibot')",
+        "actual=package.version",
         "assert Version(actual)==Version(sys.argv[1]), f'Unexpected MaiBot version: {actual}'",
-        "resources=src.common.paths.RESOURCE_ROOT",
-        "assert src.common.paths.PACKAGED_INSTALL, 'MaiBot was imported from source instead of the installed wheel'",
-        "for name in ['EULA.md','PRIVACY.md','pyproject.toml']:",
-        " assert (resources/name).is_file(), f'Missing package resource: {name}'",
+        "environment=pathlib.Path(sys.argv[2]).resolve()",
+        "for name in ['src/cli/tool.py','src/_resources/EULA.md','src/_resources/PRIVACY.md','src/_resources/pyproject.toml']:",
+        " path=pathlib.Path(package.locate_file(name)).resolve()",
+        " assert path.is_relative_to(environment) and path.is_file(), f'Missing installed package file: {name}'",
         "print(json.dumps({'version':actual}))",
-      ].join("\n"), version], undefined, signal);
+      ].join("\n"), version, environment], undefined, signal);
       const actual = (JSON.parse(probe.join("\n")) as { version: string }).version;
-      emit("validating", 72, "备份实例配置、数据与插件");
-      await mkdir(snapshot, { recursive: true });
-      const present: string[] = [];
-      for (const name of INSTANCE_STATE) {
-        signal.throwIfAborted();
-        if (existsSync(join(root, name))) {
-          await cp(join(root, name), join(snapshot, name), { recursive: true });
-          present.push(name);
-        }
-      }
-      // Registered Bots may live outside the workspace. Include their mutable state too.
-      const external: { botId: string; directory: string; present: string[] }[] = [];
-      const bots = existsSync(join(root, "host", "registry.sqlite3")) ? await readWorkspaceBots(root, this.getPython().getPythonPath()) : [];
-      for (const bot of bots) {
-        const rel = relative(root, bot.directory);
-        if (!rel || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) continue;
-        const entries: string[] = [];
-        for (const name of ["config", "data", "plugins"]) {
-          if (existsSync(join(bot.directory, name))) {
-            signal.throwIfAborted();
-            await cp(join(bot.directory, name), join(snapshot, "external", bot.bot_id, name), { recursive: true });
-            entries.push(name);
-          }
-        }
-        external.push({ botId: bot.bot_id, directory: bot.directory, present: entries });
-      }
-      await writeFile(join(snapshot, "snapshot.json"), JSON.stringify({ present, external }));
-      snapshotReady = true;
-      signal.throwIfAborted();
-      await writeFile(this.pendingFile(), JSON.stringify({ generation }));
-      initializationStarted = true;
-      emit("validating", 85, "初始化实例（保留已有配置）");
-      if (!existsSync(join(root, "host", "registry.sqlite3"))) {
-        await python.execute(initializationCommand(actual, root), (line) => emit("validating", 86, "初始化实例", line), signal);
-      }
       const packages = await python.execute(["-I", "-m", "pip", "freeze", "--all"], undefined, signal);
       await writeFile(join(environment, "onekey-requirements.txt"), `${packages.join("\n")}\n`);
       signal.throwIfAborted();
       emit("switching", 95, "切换至已验证的环境");
       await this.save({ schema: 1, mode: "pypi", generation, packageVersion: actual, sourceUrl: installed.sourceUrl,
-        installedAt: Date.now(), snapshot: generation,
+        installedAt: Date.now(),
         previous: before ? { mode: "pypi", generation: before.generation, packageVersion: before.packageVersion }
           : sourceInstance ? { mode: "source" } : undefined });
-      await rm(this.pendingFile(), { force: true }).catch(() => undefined);
-      await this.pruneUnusedGenerations().catch((error) => emit("switching", 98, "旧环境清理未完成", String(error)));
+      await this.cleanupUnusedGenerations("environments").catch((error) => emit("switching", 98, "旧环境清理未完成", String(error)));
       emit("completed", 100, "MaiBot 安装完成", `${before?.packageVersion ?? (sourceInstance ? "源码实例" : "未安装")} → ${actual}`);
       return { moduleId: "maibot", moduleName: "MaiBot", cwd: root, before: before?.packageVersion,
         after: actual, remote: installed.sourceUrl, changed: true, output, updatedAt: Date.now(), source: "remote" };
     } catch (error) {
-      // Only init can have touched the instance. Failed downloads never replace the active record.
       const detail = error instanceof Error ? error.message : String(error);
       let cleanupWarning: string | undefined;
-      if (snapshotReady && initializationStarted) {
-        try { await this.restoreSnapshot(generation); }
-        catch (restoreError) {
-          const message = `${explainMaiBotUpdateError(detail, stage)}\n配置恢复失败，请保留实例目录并联系维护者。`;
-          const errorDetails = `${detail}\n\n配置恢复错误：${String(restoreError)}`;
-          try { onProgress?.({ phase: "failed", percent: lastPercent, label: "MaiBot 更新失败", detail: message, errorDetails, log: message, updatedAt: Date.now() }); } catch { /* UI listener */ }
-          // Retain pending.json and the snapshot for startup recovery.
-          throw new Error(`${message}\n\n技术详情：${errorDetails}`, { cause: error });
-        }
-      }
       try {
         await this.cleanupFailedInstall(environment);
       } catch (cleanupError) {
         cleanupWarning = `未启用的新环境清理失败，原环境不受影响；残留文件不会用于启动。\n${String(cleanupError)}`;
       }
-      const message = `${explainMaiBotUpdateError(detail, stage)}\n${before || sourceInstance ? "原版本未切换，可以继续使用。" : "新环境未启用，请处理后重新安装。"}`;
+      const message = `${explainMaiBotUpdateError(detail, stage)}\n${before || sourceInstance ? "原运行环境未切换，可以继续使用。" : "新环境未启用，请处理后重新安装。"}`;
       output.push(detail);
       try { onProgress?.({ phase: "failed", percent: lastPercent, label: "MaiBot 更新失败", detail: message, errorDetails: detail, cleanupWarning, log: detail, updatedAt: Date.now() }); } catch { /* UI listener */ }
       throw new Error(`${message}\n\n技术详情：${detail}`, { cause: error });
@@ -213,31 +168,36 @@ export class MaiBotDeploymentManager {
   private pendingFile(): string { return join(this.paths.maibotRoot, ".onekey", "pending.json"); }
 
   private async cleanupFailedInstall(environment: string): Promise<void> {
-    await rm(this.pendingFile(), { force: true });
     // Windows may briefly retain executable handles after the installer exits.
     await rm(environment, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 
-  private async pruneUnusedGenerations(): Promise<void> {
+  async cleanupUnusedGenerations(kind: "environments" | "snapshots"): Promise<void> {
+    if (this.paths.maibotDevMode === "source" || !existsSync(this.paths.maibotRoot)) return;
     const current = this.getState();
-    if (!current) return;
-    const root = await realpath(this.paths.maibotRoot);
-    for (const kind of ["environments", "snapshots"] as const) {
-      const parent = join(root, ".onekey", kind);
-      const canonical = await realpath(parent);
-      const diff = relative(root, canonical);
-      if (!diff || isAbsolute(diff) || diff === ".." || diff.startsWith(`..${sep}`)) throw new Error(`环境目录超出实例范围：${parent}`);
-      const keep = kind === "environments"
-        ? [current.generation, current.previous?.mode === "pypi" ? current.previous.generation : undefined]
-        : [current.snapshot];
-      for (const entry of await readdir(canonical, { withFileTypes: true })) {
-        if (!entry.isDirectory() || entry.isSymbolicLink() || keep.includes(entry.name) || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(entry.name)) continue;
-        const target = join(canonical, entry.name);
-        if (existsSync(join(target, kind === "environments" ? "maibot-python-env.json" : "snapshot.json"))) {
-          await rm(target, { recursive: true, force: true });
-        }
+    const hasPending = existsSync(this.pendingFile());
+    const pending = hasPending
+      ? (JSON.parse(await readFile(this.pendingFile(), "utf8")) as { generation: unknown }).generation
+      : undefined;
+    if (hasPending && !validGeneration(pending)) throw new Error("中断恢复记录无效，已保留旧备份。");
+    const parent = join(await realpath(this.paths.maibotRoot), ".onekey", kind);
+    if (!existsSync(parent)) return;
+    const canonical = await realpath(parent);
+    if (relative(parent, canonical)) throw new Error(`跳过被重定向的清理目录：${parent}`);
+    const keep = kind === "environments"
+      ? [current?.generation, current?.previous?.mode === "pypi" ? current.previous.generation : undefined]
+      : [current?.previous ? current.snapshot : undefined];
+    const protectedNames = new Set([...keep, pending].map((name) => typeof name === "string" ? name.toLowerCase() : undefined));
+    const failures: unknown[] = [];
+    for (const entry of await readdir(canonical, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || protectedNames.has(entry.name) || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(entry.name)) continue;
+      const target = join(canonical, entry.name);
+      // The UUID directory also identifies an interrupted snapshot copy without a manifest.
+      if (kind === "snapshots" || existsSync(join(target, "maibot-python-env.json"))) {
+        await rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch((error) => failures.push(error));
       }
     }
+    if (failures.length) throw new Error(failures.map(String).join("\n"));
   }
 
   private async recoverInterruptedInstall(): Promise<void> {
@@ -297,15 +257,19 @@ export class MaiBotDeploymentManager {
 
   async rollback(): Promise<void> {
     if (this.pending) throw new Error("MaiBot 安装或更新正在进行");
+    await this.recoverInterruptedInstall();
     const current = this.getState();
-    if (!current?.previous || !current.snapshot) throw new Error("没有可恢复的 MaiBot 环境");
+    if (!current?.previous) throw new Error("没有可恢复的 MaiBot 环境");
     if (current.previous.mode === "pypi" && !existsSync(maiBotEnvironmentRoot(this.paths.maibotRoot, current.previous.generation))) {
       throw new Error("上一 Python 环境缺失，无法恢复");
     }
     const previous = current.previous;
-    await this.restoreSnapshot(current.snapshot, async () => {
+    const restoreEnvironment = async () => {
       if (previous.mode === "source") await rm(deploymentFile(this.paths.maibotRoot));
       else await this.save({ ...previous, schema: 1, installedAt: Date.now(), sourceUrl: current.sourceUrl });
-    });
+    };
+    if (current.snapshot) await this.restoreSnapshot(current.snapshot, restoreEnvironment);
+    else await restoreEnvironment();
+    await this.cleanupUnusedGenerations("environments").catch(() => undefined);
   }
 }

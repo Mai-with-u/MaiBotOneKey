@@ -1500,7 +1500,8 @@ export function registerAppIpc({
 
     const deployment = readMaiBotDeployment(maibotRoot);
     versions.maibotDeploymentMode = moduleUpdater.isPackageMode() ? "pypi" : "source";
-    versions.maibotCanRollback = Boolean(deployment?.previous && deployment.snapshot);
+    versions.maibotCanRollback = Boolean(deployment?.previous);
+    versions.maibotRollbackRestoresData = Boolean(deployment?.previous && deployment.snapshot);
 
     const pyprojectVersion = await readPyprojectVersion(
       join(maibotRoot, "pyproject.toml"),
@@ -2185,7 +2186,7 @@ export function registerAppIpc({
         "system",
         `MaiBot update finished: ${result.before ?? "-"} -> ${result.after ?? "-"} (${result.changed ? "changed" : "unchanged"})`,
       );
-      await broadcastSnapshot();
+      await broadcastSnapshot().catch((error) => logStore.append("desktop", "system", `更新已完成，刷新状态失败：${String(error)}`));
       return result;
     },
   );

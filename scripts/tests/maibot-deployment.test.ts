@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
@@ -14,7 +15,7 @@ import { activePythonEnvironmentRoot, deploymentFile, isMaiBotPackageMode, MAIBO
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
-async function fixture(source = false, failure?: "download" | "dependencies" | "init" | "probe") {
+async function fixture(source = false, failure?: "download" | "dependencies" | "probe") {
   const root = await mkdtemp(join(tmpdir(), "maibot-pypi-")); roots.push(root);
   const paths = { installRoot: root, maibotRoot: join(root, "实例 space"), pythonEnvRoot: join(root, "legacy-python"), userDataRoot: join(root, "settings"), defaultResourceRoot: root } as RuntimePaths;
   const instance = paths.maibotRoot;
@@ -49,18 +50,6 @@ async function fixture(source = false, failure?: "download" | "dependencies" | "
         if (failure === "probe") throw new Error("wrong imported package");
         return [JSON.stringify({ version: installedVersion })];
       }
-      if (args.includes("host") && args.includes("list")) {
-        await mkdir(join(instance, "host"), { recursive: true });
-        await writeFile(join(instance, "host", "registry.sqlite3"), "generated registry");
-      }
-      if (args.includes("init")) {
-        if (failure === "init") {
-          await writeFile(join(instance, "config", "bot_config.toml"), "partial init");
-          await writeFile(join(instance, "config", "model_config.toml"), "partial model");
-          throw new Error("init failed");
-        }
-        await writeFile(join(instance, "config", "model_config.toml"), "generated model");
-      }
       return args.includes("freeze") ? ["maibot==" + installedVersion] : [];
     },
   }));
@@ -76,9 +65,15 @@ test("fresh instances use PyPI; source directories remain source until migration
 });
 
 test("first installation selects the latest compatible stable package and later starts do not query or upgrade", async () => {
-  const { manager, commands } = await fixture();
+  const { manager, instance, commands } = await fixture();
   let queries = 0;
   manager.getPython = () => ({
+    async execute(args: string[]) {
+      commands.push(args);
+      await mkdir(join(instance, "host"), { recursive: true });
+      await writeFile(join(instance, "host", "registry.sqlite3"), "generated registry");
+      return [];
+    },
     async listMaiBotVersions() {
       queries++;
       return { versions: [
@@ -159,7 +154,7 @@ test("service commands use the selected Python environment and an isolated UTF-8
   } finally { services.dispose(); }
 });
 
-test("migration commits a separate environment and rollback restores data and full plugin state", async () => {
+test("migration commits a separate environment and rollback keeps current data and plugins", async () => {
   const { paths, instance, manager, commands } = await fixture(true);
   await manager.install("1.3.8");
   const state = readMaiBotDeployment(instance)!;
@@ -167,18 +162,18 @@ test("migration commits a separate environment and rollback restores data and fu
   expect(activePythonEnvironmentRoot(paths)).toBe(maiBotEnvironmentRoot(instance, state.generation));
   expect(await readFile(join(instance, "bot.py"), "utf8")).toBe("old source");
   expect(await readFile(join(activePythonEnvironmentRoot(paths), "onekey-requirements.txt"), "utf8")).toContain("maibot==1.3.8");
-  expect(commands.some((args) => args.includes("init") && args.includes(instance))).toBe(true);
+  expect(commands.some((args) => args.includes("init"))).toBe(false);
   await writeFile(join(instance, "data", "MaiBot.db"), "migrated database");
   await writeFile(join(instance, "plugins/example", "config.toml"), "new plugin config");
   await manager.rollback();
   expect(isMaiBotPackageMode(paths)).toBe(false);
-  expect(await readFile(join(instance, "data", "MaiBot.db"), "utf8")).toBe("original data");
-  expect(await readFile(join(instance, "plugins/example", "config.toml"), "utf8")).toBe("original plugin");
+  expect(await readFile(join(instance, "data", "MaiBot.db"), "utf8")).toBe("migrated database");
+  expect(await readFile(join(instance, "plugins/example", "config.toml"), "utf8")).toBe("new plugin config");
   expect(existsSync(join(instance, "config", "model_config.toml"))).toBe(false);
 });
 
 for (const ref of ["main", "dev", "feature/local-core", "detached"] as const) {
-  for (const failure of [undefined, "init"] as const) {
+  for (const failure of [undefined, "probe"] as const) {
     test(`legacy ${ref} migration ${failure ? "failure" : "and rollback"} preserves Git and local source changes`, async () => {
       const { paths, instance, manager } = await fixture(true, failure);
       const git = (...args: string[]) => execFileSync("git", args, { cwd: instance, encoding: "utf8", windowsHide: true }).trim();
@@ -208,7 +203,7 @@ for (const ref of ["main", "dev", "feature/local-core", "detached"] as const) {
       const updater = new ModuleUpdater(paths);
       updater.setDeploymentManager(manager);
       if (failure) {
-        await expect(updater.updateMaiBot({ type: "package", name: "1.3.8" })).rejects.toThrow("init failed");
+        await expect(updater.updateMaiBot({ type: "package", name: "1.3.8" })).rejects.toThrow("wrong imported package");
       } else {
         await updater.updateMaiBot({ type: "package", name: "1.3.8" });
         expect(isMaiBotPackageMode(paths)).toBe(true);
@@ -237,7 +232,7 @@ test("old Git update targets cannot trigger installation or mutate source instan
   expect(await readFile(join(instance, "bot.py"), "utf8")).toBe("old source");
 });
 
-for (const failure of ["download", "dependencies", "probe", "init"] as const) {
+for (const failure of ["download", "dependencies", "probe"] as const) {
   test(`${failure} failure preserves the source deployment and original instance`, async () => {
     const { instance, manager } = await fixture(true, failure);
     await expect(manager.install("1.3.8")).rejects.toThrow();
@@ -310,17 +305,20 @@ test("successful installs retain only the current and previous managed environme
   expect(manager.getState()!.packageVersion).toBe("1.3.9");
 });
 
-test("an interrupted initializer is recovered from its snapshot before the next install", async () => {
+test("startup recovers an interrupted legacy initializer from its snapshot", async () => {
   const { instance, manager } = await fixture();
   await manager.install("1.3.8");
   const current = manager.getState()!;
   const interrupted = "interrupted-install";
   const snapshot = join(instance, ".onekey", "snapshots", interrupted);
+  await writeFile(join(instance, "config", "model_config.toml"), "original model");
   await mkdir(snapshot, { recursive: true });
   for (const name of ["config", "data", "plugins"]) await cp(join(instance, name), join(snapshot, name), { recursive: true });
   await writeFile(join(snapshot, "snapshot.json"), JSON.stringify({ present: ["config", "data", "plugins"] }));
   await writeFile(join(instance, "config", "bot_config.toml"), "interrupted config");
   await writeFile(join(instance, ".onekey", "pending.json"), JSON.stringify({ generation: interrupted }));
+  await expect(manager.install("1.3.9")).rejects.toThrow("旧更新中断");
+  expect(await readFile(join(instance, "config", "bot_config.toml"), "utf8")).toBe("interrupted config");
   await manager.ensureInstalled();
   expect(await readFile(join(instance, "config", "bot_config.toml"), "utf8")).toBe("original config");
   expect(manager.getState()!.generation).toBe(current.generation);
@@ -344,7 +342,7 @@ test("startup notice can be dismissed with missing documents and stays dismissed
 });
 
 
-test("1.4 workspace snapshots restore public settings, nested Bots and registered external Bots", async () => {
+test("1.4 workspace updates and rollbacks keep public settings and local and external Bot data", async () => {
   const { manager, instance, commands } = await fixture(true);
   const external = await mkdtemp(join(tmpdir(), "maibot-external-")); roots.push(external);
   for (const directory of [join(instance, "host"), join(instance, "bots", "b", "data"), join(external, "data")]) await mkdir(directory, { recursive: true });
@@ -355,11 +353,74 @@ test("1.4 workspace snapshots restore public settings, nested Bots and registere
   manager.getPython = () => ({ getPythonPath: () => "python" }) as any;
   await manager.install("1.4.0");
   expect(commands.some((args) => args.includes("init"))).toBe(false);
+  expect(existsSync(join(instance, ".onekey", "snapshots"))).toBe(false);
   await writeFile(join(instance, "host", "config.toml"), "changed public");
   await writeFile(join(instance, "bots", "b", "data", "message.txt"), "changed B");
   await writeFile(join(external, "data", "message.txt"), "changed external");
   await manager.rollback();
-  expect(await readFile(join(instance, "host", "config.toml"), "utf8")).toBe("public settings");
-  expect(await readFile(join(instance, "bots", "b", "data", "message.txt"), "utf8")).toBe("Bot B original");
-  expect(await readFile(join(external, "data", "message.txt"), "utf8")).toBe("external original");
+  expect(await readFile(join(instance, "host", "config.toml"), "utf8")).toBe("changed public");
+  expect(await readFile(join(instance, "bots", "b", "data", "message.txt"), "utf8")).toBe("changed B");
+  expect(await readFile(join(external, "data", "message.txt"), "utf8")).toBe("changed external");
+});
+
+test("package update completes without running MaiBot or initializing its workspace", async () => {
+  const { manager, instance, commands } = await fixture();
+  await manager.install("1.4.0");
+  const before = manager.getState()!;
+  const phases: string[] = [];
+  await manager.install("1.4.1", (progress) => phases.push(progress.phase));
+  expect(phases.at(-1)).toBe("completed");
+  expect(manager.getState()?.previous).toMatchObject({ generation: before.generation });
+  expect(manager.getState()?.packageVersion).toBe("1.4.1");
+  expect(commands.every((args) => !args.some((arg) => ["init", "host", "run", "src.cli.tool"].includes(arg)))).toBe(true);
+  expect(existsSync(join(instance, "host"))).toBe(false);
+  expect(existsSync(join(instance, ".onekey", "snapshots"))).toBe(false);
+  expect(await readFile(join(instance, "data", "MaiBot.db"), "utf8")).toBe("original data");
+
+  manager.getPython = () => ({
+    async execute(args: string[]) {
+      expect(args).toContain("host");
+      throw new Error("workspace initialization failed");
+    },
+  }) as any;
+  await expect(manager.ensureInstalled()).rejects.toThrow("workspace initialization failed");
+  expect(manager.getState()?.packageVersion).toBe("1.4.1");
+});
+
+test("startup cleanup removes abandoned and incomplete snapshots while preserving referenced and unrelated directories", async () => {
+  const { manager, instance } = await fixture(true);
+  await manager.install("1.4.0");
+  const root = join(instance, ".onekey", "snapshots");
+  const active = randomUUID();
+  const abandoned = randomUUID();
+  const incomplete = randomUUID();
+  for (const name of [active, abandoned, incomplete, "unmanaged"]) await mkdir(join(root, name), { recursive: true });
+  await writeFile(join(root, abandoned, "snapshot.json"), JSON.stringify({ present: [] }));
+  await writeFile(join(root, incomplete, "partial-copy"), "unfinished");
+  await writeFile(deploymentFile(instance), JSON.stringify({ ...manager.getState(), snapshot: active }));
+
+  const pending = join(instance, ".onekey", "pending.json");
+  await writeFile(pending, JSON.stringify({ generation: abandoned }));
+  await manager.cleanupUnusedGenerations("snapshots");
+  expect(existsSync(join(root, abandoned))).toBe(true);
+  expect(existsSync(join(root, incomplete))).toBe(false);
+
+  await rm(pending);
+  await manager.cleanupUnusedGenerations("snapshots");
+  expect(existsSync(join(root, active))).toBe(true);
+  expect(existsSync(join(root, abandoned))).toBe(false);
+  expect(existsSync(join(root, incomplete))).toBe(false);
+  expect(existsSync(join(root, "unmanaged"))).toBe(true);
+});
+
+test("startup cleanup does not follow a redirected snapshot directory", async () => {
+  const { manager, instance } = await fixture();
+  await manager.install("1.4.0");
+  const external = await mkdtemp(join(tmpdir(), "maibot-backup-target-"));
+  roots.push(external);
+  const backup = join(external, randomUUID());
+  await mkdir(backup);
+  await symlink(external, join(instance, ".onekey", "snapshots"), process.platform === "win32" ? "junction" : "dir");
+  await expect(manager.cleanupUnusedGenerations("snapshots")).rejects.toThrow("重定向");
+  expect(existsSync(backup)).toBe(true);
 });

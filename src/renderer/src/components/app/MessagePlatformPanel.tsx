@@ -1661,7 +1661,7 @@ export function MessagePlatformPanel({
     try {
       await window.maibotDesktop.modules.updateMaiBot(target);
       toast.success("MaiBot 更新完成");
-      await refreshSnapshot();
+      await refreshSnapshot().catch(() => undefined);
     } catch (nextError) {
       const raw = messageFromError(nextError);
       const message = maiBotUpdateErrorSummary(raw);
@@ -2325,10 +2325,13 @@ export function MessagePlatformPanel({
                 disabled={busy !== null || maibotUpdateBlocked}
                 size="sm" variant="secondary"
                 onClick={() => {
-                  if (!window.confirm("恢复上一运行环境，并用更新前快照替换当前配置、数据和插件？更新后的这些数据将被替换。")) return;
+                  const restoresData = snapshot.moduleVersions.maibotRollbackRestoresData;
+                  if (!window.confirm(restoresData
+                    ? "恢复上一运行环境，并用旧版一键包的快照替换当前配置、数据和插件？更新后的这些数据将被替换。"
+                    : "切回上一运行环境？当前配置、数据和插件会保留。")) return;
                   setBusy("maibot:update");
                   void window.maibotDesktop?.modules.rollbackMaiBot()
-                    .then(() => refreshSnapshot()).then(() => toast.success("已恢复上一环境及实例数据"))
+                    .then(() => refreshSnapshot()).then(() => toast.success(restoresData ? "已恢复上一环境及实例数据" : "已恢复上一环境"))
                     .catch((nextError: unknown) => setError(messageFromError(nextError)))
                     .finally(() => setBusy(null));
                 }}>恢复上一环境</Button> : null}
