@@ -154,27 +154,30 @@ test("service commands use the selected Python environment and an isolated UTF-8
   } finally { services.dispose(); }
 });
 
-test("migration commits a separate environment and rollback keeps current data and plugins", async () => {
+test("migration commits a separate environment, deletes old source, and preserves instance data", async () => {
   const { paths, instance, manager, commands } = await fixture(true);
+  await mkdir(join(instance, "src"));
+  await writeFile(join(instance, "src", "__init__.py"), "");
+  await mkdir(join(instance, "logs"));
+  await writeFile(join(instance, "logs", "worker-console.log"), "original logs");
   await manager.install("1.3.8");
   const state = readMaiBotDeployment(instance)!;
-  expect(state.previous).toEqual({ mode: "source" });
+  expect(state.previous).toBeUndefined();
   expect(activePythonEnvironmentRoot(paths)).toBe(maiBotEnvironmentRoot(instance, state.generation));
-  expect(await readFile(join(instance, "bot.py"), "utf8")).toBe("old source");
+  expect(existsSync(join(instance, "bot.py"))).toBe(false);
+  expect(existsSync(join(instance, "src"))).toBe(false);
   expect(await readFile(join(activePythonEnvironmentRoot(paths), "onekey-requirements.txt"), "utf8")).toContain("maibot==1.3.8");
   expect(commands.some((args) => args.includes("init"))).toBe(false);
-  await writeFile(join(instance, "data", "MaiBot.db"), "migrated database");
-  await writeFile(join(instance, "plugins/example", "config.toml"), "new plugin config");
-  await manager.rollback();
-  expect(isMaiBotPackageMode(paths)).toBe(false);
-  expect(await readFile(join(instance, "data", "MaiBot.db"), "utf8")).toBe("migrated database");
-  expect(await readFile(join(instance, "plugins/example", "config.toml"), "utf8")).toBe("new plugin config");
+  await expect(manager.rollback()).rejects.toThrow("没有可恢复的 MaiBot PyPI 环境");
+  expect(await readFile(join(instance, "data", "MaiBot.db"), "utf8")).toBe("original data");
+  expect(await readFile(join(instance, "plugins/example", "config.toml"), "utf8")).toBe("original plugin");
+  expect(await readFile(join(instance, "logs", "worker-console.log"), "utf8")).toBe("original logs");
   expect(existsSync(join(instance, "config", "model_config.toml"))).toBe(false);
 });
 
 for (const ref of ["main", "dev", "feature/local-core", "detached"] as const) {
   for (const failure of [undefined, "probe"] as const) {
-    test(`legacy ${ref} migration ${failure ? "failure" : "and rollback"} preserves Git and local source changes`, async () => {
+    test(`legacy ${ref} migration ${failure ? "preserves source on failure" : "deletes source after switching"}`, async () => {
       const { paths, instance, manager } = await fixture(true, failure);
       const git = (...args: string[]) => execFileSync("git", args, { cwd: instance, encoding: "utf8", windowsHide: true }).trim();
       git("init", "--quiet", "--initial-branch=main");
@@ -204,21 +207,59 @@ for (const ref of ["main", "dev", "feature/local-core", "detached"] as const) {
       updater.setDeploymentManager(manager);
       if (failure) {
         await expect(updater.updateMaiBot({ type: "package", name: "1.3.8" })).rejects.toThrow("wrong imported package");
+        expect(isMaiBotPackageMode(paths)).toBe(false);
+        expect(activePythonEnvironmentRoot(paths)).toBe(paths.pythonEnvRoot);
+        await assertSource();
       } else {
         await updater.updateMaiBot({ type: "package", name: "1.3.8" });
         expect(isMaiBotPackageMode(paths)).toBe(true);
-        await assertSource();
-        await updater.rollbackMaiBot();
+        for (const name of [".git", ".gitignore", "bot.py", "src"]) expect(existsSync(join(instance, name))).toBe(false);
+        expect(await readFile(join(instance, "untracked.py"), "utf8")).toBe("untracked local code");
       }
-      expect(isMaiBotPackageMode(paths)).toBe(false);
-      expect(activePythonEnvironmentRoot(paths)).toBe(paths.pythonEnvRoot);
-      await assertSource();
       expect(await readFile(join(instance, "data", "MaiBot.db"), "utf8")).toBe("original data");
       expect(await readFile(join(instance, "config", "bot_config.toml"), "utf8")).toBe("original config");
       expect(await readFile(join(instance, "plugins/example", "config.toml"), "utf8")).toBe("original plugin");
     });
   }
 }
+
+test("launcher startup cleanup handles earlier migrations without following source junctions", async () => {
+  const { paths, instance, manager } = await fixture(true);
+  const external = join(paths.installRoot, "outside source");
+  await mkdir(external);
+  await writeFile(join(external, "keep.py"), "external source");
+  await symlink(external, join(instance, "src"), process.platform === "win32" ? "junction" : "dir");
+  await manager.cleanupLegacySource();
+  expect(existsSync(join(instance, "src"))).toBe(true);
+  const state = { schema: 1, mode: "pypi", generation: "existing", packageVersion: "1.4.0", sourceUrl: "https://pypi.org/simple",
+    installedAt: Date.now(), previous: { mode: "source" }, snapshot: "old-snapshot" };
+  await writeFile(deploymentFile(instance), JSON.stringify(state));
+  await expect(manager.rollback()).rejects.toThrow("没有可恢复的 MaiBot PyPI 环境");
+
+  await manager.cleanupLegacySource();
+  await manager.cleanupLegacySource();
+  expect(existsSync(join(instance, "bot.py"))).toBe(false);
+  expect(existsSync(join(instance, "src"))).toBe(false);
+  expect(await readFile(join(external, "keep.py"), "utf8")).toBe("external source");
+  expect(manager.getState()).toEqual({ ...state, previous: undefined, snapshot: undefined });
+
+  await mkdir(join(instance, "src"));
+  await writeFile(join(instance, "src", "__init__.py"), "");
+  await manager.cleanupLegacySource();
+  expect(existsSync(join(instance, "src"))).toBe(false);
+});
+
+test("cleanup failure after switching keeps the new environment and permits retry", async () => {
+  const { instance, manager } = await fixture(true);
+  const cleanup = manager.cleanupLegacySource.bind(manager);
+  manager.cleanupLegacySource = async () => { throw new Error("locked source file"); };
+  await expect(manager.install("1.4.0")).rejects.toThrow("MaiBot 1.4.0 已切换，旧源码清理失败");
+  const state = manager.getState()!;
+  expect(existsSync(join(maiBotEnvironmentRoot(instance, state.generation), "python.exe"))).toBe(true);
+  expect(existsSync(join(instance, "bot.py"))).toBe(true);
+  await cleanup();
+  expect(existsSync(join(instance, "bot.py"))).toBe(false);
+});
 
 test("old Git update targets cannot trigger installation or mutate source instances", async () => {
   const { paths, instance, manager, commands } = await fixture(true);
@@ -354,6 +395,7 @@ test("1.4 workspace updates and rollbacks keep public settings and local and ext
   await manager.install("1.4.0");
   expect(commands.some((args) => args.includes("init"))).toBe(false);
   expect(existsSync(join(instance, ".onekey", "snapshots"))).toBe(false);
+  await manager.install("1.4.1");
   await writeFile(join(instance, "host", "config.toml"), "changed public");
   await writeFile(join(instance, "bots", "b", "data", "message.txt"), "changed B");
   await writeFile(join(external, "data", "message.txt"), "changed external");
@@ -390,6 +432,7 @@ test("package update completes without running MaiBot or initializing its worksp
 test("startup cleanup removes abandoned and incomplete snapshots while preserving referenced and unrelated directories", async () => {
   const { manager, instance } = await fixture(true);
   await manager.install("1.4.0");
+  await manager.install("1.4.1");
   const root = join(instance, ".onekey", "snapshots");
   const active = randomUUID();
   const abandoned = randomUUID();

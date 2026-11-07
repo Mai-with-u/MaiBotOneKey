@@ -1500,8 +1500,8 @@ export function registerAppIpc({
 
     const deployment = readMaiBotDeployment(maibotRoot);
     versions.maibotDeploymentMode = moduleUpdater.isPackageMode() ? "pypi" : "source";
-    versions.maibotCanRollback = Boolean(deployment?.previous);
-    versions.maibotRollbackRestoresData = Boolean(deployment?.previous && deployment.snapshot);
+    versions.maibotCanRollback = deployment?.previous?.mode === "pypi";
+    versions.maibotRollbackRestoresData = versions.maibotCanRollback && Boolean(deployment?.snapshot);
 
     const pyprojectVersion = await readPyprojectVersion(
       join(maibotRoot, "pyproject.toml"),

@@ -1,7 +1,7 @@
 import type { MaiBotModuleUpdateProgress, ModuleTagOption, ModuleUpdateTarget, ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
 import type { MaiBotDeploymentManager } from "./maibot-deployment-manager";
 
-/** Core updates only install published packages; source checkouts are never changed. */
+/** Core updates install published packages and migrate legacy source instances to PyPI. */
 export class ModuleUpdater {
   private deploymentManager?: MaiBotDeploymentManager;
   constructor(private readonly paths: RuntimePaths) {}

@@ -1,7 +1,7 @@
 import { readWorkspaceBots } from "./maibot-workspace";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { MaiBotModuleUpdateProgress, ModuleUpdateResult, RuntimePaths } from "../../shared/contracts";
 import { PythonDependencyManager } from "./python-dependency-manager";
@@ -12,6 +12,14 @@ import { deploymentFile, isMaiBotPackageMode, maiBotEnvironmentRoot, readMaiBotD
 type Progress = (progress: MaiBotModuleUpdateProgress) => void;
 type DeploymentPython = Pick<PythonDependencyManager, "ensurePythonEnvironment" | "installMaiBot" | "execute">;
 const INSTANCE_STATE = ["config", "data", "plugins", "host", "bots"] as const;
+// Root entries shipped with the old source tree. Keep bot.py last so cleanup can resume after interruption.
+const LEGACY_SOURCE_ENTRIES = [
+  ".coderabbit.yaml", ".devcontainer", ".dockerignore", ".git", ".gitattributes", ".github", ".gitignore",
+  ".pre-commit-config.yaml", "AGENTS.md", "CLAUDE.md", "CODE_OF_CONDUCT.md", "Dockerfile", "EULA.md", "LICENSE",
+  "MANIFEST.in", "PRIVACY.md", "README.md", "changelogs", "crowdin.yml", "dashboard", "depends-data",
+  "docker-compose.yml", "docker-entrypoint.sh", "docs", "locales", "news_server", "pet-clients", "prompts",
+  "pyproject.toml", "pytests", "requirements.txt", "scripts", "setup.py", "src", "template", "tests", "uv.lock", "bot.py",
+] as const;
 
 function initializationCommand(version: string, root: string): string[] {
   const [major, minor] = version.split(".").map(Number);
@@ -49,6 +57,8 @@ export class MaiBotDeploymentManager {
       }
       await this.install(version, onProgress);
       deployment = this.getState()!;
+    } else {
+      await this.cleanupLegacySource();
     }
     const root = this.paths.maibotRoot;
     const command = initializationCommand(deployment.packageVersion, root);
@@ -88,12 +98,39 @@ export class MaiBotDeploymentManager {
     } finally { await rm(temporary, { force: true }); }
   }
 
+  async cleanupLegacySource(): Promise<void> {
+    const deployment = this.getState();
+    if (!deployment) return;
+    const previousSource = deployment.previous?.mode === "source";
+    const rootPath = this.paths.maibotRoot;
+    const hasSourceEntry = existsSync(join(rootPath, "bot.py"));
+    if (!previousSource && !hasSourceEntry && !existsSync(join(rootPath, "src"))) return;
+
+    const root = await realpath(rootPath);
+    if (dirname(root) === root) throw new Error(`MaiBot 实例目录不能是文件系统根目录：${root}`);
+    const entries = new Map((await readdir(root, { withFileTypes: true })).map((entry) => [
+      process.platform === "win32" ? entry.name.toLowerCase() : entry.name, entry,
+    ]));
+    for (const name of previousSource || hasSourceEntry ? LEGACY_SOURCE_ENTRIES : ["src"]) {
+      const entry = entries.get(name);
+      if (!entry) continue;
+      const target = join(root, entry.name);
+      if (entry.isSymbolicLink()) {
+        await unlink(target);
+        continue;
+      }
+      const recursive = entry.isDirectory();
+      if (recursive && relative(target, await realpath(target))) throw new Error(`旧源码目录被重定向：${target}`);
+      await rm(target, { recursive, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+    if (previousSource) await this.save({ ...deployment, previous: undefined, snapshot: undefined });
+  }
+
   private async installIntoNewEnvironment(version: string, signal: AbortSignal, onProgress?: Progress): Promise<ModuleUpdateResult> {
     if (existsSync(this.pendingFile())) throw new Error("旧更新中断，请先启动 MaiBot 完成恢复，再更新程序包。");
     const before = this.getState();
     const generation = randomUUID();
     const root = this.paths.maibotRoot;
-    // Migration never checks out a branch or modifies Git metadata/source files.
     const sourceInstance = !before && existsSync(join(root, "bot.py"));
     const environment = maiBotEnvironmentRoot(root, generation);
     const python = this.createEnvironment({ ...this.paths, pythonEnvRoot: environment });
@@ -105,9 +142,10 @@ export class MaiBotDeploymentManager {
       if (log) output.push(log);
       try { onProgress?.({ phase, percent, label, detail: log, log, updatedAt: Date.now() }); } catch { /* UI listeners cannot invalidate a committed installation. */ }
     };
+    let deployment: MaiBotDeployment;
     try {
       emit("preparing", 5, sourceInstance ? "准备将源码实例迁移到 PyPI" : "准备独立 Python 环境",
-        sourceInstance ? `安装 MaiBot ${version}；保留原 Git 分支、源码和本地修改` : `MaiBot ${version}`);
+        sourceInstance ? `安装 MaiBot ${version}，切换后删除旧源码和 Git 记录` : `MaiBot ${version}`);
       signal.throwIfAborted();
       await python.ensurePythonEnvironment((line) => emit("preparing", 10, "准备独立 Python 环境", line));
       let installingDependencies = false;
@@ -132,7 +170,7 @@ export class MaiBotDeploymentManager {
         "actual=package.version",
         "assert Version(actual)==Version(sys.argv[1]), f'Unexpected MaiBot version: {actual}'",
         "environment=pathlib.Path(sys.argv[2]).resolve()",
-        "for name in ['src/cli/tool.py','src/_resources/EULA.md','src/_resources/PRIVACY.md','src/_resources/pyproject.toml']:",
+        "for name in ['src/cli/tool.py','src/runtime.py','src/_resources/EULA.md','src/_resources/PRIVACY.md','src/_resources/pyproject.toml']:",
         " path=pathlib.Path(package.locate_file(name)).resolve()",
         " assert path.is_relative_to(environment) and path.is_file(), f'Missing installed package file: {name}'",
         "print(json.dumps({'version':actual}))",
@@ -142,14 +180,9 @@ export class MaiBotDeploymentManager {
       await writeFile(join(environment, "onekey-requirements.txt"), `${packages.join("\n")}\n`);
       signal.throwIfAborted();
       emit("switching", 95, "切换至已验证的环境");
-      await this.save({ schema: 1, mode: "pypi", generation, packageVersion: actual, sourceUrl: installed.sourceUrl,
-        installedAt: Date.now(),
-        previous: before ? { mode: "pypi", generation: before.generation, packageVersion: before.packageVersion }
-          : sourceInstance ? { mode: "source" } : undefined });
-      await this.cleanupUnusedGenerations("environments").catch((error) => emit("switching", 98, "旧环境清理未完成", String(error)));
-      emit("completed", 100, "MaiBot 安装完成", `${before?.packageVersion ?? (sourceInstance ? "源码实例" : "未安装")} → ${actual}`);
-      return { moduleId: "maibot", moduleName: "MaiBot", cwd: root, before: before?.packageVersion,
-        after: actual, remote: installed.sourceUrl, changed: true, output, updatedAt: Date.now(), source: "remote" };
+      deployment = { schema: 1, mode: "pypi", generation, packageVersion: actual, sourceUrl: installed.sourceUrl,
+        installedAt: Date.now(), previous: before ? { mode: "pypi", generation: before.generation, packageVersion: before.packageVersion } : undefined };
+      await this.save(deployment);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       let cleanupWarning: string | undefined;
@@ -163,6 +196,18 @@ export class MaiBotDeploymentManager {
       try { onProgress?.({ phase: "failed", percent: lastPercent, label: "MaiBot 更新失败", detail: message, errorDetails: detail, cleanupWarning, log: detail, updatedAt: Date.now() }); } catch { /* UI listener */ }
       throw new Error(`${message}\n\n技术详情：${detail}`, { cause: error });
     }
+
+    try {
+      await this.cleanupLegacySource();
+    } catch (error) {
+      const message = `MaiBot ${deployment.packageVersion} 已切换，旧源码清理失败：${String(error)}`;
+      emit("failed", 98, "旧源码清理失败", message);
+      throw new Error(message, { cause: error });
+    }
+    await this.cleanupUnusedGenerations("environments").catch((error) => emit("switching", 98, "旧环境清理未完成", String(error)));
+    emit("completed", 100, "MaiBot 安装完成", `${before?.packageVersion ?? (sourceInstance ? "源码实例" : "未安装")} → ${deployment.packageVersion}`);
+    return { moduleId: "maibot", moduleName: "MaiBot", cwd: root, before: before?.packageVersion,
+      after: deployment.packageVersion, remote: deployment.sourceUrl, changed: true, output, updatedAt: Date.now(), source: "remote" };
   }
 
   private pendingFile(): string { return join(this.paths.maibotRoot, ".onekey", "pending.json"); }
@@ -259,15 +304,12 @@ export class MaiBotDeploymentManager {
     if (this.pending) throw new Error("MaiBot 安装或更新正在进行");
     await this.recoverInterruptedInstall();
     const current = this.getState();
-    if (!current?.previous) throw new Error("没有可恢复的 MaiBot 环境");
-    if (current.previous.mode === "pypi" && !existsSync(maiBotEnvironmentRoot(this.paths.maibotRoot, current.previous.generation))) {
+    const previous = current?.previous;
+    if (!current || previous?.mode !== "pypi") throw new Error("没有可恢复的 MaiBot PyPI 环境");
+    if (!existsSync(maiBotEnvironmentRoot(this.paths.maibotRoot, previous.generation))) {
       throw new Error("上一 Python 环境缺失，无法恢复");
     }
-    const previous = current.previous;
-    const restoreEnvironment = async () => {
-      if (previous.mode === "source") await rm(deploymentFile(this.paths.maibotRoot));
-      else await this.save({ ...previous, schema: 1, installedAt: Date.now(), sourceUrl: current.sourceUrl });
-    };
+    const restoreEnvironment = () => this.save({ ...previous, schema: 1, installedAt: Date.now(), sourceUrl: current.sourceUrl });
     if (current.snapshot) await this.restoreSnapshot(current.snapshot, restoreEnvironment);
     else await restoreEnvironment();
     await this.cleanupUnusedGenerations("environments").catch(() => undefined);

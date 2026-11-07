@@ -561,6 +561,9 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
     }
     logStore.append("desktop", "system", `启动 MaiBot OneKey，PID ${process.pid}`);
     cleanupLauncherUpdateDownloadsOnStartup();
+    await maiBotDeploymentManager.cleanupLegacySource().catch((error) =>
+      logStore.append("desktop", "system", `旧源码清理未完成：${String(error)}`),
+    );
     await maiBotDeploymentManager.cleanupUnusedGenerations("snapshots").catch((error) =>
       logStore.append("desktop", "system", `旧快照清理未完成：${String(error)}`),
     );

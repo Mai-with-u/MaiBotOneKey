@@ -2200,6 +2200,9 @@ export function MessagePlatformPanel({
                 <DetailRow label="远端错误" value={snapshot.moduleVersions.maibotRemoteError} retro={useRetroStyle} />
               ) : null}
             </DataPanel>
+            {snapshot.moduleVersions.maibotDeploymentMode === "source" && snapshot.paths.maibotDevMode !== "source" ? (
+              <p className="text-xs text-muted-foreground">迁移完成后会删除旧源码和 Git 记录，保留配置、数据和插件。</p>
+            ) : null}
             {maibotUpdateBlocked ? (
               <div className={cn("border border-warning/40 bg-warning/15 px-3 py-2 text-xs", useRetroStyle ? "rounded-sm" : "rounded-lg")}>
                 请先停止 MaiBot Core，再执行更新。
@@ -2326,9 +2329,8 @@ export function MessagePlatformPanel({
                 {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <ArrowUp />}
                 {snapshot.paths.maibotDevMode === "source" ? "源码调试模式" : busy === "maibot:update"
                   ? "更新中"
-                  : maibotTargetIsCurrent
-                    ? "重新安装当前版本"
-                    : snapshot.moduleVersions.maibotDeploymentMode === "source" ? "迁移到 PyPI"
+                  : snapshot.moduleVersions.maibotDeploymentMode === "source" ? "迁移到 PyPI"
+                    : maibotTargetIsCurrent ? "重新安装当前版本"
                       : !snapshot.moduleVersions.maibotLocal ? "安装 MaiBot"
                         : compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal) > 0 ? "更新 MaiBot"
                           : compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal) < 0 ? "切换到所选版本"
