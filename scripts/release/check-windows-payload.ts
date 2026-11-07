@@ -10,22 +10,17 @@ type PathKind = "file" | "dir";
 type Candidate = {
   path: string;
   kind: PathKind;
-  contains?: string[];
 };
 
 type Requirement = {
   label: string;
   required: boolean;
-  standardOnly?: boolean;
   candidates: Candidate[];
 };
 
 type JsonRecord = Record<string, unknown>;
 
 const root = process.cwd();
-const flags = process.argv.slice(2);
-if (flags.some((flag) => flag !== "--snowluma-only")) throw new Error("Unsupported payload check option: " + flags.join(" "));
-const snowlumaOnly = flags.includes("--snowluma-only");
 const pythonBootstrapPackages = new Set([
   "pip",
   "pip.dist-info",
@@ -54,16 +49,7 @@ function dir(path: string): Candidate {
   return { path: join(root, path), kind: "dir" };
 }
 
-function dirContaining(path: string, contains: string[]): Candidate {
-  return { path: join(root, path), kind: "dir", contains };
-}
-
 const requirements: Requirement[] = [
-  ...["plugin.py", "settings.py", "codec.py", "_manifest.json", "LICENSE", "assets/icon.svg"].map((name) => ({
-    label: `QQ official adapter bundled plugin: ${name}`,
-    required: true,
-    candidates: [file(`resources/bundled-plugins/qq_official_adapter/${name}`)],
-  })),
   {
     label: "runtime directory",
     required: true,
@@ -140,18 +126,6 @@ const requirements: Requirement[] = [
     candidates: [file("modules/MaiBot/plugins/snowluma-adapter/plugin.py")],
   },
   {
-    label: "NapCat module",
-    standardOnly: true,
-    required: true,
-    candidates: [dir("modules/napcat")],
-  },
-  {
-    label: "NapCat Windows runtime",
-    standardOnly: true,
-    required: true,
-    candidates: [file("modules/napcat/node.exe"), file("modules/napcat/NapCatWinBootMain.exe")],
-  },
-  {
     label: "SnowLuma module",
     required: true,
     candidates: [dir("modules/SnowLuma")],
@@ -188,15 +162,6 @@ const requirements: Requirement[] = [
     label: "node-pty Windows console-list binding",
     required: true,
     candidates: [file("node_modules/node-pty/prebuilds/win32-x64/conpty_console_list.node")],
-  },
-  {
-    label: "NapCat version resources",
-    standardOnly: true,
-    required: true,
-    candidates: [
-      file("modules/napcat/napcat/package.json"),
-      dirContaining("modules/napcat/versions", [join("resources", "app", "package.json")]),
-    ],
   },
   {
     label: "Windows app icon",
@@ -249,39 +214,10 @@ async function checkModuleResourceFilter(): Promise<string[]> {
 async function matches(candidate: Candidate): Promise<boolean> {
   try {
     const info = await stat(candidate.path);
-    if (candidate.kind === "file") {
-      return info.isFile();
-    }
-    if (!info.isDirectory()) {
-      return false;
-    }
-    if (!candidate.contains?.length) {
-      return true;
-    }
-    return directoryHasAny(candidate.path, candidate.contains);
+    return candidate.kind === "file" ? info.isFile() : info.isDirectory();
   } catch {
     return false;
   }
-}
-
-async function directoryHasAny(directory: string, relativePaths: string[]): Promise<boolean> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    for (const relativePath of relativePaths) {
-      try {
-        const info = await stat(join(directory, entry.name, relativePath));
-        if (info.isFile()) {
-          return true;
-        }
-      } catch {
-        // Try the next known NapCat layout.
-      }
-    }
-  }
-  return false;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -355,7 +291,6 @@ async function main(): Promise<void> {
   console.log("Checking Windows release payload...");
 
   for (const requirement of requirements) {
-    if (snowlumaOnly && requirement.standardOnly) continue;
     const matched = [];
     for (const candidate of requirement.candidates) {
       if (await matches(candidate)) {
@@ -439,7 +374,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log(`Windows ${snowlumaOnly ? "SnowLuma" : "standard"} release payload looks complete.`);
+  console.log("Windows release payload looks complete.");
 }
 
 await main();

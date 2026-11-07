@@ -5,6 +5,8 @@ import { ProtocolComponentManager } from "./protocol-component-manager";
 import { readMaiBotSetupStatus } from "./maibot-setup-client";
 import { runProcess, runWithoutAsar, samePath, sameOrInsidePath } from "./runtime-file-utils";
 import { ProtocolBackendManager } from "./protocol-backend-manager";
+import { hasWindowsNapCat, installWindowsNapCat } from "./napcat-download";
+import { normalizeQqAccount } from "../../shared/qq-account";
 import { MaiBotAdapterClient } from "./maibot-adapter-client";
 import type { MaiBotDeploymentManager } from "./maibot-deployment-manager";
 import { isMaiBotPackageMode, readMaiBotDeployment } from "./maibot-deployment-state";
@@ -14,7 +16,6 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { QQ_OFFICIAL_ADAPTER_DIRECTORY, QQ_OFFICIAL_ADAPTER_PLUGIN_ID } from "../../shared/qq-official-adapter";
 import type {
   AgreementDocument,
   AgreementDocumentId,
@@ -102,7 +103,6 @@ const NAPCAT_LAUNCHER_CONTENT = [
 
 const NAPCAT_ADAPTER_DIR = join("plugins", "napcat-adapter");
 const SNOWLUMA_ADAPTER_DIR = join("plugins", "snowluma-adapter");
-const QQ_OFFICIAL_ADAPTER_DIR = join("plugins", QQ_OFFICIAL_ADAPTER_DIRECTORY);
 const SNOWLUMA_ADAPTER_PLUGIN_ID = "maibot-team.snowluma-adapter";
 
 function asPositiveNumber(value: unknown, fallback: number): number {
@@ -238,6 +238,7 @@ function maibotInitialConfigVersion(templateVersion: string): string {
 export class InitManager {
   private dependencyCache?: { expiresAt: number; checks: InitCheck[] };
   private deploymentManager?: MaiBotDeploymentManager;
+  private napCatInstall?: Promise<void>;
 
   setDeploymentManager(manager: MaiBotDeploymentManager): void { this.deploymentManager = manager; }
   cancelMaiBotInstall(): boolean { return this.deploymentManager?.cancel() ?? false; }
@@ -247,8 +248,7 @@ export class InitManager {
       onProgress?.(progress);
     });
     if (this.deploymentManager?.isPackageMode()) {
-      await this.ensureBundledMaiBotPluginSubtree(SNOWLUMA_ADAPTER_DIR, ["plugin.py"], SNOWLUMA_ADAPTER_PLUGIN_ID);
-      await this.ensureBundledMaiBotPluginSubtree(QQ_OFFICIAL_ADAPTER_DIR, ["plugin.py", "settings.py", "codec.py", "_manifest.json"], QQ_OFFICIAL_ADAPTER_PLUGIN_ID);
+      await this.ensureBundledSnowLumaAdapter();
     }
   }
 
@@ -291,7 +291,11 @@ export class InitManager {
   ensureNapCatWebUiConfig() { return this.protocols.ensureNapCatWebUiConfig(); }
   readNapCatWebUiToken() { return this.protocols.readNapCatWebUiToken(); }
   saveQqBackendAccount(backend: QqBackend, account: string) { return this.protocols.saveQqBackendAccount(backend, account); }
-  async setQqBackend(backend: QqBackend): Promise<void> {
+  async setQqBackend(backend: QqBackend, downloadNapCat = true): Promise<void> {
+    if (backend === "napcat" && this.needsNapCatDownload()) {
+      if (!downloadNapCat) return this.protocols.setQqBackend(backend);
+      await this.prepareOptionalNapCat();
+    }
     await this.protocols.setQqBackend(backend, () => this.ensureServiceReady("napcat"));
   }
   async setQqProtocol(protocol: QqProtocol, options: QqProtocolOptions = {}): Promise<void> {
@@ -301,6 +305,8 @@ export class InitManager {
     } else await this.setQqBackend(protocol);
   }
   async setQqAccount(account: string, token?: string, backend: QqBackend = this.getQqBackendSync()): Promise<InitState> {
+    if (!normalizeQqAccount(account)) throw new Error("QQ 号必须是纯数字且不能为 0");
+    if (backend === "napcat") await this.prepareOptionalNapCat();
     await this.protocols.configureAccount(account, backend, token);
     await this.ensureServiceReady("napcat");
     return this.getState();
@@ -311,28 +317,42 @@ export class InitManager {
     return { state: await this.getState(), changedFiles: [] };
   }
 
+  private needsNapCatDownload(): boolean {
+    return process.platform === "win32" &&
+      !existsSync(join(this.paths.bundledModulesRoot, "napcat")) &&
+      !hasWindowsNapCat(this.paths.napcatRoot);
+  }
+
+  private async prepareOptionalNapCat(): Promise<void> {
+    if (this.napCatInstall) return this.napCatInstall;
+    if (!this.needsNapCatDownload()) return;
+    const python = this.getBundledPythonPath();
+    if (!python) throw new Error("缺少用于解压 NapCat 的内置 Python，请重新安装启动器。");
+    this.napCatInstall = installWindowsNapCat(this.paths.napcatRoot, python).finally(() => {
+      this.napCatInstall = undefined;
+    });
+    return this.napCatInstall;
+  }
+
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
     const qqBackend = await this.readQqBackend();
+    const napCatDownloadRequired = this.needsNapCatDownload();
     const qqAccount = this.getMessagePlatformQqAccount(qqBackend);
     const messagePlatformConfigured = Boolean(qqAccount);
     const dependencyChecks = options.refreshDependencies === false
       ? this.getCachedDependencyChecks()
       : await this.checkDependencies();
-    const napCatWebUiCheck = await this.checkNapCatWebUi();
-    const qqModuleChecks = qqBackend === "snowluma"
+    const qqModuleChecks: InitCheck[] = qqBackend === "snowluma"
       ? [
           checkDir(this.paths.snowlumaRoot, "SnowLuma 模块", "snowluma-module"),
           checkFile(join(this.paths.snowlumaRoot, "index.mjs"), "SnowLuma 启动文件", "snowluma-entry"),
         ]
-      : [
-          checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
-          checkFile(
-            join(this.paths.napcatRoot, "NapCatWinBootMain.exe"),
-            "NapCat 启动文件",
-            "napcat-entry",
-          ),
-          napCatWebUiCheck,
-        ];
+      : napCatDownloadRequired
+        ? [{ id: "napcat-download", label: "NapCat 模块", status: "warning", detail: "在消息平台选择 NapCat 后从 GitHub 下载" }]
+        : [
+            checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
+            await this.checkNapCatWebUi(),
+          ];
     const checks: InitCheck[] = [
       this.checkRuntimeRoot(),
       this.checkPythonRuntime(),
@@ -345,7 +365,7 @@ export class InitManager {
       ...dependencyChecks,
     ];
     const isReady = checks.every((check) => check.status !== "error");
-    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), messagePlatformConfigured, checks };
+    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), napCatDownloadRequired, messagePlatformConfigured, checks };
   }
 
   async refreshDependencyChecks(): Promise<InitCheck[]> {
@@ -462,10 +482,9 @@ export class InitManager {
   }
 
   async ensureModulesReady(onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
-    return [
-      ...(await this.ensureServiceReady("maibot", onProgress)),
-      ...(await this.ensureServiceReady("napcat")),
-    ];
+    const changedFiles = await this.ensureServiceReady("maibot", onProgress);
+    if (this.getQqBackendSync() === "napcat" && this.needsNapCatDownload()) return changedFiles;
+    return [...changedFiles, ...(await this.ensureServiceReady("napcat"))];
   }
 
   async ensureServiceReady(serviceId: ServiceId, onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
@@ -479,10 +498,9 @@ export class InitManager {
       const packageMode = isMaiBotPackageMode(this.paths);
       if (packageMode) await this.ensureMaiBotPackage(undefined, onProgress);
       const changedFiles = packageMode ? [] : await this.ensureBundledModuleSubtree("MaiBot", ["bot.py"], {
-        excludeRelativePaths: [NAPCAT_ADAPTER_DIR, SNOWLUMA_ADAPTER_DIR, QQ_OFFICIAL_ADAPTER_DIR],
+        excludeRelativePaths: [NAPCAT_ADAPTER_DIR, SNOWLUMA_ADAPTER_DIR, join("plugins", "qq_official_adapter")],
       });
-      changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(SNOWLUMA_ADAPTER_DIR, ["plugin.py"], SNOWLUMA_ADAPTER_PLUGIN_ID)));
-      changedFiles.push(...(await this.ensureBundledMaiBotPluginSubtree(QQ_OFFICIAL_ADAPTER_DIR, ["plugin.py", "settings.py", "codec.py", "_manifest.json"], QQ_OFFICIAL_ADAPTER_PLUGIN_ID)));
+      changedFiles.push(...(await this.ensureBundledSnowLumaAdapter()));
       const repairedConfig = packageMode || existsSync(join(this.paths.maibotRoot, "host", "registry.sqlite3")) ? undefined : await this.repairBotConfigVersionInfo();
       return [...changedFiles, ...(repairedConfig ? [repairedConfig] : [])];
     }
@@ -496,6 +514,15 @@ export class InitManager {
       ], {
         excludeRelativePaths: ["config", "data", "logs"],
       });
+    }
+
+    if (process.platform === "win32" && hasWindowsNapCat(this.paths.napcatRoot)) {
+      if (!existsSync(join(this.paths.napcatRoot, "NapCatWinBootMain.exe"))) return [];
+      const launcher = await this.ensureNapCatLauncher();
+      return launcher ? [launcher] : [];
+    }
+    if (this.needsNapCatDownload()) {
+      throw new Error("NapCat 尚未安装，请在消息平台选择并保存 NapCat，从 GitHub 下载安装。");
     }
 
     const napcatRequiredPaths = process.platform === "darwin"
@@ -668,11 +695,7 @@ export class InitManager {
     return [target];
   }
 
-  private async ensureBundledMaiBotPluginSubtree(
-    pluginRelativePath: string,
-    requiredRelativePaths: string[],
-    expectedPluginId?: string,
-  ): Promise<string[]> {
+  private async ensureBundledSnowLumaAdapter(): Promise<string[]> {
     let botRoot = this.paths.maibotRoot;
     if (existsSync(join(botRoot, "host", "registry.sqlite3"))) {
       const bots = await readWorkspaceBots(botRoot, this.getPythonPath());
@@ -681,23 +704,18 @@ export class InitManager {
       else if (bots.length === 1) botRoot = bots[0].directory;
       else return []; // Multiple Bots without an original root Bot must install adapters explicitly in WebUI.
     }
-    const moduleSource = join(this.paths.bundledModulesRoot, "MaiBot", pluginRelativePath);
-    const source = pluginRelativePath === QQ_OFFICIAL_ADAPTER_DIR && !existsSync(moduleSource)
-      ? join(dirname(this.paths.bundledModulesRoot), "resources", "bundled-plugins", QQ_OFFICIAL_ADAPTER_DIRECTORY)
-      : moduleSource;
-    const target = join(botRoot, pluginRelativePath);
+    const source = join(this.paths.bundledModulesRoot, "MaiBot", SNOWLUMA_ADAPTER_DIR);
+    const target = join(botRoot, SNOWLUMA_ADAPTER_DIR);
 
     if (!existsSync(source) || samePath(source, target)) {
       return [];
     }
 
-    const sourcePluginId = expectedPluginId ?? this.readPluginManifestId(source);
-    if (sourcePluginId && this.findMaiBotPluginDirByManifestId(sourcePluginId, botRoot)) {
+    if (this.findMaiBotPluginDirByManifestId(SNOWLUMA_ADAPTER_PLUGIN_ID, botRoot)) {
       return [];
     }
 
-    const isReady = requiredRelativePaths.every((relativePath) => existsSync(join(target, relativePath)));
-    if (isReady) {
+    if (existsSync(join(target, "plugin.py"))) {
       return [];
     }
 

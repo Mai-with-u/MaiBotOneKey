@@ -112,10 +112,13 @@ export class ProtocolComponentManager {
 
   async upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> {
     if (component !== undefined && component !== "napcat" && component !== "snowluma") throw new Error("未知协议端组件");
-    await this.cleanupQqComponentProcesses(component);
+    const reinstallNapCat = component !== "snowluma" && existsSync(join(this.paths.bundledModulesRoot, "napcat"));
+    if (reinstallNapCat || component !== "napcat") {
+      await this.cleanupQqComponentProcesses(reinstallNapCat ? component : "snowluma");
+    }
 
     const components: QqComponentUpgradeEntry[] = [];
-    if (component !== "snowluma" && existsSync(join(this.paths.bundledModulesRoot, "napcat"))) {
+    if (reinstallNapCat) {
       components.push(
         await this.upgradeBundledComponent({
           id: "napcat",

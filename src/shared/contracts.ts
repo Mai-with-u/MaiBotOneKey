@@ -351,6 +351,7 @@ export interface InitState {
   qqBackend: QqBackend;
   qqProtocol?: QqProtocol;
   qqOfficialConfigured?: boolean;
+  napCatDownloadRequired?: boolean;
   messagePlatformConfigured: boolean;
   checks: InitCheck[];
   repairedAt?: number;

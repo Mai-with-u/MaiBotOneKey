@@ -29,6 +29,8 @@ async function fixture() {
   } as RuntimePaths;
   const adapterPath = join(paths.maibotRoot, "plugins", "snowluma-adapter", "config.toml");
   await mkdir(join(paths.maibotRoot, "plugins", "snowluma-adapter"), { recursive: true });
+  await mkdir(join(paths.napcatRoot, "napcat"), { recursive: true });
+  await writeFile(join(paths.napcatRoot, "NapCatWinBootMain.exe"), "existing NapCat fixture");
   const manager = new InitManager(paths);
   // These tests exercise setup and the actual generated connection files,
   // without requiring bundled binaries or Python dependency discovery.

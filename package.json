@@ -29,7 +29,6 @@
     "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
     "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
     "release:win:standard": "bun run release:win",
-    "release:win:snowluma": "bun run release:check --snowluma-only && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts --snowluma-only",
     "pack:win": "bun run release:win",
     "test": "bun test scripts/tests"
   },
@@ -146,18 +145,6 @@
         ]
       },
       {
-        "from": "resources/bundled-plugins/qq_official_adapter",
-        "to": "modules/MaiBot/plugins/qq_official_adapter",
-        "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc",
-          "!config.toml",
-          "!data/**",
-          "!logs/**"
-        ]
-      },
-      {
         "from": "modules/MaiBot/plugins/snowluma-adapter",
         "to": "modules/MaiBot/plugins/snowluma-adapter",
         "filter": [
@@ -183,43 +170,7 @@
       "target": "nsis",
       "icon": "resources/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "artifactName": "MaiBot-OK-${version}-win.${ext}",
-      "extraResources": [
-        {
-          "from": "modules/napcat",
-          "to": "modules/napcat",
-          "filter": [
-            "**/*",
-            "!**/.git/**",
-            "!**/__pycache__/**",
-            "!**/*.pyc",
-            "!**/*linux*",
-            "!**/*darwin*",
-            "!**/*arm64*",
-            "!*.db",
-            "!*.db-*",
-            "!*.log",
-            "!config/**",
-            "!cache/**",
-            "!data/**",
-            "!logs/**",
-            "!temp/**",
-            "!tmp/**",
-            "!napcat/config/**",
-            "!napcat/cache/**",
-            "!napcat/data/**",
-            "!napcat/logs/**",
-            "!napcat/temp/**",
-            "!napcat/tmp/**",
-            "!versions/**/resources/app/napcat/cache/**",
-            "!versions/**/resources/app/napcat/config/**",
-            "!versions/**/resources/app/napcat/data/**",
-            "!versions/**/resources/app/napcat/logs/**",
-            "!versions/**/resources/app/napcat/temp/**",
-            "!versions/**/resources/app/napcat/tmp/**"
-          ]
-        }
-      ]
+      "artifactName": "MaiBot-OK-${version}-win.${ext}"
     },
     "mac": {
       "icon": "resources/icon.icns",

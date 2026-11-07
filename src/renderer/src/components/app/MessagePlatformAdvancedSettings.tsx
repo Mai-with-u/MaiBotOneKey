@@ -57,6 +57,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   const [error, setError] = useState<string | null>(null);
   const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
   const [upgradeSnowLumaOnly, setUpgradeSnowLumaOnly] = useState(false);
+  const reinstallComponentLabel = snapshot.platform === "win32" ? "SnowLuma" : "NapCat / SnowLuma";
   const [forceSnowLumaUpgrade] = useSnowLumaUpgradeDebug();
   const snowLumaUpgradeAvailable = (snapshot.initState.qqProtocol ?? snapshot.initState.qqBackend) === "snowluma"
     && (forceSnowLumaUpgrade || isSnowLumaUpgradeAvailable(snapshot.moduleVersions.snowlumaLocal, snapshot.moduleVersions.snowlumaBundled));
@@ -117,7 +118,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   };
   const upgradeQqComponents = useCallback(async () => {
     if (qqComponentsChangeBlocked) {
-      setError("请先停止 QQ 协议端，再重新安装 NapCat / SnowLuma。");
+      setError(`请先停止 QQ 协议端，再重新安装 ${reinstallComponentLabel}。`);
       return;
     }
 
@@ -126,17 +127,17 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     try {
       const bridge = window.maibotDesktop;
       if (!bridge) throw new Error("无法连接启动器");
-      const result = await bridge.protocols.upgradeQqComponents(upgradeSnowLumaOnly ? "snowluma" : undefined);
+      const result = await bridge.protocols.upgradeQqComponents(upgradeSnowLumaOnly || snapshot.platform === "win32" ? "snowluma" : undefined);
       setConfirmQqComponentsUpgradeOpen(false);
       const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
-      toast.success(`${upgradeSnowLumaOnly ? "SnowLuma 已升级" : "NapCat / SnowLuma 已重新安装"}，保留 ${preservedCount} 项配置与数据`);
+      toast.success(`${upgradeSnowLumaOnly ? "SnowLuma 已升级" : `${reinstallComponentLabel} 已重新安装`}，保留 ${preservedCount} 项配置与数据`);
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [qqComponentsChangeBlocked, refreshSnapshot, upgradeSnowLumaOnly]);
+  }, [qqComponentsChangeBlocked, refreshSnapshot, reinstallComponentLabel, snapshot.platform, upgradeSnowLumaOnly]);
 
   const saveQqWebuiPorts = useCallback(() => {
     if (!qqWebuiPortsValid) {
@@ -336,7 +337,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                 {qqComponentsChangeBlocked ? <p className="text-xs text-warning-foreground">QQ 协议端仍在运行，请先停止协议端。</p> : null}
                 <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">重新安装 NapCat / SnowLuma</p>
+                    <p className="text-sm font-medium">重新安装 {reinstallComponentLabel}</p>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       使用当前一键包内置组件覆盖程序文件，保留配置、数据和日志。
                     </p>
@@ -372,7 +373,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
       <DialogHeader
         description={upgradeSnowLumaOnly
           ? `SnowLuma ${snapshot.moduleVersions.snowlumaLocal} → ${snapshot.moduleVersions.snowlumaBundled}，使用一键包内置版本升级。`
-          : "这会用一键包内置的 NapCat 与 SnowLuma 程序文件覆盖现有组件。"}
+          : `这会用一键包内置的 ${reinstallComponentLabel} 程序文件覆盖现有组件。`}
         icon={<Download className="size-4" />}
         title={upgradeSnowLumaOnly ? "确认升级 SnowLuma？" : "确认重新安装？"}
         tone="warning"

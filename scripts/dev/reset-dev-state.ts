@@ -243,7 +243,6 @@ async function main(): Promise<void> {
     addTarget(targets, snowlumaRoot, stateDirectory, `SnowLuma ${stateDirectory}`);
   }
   await addNapCatVersionTargets(targets, napcatRoot);
-  await addAdapterConfigTargets(targets, maibotRoot, "qq_official_adapter", "QQ 官方适配器");
   await addAdapterConfigTargets(targets, maibotRoot, "snowluma-adapter", "SnowLuma 适配器");
 
   if (platform() === "darwin") {

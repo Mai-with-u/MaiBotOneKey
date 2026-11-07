@@ -1753,9 +1753,9 @@ export function registerAppIpc({
       serviceManager.reloadRuntimePaths();
       return result;
     } catch (error) {
-      if (switchingBackend && !operationCompleted) {
+      if (switchingBackend && !operationCompleted && initManager.getQqBackendSync() !== currentInitState.qqBackend) {
         try {
-          await initManager.setQqBackend(currentInitState.qqBackend);
+          await initManager.setQqBackend(currentInitState.qqBackend, false);
           serviceManager.reloadRuntimePaths();
         } catch (rollbackError) {
           logStore.append(

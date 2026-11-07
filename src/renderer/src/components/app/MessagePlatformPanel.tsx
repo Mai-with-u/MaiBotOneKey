@@ -1069,6 +1069,7 @@ export function MessagePlatformPanel({
   const [, setMascotClickCount] = useState(0);
   const [messagePlatformBackend, setMessagePlatformBackend] = useState<QqProtocol>("official");
   const currentProtocol = snapshot.initState.qqProtocol ?? snapshot.initState.qqBackend ?? "napcat";
+  const napCatDownloadRequired = snapshot.initState.napCatDownloadRequired === true;
   const [selectedProtocol, setSelectedProtocol] = useState<QqProtocol>(currentProtocol);
   useEffect(() => {
     setSelectedProtocol(currentProtocol);
@@ -1525,6 +1526,16 @@ export function MessagePlatformPanel({
     }
   }, [busy, pendingProtocolSwitch]);
 
+  const configureAndStartOneBot = useCallback(async (qqAccount: string, qqBackend: QqBackend) => {
+    const bridge = window.maibotDesktop;
+    if (!bridge) throw new Error("桌面桥未就绪，无法初始化消息平台");
+    await bridge.protocols.setQqAccount({ qqAccount, qqBackend });
+    await bridge.adapters.syncQqConnections();
+    await bridge.adapters.setEnabled("onebot", true);
+    setPendingProtocolSwitch(null);
+    await bridge.services.start("napcat");
+  }, []);
+
   const setupMessagePlatform = useCallback(async () => {
     if (messagePlatformBackend === "official") {
       if (!officialAppId.trim() || !officialAppSecret.trim()) {
@@ -1563,15 +1574,7 @@ export function MessagePlatformPanel({
     setError(null);
 
     try {
-      await window.maibotDesktop.protocols.setQqAccount({
-        qqAccount,
-        qqBackend: messagePlatformBackend,
-      });
-      // Adding a platform is an explicit connection workflow; MaiBot owns adapter validation and activation.
-      await window.maibotDesktop.adapters.syncQqConnections();
-      await window.maibotDesktop.adapters.setEnabled("onebot", true);
-      setPendingProtocolSwitch(null);
-      await window.maibotDesktop.services.start("napcat");
+      await configureAndStartOneBot(qqAccount, messagePlatformBackend);
       toast.success(`${messagePlatformBackend === "snowluma" ? "QQ-SnowLuma" : "QQ-NapCat"} 已配置并启动`);
       setMessagePlatformDialogOpen(false);
       await refreshSnapshot();
@@ -1587,7 +1590,7 @@ export function MessagePlatformPanel({
     } finally {
       setBusy(null);
     }
-  }, [messagePlatformAccount, messagePlatformBackend, officialAppId, officialAppSecret, refreshSnapshot]);
+  }, [configureAndStartOneBot, messagePlatformAccount, messagePlatformBackend, officialAppId, officialAppSecret, refreshSnapshot]);
 
   const saveProtocolSelection = useCallback(async () => {
     if (!window.maibotDesktop || qqBackendBusy) return;
@@ -1600,7 +1603,9 @@ export function MessagePlatformPanel({
       ? normalizeQqAccount(savedAccounts?.[selectedProtocol].qqAccount) ?? ""
       : "";
     const targetAccountValid = Boolean(targetAccount);
-    if (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : targetAccountValid)) return;
+    if (selectedProtocol === currentProtocol && (selectedProtocol === "official"
+      ? snapshot.initState.qqOfficialConfigured
+      : targetAccountValid && !(selectedProtocol === "napcat" && napCatDownloadRequired))) return;
     if (selectedProtocol === "official" && snapshot.initState.qqOfficialConfigured === false) {
       setPendingProtocolSwitch(currentProtocol);
       setMessagePlatformBackend("official");
@@ -1628,6 +1633,8 @@ export function MessagePlatformPanel({
         await window.maibotDesktop.init.repair();
         await window.maibotDesktop.services.start("napcat");
         setQqWebuiPort(readQqWebuiPort("snowluma"));
+      } else if (selectedProtocol === "napcat" && napCatDownloadRequired) {
+        await configureAndStartOneBot(targetAccount, "napcat");
       } else {
         await saveQqProtocol(selectedProtocol);
       }
@@ -1640,7 +1647,7 @@ export function MessagePlatformPanel({
     } finally {
       setBusy(null);
     }
-  }, [currentProtocol, selectedProtocol, qqBackendBusy, refreshSnapshot, snapshot.initState.messagePlatformConfigured, snapshot.initState.qqAccount, snapshot.initState.qqOfficialConfigured]);
+  }, [configureAndStartOneBot, currentProtocol, selectedProtocol, qqBackendBusy, refreshSnapshot, napCatDownloadRequired, snapshot.initState.qqOfficialConfigured]);
 
   const updateMaiBot = useCallback(async () => {
     const target = selectedMaiBotTarget;
@@ -1787,7 +1794,7 @@ export function MessagePlatformPanel({
                 <div className="min-w-0 flex-1">
                   <h2 className="text-sm font-semibold">协议端选择</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {selectedProtocol === "snowluma" ? "使用 SnowLuma 注入 QQ 进程。" : selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
+                    {selectedProtocol === "snowluma" ? "使用 SnowLuma 注入 QQ 进程。" : selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : snapshot.platform === "win32" ? "首次使用 NapCat 时从 GitHub 下载安装。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
                   </p>
                 </div>
                 <SegmentedControl
@@ -1798,9 +1805,11 @@ export function MessagePlatformPanel({
                   disabled={busy !== null}
                   options={([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方QQ" }] as const).map((option) => ({ ...option, disabled: qqBackendBusy && option.value !== currentProtocol }))}
                 />
-                <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount))))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
+                <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount)) && !(selectedProtocol === "napcat" && napCatDownloadRequired)))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
                   {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
-                  保存协议端
+                  {selectedProtocol === "napcat" && napCatDownloadRequired
+                    ? busy === "message-platform:protocol" ? "正在准备 NapCat…" : "从 GitHub 下载并配置"
+                    : "保存协议端"}
                 </Button>
                 {qqBackendBusy ? <p className="w-full text-xs text-muted-foreground">{snapshot.runtimeOperation ? `正在${snapshot.runtimeOperation}，请稍候。` : "请先停止当前 QQ 协议端，再切换。"}</p> : null}
                 {error && !messagePlatformDialogOpen ? <p className="w-full text-xs text-destructive">{error}</p> : null}
@@ -1897,7 +1906,9 @@ export function MessagePlatformPanel({
                 {
                   backend: "napcat",
                   title: "QQ-NapCat",
-                  description: "通过NapCat连接QQ，不需要额外下载QQ客户端，直接扫码登录，使用WS连接到MaiBot",
+                  description: napCatDownloadRequired
+                    ? "首次配置时从 GitHub 下载 NapCat，安装后扫码登录 QQ。"
+                    : "通过 NapCat 连接 QQ，使用 WebSocket 连接 MaiBot。",
                 },
                 {
                   backend: "official",
@@ -1955,7 +1966,9 @@ export function MessagePlatformPanel({
               size="sm"
             >
               {busy === "message-platform:setup" ? <Loader2 className="animate-spin" /> : <Server />}
-              {messagePlatformBackend === "official" ? "配置并保存" : "配置并启动"}
+              {messagePlatformBackend === "napcat" && napCatDownloadRequired
+                ? busy === "message-platform:setup" ? "正在准备 NapCat…" : "从 GitHub 下载并安装"
+                : messagePlatformBackend === "official" ? "配置并保存" : "配置并启动"}
             </Button>
           </DialogFooter>
         </DialogContent>
