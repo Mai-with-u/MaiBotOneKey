@@ -550,12 +550,14 @@ function MessagePlatformConnectCard({
   );
 }
 
-function SolidUpgradeIcon(): React.JSX.Element {
+function SolidUpgradeIcon({ retro }: { retro: boolean }): React.JSX.Element {
   return (
     <svg aria-hidden className="size-5" fill="none" viewBox="0 0 24 24">
-      <path d="M12 21V7" stroke="currentColor" strokeWidth="6" />
-      <path d="M4 12 12 4" stroke="currentColor" strokeWidth="6" />
-      <path d="M20 12 12 4" stroke="currentColor" strokeWidth="6" />
+      {retro ? (
+        <path d="M12 21V7 M4 12 12 4 M20 12 12 4" stroke="currentColor" strokeWidth="6" />
+      ) : (
+        <path d="M12 2 22 12 18 16 15 13V22H9V13L6 16 2 12Z" fill="currentColor" />
+      )}
     </svg>
   );
 }
@@ -1781,7 +1783,7 @@ export function MessagePlatformPanel({
           {compareVersionText(snapshot.moduleVersions.maibotLatestStableTag, snapshot.moduleVersions.maibotLocal) > 0 ? (
             <span className="absolute right-0 top-0 size-1.5 rounded-full bg-warning" />
           ) : null}
-          {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <SolidUpgradeIcon />}
+          {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <SolidUpgradeIcon retro={useRetroStyle} />}
         </Button>,
         updateToolbarTarget,
       ) : null}
