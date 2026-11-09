@@ -116,37 +116,14 @@ const requirements: Requirement[] = [
     candidates: [file(`resources/maibot-package/${name}`)],
   })),
   {
-    label: "MaiBot snowluma-adapter plugin",
+    label: "MaiBot OneBot adapter for NapCat",
     required: true,
     candidates: [dir("modules/MaiBot/plugins/snowluma-adapter")],
   },
   {
-    label: "MaiBot snowluma-adapter entry",
+    label: "MaiBot OneBot adapter entry",
     required: true,
     candidates: [file("modules/MaiBot/plugins/snowluma-adapter/plugin.py")],
-  },
-  {
-    label: "SnowLuma module",
-    required: true,
-    candidates: [dir("modules/SnowLuma")],
-  },
-  {
-    label: "SnowLuma entry",
-    required: true,
-    candidates: [file("modules/SnowLuma/index.mjs")],
-  },
-  {
-    label: "SnowLuma Windows runtime",
-    required: true,
-    candidates: [file("modules/SnowLuma/node.exe")],
-  },
-  {
-    label: "SnowLuma native binding",
-    required: true,
-    candidates: [
-      file("modules/SnowLuma/native/snowluma-win32-x64.node"),
-      file("modules/SnowLuma/native/snowluma-win32-x64.dll"),
-    ],
   },
   {
     label: "node-pty Windows pty binding",
@@ -182,10 +159,7 @@ const requiredModuleResourceExclusions = [
   "!MaiBot/logs/**",
   "!MaiBot/plugins/**",
   "!napcat/**",
-  "!SnowLuma/config/**",
-  "!SnowLuma/data/**",
-  "!SnowLuma/logs/**",
-  "!SnowLuma/.maibot-target-runtime.mjs",
+  "!SnowLuma/**",
 ];
 
 function asRecord(value: unknown): JsonRecord | undefined {

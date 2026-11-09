@@ -53,6 +53,7 @@ async function buildInstaller(): Promise<void> {
       "--win", "nsis", "--x64", "--publish", "never", "--config", configPath]);
     const resources = join(output, "win-unpacked/resources");
     if (existsSync(join(resources, "modules/napcat"))) throw new Error("Windows installer includes NapCat.");
+    if (existsSync(join(resources, "modules/SnowLuma"))) throw new Error("Windows installer includes the SnowLuma runtime.");
     for (const { file } of bundledWheels) {
       if (!existsSync(join(resources, "runtime", "python-wheels", file))) throw new Error("Missing bundled Python wheel: " + file);
     }

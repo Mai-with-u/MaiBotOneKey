@@ -5,7 +5,7 @@ import { FileMatcher } from "app-builder-lib/out/fileMatcher";
 import { createFilter } from "app-builder-lib/out/util/filter";
 
 const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-test("packaging excludes the generated SnowLuma account entry and runtime data", () => {
+test("packaging excludes SnowLuma and NapCat runtimes", () => {
   const mapping = pkg.build.extraResources.find((resource: { from: string }) => resource.from === "modules");
   const root = resolve("modules");
   const matcher = new FileMatcher(root, resolve("output/modules"), (value: string) => value, mapping.filter);
@@ -13,8 +13,8 @@ test("packaging excludes the generated SnowLuma account entry and runtime data",
   matcher.computeParsedPatterns(patterns);
   const filter = createFilter(root, patterns);
   const stat = { isDirectory: () => false } as any;
-  expect(filter(join(root, "SnowLuma/index.mjs"), stat)).toBe(true);
-  expect(filter(join(root, "SnowLuma/node.exe"), stat)).toBe(true);
+  expect(filter(join(root, "SnowLuma/index.mjs"), stat)).toBe(false);
+  expect(filter(join(root, "SnowLuma/node.exe"), stat)).toBe(false);
   for (const file of ["SnowLuma/.maibot-target-runtime.mjs", "SnowLuma/config/runtime.json", "SnowLuma/data/account.db", "SnowLuma/logs/runtime.log", "napcat/index.js"]) {
     expect(filter(join(root, file), stat)).toBe(false);
   }

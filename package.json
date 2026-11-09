@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Electron shell for MaiBot OK.",
   "author": "![1779700604525](image/package/1779700604525.png)MotricSeven",
   "license": "GPL-3.0-only",
@@ -126,11 +126,8 @@
           "!MaiBot/maibot_statistics.html",
           "!MaiBot/plugins/**",
           "!MaiBot/pytests/**",
-          "!SnowLuma/config/**",
-          "!SnowLuma/data/**",
-          "!SnowLuma/logs/**",
-          "!napcat/**",
-          "!SnowLuma/.maibot-target-runtime.mjs"
+          "!SnowLuma/**",
+          "!napcat/**"
         ]
       },
       {

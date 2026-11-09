@@ -7,6 +7,7 @@ import manifest from "../../../package.json";
 test("Windows payload excludes NapCat and can be checked without a local copy", async () => {
   const modules = manifest.build.extraResources.find(({ from, to }) => from === "modules" && to === "modules");
   expect(modules?.filter).toContain("!napcat/**");
+  expect(modules?.filter).toContain("!SnowLuma/**");
   expect(manifest.build.win).not.toHaveProperty("extraResources");
   const root = await mkdtemp(join(tmpdir(), "onekey-payload-variant-"));
   const script = resolve("scripts/release/check-windows-payload.ts");
@@ -14,7 +15,7 @@ test("Windows payload excludes NapCat and can be checked without a local copy", 
     const child = Bun.spawn([process.execPath, script], { cwd: root, stdout: "pipe", stderr: "pipe" });
     const output = await new Response(child.stdout).text();
     expect(await child.exited).toBe(1);
-    expect(output).toContain("[missing] SnowLuma module");
+    expect(output).not.toContain("[missing] SnowLuma");
     expect(output).toContain("[missing] MaiBot initial package manifest");
     expect(output).not.toContain("[missing] NapCat");
   } finally {
