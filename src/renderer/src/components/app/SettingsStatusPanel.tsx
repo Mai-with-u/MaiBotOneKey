@@ -31,7 +31,7 @@ import {
   Wrench,
 } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -92,6 +92,7 @@ import { settingsLogMessage, settingsLogs } from "@/lib/settings-logs";
 interface SettingsStatusPanelProps {
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
+  maiBotPortSettingsRequest: number;
 }
 
 const statusText: Record<ServiceStatus, string> = {
@@ -670,6 +671,7 @@ function LogLine({ entry }: { entry: LogEntry }): React.JSX.Element {
 export function SettingsStatusPanel({
   snapshot,
   onSnapshot,
+  maiBotPortSettingsRequest,
 }: SettingsStatusPanelProps): React.JSX.Element {
   const theme = useTheme();
   const appearance = useAppearance();
@@ -721,6 +723,42 @@ export function SettingsStatusPanel({
   };
   const services = snapshot.services ?? [];
   const maibotService = services.find((service) => service.id === "maibot");
+  const maiBotPortInputId = useId();
+  const handledPortSettingsRequest = useRef(0);
+  const [maiBotPortDraft, setMaiBotPortDraft] = useState(String(maibotService?.port ?? ""));
+  const maiBotPort = Number(maiBotPortDraft);
+  const maiBotPortValid = /^\d+$/u.test(maiBotPortDraft) && maiBotPort >= 1 && maiBotPort <= 65535;
+  const maiBotPortBusy = Boolean(maibotService?.managed || ["starting", "running", "stopping"].includes(maibotService?.status ?? ""));
+  useEffect(() => setMaiBotPortDraft(String(maibotService?.port ?? "")), [maibotService?.port]);
+  useEffect(() => {
+    if (maiBotPortSettingsRequest === handledPortSettingsRequest.current) return;
+    if (activeSettingsTab !== "general") {
+      setActiveSettingsTab("general");
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const input = document.getElementById(maiBotPortInputId);
+      input?.scrollIntoView({ block: "center" });
+      input?.focus({ preventScroll: true });
+      handledPortSettingsRequest.current = maiBotPortSettingsRequest;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSettingsTab, maiBotPortInputId, maiBotPortSettingsRequest]);
+
+  const saveMaiBotPort = async () => {
+    const save = window.maibotDesktop?.init.saveMaiBotWebUiPort;
+    if (!save || !maiBotPortValid || maiBotPortBusy) return;
+    setBusy("maibot-port");
+    setError(null);
+    try {
+      await save(maiBotPort);
+      toast.success("MaiBot WebUI 端口已保存");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
   const serviceCommands = snapshot.serviceCommands ?? [];
   const runtimeResourcePathConfigs = snapshot.runtimeResourcePathConfigs ?? [];
   const editableRuntimeResourcePathConfigs = runtimeResourcePathConfigs;
@@ -1209,6 +1247,23 @@ export function SettingsStatusPanel({
               </TabsList>
 
               <TabsContent className="settings-content" value="general">
+                <SettingsSection className="flex flex-wrap items-end gap-3">
+                  <label className="grid gap-1.5 text-sm font-medium" htmlFor={maiBotPortInputId}>
+                    MaiBot WebUI 端口
+                    <Input id={maiBotPortInputId} className="w-28" inputMode="numeric" monospace
+                      disabled={busy !== null || maiBotPortBusy || !snapshot.moduleVersions.maibotLocal}
+                      value={maiBotPortDraft} onChange={(event) => setMaiBotPortDraft(event.target.value)} />
+                  </label>
+                  <Button
+                    size="sm"
+                    disabled={busy !== null || maiBotPortBusy || !snapshot.moduleVersions.maibotLocal || !maiBotPortValid || maiBotPort === maibotService?.port}
+                    onClick={() => void saveMaiBotPort()}
+                  >
+                    {busy === "maibot-port" ? <Loader2 className="animate-spin" /> : <Save />}
+                    保存端口
+                  </Button>
+                  {maiBotPortBusy ? <p className="text-xs text-muted-foreground">停止 MaiBot 后可修改端口。</p> : null}
+                </SettingsSection>
                 <details className="mb-4 rounded-md border border-border p-3">
                   <summary className="cursor-pointer text-sm font-medium">使用须知与隐私说明</summary>
                   <div className="mt-3 max-h-96 space-y-6 overflow-auto">
@@ -1837,7 +1892,7 @@ export function SettingsStatusPanel({
                   >
                     <Checkbox
                       checked={serviceStartupSettings.useLocalDashboard}
-                      disabled={busy !== null}
+                      disabled={busy !== null || snapshot.paths.maibotDevMode === "source"}
                       onCheckedChange={(checked) =>
                         void saveServiceStartupSettings({
                           ...serviceStartupSettings,
@@ -1848,7 +1903,9 @@ export function SettingsStatusPanel({
                     <span className="min-w-0">
                       <span className="block text-sm font-medium">启动时使用本地 Dashboard 构建</span>
                       <span className="mt-1 block text-xs leading-relaxed">
-                        开启后会向 MaiBot Core 注入 MAIBOT_WEBUI_USE_LOCAL_DASHBOARD=1，下次启动生效。
+                        {snapshot.paths.maibotDevMode === "source"
+                          ? "源码模式始终使用本地 Dashboard 构建。"
+                          : "开启后会向 MaiBot Core 注入 MAIBOT_WEBUI_USE_LOCAL_DASHBOARD=1，下次启动生效。"}
                       </span>
                     </span>
                     {busy === "service-startup-settings" ? (

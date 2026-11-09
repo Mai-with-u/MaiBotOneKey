@@ -1,7 +1,6 @@
 import { startupLogs } from "@/lib/startup-logs";
 import { requestMessagePlatformGuide } from "@/lib/message-platform-guide";
 import {
-  ChevronDown,
   Fish,
   FolderOpen,
   Info,
@@ -9,13 +8,11 @@ import {
   Loader2,
   Play,
   Settings,
-  Square,
   TerminalSquare,
   Unplug,
   X,
 } from "lucide-react";
 import { type CSSProperties, type FocusEvent, type PointerEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { toast } from "sonner";
 import type {
   DesktopSnapshot,
@@ -45,7 +42,9 @@ import { SettingsStatusPanel } from "./SettingsStatusPanel";
 import { StartupAgreementPage } from "./StartupAgreementPage";
 import { TerminalPanel } from "./TerminalPanel";
 import { Titlebar } from "./Titlebar";
-import { WebviewPanel } from "./WebviewPanel";
+import { ServiceStatusPill } from "./ServiceStatusPill";
+import { WebviewPanel, type WebviewControls } from "./WebviewPanel";
+import type { WebuiLayout } from "@/lib/webui-host-message";
 
 function isServiceProcessActive(service: ServiceDescriptor): boolean {
   return service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping";
@@ -53,8 +52,6 @@ function isServiceProcessActive(service: ServiceDescriptor): boolean {
 
 const MAIBOT_DEFAULT_WEBUI_URL = "http://127.0.0.1:8001";
 const MAIBOT_CHAT_WEBUI_PATH = "/chat/embed";
-const toolbarMenuItemClassName =
-  "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 const retroTopActionIconClassName =
   "[&_svg]:fill-none [&_svg]:stroke-[3] [&_svg]:[stroke-linecap:square] [&_svg]:[stroke-linejoin:miter]";
 const tabPageTransitionClassName =
@@ -497,7 +494,32 @@ export function DesktopShell(): React.JSX.Element {
   const [preparing, setPreparing] = useState(() => !readStartupWizardSeen());
   const [maiBotPageState, setMaiBotPageState] = useState<"loading" | "ready" | "error">("loading");
   const openMessagePlatformFromWebui = useCallback(() => setActiveTab("message-platform"), []);
-  const [webviewToolbarHost, setWebviewToolbarHost] = useState<HTMLDivElement | null>(null);
+  const openMaiBotHome = useCallback(() => setActiveTab("maibot"), []);
+  const webviewControlsRef = useRef<WebviewControls | null>(null);
+  // The title bar brand column follows the embedded WebUI sidebar width.
+  const [brandColumnWidth, setBrandColumnWidth] = useState<number | undefined>(undefined);
+  // While the WebUI runs a tutorial or the first-run trial, the brand must not jump to the home page.
+  const [webuiHomeLocked, setWebuiHomeLocked] = useState(false);
+  const [webuiSidebarCollapsed, setWebuiSidebarCollapsed] = useState(false);
+  // Last settled widths of each sidebar state, so a toggle can animate to the target at once.
+  const sidebarWidthsRef = useRef({ expanded: 0, collapsed: 68 });
+  const handleWebuiLayout = useCallback((layout: WebuiLayout) => {
+    setBrandColumnWidth(layout.sidebarWidth > 0 ? layout.sidebarWidth : undefined);
+    setWebuiHomeLocked(layout.homeLocked);
+    if (layout.sidebarWidth > 0) {
+      sidebarWidthsRef.current[layout.collapsed ? "collapsed" : "expanded"] = layout.sidebarWidth;
+      setWebuiSidebarCollapsed(layout.collapsed);
+    }
+  }, []);
+  // The WebUI hides its own collapse key inside OneKey; the title bar key drives it instead.
+  // The column starts moving together with the sidebar instead of waiting for the WebUI report.
+  const toggleWebuiSidebar = useCallback(() => {
+    const next = !webuiSidebarCollapsed;
+    const target = sidebarWidthsRef.current[next ? "collapsed" : "expanded"];
+    setWebuiSidebarCollapsed(next);
+    if (target > 0) setBrandColumnWidth(target);
+    webviewControlsRef.current?.setSidebarCollapsed(next);
+  }, [webuiSidebarCollapsed]);
   const [maibotCoreHost, setMaibotCoreHost] = useState<HTMLDivElement | null>(null);
   const [maibotUpdateHost, setMaibotUpdateHost] = useState<HTMLDivElement | null>(null);
   const [maibotWebviewPath, setMaibotWebviewPath] = useState<string | null>("/");
@@ -509,6 +531,7 @@ export function DesktopShell(): React.JSX.Element {
   const [terminalFocusSessionId, setTerminalFocusSessionId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [maiBotPortSettingsRequest, setMaiBotPortSettingsRequest] = useState(0);
   const retroTabsRef = useRef<HTMLDivElement | null>(null);
   const appearance = useAppearance();
   const useRetroChrome = usesRetroStructure(appearance.mode);
@@ -584,6 +607,8 @@ export function DesktopShell(): React.JSX.Element {
     [maibotService?.url, maibotWebviewPath],
   );
   const qqBackendService = serviceById.get("napcat");
+  const conflictPort = actionError?.match(/端口\s+(\d+)\s+已被占用/u)?.[1];
+  const maiBotPortConflict = maibotService?.health === "conflict" && Number(conflictPort) === maibotService.port;
   const qqBackendName =
     qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
   const messagePlatformConfigured = Boolean(
@@ -851,26 +876,47 @@ export function DesktopShell(): React.JSX.Element {
     };
   }, [useRetroChrome]);
 
-  const webviewToolbarActive = activeTab === "maibot";
+  const maibotPageControllable = activeTab === "maibot" && maibotWebviewAvailable;
+  // The WebUI hides its own logo inside OneKey, so the title bar mark takes over as the home link.
+  const goMaiBotHome = useCallback(() => {
+    setActiveTab("maibot");
+    webviewControlsRef.current?.navigate("/");
+  }, []);
 
   const toolbarActions = (
     <div
       className={cn(
         "flex shrink-0 items-center gap-1",
-        !webviewToolbarActive && "ml-auto",
         useRetroChrome && "py-1",
       )}
     >
+    <ServiceStatusPill
+      active={hasActiveServiceProcess}
+      onOpenExternal={maibotPageControllable ? () => webviewControlsRef.current?.openExternal() : undefined}
+      onPrimary={runPrimaryServiceAction}
+      onReload={maibotPageControllable ? () => webviewControlsRef.current?.refresh() : undefined}
+      onStartAll={startAll}
+      onStartService={startService}
+      onStopAll={stopAll}
+      operation={snapshot?.runtimeOperation ?? undefined}
+      primaryLabel={primaryServiceActionLabel}
+      qqBackendAvailable={Boolean(qqBackendService) && messagePlatformConfigured}
+      qqBackendName={qqBackendName}
+      service={maibotService}
+      transitioning={primaryServiceActionDisabled}
+      webuiUrl={maibotWebviewAvailable ? maibotService?.url : undefined}
+    />
     <div className="flex items-center" ref={setMaibotUpdateHost} />
     <Button
       aria-label="设置"
       className={cn(
         useRetroChrome
           ? [
-              cn("retro-top-action text-primary-foreground [&_svg]:stroke-primary-foreground", retroTopActionIconClassName),
+              cn("retro-top-action", retroTopActionIconClassName),
+              // Same keycap as the other title bar keys; only the selected state differs.
               activeTab === "settings"
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-[var(--retro-ink)] bg-[var(--retro-ink)] text-primary-foreground hover:bg-[var(--retro-ink)]",
+                ? "border-primary bg-primary text-primary-foreground [&_svg]:stroke-primary-foreground"
+                : "border-border bg-card",
             ]
           : "size-7",
       )}
@@ -880,100 +926,6 @@ export function DesktopShell(): React.JSX.Element {
     >
       <Settings />
     </Button>
-    {useRetroChrome ? (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label={primaryServiceActionLabel}
-            className={cn("retro-top-action w-14 border-primary bg-primary px-0 text-primary-foreground hover:bg-primary/90", retroTopActionIconClassName)}
-            disabled={primaryServiceActionDisabled}
-            onClick={runPrimaryServiceAction}
-            size="sm"
-            variant="secondary"
-          >
-            {primaryServiceActionTransitioning ? (
-              <Loader2 className="animate-spin" />
-            ) : hasActiveServiceProcess ? (
-              <Square />
-            ) : (
-              <Play />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          {primaryServiceActionLabel}
-        </TooltipContent>
-      </Tooltip>
-    ) : (
-      <div className="flex shrink-0 items-center">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label={primaryServiceActionLabel}
-              className={cn("h-7 w-8 px-0 text-[11px]", !hasActiveServiceProcess && "rounded-r-none")}
-              disabled={primaryServiceActionDisabled}
-              onClick={runPrimaryServiceAction}
-              size="sm"
-              variant="default"
-            >
-              {primaryServiceActionTransitioning ? (
-                <Loader2 className="animate-spin" />
-              ) : hasActiveServiceProcess ? (
-                <Square />
-              ) : (
-                <Play />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {primaryServiceActionLabel}
-          </TooltipContent>
-        </Tooltip>
-        {!hasActiveServiceProcess && !primaryServiceActionTransitioning ? (
-          <DropdownMenuPrimitive.Root>
-            <DropdownMenuPrimitive.Trigger asChild>
-              <Button
-                aria-label="选择要启动的服务"
-                className="-ml-px h-7 w-5 rounded-l-none border-l border-primary-foreground/25 px-0 text-[11px]"
-                disabled={actionBusy !== null}
-                size="sm"
-                variant="default"
-              >
-                <ChevronDown className="size-3" />
-              </Button>
-            </DropdownMenuPrimitive.Trigger>
-            <DropdownMenuPrimitive.Portal>
-              <DropdownMenuPrimitive.Content
-                align="end"
-                className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg shadow-black/15"
-                sideOffset={6}
-              >
-                <DropdownMenuPrimitive.Item className={toolbarMenuItemClassName} onSelect={startAll}>
-                  <Play className="size-3.5" />
-                  <span className="flex-1">启动全部服务</span>
-                </DropdownMenuPrimitive.Item>
-                <DropdownMenuPrimitive.Item
-                  className={toolbarMenuItemClassName}
-                  disabled={!maibotService}
-                  onSelect={() => startService("maibot")}
-                >
-                  <Play className="size-3.5" />
-                  启动 MaiBot
-                </DropdownMenuPrimitive.Item>
-                <DropdownMenuPrimitive.Item
-                  className={toolbarMenuItemClassName}
-                  disabled={!qqBackendService || !messagePlatformConfigured}
-                  onSelect={() => startService("napcat")}
-                >
-                  <Play className="size-3.5" />
-                  启动 {qqBackendName}
-                </DropdownMenuPrimitive.Item>
-              </DropdownMenuPrimitive.Content>
-            </DropdownMenuPrimitive.Portal>
-          </DropdownMenuPrimitive.Root>
-        ) : null}
-      </div>
-    )}
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
@@ -1089,11 +1041,10 @@ export function DesktopShell(): React.JSX.Element {
             appVersion={snapshot?.appVersion ?? "0.1.0"}
             retro={useRetroChrome}
             navigation={onboarding ? undefined : navigationTabs}
-            toolbar={!onboarding && (
-              <div className="ml-3 flex min-w-0 flex-1 items-center">
-                <div className={cn("min-w-0 flex-1", webviewToolbarActive ? "flex h-full items-center" : "hidden")} ref={setWebviewToolbarHost} />
-              </div>
-            )}
+            brandColumnWidth={onboarding ? undefined : brandColumnWidth}
+            brandHome={!onboarding}
+            sidebarToggle={!onboarding && brandColumnWidth ? { collapsed: webuiSidebarCollapsed, onToggle: toggleWebuiSidebar } : undefined}
+            onBrandClick={onboarding || webuiHomeLocked ? undefined : goMaiBotHome}
             actions={!onboarding && (
               <>
                 {toolbarActions}
@@ -1103,7 +1054,16 @@ export function DesktopShell(): React.JSX.Element {
 
           {!onboarding && actionError ? (
             <div className="flex shrink-0 items-center gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-[12px] text-destructive" role="alert">
-              <span className="min-w-0 flex-1 break-words">{actionError}</span>
+              <span className="min-w-0 flex-1 break-words">
+                {maiBotPortConflict ? `MaiBot WebUI 端口 ${conflictPort} 已被占用。请释放该端口，或修改端口后重试。` : actionError}
+              </span>
+              {maiBotPortConflict ? (
+                <Button className="shrink-0" size="sm" variant="secondary" onClick={() => {
+                  setActionError(null);
+                  setActiveTab("settings");
+                  setMaiBotPortSettingsRequest((request) => request + 1);
+                }}>端口设置</Button>
+              ) : null}
               <Button aria-label="关闭错误提示" className="size-6" onClick={() => setActionError(null)} size="icon-sm" variant="ghost">
                 <X />
               </Button>
@@ -1152,6 +1112,7 @@ export function DesktopShell(): React.JSX.Element {
                   coreToolbarTarget={maibotCoreHost}
                   updateToolbarTarget={maibotUpdateHost}
                   active={activeTab === "message-platform"}
+                  onOpenMaiBotHome={openMaiBotHome}
                   onOpenPluginConfig={openPluginConfig}
                   onOpenTerminalSession={openTerminalSession}
                   onSnapshot={setSnapshot}
@@ -1187,7 +1148,8 @@ export function DesktopShell(): React.JSX.Element {
                   loadingFallback={maibotWebuiStatusPanel}
                   title="MaiBot WebUI"
                   toolbarPlacement="external"
-                  toolbarTarget={webviewToolbarHost}
+                  onWebuiLayout={handleWebuiLayout}
+                  controlsRef={webviewControlsRef}
                   reloadTrigger={maibotWebviewNavigationRequest}
                   url={maibotWebviewTarget.entryUrl}
                   navigationTargetUrl={maibotWebviewTarget.targetUrl}
@@ -1229,6 +1191,7 @@ export function DesktopShell(): React.JSX.Element {
             >
               {snapshot ? (
                 <SettingsStatusPanel
+                  maiBotPortSettingsRequest={maiBotPortSettingsRequest}
                   onSnapshot={setSnapshot}
                   snapshot={snapshot}
                 />

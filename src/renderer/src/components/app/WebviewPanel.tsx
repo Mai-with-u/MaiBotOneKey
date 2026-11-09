@@ -5,7 +5,7 @@ import {
   Plus,
   RotateCw,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,18 @@ import { cn } from "@/lib/utils";
 import { useShortcut } from "@/lib/use-shortcut";
 import { parseMaiBotTheme, READ_MAIBOT_THEME_SCRIPT, rememberMaiBotTheme } from "@/lib/maibot-theme";
 import { READ_MAIBOT_CONTENT_SCRIPT, waitForWebviewContent } from "@/lib/webview-readiness";
-import { isMessagePlatformRequest } from "@/lib/webui-host-message";
+import { isMessagePlatformRequest, parseWebuiLayoutMessage, type WebuiLayout } from "@/lib/webui-host-message";
+
+/** Lets the title bar drive the page without the old address toolbar. */
+export interface WebviewControls {
+  refresh: () => void;
+  openExternal: () => void;
+  /** Moves the WebUI to a route inside the page, without reloading it. */
+  navigate: (path: string) => void;
+  /** Asks the embedded WebUI to collapse or expand its sidebar. */
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  currentUrl: string;
+}
 
 interface WebviewPanelProps {
   guestCss?: string;
@@ -36,6 +47,9 @@ interface WebviewPanelProps {
   navigationTargetUrl?: string;
   onWebuiIdentity?: (identity: { userId?: string; userName?: string }) => void;
   onMessagePlatformRequest?: () => void;
+  /** The embedded MaiBot WebUI reports its sidebar width here; 0 means no sidebar. */
+  onWebuiLayout?: (layout: WebuiLayout) => void;
+  controlsRef?: MutableRefObject<WebviewControls | null>;
 }
 
 type LoadState = "loading" | "ready" | "error";
@@ -46,6 +60,7 @@ type WebviewElement = HTMLElement & {
   loadURL?: (url: string) => Promise<void> | void;
   setZoomFactor?: (factor: number) => void;
   insertCSS?: (css: string) => Promise<string>;
+  send?: (channel: string, ...args: unknown[]) => void;
 };
 
 type DidFailLoadEvent = Event & {
@@ -106,6 +121,8 @@ export function WebviewPanel({
   navigationTargetUrl,
   onWebuiIdentity,
   onMessagePlatformRequest,
+  onWebuiLayout,
+  controlsRef,
 }: WebviewPanelProps): React.JSX.Element {
   const webviewRef = useRef<WebviewElement | null>(null);
   const domReadyRef = useRef(false);
@@ -121,11 +138,41 @@ export function WebviewPanel({
     setLoadStateValue(state);
   }, []);
   const [currentUrl, setCurrentUrl] = useState(url);
+  const [entryUrl, setEntryUrl] = useState(url);
+  const setupEntryUrlRef = useRef<string | null>(null);
   const [reloadKey, setReloadKey] = useState(() => Date.now());
   const [zoomPercent, setZoomPercent] = useState(100);
   const zoomPercentRef = useRef(zoomPercent);
   zoomPercentRef.current = zoomPercent;
-  const webviewUrl = withCacheBust(url, reloadKey);
+  const webviewUrl = withCacheBust(entryUrl, reloadKey);
+
+  useLayoutEffect(() => {
+    if (readMaiBotAppearance) {
+      const current = URL.parse(currentUrl);
+      const entry = URL.parse(entryUrl);
+      const next = URL.parse(url);
+      if (current?.pathname === "/setup" && current.origin === entry?.origin) {
+        setupEntryUrlRef.current = entryUrl;
+      }
+      if (url === entryUrl) return;
+      // A password saved by the wizard updates the service URL. Keep the live
+      // wizard and apply the new entry if the guest later needs to sign in.
+      if (
+        setupEntryUrlRef.current === entryUrl &&
+        current?.pathname !== "/auth" &&
+        entry &&
+        entry.origin === next?.origin &&
+        next?.pathname === "/auth" &&
+        next.searchParams.has("token") &&
+        (entry.searchParams.get("redirect") ?? `${entry.pathname}${entry.search}${entry.hash}`) ===
+          next.searchParams.get("redirect")
+      ) {
+        return;
+      }
+    }
+    setupEntryUrlRef.current = null;
+    setEntryUrl(url);
+  }, [currentUrl, entryUrl, readMaiBotAppearance, url]);
 
   const applyZoom = useCallback(() => {
     if (!showZoomControls || !domReadyRef.current) return;
@@ -191,8 +238,9 @@ export function WebviewPanel({
     documentVersionRef.current += 1;
     domReadyRef.current = false;
     setLoadState("loading");
+    setEntryUrl(url);
     setReloadKey((current) => Math.max(Date.now(), current + 1));
-  }, [setLoadState]);
+  }, [setLoadState, url]);
 
   const clearWebviewCache = useCallback(async () => {
     await window.maibotDesktop?.clearWebviewCache?.();
@@ -215,6 +263,32 @@ export function WebviewPanel({
     externalOpen(currentUrl);
   }, [currentUrl]);
 
+  useEffect(() => {
+    if (!controlsRef) return;
+    const navigate = (path: string) => {
+      const webview = webviewRef.current;
+      if (!webview?.executeJavaScript || !domReadyRef.current) return;
+      // The WebUI router follows history.pushState, so the page switches route in place.
+      void webview.executeJavaScript(`(() => {
+        const path = ${JSON.stringify(path)};
+        if (location.pathname + location.search === path) return;
+        const state = history.state || {};
+        const key = Math.random().toString(36).slice(2, 10);
+        history.pushState({ ...state, key, __TSR_key: key, __TSR_index: (state.__TSR_index || 0) + 1 }, "", path);
+      })()`).catch(() => undefined);
+    };
+    const setSidebarCollapsed = (collapsed: boolean) => {
+      if (!domReadyRef.current) return;
+      try {
+        webviewRef.current?.send?.("maibot:sidebar", { collapsed });
+      } catch {
+        // A navigation may temporarily detach the guest.
+      }
+    };
+    controlsRef.current = { refresh: () => void refresh(), openExternal, navigate, setSidebarCollapsed, currentUrl };
+    return () => { controlsRef.current = null; };
+  }, [controlsRef, currentUrl, openExternal, refresh]);
+
   useShortcut("Mod+R", refresh, { enabled: active });
   useShortcut("Mod+Shift+O", openExternal, { enabled: active });
 
@@ -235,8 +309,8 @@ export function WebviewPanel({
     domReadyRef.current = false;
     navigationTargetAttemptedRef.current = false;
     setLoadState("loading");
-    setCurrentUrl(url);
-  }, [navigationTargetUrl, url, reloadKey, setLoadState]);
+    setCurrentUrl(entryUrl);
+  }, [navigationTargetUrl, entryUrl, reloadKey, setLoadState]);
 
   useEffect(() => { retryCountRef.current = 0; }, [url, navigationTargetUrl]);
 
@@ -344,6 +418,8 @@ export function WebviewPanel({
         return;
       }
       if (event.type === "did-start-navigation" && !navigationEvent.isInPlace) {
+        // A new document has no sidebar until the WebUI reports one again.
+        onWebuiLayout?.({ sidebarWidth: 0, collapsed: false, homeLocked: false });
         documentVersionRef.current += 1;
         domReadyRef.current = false;
         setLoadState("loading");
@@ -358,10 +434,14 @@ export function WebviewPanel({
     };
 
     const handleHostMessage = (event: Event): void => {
-      const message = event as Event & { channel: string };
-      if (isMessagePlatformRequest(message.channel, readLiveWebviewUrl(), url)) {
+      const message = event as Event & { channel: string; args?: unknown[] };
+      const sourceUrl = readLiveWebviewUrl();
+      if (isMessagePlatformRequest(message.channel, sourceUrl, url)) {
         onMessagePlatformRequest?.();
+        return;
       }
+      const layout = parseWebuiLayoutMessage(message.channel, message.args, sourceUrl, url);
+      if (layout) onWebuiLayout?.(layout);
     };
 
     webview.addEventListener("ipc-message", handleHostMessage);
@@ -386,7 +466,7 @@ export function WebviewPanel({
       webview.removeEventListener("dom-ready", handleReady);
       webview.removeEventListener("did-fail-load", handleFail);
     };
-  }, [applyZoom, guestCss, handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, onMessagePlatformRequest, readLiveWebviewUrl, readMaiBotAppearance, reloadKey, syncCurrentUrl, url, setLoadState]);
+  }, [applyZoom, guestCss, handleLoadUrlFailure, navigationTargetUrl, onWebuiIdentity, onMessagePlatformRequest, onWebuiLayout, readLiveWebviewUrl, readMaiBotAppearance, reloadKey, syncCurrentUrl, url, setLoadState]);
 
   useEffect(() => {
     if (loadState !== "loading") return;

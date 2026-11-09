@@ -130,6 +130,7 @@ const desktopBridge: DesktopBridge = {
   init: {
     getState: () => ipcRenderer.invoke("init:getState") as Promise<InitState>,
     getMaiBotSetupStatus: () => ipcRenderer.invoke("init:getMaiBotSetupStatus") as Promise<MaiBotSetupStatus>,
+    saveMaiBotWebUiPort: (port: number) => ipcRenderer.invoke("init:saveMaiBotWebUiPort", port) as Promise<void>,
     repair: () =>
       ipcRenderer.invoke("init:repair") as Promise<InitRepairResult>,
   },
@@ -164,7 +165,6 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("modules:checkMaibotUpdate", target) as Promise<MaiBotUpdateInfo>,
     updateMaiBot: (target?: ModuleUpdateTarget) =>
       ipcRenderer.invoke("modules:updateMaibot", target) as Promise<ModuleUpdateResult>,
-    rollbackMaiBot: () => ipcRenderer.invoke("modules:rollbackMaibot") as Promise<void>,
     onMaiBotUpdateProgress: (callback: (progress: MaiBotModuleUpdateProgress) => void) =>
       onIpc("modules:maibot-update-progress", callback),
     listMaiBotTags: () => ipcRenderer.invoke("modules:listMaibotTags") as Promise<ModuleTagOption[]>,

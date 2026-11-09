@@ -388,13 +388,13 @@ class ServiceStartupSettingsStore {
   private readonly path: string;
   private cache: ServiceStartupSettings;
 
-  constructor(paths: RuntimePaths) {
+  constructor(private readonly paths: RuntimePaths) {
     this.path = join(paths.userDataRoot, SERVICE_STARTUP_SETTINGS_FILE);
     this.cache = this.read();
   }
 
   get(): ServiceStartupSettings {
-    return { ...this.cache };
+    return { ...this.cache, useLocalDashboard: this.paths.maibotDevMode === "source" || this.cache.useLocalDashboard };
   }
 
   async set(settings: ServiceStartupSettings): Promise<ServiceStartupSettings> {
@@ -601,6 +601,10 @@ export class ServiceManager extends EventEmitter {
 
     let resolved: ResolvedServiceCommand;
     try {
+      if (serviceId === "maibot" && this.paths.maibotDevMode === "source"
+        && !existsSync(join(this.paths.maibotRoot, "dashboard", "dist", "index.html"))) {
+        throw new Error("源码 Dashboard 尚未构建，请先运行 bun run dev:source。");
+      }
       if (serviceId === "maibot" && isMaiBotPackageMode(this.paths)) {
         this.setState(serviceId, { ...state, status: "starting", desired: true, detail: "正在准备 MaiBot PyPI 环境" });
         await this.initManager.ensureMaiBotPackage(
@@ -675,16 +679,22 @@ export class ServiceManager extends EventEmitter {
       if (usePythonEnvironment && this.pythonDependencyManager) {
         this.setState("maibot", {
           ...this.getState("maibot"),
-          detail: "\u6b63\u5728\u68c0\u67e5 MaiBot \u542f\u52a8\u4f9d\u8d56\uff0c\u5b8c\u6210\u540e\u4f1a\u542f\u52a8 PTY",
+          detail: "正在下载麦麦必须文件,完成后会启动 Maibot",
         });
         this.logs.append("maibot", "system", "startup dependency upgrade: checking MaiBot dependencies in portable Python environment");
-        const dependencyUpgradeStartedAt = Date.now();
+        let lastDependencyOutputAt = Date.now();
+        let nextIdleNoticeAt = lastDependencyOutputAt + 30_000;
         const dependencyUpgradeHeartbeat = setInterval(() => {
-          const elapsedSeconds = Math.round((Date.now() - dependencyUpgradeStartedAt) / 1000);
-          this.logs.append("maibot", "system", `startup dependency upgrade still running (${elapsedSeconds}s)`);
+          const now = Date.now();
+          if (now < nextIdleNoticeAt) return;
+          const idleSeconds = Math.floor((now - lastDependencyOutputAt) / 1000);
+          this.logs.append("maibot", "system", `依赖检查已 ${idleSeconds} 秒没有新输出，仍在等待 pip 响应。`);
+          nextIdleNoticeAt = now + 30_000;
         }, 15_000);
         const upgradeResult = await this.pythonDependencyManager
           .upgradeStartupDependencies((line) => {
+            lastDependencyOutputAt = Date.now();
+            nextIdleNoticeAt = lastDependencyOutputAt + 30_000;
             this.logs.append("maibot", "system", `startup dependency upgrade: ${line}`);
           })
           .finally(() => clearInterval(dependencyUpgradeHeartbeat));
@@ -1009,8 +1019,18 @@ export class ServiceManager extends EventEmitter {
   }
 
   reloadRuntimePaths(): void {
+    const previousMaiBotPort = this.getDefinition("maibot").port;
     this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(this.paths.snowlumaRoot, this.paths.protocolSettingsRoot ?? this.paths.userDataRoot);
     this.definitions = this.createDefinitions();
+    const maibot = this.getState("maibot");
+    if (!maibot.managed && previousMaiBotPort !== this.getDefinition("maibot").port) {
+      this.setState("maibot", {
+        ...maibot,
+        dynamicUrl: undefined,
+        ...(maibot.health === "conflict" ? { status: "stopped", health: "unknown", error: undefined, detail: undefined } : {}),
+      });
+      return;
+    }
     this.emit("snapshot", this.snapshot());
   }
 

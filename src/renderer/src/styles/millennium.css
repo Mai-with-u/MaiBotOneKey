@@ -227,7 +227,8 @@
 /* ---------- 标题栏：机壳上沿 ---------- */
 
 :root[data-appearance-mode="millennium"] .app-titlebar {
-  background-color: var(--mil-panel);
+  /* 顶盖比下方 WebUI 底色深一档，选中页签用 WebUI 底色，看起来是同一块面板从顶盖下伸出来 */
+  background-color: color-mix(in srgb, var(--mil-shell) 72%, var(--mil-lo));
   /* 底线用同一层背景绘制，避免系统缩放将 border 取整后与页签错位。 */
   background-image: linear-gradient(var(--mil-line), var(--mil-line)), var(--mil-speck);
   background-size: 100% 2px, 5px 5px;
@@ -342,7 +343,6 @@
     [data-variant="destructive"]
   ),
 :root[data-appearance-mode="millennium"] .retro-titlebar-actions [data-variant],
-:root[data-appearance-mode="millennium"] .app-window-controls button,
 :root[data-appearance-mode="millennium"] button[aria-pressed="false"] {
   background-color: var(--mil-key);
   /* The inset keycap outline sits inside the transparent CSS border. */
@@ -360,7 +360,6 @@
 :root[data-appearance-mode="millennium"]
   :is([data-variant="secondary"], [data-variant="outline"]):not(:disabled):hover,
 :root[data-appearance-mode="millennium"] .retro-titlebar-actions [data-variant]:not(:disabled):hover,
-:root[data-appearance-mode="millennium"] .app-window-controls button:hover,
 :root[data-appearance-mode="millennium"] button[aria-pressed="false"]:not(:disabled):hover {
   background-color: var(--mil-key-hover);
   color: var(--mil-ink);
@@ -380,8 +379,7 @@
   color: var(--mil-hot-ink);
 }
 
-:root[data-appearance-mode="millennium"] [data-variant="destructive"],
-:root[data-appearance-mode="millennium"] .app-window-controls button[aria-label="关闭"]:hover {
+:root[data-appearance-mode="millennium"] [data-variant="destructive"] {
   background-color: var(--mil-danger);
   box-shadow:
     inset 0 0 0 2px var(--mil-line),
@@ -429,8 +427,7 @@
     [data-variant="outline"],
     [data-variant="destructive"]
   ):not(:disabled):active,
-:root[data-appearance-mode="millennium"] .retro-titlebar-actions [data-variant]:not(:disabled):active,
-:root[data-appearance-mode="millennium"] .app-window-controls button:active {
+:root[data-appearance-mode="millennium"] .retro-titlebar-actions [data-variant]:not(:disabled):active {
   box-shadow:
     inset 0 0 0 2px var(--mil-line),
     inset 0 -2px 0 rgb(0 0 0 / 0.22);
@@ -454,10 +451,127 @@
   width: 15px !important;
 }
 
+/* 窗口键不做键帽：贴着右上角平铺，占满顶盖高度，左侧一道竖线和应用键隔开 */
+:root[data-appearance-mode="millennium"] .app-window-controls {
+  align-self: stretch;
+  gap: 0;
+  height: auto;
+  margin-bottom: 2px;
+  margin-left: 6px;
+  padding: 0 !important;
+  border-left: 2px solid color-mix(in srgb, var(--mil-line) 28%, transparent);
+}
 :root[data-appearance-mode="millennium"] .app-window-controls button {
-  height: 24px;
-  padding: 0 0 3px;
-  width: 30px;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--mil-print);
+  height: 100%;
+  padding: 0;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+  width: 44px;
+}
+:root[data-appearance-mode="millennium"] .app-window-controls button svg {
+  /* 和其他标题栏键一样的粗方头线条 */
+  height: 15px;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 3;
+  width: 15px;
+}
+:root[data-appearance-mode="millennium"] .app-window-controls button:hover {
+  background-color: color-mix(in srgb, var(--mil-line) 14%, transparent);
+  color: var(--mil-ink);
+}
+:root[data-appearance-mode="millennium"] .app-window-controls button:active {
+  background-color: color-mix(in srgb, var(--mil-line) 24%, transparent);
+}
+:root[data-appearance-mode="millennium"] .app-window-controls button[aria-label="关闭"]:hover,
+:root[data-appearance-mode="millennium"] .app-window-controls button[aria-label="关闭"]:active {
+  background-color: var(--mil-danger);
+  color: #fff4e6;
+}
+
+/* 品牌列和 WebUI 侧栏同宽，右侧一道虚线对齐侧栏边 */
+:root[data-appearance-mode="millennium"] .app-titlebar-brand-column[data-aligned="true"] {
+  border-right: 2px dashed color-mix(in srgb, var(--mil-line) 30%, transparent);
+  margin-bottom: 2px;
+}
+:root[data-appearance-mode="millennium"] .app-titlebar .app-titlebar-version {
+  border: 2px solid color-mix(in srgb, var(--mil-line) 30%, transparent);
+  color: var(--mil-print);
+  font-family: var(--mil-font);
+  padding: 0 5px;
+}
+
+/* 服务状态胶囊：凹进去的小液晶屏 */
+:root[data-appearance-mode="millennium"] .app-service-pill {
+  /* 和 WebUI 里的液晶屏同一张细网格纹理 */
+  background-color: var(--mil-screen);
+  background-image: var(--mil-screen-tex);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-sunk);
+  color: var(--mil-screen-ink);
+  font-family: var(--mil-font);
+}
+:root[data-appearance-mode="millennium"] .app-service-pill-led {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+}
+:root[data-appearance-mode="millennium"] .app-service-pill-sep {
+  background: var(--mil-rule);
+}
+:root[data-appearance-mode="millennium"] .app-service-pill-key {
+  border-radius: 0;
+  color: var(--mil-screen-ink);
+}
+:root[data-appearance-mode="millennium"] .app-service-pill-key[data-primary="true"] {
+  background: var(--mil-hot);
+  box-shadow: inset 0 0 0 2px var(--mil-line), inset 0 -3px 0 var(--mil-hot-side);
+  color: var(--mil-hot-ink);
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-mark {
+  /* 和旁边的 MAIBOT 铭牌同一块深色底、同一道凸边 */
+  background: var(--mil-plate);
+  border-radius: 0;
+  box-shadow: -1px -1px 0 1px var(--mil-lo), 1px 1px 0 1px var(--mil-hi);
+}
+:where(:root[data-appearance-mode="millennium"]) .app-titlebar-mark > span {
+  background: color-mix(in srgb, var(--mil-plate-ink) 30%, var(--mil-plate));
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-sidebar-key {
+  background-color: var(--mil-key);
+  border: 0;
+  border-radius: 0;
+  box-shadow: var(--mil-keycap);
+  color: var(--mil-ink);
+  padding-bottom: 3px;
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-sidebar-key:hover {
+  background-color: var(--mil-key-hover);
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-sidebar-key:active {
+  box-shadow: inset 0 0 0 2px var(--mil-line), inset 0 -2px 0 rgb(0 0 0 / 0.22);
+  transform: translateY(1px);
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-sidebar-key svg {
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 2.6;
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-home-face {
+  border-radius: 0;
+}
+:root[data-appearance-mode="millennium"] .app-titlebar-home:not([aria-disabled="true"]):is(:hover, :focus-visible) .app-titlebar-home-face {
+  background: color-mix(in srgb, var(--mil-key-hover) 70%, transparent);
+  box-shadow: 0 0 0 2px var(--mil-on-side);
+}
+:root[data-appearance-mode="millennium"] .app-service-menu {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--mil-float-shadow);
 }
 
 /* ---------- 凸起的塑料模块 ---------- */

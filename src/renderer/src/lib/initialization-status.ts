@@ -1,4 +1,25 @@
-import type { MaiBotModuleUpdateProgress, ServiceDescriptor } from "@shared/contracts";
+import type { LogEntry, MaiBotModuleUpdateProgress, ServiceDescriptor } from "@shared/contracts";
+
+export interface StartupDownloadProgress {
+  percent: number | null;
+  label: string;
+}
+
+export function startupDownloadProgress(logs: readonly LogEntry[], startedAt: number): StartupDownloadProgress | undefined {
+  for (let index = logs.length - 1; index >= 0; index--) {
+    const { message, timestamp } = logs[index];
+    if (timestamp < startedAt) break;
+    if (/^(?:start failed:|startup dependency upgrade completed:)/u.test(message)) return;
+
+    const pip = /^(?:startup dependency upgrade|MaiBot preparation):\s*(.*)$/u.exec(message)?.[1];
+    if (!pip) continue;
+    const progress = /^下载进度 (.+)（(\d+)%）$/u.exec(pip);
+    if (progress) return { percent: Number(progress[2]), label: progress[1] };
+    if (pip.startsWith("已下载 ")) return { percent: null, label: pip.slice("已下载 ".length) };
+    if (pip.startsWith("Downloading ")) return { percent: null, label: "下载中" };
+    if (/^(?:Collecting |Using cached |Installing |Successfully installed|WARNING: Retrying|ERROR:|失败原因：|pip install |checking MaiBot dependencies|验证包与 Python 环境)/u.test(pip)) return;
+  }
+}
 
 export function canRestartDependencyDownload(
   service: ServiceDescriptor | undefined,

@@ -1,7 +1,8 @@
 import {
   Maximize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Minus,
-  Square,
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -19,6 +20,14 @@ interface TitlebarProps {
   toolbar?: ReactNode;
   coreHostRef?: (element: HTMLDivElement | null) => void;
   brand?: ReactNode;
+  /** Width of the embedded WebUI sidebar, so the brand column lines up with it. */
+  brandColumnWidth?: number;
+  /** Shows the three-light mark and the nameplate as one home button. */
+  brandHome?: boolean;
+  /** Returns to the MaiBot home page; omitted while a tutorial locks navigation. */
+  onBrandClick?: () => void;
+  /** The embedded WebUI sidebar collapse key, moved up from the sidebar. */
+  sidebarToggle?: { collapsed: boolean; onToggle: () => void };
 }
 
 function useWindowState(): WindowState {
@@ -81,6 +90,15 @@ function MacTrafficLights(): React.JSX.Element {
   );
 }
 
+/** Window key glyphs share one 24-unit grid so every theme can set one stroke width for all three. */
+function WindowIcon({ path }: { path: string }): React.JSX.Element {
+  return (
+    <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path d={path} />
+    </svg>
+  );
+}
+
 function WinControls({ isMaximized, miniMode = false, retro = false }: { isMaximized: boolean; miniMode?: boolean; retro?: boolean }): React.JSX.Element {
   const bridge = window.maibotDesktop?.window;
   const baseBtn =
@@ -101,7 +119,7 @@ function WinControls({ isMaximized, miniMode = false, retro = false }: { isMaxim
         onClick={() => bridge?.minimize()}
         type="button"
       >
-        <Minus className="size-3.5" strokeWidth={2} />
+        <WindowIcon path="M5 12h14" />
       </button>
       <button
         aria-label={miniMode ? "退出迷你模式" : isMaximized ? "还原" : "最大化"}
@@ -109,22 +127,7 @@ function WinControls({ isMaximized, miniMode = false, retro = false }: { isMaxim
         onClick={() => bridge?.toggleMaximize()}
         type="button"
       >
-        {isMaximized ? (
-          <svg
-            aria-hidden
-            fill="none"
-            height="11"
-            stroke="currentColor"
-            strokeWidth="1.4"
-            viewBox="0 0 12 12"
-            width="11"
-          >
-            <rect height="7" width="7" x="2.5" y="3.5" />
-            <path d="M4.5 3V2h6v6H9.5" />
-          </svg>
-        ) : (
-          <Square className="size-3" strokeWidth={1.6} />
-        )}
+        <WindowIcon path={isMaximized ? "M8 9h10v10H8zM6 15V5h10" : "M5 5h14v14H5z"} />
       </button>
       <button
         aria-label="关闭"
@@ -132,9 +135,26 @@ function WinControls({ isMaximized, miniMode = false, retro = false }: { isMaxim
         onClick={() => bridge?.close()}
         type="button"
       >
-        <X className="size-3.5" strokeWidth={2} />
+        <WindowIcon path="M6 6l12 12M18 6L6 18" />
       </button>
     </div>
+  );
+}
+
+function SidebarToggleKey({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }): React.JSX.Element {
+  const label = collapsed ? "展开侧栏" : "收起侧栏";
+  return (
+    <button
+      aria-expanded={!collapsed}
+      aria-label={label}
+      className="app-titlebar-sidebar-key"
+      data-app-region="no-drag"
+      onClick={onToggle}
+      title={label}
+      type="button"
+    >
+      {collapsed ? <PanelLeftOpen aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
+    </button>
   );
 }
 
@@ -155,6 +175,10 @@ export function Titlebar({
   toolbar,
   coreHostRef,
   brand,
+  brandColumnWidth,
+  brandHome = false,
+  onBrandClick,
+  sidebarToggle,
 }: TitlebarProps): React.JSX.Element {
   const platform = usePlatform();
   const state = useWindowState();
@@ -175,8 +199,46 @@ export function Titlebar({
       )}
       data-app-region="drag"
     >
+      <div
+        className={cn("app-titlebar-brand-column flex min-w-0 shrink-0 items-stretch", brandColumnWidth && "overflow-hidden")}
+        data-aligned={brandColumnWidth ? "true" : undefined}
+        data-collapsed={sidebarToggle?.collapsed ? "true" : undefined}
+        data-has-key={sidebarToggle ? "true" : undefined}
+        style={brandColumnWidth ? { width: brandColumnWidth } : undefined}
+      >
       {isMac ? <MacTrafficLights /> : null}
 
+      {brandHome ? (
+        // The mark and the nameplate are one button: they highlight and click together.
+        <button
+          aria-disabled={onBrandClick ? undefined : true}
+          aria-label={onBrandClick ? `回到 MaiBot 首页 · ${statusLabel}` : `${statusLabel} · 引导进行中，暂时不能回首页`}
+          className={cn("app-titlebar-home flex min-w-0 items-center gap-2.5 pl-[18px]", brandColumnWidth ? "flex-1 pr-3" : "pr-5")}
+          data-app-region="no-drag"
+          onClick={onBrandClick}
+          title={onBrandClick ? "回到 MaiBot 首页" : "引导进行中，暂时不能回首页"}
+          type="button"
+        >
+          <span className="app-titlebar-home-face flex min-w-0 items-center gap-2.5">
+          <span aria-hidden="true" className="app-titlebar-mark" data-status={serviceStatus ?? "unknown"}>
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="app-titlebar-core flex min-w-0 items-center">
+            {brand ?? (coreHostRef ? (
+              <div data-app-region="no-drag" ref={coreHostRef} />
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                <span className={cn("retro-title truncate leading-none", retro ? "text-lg" : "text-base")}>MaiBot OK</span>
+                <span className="retro-value text-[9px] leading-none text-primary" title="一键包版本">v{appVersion}</span>
+              </div>
+            ))}
+          </span>
+          </span>
+        </button>
+      ) : (
+        <>
       {/* Brand */}
       <div className="app-titlebar-brand flex items-center gap-2.5 pl-4 pr-1.5" data-app-region="no-drag">
         <span
@@ -194,7 +256,7 @@ export function Titlebar({
       <div
         className={cn(
           "app-titlebar-core flex min-w-0 items-center gap-1.5",
-          navigation ? "shrink-0 pr-5" : "flex-1",
+          brandColumnWidth ? "flex-1 pr-3" : navigation ? "shrink-0 pr-5" : "flex-1",
           isMac ? "justify-center px-3" : "px-1",
         )}
       >
@@ -207,6 +269,13 @@ export function Titlebar({
           </div>
         ))}
       </div>
+        </>
+      )}
+      </div>
+      {/* One key that slides between the column's right end and just outside it, so collapsing never remounts it. */}
+      {sidebarToggle ? (
+        <SidebarToggleKey collapsed={sidebarToggle.collapsed} onToggle={sidebarToggle.onToggle} />
+      ) : null}
 
       {navigation ? (
         <div className="app-titlebar-navigation ml-2 flex min-w-0 self-end pt-1" data-app-region="no-drag">

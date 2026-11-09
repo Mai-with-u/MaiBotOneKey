@@ -6,6 +6,34 @@ import { promisify } from "node:util";
 export interface WorkspaceBot { bot_id: string; name: string; directory: string }
 const execute = promisify(execFile);
 
+export async function saveWorkspaceWebUiPort(root: string, python: string, packaged: boolean, port: number): Promise<void> {
+  const script = `
+from dataclasses import replace
+from pathlib import Path
+import sys
+import tomlkit
+from src.common.process_lease import ProcessLease
+from src.host.config import HostConfig, config_from_bot, save_host_config
+from src.host.config_transaction import write_private
+
+root, port = Path(sys.argv[1]), int(sys.argv[2])
+path = root / "host" / "config.toml"
+path.parent.mkdir(parents=True, exist_ok=True)
+with ProcessLease(path.parent / "run.lock"):
+    if path.exists():
+        document = tomlkit.parse(path.read_text(encoding="utf-8"))
+        document["webui"]["port"] = port
+        write_private(path, tomlkit.dumps(document))
+    else:
+        legacy = root / "config" / "bot_config.toml"
+        config = config_from_bot(legacy) if legacy.exists() else HostConfig()
+        save_host_config(root, replace(config, port=port))
+`;
+  await execute(python, [...(packaged ? ["-I"] : []), "-X", "utf8", "-c", script, root, String(port)], {
+    cwd: root, windowsHide: true, timeout: 10_000,
+  });
+}
+
 /** Read only: listing must neither migrate a workspace nor require the host to be running. */
 export async function readWorkspaceBots(root: string, python: string): Promise<WorkspaceBot[]> {
   const database = join(root, "host", "registry.sqlite3");

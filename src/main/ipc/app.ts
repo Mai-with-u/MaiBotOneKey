@@ -1500,8 +1500,6 @@ export function registerAppIpc({
 
     const deployment = readMaiBotDeployment(maibotRoot);
     versions.maibotDeploymentMode = moduleUpdater.isPackageMode() ? "pypi" : "source";
-    versions.maibotCanRollback = deployment?.previous?.mode === "pypi";
-    versions.maibotRollbackRestoresData = versions.maibotCanRollback && Boolean(deployment?.snapshot);
 
     const pyprojectVersion = await readPyprojectVersion(
       join(maibotRoot, "pyproject.toml"),
@@ -1945,6 +1943,12 @@ export function registerAppIpc({
   });
 
   ipcMain.handle("init:getMaiBotSetupStatus", () => initManager.getMaiBotSetupStatus());
+  handleDeploymentMutation("init:saveMaiBotWebUiPort", async (_event, port: number) => {
+    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
+    if (maibot && (maibot.managed || isRuntimeBusy(maibot))) throw new Error("请先停止 MaiBot，再修改 WebUI 端口。");
+    await initManager.saveMaiBotWebUiPort(port);
+    serviceManager.reloadRuntimePaths();
+  });
 
   handleRuntimeMutation("adapters:syncQqConnections", async (): Promise<InitRepairResult> => {
     await serviceManager.refresh();
@@ -2190,16 +2194,6 @@ export function registerAppIpc({
       return result;
     },
   );
-
-  handleDeploymentMutation("modules:rollbackMaibot", async (): Promise<void> => {
-    const maibot = serviceManager.snapshot().find((service) => service.id === "maibot");
-    if (maibot?.managed || (maibot && ["starting", "running", "stopping"].includes(maibot.status))) throw new Error("请先停止 MaiBot，再恢复上一环境");
-    await moduleUpdater.rollbackMaiBot();
-    await rm(maibotUpdateSelectionPath, { force: true });
-    initManager.clearDependencyCache();
-    serviceManager.reloadRuntimePaths();
-    await broadcastSnapshot();
-  });
 
   ipcMain.handle(
     "modules:refreshVersions",

@@ -28,7 +28,28 @@
 .initialization-computer .mil-launch-led[data-tone="amber"] { fill: var(--mil-crt-amber); }
 .initialization-computer .mil-launch-led[data-tone="green"] { fill: var(--success); }
 .initialization-computer .mil-launch-led[data-tone="red"] { fill: var(--destructive); }
+.initialization-page[data-preparation-failed="true"] > div {
+  gap: .75rem;
+  padding-block: .5rem;
+}
+.initialization-page[data-preparation-failed="true"] .initialization-computer {
+  max-width: 16rem;
+}
+.initialization-page [data-slot="progress-indicator"][data-state="indeterminate"] {
+  width: 28%;
+  animation: initialization-download 1.6s ease-in-out infinite alternate;
+}
+@keyframes initialization-download {
+  to { transform: translateX(257%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .initialization-page [data-slot="progress-indicator"][data-state="indeterminate"] { animation: none; }
+}
 @media (max-height: 650px) {
   .initialization-computer { max-width: 15rem; }
   .initialization-page > div { gap: .75rem; padding-block: .5rem; }
+  .initialization-page[data-preparation-failed="true"] > div { gap: .5rem; }
+  .initialization-page[data-preparation-failed="true"] .initialization-computer { max-width: min(11rem, 28vh); }
+  .initialization-page[data-preparation-failed="true"] [role="log"] { height: 6rem; }
+  .initialization-page[data-preparation-failed="true"] pre { max-height: min(5.5rem, 16vh); }
 }

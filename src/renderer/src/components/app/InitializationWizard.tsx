@@ -1,7 +1,7 @@
 import { startupLogs } from "@/lib/startup-logs";
 import { getDesktopSnapshot } from "@/lib/desktop-api";
 import { watchSetupCompletion } from "@/lib/setup-completion";
-import { canRestartDependencyDownload, initializationStatus } from "@/lib/initialization-status";
+import { canRestartDependencyDownload, initializationStatus, startupDownloadProgress } from "@/lib/initialization-status";
 import {
   Loader2,
   RotateCcw,
@@ -72,7 +72,8 @@ export function InitializationWizard({
   webuiState,
   onReloadWebui,
 }: InitializationWizardProps): React.JSX.Element | null {
-  const [seen, setSeen] = useState(readStartupWizardSeen);
+  const agreementPending = !snapshot.startupAgreement.isDismissed;
+  const [seen, setSeen] = useState(() => !agreementPending && readStartupWizardSeen());
   const [busy, setBusy] = useState(false);
   const [preparation, setPreparation] = useState<MaiBotModuleUpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,8 +87,8 @@ export function InitializationWizard({
   const autoStartRequested = useRef(false);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startupRunId = useRef(0);
+  const startupLogStartedAt = useRef(0);
   const handingOff = useRef(false);
-  const agreementPending = !snapshot.startupAgreement.isDismissed;
   const service = maibotServiceFrom(snapshot);
   const logs = useMemo(
     () => startupLogs(snapshot.recentLogs ?? []),
@@ -101,7 +102,20 @@ export function InitializationWizard({
   const status = ready && webuiState !== "ready"
     ? { progress: 96, detail: "正在加载 MaiBot 首页" }
     : initializationStatus(service, busy, preparation);
+  const download = !running && !error && service?.status !== "error" && (busy || starting)
+    ? startupDownloadProgress(logs, startupLogStartedAt.current)
+    : undefined;
   const restartDownloadVisible = step === "core" && canRestartDependencyDownload(service, preparation);
+
+  useLayoutEffect(() => {
+    if (!agreementPending) return;
+    setSeen(false);
+    try {
+      localStorage.removeItem(STARTUP_WIZARD_KEY);
+    } catch {
+      // The current window can still show the guide without storage.
+    }
+  }, [agreementPending]);
 
   useEffect(() => {
     if (!open || step !== "core") return;
@@ -166,6 +180,7 @@ export function InitializationWizard({
     }) => {
       const runId = startupRunId.current + 1;
       startupRunId.current = runId;
+      startupLogStartedAt.current = Date.now();
       setBusy(true);
       setPreparation(null);
       setError(null);
@@ -380,6 +395,7 @@ export function InitializationWizard({
     <InitializationPage
       status={`${status.detail}${statusAnimating ? statusEllipsis : ""}`}
       progress={status.progress}
+      download={download}
       active={statusAnimating}
       error={error || (ready && webuiState === "error" ? "MaiBot 首页加载失败，请重新加载。" : service?.status === "error" ? service.error || service.detail || "MaiBot 启动失败" : null)}
       sourceSelector={sourceSelector}

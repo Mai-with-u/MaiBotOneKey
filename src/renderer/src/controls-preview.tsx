@@ -1,7 +1,8 @@
-// Development entry served at /controls.html by `bun run dev:web`.
+// Development entry served at /controls.html by `bun run vite --config vite.renderer.config.ts`.
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { version as launcherVersion } from "../../../package.json";
 import { transitionStartupScene } from "@/lib/startup-transition";
 import { Download, Radar, PackageCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InitializationPage } from "@/components/app/InitializationPage";
 import { MaiBotOverviewCard } from "@/components/app/MaiBotOverviewCard";
+import { ServiceStatusPill } from "@/components/app/ServiceStatusPill";
+import { ArrowUp, FolderOpen, Settings } from "lucide-react";
 import { Titlebar } from "@/components/app/Titlebar";
 import { StartupAgreementPage } from "@/components/app/StartupAgreementPage";
 import { createPreviewSnapshot } from "@/lib/desktop-preview";
@@ -110,13 +113,21 @@ function AgreementPreview(): React.JSX.Element {
 const previewParams = new URLSearchParams(location.search);
 function TitlebarTabsPreview(): React.JSX.Element {
   const [tab, setTab] = useState("maibot");
+  const [collapsed, setCollapsed] = useState(false);
+  const status = (previewParams.get("status") ?? "running") as "running" | "starting" | "stopped" | "error";
+  const service = { ...createPreviewSnapshot().services[0], status, health: "ready" as const, startedAt: Date.now() - 312_000, url: "http://127.0.0.1:8001/" };
   return <Tabs value={tab} onValueChange={setTab} className="retro-shell relative flex h-screen flex-col bg-background text-foreground">
-    <Titlebar appVersion="0.7.0" retro serviceStatus="running" brand={<MaiBotOverviewCard localVersion="1.3.9" launcherVersion="0.7.0" retro />} navigation={
+    <Titlebar appVersion={launcherVersion} retro serviceStatus={status} brandColumnWidth={collapsed ? 68 : 312} sidebarToggle={{ collapsed, onToggle: () => setCollapsed((value) => !value) }} brandHome onBrandClick={previewParams.get("locked") === "1" ? undefined : () => setTab("maibot")} brand={<MaiBotOverviewCard localVersion="1.4.4" launcherVersion={launcherVersion} retro />} navigation={
       <TabsList className="retro-tabs retro-folder-tabs h-full">
         {[{ value: "maibot", label: "MaiBot" }, { value: "terminal", label: "终端" }, { value: "message-platform", label: "消息平台" }].map((item) => <TabsTrigger data-retro-tab-item="true" data-retro-active={tab === item.value ? "true" : undefined} key={item.value} value={item.value}>{item.label}</TabsTrigger>)}
       </TabsList>
-    } />
-    <main className="min-h-0 flex-1" />
+    } actions={<div className="flex shrink-0 items-center gap-1 py-1">
+      <ServiceStatusPill active={status !== "stopped"} onPrimary={() => undefined} onReload={() => undefined} onOpenExternal={() => undefined} onStartAll={() => undefined} onStartService={() => undefined} onStopAll={() => undefined} primaryLabel={status === "stopped" ? "启动全部服务" : "停止全部服务"} qqBackendAvailable qqBackendName="NapCat" service={service} transitioning={status === "starting"} webuiUrl={service.url} />
+      <Button aria-label="更新 MaiBot" className="retro-top-action" size="icon-sm" variant="secondary"><ArrowUp /></Button>
+      <Button aria-label="设置" className="retro-top-action border-border bg-card" size="icon-sm" variant="secondary"><Settings /></Button>
+      <Button aria-label="打开 MaiBot 根目录" className="retro-top-action border-border bg-card" size="icon-sm" variant="ghost"><FolderOpen /></Button>
+    </div>} />
+    <main className="flex min-h-0 flex-1"><aside style={{ width: collapsed ? 68 : 312 }} className="shrink-0 border-r-2 border-[var(--mil-line,var(--border))] bg-[var(--mil-panel,var(--card))]" /><div className="flex-1" /></main>
   </Tabs>;
 }
 function PreparationNoticePreview(): React.JSX.Element {

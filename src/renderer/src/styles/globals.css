@@ -889,6 +889,161 @@
   height: 16px !important;
 }
 
+/* 标题栏服务状态胶囊：指示灯 + 状态 + 时长 + 启停键 + 菜单 */
+.app-service-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  max-width: 320px;
+  padding: 0 3px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.app-service-pill-led {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+}
+.app-service-pill[data-tone="on"] .app-service-pill-led { background: var(--success, #3fae72); }
+.app-service-pill[data-tone="busy"] .app-service-pill-led { background: var(--warning, #f2c14e); animation: app-service-pill-blink 1.2s steps(1) infinite; }
+.app-service-pill[data-tone="error"] .app-service-pill-led { background: var(--destructive); }
+.app-service-pill-label { flex: none; }
+.app-service-pill-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.app-service-pill-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 5px 1px;
+  flex: none;
+  background: var(--border);
+}
+.app-service-pill-key {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  flex: none;
+  border-radius: 4px;
+  color: var(--foreground);
+}
+.app-service-pill-key:not(:disabled):hover { background: var(--accent); }
+.app-service-pill-key:disabled { opacity: 0.6; }
+.app-service-pill-key svg { width: 13px; height: 13px; }
+.app-service-pill-key[data-primary="true"] { background: var(--primary); color: var(--primary-foreground); }
+@keyframes app-service-pill-blink { 50% { opacity: 0.35; } }
+/* 窗口变窄时先收起时长，再收起状态文字，只留指示灯和按键，避免压住页签 */
+@media (max-width: 1240px) {
+  .app-service-pill-meta { display: none; }
+}
+@media (max-width: 1080px) {
+  .app-service-pill-label { display: none; }
+}
+
+/* 标题栏标志：深色铭牌底上三根彩条，和设计稿一样粗边、条间留缝；运行中亮彩灯 */
+.app-titlebar-mark {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  width: 32px;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 3px;
+  border-radius: 3px;
+  background: var(--foreground);
+}
+.app-titlebar-mark > span {
+  flex: 1;
+  background: color-mix(in srgb, var(--background) 35%, var(--foreground));
+  transition: background-color 200ms ease, opacity 200ms ease;
+}
+.app-titlebar-mark[data-status="running"] > span:nth-child(1) { background: #8fd6a0; }
+.app-titlebar-mark[data-status="running"] > span:nth-child(2) { background: #f5d565; }
+.app-titlebar-mark[data-status="running"] > span:nth-child(3) { background: #f08a5d; }
+.app-titlebar-mark:is([data-status="starting"], [data-status="stopping"]) > span {
+  background: #f5d565;
+  animation: app-titlebar-mark-scan 1.2s steps(1) infinite;
+}
+.app-titlebar-mark:is([data-status="starting"], [data-status="stopping"]) > span:nth-child(2) { animation-delay: 0.4s; }
+.app-titlebar-mark:is([data-status="starting"], [data-status="stopping"]) > span:nth-child(3) { animation-delay: 0.8s; }
+.app-titlebar-mark[data-status="error"] > span { background: var(--destructive); }
+/* 标志和铭牌是同一个按钮：悬停、聚焦时一起圈出来 */
+.app-titlebar-home {
+  align-self: stretch;
+  padding-block: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.app-titlebar-home:focus-visible { outline: none; }
+.app-titlebar-home[aria-disabled="true"] { cursor: default; }
+.app-titlebar-home-face {
+  margin-left: -5px;
+  padding: 3px 8px 3px 5px;
+  border-radius: 6px;
+  transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+.app-titlebar-home:not([aria-disabled="true"]):is(:hover, :focus-visible) .app-titlebar-home-face {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.app-titlebar-home:not([aria-disabled="true"]):active .app-titlebar-home-face { transform: translateY(1px); }
+/* 折叠侧栏：品牌列宽度跟 WebUI 侧栏同一条缓动；铭牌淡出、被列裁掉，三色灯原地不动 */
+.app-titlebar-brand-column {
+  transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1), padding-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.app-titlebar-brand-column[data-has-key="true"] { padding-right: 38px; }
+.app-titlebar-brand-column[data-has-key="true"][data-collapsed="true"] { padding-right: 0; }
+.app-titlebar-brand-column .app-titlebar-core { transition: opacity 140ms ease; }
+.app-titlebar-brand-column[data-collapsed="true"] .app-titlebar-core { opacity: 0; }
+
+/* WebUI 侧栏的折叠键：同一颗键，展开时左移进品牌列右端，折叠后滑到品牌列外侧 */
+.app-titlebar-sidebar-key {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  align-self: center;
+  flex: none;
+  width: 28px;
+  height: 26px;
+  margin-left: -38px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--foreground);
+  transition: margin-left 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.app-titlebar-brand-column[data-collapsed="true"] + .app-titlebar-sidebar-key { margin-left: 8px; }
+.app-titlebar-sidebar-key:hover { background: var(--accent); }
+.app-titlebar-sidebar-key:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.app-titlebar-sidebar-key svg { width: 15px; height: 15px; }
+@keyframes app-titlebar-mark-scan { 0%, 33% { opacity: 1; } 34%, 100% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .app-titlebar-mark > span { animation: none !important; }
+  .app-titlebar-brand-column, .app-titlebar-brand-column .app-titlebar-core, .app-titlebar-sidebar-key { transition: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-service-pill[data-tone="busy"] .app-service-pill-led { animation: none; }
+}
+
 /* ──────────────────────────────────────────────────────────
  * Base
  * ────────────────────────────────────────────────────────── */

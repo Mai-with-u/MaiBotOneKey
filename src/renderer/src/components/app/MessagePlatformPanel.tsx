@@ -1033,6 +1033,7 @@ export function MessagePlatformPanel({
   active,
   snapshot,
   onSnapshot,
+  onOpenMaiBotHome,
   onOpenPluginConfig,
   onOpenTerminalSession,
   onStartService,
@@ -1044,6 +1045,7 @@ export function MessagePlatformPanel({
   active: boolean;
   snapshot: DesktopSnapshot;
   onSnapshot: (snapshot: DesktopSnapshot) => void;
+  onOpenMaiBotHome: () => void;
   onOpenPluginConfig: (pluginId: string) => void;
   onOpenTerminalSession: (sessionId: string) => void;
   onStartService: (id: ServiceId) => void;
@@ -1137,13 +1139,13 @@ export function MessagePlatformPanel({
     snapshot.moduleVersions.maibotLatestStableTag,
     selectedMaiBotHistoryTag,
   ]);
-  const maibotTargetIsCurrent =
-    selectedMaiBotTarget?.type === "package"
-    // 源码实例即使版本号相同，也需要执行迁移。
-    && snapshot.moduleVersions.maibotSelectedTarget?.type === "package"
-    && snapshot.moduleVersions.maibotSelectedTarget.name === selectedMaiBotTarget.name
-    && Boolean(snapshot.moduleVersions.maibotLocal)
-    && compareVersionText(selectedMaiBotTarget.name, versionAsTag(snapshot.moduleVersions.maibotLocal)) === 0;
+  const maibotVersionChange = compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal);
+  const maibotUpdateAction = snapshot.paths.maibotDevMode === "source" || !selectedMaiBotTarget
+    ? undefined
+    : snapshot.moduleVersions.maibotDeploymentMode === "source" ? "迁移到 PyPI"
+      : !snapshot.moduleVersions.maibotLocal ? "安装 MaiBot"
+        : maibotVersionChange > 0 ? "更新 MaiBot"
+          : maibotVersionChange < 0 ? "切换到所选版本" : undefined;
 
   const maibotVersionOptions = useMemo(() => Array.from(new Set([
     snapshot.moduleVersions.maibotLatestStableTag,
@@ -1653,6 +1655,7 @@ export function MessagePlatformPanel({
 
   const updateMaiBot = useCallback(async () => {
     const target = selectedMaiBotTarget;
+    if (!maibotUpdateAction) return;
     if (!window.maibotDesktop?.modules || !target) {
       setError("没有可用的目标版本");
       return;
@@ -1669,6 +1672,8 @@ export function MessagePlatformPanel({
     });
     try {
       await window.maibotDesktop.modules.updateMaiBot(target);
+      setUpdateDialog(null);
+      onOpenMaiBotHome();
       toast.success("MaiBot 更新完成");
       await refreshSnapshot().catch(() => undefined);
     } catch (nextError) {
@@ -1689,6 +1694,8 @@ export function MessagePlatformPanel({
       setBusy(null);
     }
   }, [
+    maibotUpdateAction,
+    onOpenMaiBotHome,
     refreshSnapshot,
     selectedMaiBotTarget,
   ]);
@@ -2035,7 +2042,7 @@ export function MessagePlatformPanel({
           onInteractOutside={(event) => event.preventDefault()}
           showCloseButton={false}
           size="xl"
-          className="sm:max-w-[624px]"
+          className="grid-cols-[minmax(0,1fr)] sm:max-w-[624px]"
         >
           <div>
             <button
@@ -2153,7 +2160,7 @@ export function MessagePlatformPanel({
             </>
           ) : (
           <>
-            <DialogBody className="grid gap-4">
+            <DialogBody className="grid grid-cols-[minmax(0,1fr)] gap-4 [overflow-wrap:anywhere] [scrollbar-gutter:stable]">
             {error && updateDialog === "maibot" ? (
               <div className={cn("border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive", useRetroStyle ? "rounded-sm" : "rounded-lg")}>
                 {error}
@@ -2215,7 +2222,7 @@ export function MessagePlatformPanel({
                 <div
                   aria-live="polite"
                   className={cn(
-                    "grid min-h-0 gap-2 border px-3 py-2 text-xs",
+                    "grid min-h-0 grid-cols-[minmax(0,1fr)] gap-2 border px-3 py-2 text-xs",
                     maibotModuleUpdateProgress.phase !== "failed" && "h-full grid-rows-[auto_auto_auto_minmax(0,1fr)]",
                     useRetroStyle ? "retro-control rounded-sm" : "rounded-lg",
                     maibotModuleUpdateProgress.phase === "failed"
@@ -2254,7 +2261,7 @@ export function MessagePlatformPanel({
                       "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
                       maibotModuleUpdateProgress.phase === "failed"
                         ? "text-destructive"
-                        : "text-muted-foreground",
+                        : "line-clamp-2 h-8 leading-4 text-muted-foreground",
                     )}
                     title={maibotModuleUpdateProgress.detail}
                   >
@@ -2269,10 +2276,10 @@ export function MessagePlatformPanel({
                       </pre>
                     </details>
                   ) : null}
-                  <div className="min-h-0 max-h-24 overflow-auto border-t border-border/60 pt-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+                  <div className="min-h-0 max-h-24 overflow-y-auto border-t border-border/60 pt-1.5 font-mono text-[10px] leading-4 text-muted-foreground [scrollbar-gutter:stable]">
                     {maibotModuleUpdateLogs.length > 0 ? (
                       maibotModuleUpdateLogs.slice(-5).map((line, index) => (
-                        <p className="break-words" key={`${index}-${line}`}>
+                        <p key={`${index}-${line}`}>
                           <span aria-hidden="true" className="mr-1 text-primary">›</span>
                           {line}
                         </p>
@@ -2316,47 +2323,23 @@ export function MessagePlatformPanel({
               {maibotUpdateNotesPanel}
             </DialogBody>
             <DialogFooter className="flex-wrap sm:justify-between">
-            <div className="flex flex-wrap justify-start gap-2">
-              <Button
-                disabled={
-                  busy !== null ||
-                  maibotUpdateBlocked ||
-                  snapshot.paths.maibotDevMode === "source" ||
-                  !selectedMaiBotTarget ||
-                  (maibotChannel === "other" && maibotRefsLoading)
-                }
-                onClick={() => void updateMaiBot()}
-                size="sm"
-              >
-                {busy === "maibot:update" ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-                {snapshot.paths.maibotDevMode === "source" ? "源码调试模式" : busy === "maibot:update"
-                  ? "更新中"
-                  : snapshot.moduleVersions.maibotDeploymentMode === "source" ? "迁移到 PyPI"
-                    : maibotTargetIsCurrent ? "重新安装当前版本"
-                      : !snapshot.moduleVersions.maibotLocal ? "安装 MaiBot"
-                        : compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal) > 0 ? "更新 MaiBot"
-                          : compareVersionText(selectedMaiBotTarget?.name, snapshot.moduleVersions.maibotLocal) < 0 ? "切换到所选版本"
-                            : "重新安装当前版本"}
-              </Button>
-              {snapshot.moduleVersions.maibotCanRollback ? <Button
-                disabled={busy !== null || maibotUpdateBlocked}
-                size="sm" variant="secondary"
-                onClick={() => {
-                  const restoresData = snapshot.moduleVersions.maibotRollbackRestoresData;
-                  if (!window.confirm(restoresData
-                    ? "恢复上一运行环境，并用旧版一键包的快照替换当前配置、数据和插件？更新后的这些数据将被替换。"
-                    : "切回上一运行环境？当前配置、数据和插件会保留。")) return;
-                  setBusy("maibot:update");
-                  void window.maibotDesktop?.modules.rollbackMaiBot()
-                    .then(() => refreshSnapshot()).then(() => toast.success(restoresData ? "已恢复上一环境及实例数据" : "已恢复上一环境"))
-                    .catch((nextError: unknown) => setError(messageFromError(nextError)))
-                    .finally(() => setBusy(null));
-                }}>恢复上一环境</Button> : null}
-            </div>
-                <Button disabled={busy !== null || !selectedMaiBotTarget} onClick={openMaiBotRelease} size="sm" variant="secondary">
-                  <ExternalLink />
-                  查看更新
+              {busy === "maibot:update" || maibotUpdateAction ? (
+                <Button
+                  disabled={busy !== null || maibotUpdateBlocked || (maibotChannel === "other" && maibotRefsLoading)}
+                  onClick={() => void updateMaiBot()}
+                  size="sm"
+                >
+                  {busy === "maibot:update" ? <><Loader2 className="animate-spin" />更新中</> : <><ArrowUp />{maibotUpdateAction}</>}
                 </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  {snapshot.paths.maibotDevMode === "source" ? "源码调试模式" : selectedMaiBotTarget ? "已安装所选版本" : null}
+                </span>
+              )}
+              <Button disabled={busy !== null || !selectedMaiBotTarget} onClick={openMaiBotRelease} size="sm" variant="secondary">
+                <ExternalLink />
+                查看更新
+              </Button>
             </DialogFooter>
           </>
           )}

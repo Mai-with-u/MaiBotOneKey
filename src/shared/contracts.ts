@@ -215,8 +215,6 @@ export interface ModuleRuntimeVersions {
   maibotLocal?: string;
   maibotLocalSource?: "pyproject" | "pypi" | "unknown";
   maibotDeploymentMode?: "source" | "pypi";
-  maibotCanRollback?: boolean;
-  maibotRollbackRestoresData?: boolean;
   maibotSelectedChannel?: "stable" | "custom";
   maibotSelectedTarget?: ModuleUpdateTarget;
   maibotSelectedAt?: number;
@@ -721,6 +719,7 @@ export interface DesktopBridge {
   init: {
     getState: () => Promise<InitState>;
     getMaiBotSetupStatus: () => Promise<MaiBotSetupStatus>;
+    saveMaiBotWebUiPort: (port: number) => Promise<void>;
     repair: () => Promise<InitRepairResult>;
   };
   protocols: {
@@ -745,7 +744,6 @@ export interface DesktopBridge {
     refreshVersions: () => Promise<DesktopSnapshot>;
     checkMaiBotUpdate: (target: ModuleUpdateTarget) => Promise<MaiBotUpdateInfo>;
     updateMaiBot: (target?: ModuleUpdateTarget) => Promise<ModuleUpdateResult>;
-    rollbackMaiBot: () => Promise<void>;
     onMaiBotUpdateProgress: (callback: (progress: MaiBotModuleUpdateProgress) => void) => () => void;
     listMaiBotTags: () => Promise<ModuleTagOption[]>;
   };

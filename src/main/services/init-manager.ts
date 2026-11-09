@@ -1,5 +1,5 @@
 import { MaiBotHostClient } from "./maibot-host-client";
-import { importWorkspaceConfig, resetWorkspaceBotData, readWorkspaceBots, type WorkspaceBot } from "./maibot-workspace";
+import { importWorkspaceConfig, resetWorkspaceBotData, readWorkspaceBots, saveWorkspaceWebUiPort, type WorkspaceBot } from "./maibot-workspace";
 import { resolveGitPath } from "./git-runtime";
 import { ProtocolComponentManager } from "./protocol-component-manager";
 import { readMaiBotSetupStatus } from "./maibot-setup-client";
@@ -16,6 +16,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { STARTUP_AGREEMENT_FILE } from "./service-startup-defaults";
 import type {
   AgreementDocument,
   AgreementDocumentId,
@@ -26,6 +27,7 @@ import type {
   MaiBotConfigImportResult,
   MaiBotDataResetResult,
   MaiBotModuleUpdateProgress,
+  MaiBotSetupStatus,
   QqComponentUpgradeResult,
   QqComponentUpgradeId,
   QqBackend,
@@ -86,7 +88,6 @@ const AGREEMENT_FILES: Array<{ id: AgreementDocumentId; title: string; fileName:
   { id: "privacy", title: "隐私说明", fileName: "PRIVACY.md", envVar: "PRIVACY_AGREE" },
 ];
 
-const AGREEMENT_STORE_FILE = "agreement.json";
 
 /**
  * NapCat startup wrapper .cmd: switch the console to UTF-8 before launching the exe.
@@ -275,8 +276,10 @@ export class InitManager {
   resetSnowLumaComponent(): Promise<SnowLumaResetResult> { return this.protocolComponents.resetSnowLumaComponent(); }
   upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> { return this.protocolComponents.upgradeQqComponents(component); }
   getQqBackendSync() { return this.protocols.getQqBackendSync(); }
-  async getMaiBotSetupStatus() {
-    // Read the active instance's latest token on every request, including after password changes.
+  async getMaiBotSetupStatus(): Promise<MaiBotSetupStatus> {
+    const credentials = await this.readMaiBotWebUiToken();
+    if (!credentials.exists) return "pending";
+    if (credentials.error) throw new Error(credentials.error);
     return readMaiBotSetupStatus(this.host);
   }
   readQqBackend() { return this.protocols.readQqBackend(); }
@@ -478,7 +481,7 @@ export class InitManager {
   }
 
   private agreementStorePath(): string {
-    return join(this.paths.userDataRoot, AGREEMENT_STORE_FILE);
+    return join(this.paths.userDataRoot, STARTUP_AGREEMENT_FILE);
   }
 
   async ensureModulesReady(onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
@@ -863,6 +866,11 @@ export class InitManager {
     }
     const endpoint = buildMaiBotWebUiEndpoint(config.hosts[0], config.port);
     return { ...endpoint, url: endpoint.url.replace(/^http:/, config.ssl_certfile ? "https:" : "http:"), sourcePath: configPath };
+  }
+
+  async saveMaiBotWebUiPort(port: number): Promise<void> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("请输入 1–65535 之间的 MaiBot WebUI 端口。");
+    await saveWorkspaceWebUiPort(this.paths.maibotRoot, this.getPythonPath(), isMaiBotPackageMode(this.paths), port);
   }
 
   /** Read only the active instance's token; missing credentials use normal login. */
