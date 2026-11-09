@@ -38,25 +38,47 @@ Function MaiInstanceBrowseClick
   ${EndIf}
 FunctionEnd
 
+!macro MaiNormalizeDirectory input register
+  ClearErrors
+  GetFullPathName $${register} "${input}"
+  ${If} ${Errors}
+    ; NSIS GetFullPathName needs an existing entry. Resolve new folders lexically.
+    StrCpy $3 "${input}"
+    System::Call 'kernel32::GetFullPathNameW(w r3, i ${NSIS_MAX_STRLEN}, w .r${register}, p 0) i.r0'
+    ${If} $0 == 0
+    ${OrIf} $0 >= ${NSIS_MAX_STRLEN}
+      MessageBox MB_OK|MB_ICONEXCLAMATION "无法解析所选目录，请选择其他位置。"
+      Abort
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 Function MaiInstanceLeave
   ${NSD_GetText} $MaiInstanceEdit $MaiInstanceRoot
   ${If} $MaiInstanceRoot == ""
     Return
   ${EndIf}
-  System::Call 'shlwapi::PathIsRelativeW(w $MaiInstanceRoot) i.r0'
+  StrCpy $1 $MaiInstanceRoot
+  System::Call 'shlwapi::PathIsRelativeW(w r1) i.r0'
   ${If} $0 != 0
     MessageBox MB_OK|MB_ICONEXCLAMATION "请选择完整的绝对目录路径。"
     Abort
   ${EndIf}
-  System::Call 'shlwapi::PathIsRootW(w $MaiInstanceRoot) i.r0'
+  System::Call 'shlwapi::PathIsRootW(w r1) i.r0'
   ${If} $0 != 0
     MessageBox MB_OK|MB_ICONEXCLAMATION "请使用独立文件夹，不要直接使用磁盘根目录。"
     Abort
   ${EndIf}
-  GetFullPathName $1 "$MaiInstanceRoot"
-  GetFullPathName $2 "$INSTDIR"
-  StrCpy $1 "$1\"
-  StrCpy $2 "$2\"
+  !insertmacro MaiNormalizeDirectory $MaiInstanceRoot 1
+  !insertmacro MaiNormalizeDirectory $INSTDIR 2
+  StrCpy $3 $1 1 -1
+  ${If} $3 != "\"
+    StrCpy $1 "$1\"
+  ${EndIf}
+  StrCpy $3 $2 1 -1
+  ${If} $3 != "\"
+    StrCpy $2 "$2\"
+  ${EndIf}
   StrLen $3 $1
   StrCpy $4 $2 $3
   ${If} $1 == $4
