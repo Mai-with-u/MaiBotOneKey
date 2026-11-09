@@ -18,7 +18,6 @@ import { fetchMirrorManifest, isOfficialLauncherDownloadUrl, withDownloadFallbac
 import { resolveMaiBotUpdateTarget } from "../../shared/maibot-update-target";
 import { isWindowsLongPathError } from "../../shared/windows-long-path";
 import { enableWindowsLongPaths, windowsLongPathsEnabled } from "../services/windows-long-path";
-import { readSnowLumaVersion } from "../services/snowluma-version";
 import { LauncherAutoStart, readOpenAtLogin, saveOpenAtLogin } from "../services/launcher-startup";
 import { createWriteStream, existsSync, writeFileSync, type WriteStream } from "node:fs";
 import {
@@ -78,7 +77,6 @@ import type {
   ServiceDescriptor,
   ServiceId,
   ServiceStartupSettings,
-  SnowLumaResetResult,
   SourceSettings,
   SourceSettingsUpdate,
   SystemPerformanceSnapshot,
@@ -1492,10 +1490,6 @@ export function registerAppIpc({
 
   const readLocalModuleVersions = async (): Promise<ModuleRuntimeVersions> => {
     const versions: ModuleRuntimeVersions = {};
-    [versions.snowlumaLocal, versions.snowlumaBundled] = await Promise.all([
-      readSnowLumaVersion(paths.snowlumaRoot),
-      readSnowLumaVersion(join(paths.bundledModulesRoot, "SnowLuma")),
-    ]);
     const maibotRoot = paths.maibotRoot;
 
     const deployment = readMaiBotDeployment(maibotRoot);
@@ -1741,7 +1735,7 @@ export function registerAppIpc({
     const qqBackendService = runtimeServices.find((service) => service.id === "napcat");
 
     if (switchingBackend && qqBackendService && isRuntimeBusy(qqBackendService)) {
-      throw new Error("请先停止当前 QQ 后端，再切换 NapCat / SnowLuma。");
+      throw new Error("请先停止当前 QQ 后端，再切换协议端。");
     }
 
     let operationCompleted = false;
@@ -1815,7 +1809,7 @@ export function registerAppIpc({
     appIconManager.reset();
     applyAppIcon();
 
-    for (const key of ["maibot", "napcat", "snowluma"] as const) {
+    for (const key of ["maibot", "napcat"] as const) {
       const config = resourceLocationManager
         .getPathConfigs()
         .find((item) => item.key === key);
@@ -1973,39 +1967,17 @@ export function registerAppIpc({
   });
 
   handleRuntimeMutation(
-    "protocols:resetSnowLuma",
-    async (): Promise<SnowLumaResetResult> => {
-      await serviceManager.refresh();
-      if (serviceManager.snapshot().some((service) => service.id === "napcat" && isRuntimeBusy(service))) {
-        throw new Error(
-          "Stop QQ backend before resetting SnowLuma.",
-        );
-      }
-
-      const result = await initManager.resetSnowLumaComponent();
-      serviceManager.reloadRuntimePaths();
-      logStore.append(
-        "desktop",
-        "system",
-        `SnowLuma 组件已重置: ${result.snowlumaRoot}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
-  handleRuntimeMutation(
     "protocols:upgradeQqComponents",
     async (_event, component?: import("../../shared/contracts").QqComponentUpgradeId): Promise<QqComponentUpgradeResult> => {
-      if (component !== undefined && component !== "napcat" && component !== "snowluma") throw new Error("未知协议端组件");
+      if (component !== undefined && component !== "napcat") throw new Error("未知协议端组件");
       await serviceManager.refresh();
       if (serviceManager.snapshot().some((service) => service.id === "napcat" && isRuntimeBusy(service))) {
         throw new Error(
-          "Stop QQ backend before upgrading NapCat / SnowLuma.",
+          "Stop QQ backend before reinstalling NapCat.",
         );
       }
 
-      const result = await initManager.upgradeQqComponents(component);
+      const result = await initManager.upgradeQqComponents("napcat");
       serviceManager.reloadRuntimePaths();
       const summary = result.components
         .map(
@@ -2023,8 +1995,8 @@ export function registerAppIpc({
     },
   );
 
-  handleRuntimeMutation("adapters:setQqProtocol", async (_event, protocol: "napcat" | "snowluma" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
-    if (!["napcat", "snowluma", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
+  handleRuntimeMutation("adapters:setQqProtocol", async (_event, protocol: "napcat" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
+    if (!["napcat", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
     await serviceManager.refresh();
     const backendService = serviceManager.snapshot().find((service) => service.id === "napcat");
     if (protocol !== "official" && protocol !== initManager.getQqProtocolSync() && backendService && isRuntimeBusy(backendService)) {
@@ -2049,7 +2021,6 @@ export function registerAppIpc({
     const tokens = await serviceManager.readQqWebuiTokens();
     return {
       napcat: { qqAccount: accounts.napcat, webuiToken: tokens.napcat },
-      snowluma: { qqAccount: accounts.snowluma, webuiToken: tokens.snowluma },
     };
   });
 
@@ -2063,15 +2034,10 @@ export function registerAppIpc({
     await broadcastSnapshot();
   });
 
-  handleRuntimeMutation("protocols:saveSnowLumaWebuiPassword", async (_event, password: string) => {
-    await serviceManager.saveSnowLumaWebuiPassword(password);
-    await broadcastSnapshot();
-  });
-
   handleRuntimeMutation(
     "protocols:setQqBackend",
     async (_event, backend: QqBackend): Promise<InitState> => {
-      if (backend !== "napcat" && backend !== "snowluma") {
+      if (backend !== "napcat") {
         throw new Error("Unsupported QQ backend.");
       }
       await mutateQqBackendSafely(
@@ -2082,7 +2048,7 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        `QQ 后端已切换为: ${backend === "snowluma" ? "SnowLuma" : "NapCat"}`,
+        "QQ 后端已切换为 NapCat",
       );
       await broadcastSnapshot();
       return state;
@@ -2105,7 +2071,7 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        request.qqAccount ? `机器人 QQ 号已配置: ${request.qqAccount}` : "SnowLuma 消息平台已配置，QQ 号由客户端登录确定",
+        "机器人 QQ 号已配置",
       );
       await broadcastSnapshot();
       return state;
@@ -2629,7 +2595,7 @@ export function registerAppIpc({
   );
 
   ipcMain.handle("resources:choosePath", async (_event, key: RuntimeResourcePathKey, mode: ResourcePathMode): Promise<string | null> => {
-    if (!["maibot", "napcat", "snowluma"].includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
+    if (!["maibot", "napcat"].includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
     return resourceLocationManager.withPathOperation(async () => {
       assertServicesStoppedForResourceMove();
       const window = getMainWindow();

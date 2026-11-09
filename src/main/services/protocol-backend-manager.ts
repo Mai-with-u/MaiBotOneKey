@@ -10,8 +10,6 @@ const QQ_BACKEND_FILE = "qq-backend.json";
 const MESSAGE_PLATFORM_FILE = "message-platform.json";
 const ONEBOT_HOST = "127.0.0.1";
 const NAPCAT_ONEBOT_PORT = 7998;
-const SNOWLUMA_ONEBOT_PORT = 7988;
-const SNOWLUMA_WEBUI_PORT = 5099;
 export interface ProtocolConnection { host: string; port: number; token: string }
 interface StoredMessagePlatformFile {
   version: 1;
@@ -21,9 +19,6 @@ interface StoredMessagePlatformFile {
   configuredAt?: number;
 }
 function toDetail(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function asTcpPort(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 65535 ? value : fallback;
-}
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function uniquePaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -36,17 +31,9 @@ function uniquePaths(paths: string[]): string[] {
 
 /** Owns protocol configuration only. No MaiBot paths, plugin files, or runtime APIs. */
 export class ProtocolBackendManager {
-  constructor(private readonly paths: Pick<RuntimePaths, "userDataRoot" | "protocolSettingsRoot" | "napcatRoot" | "snowlumaRoot" | "bundledModulesRoot">) {}
+  constructor(private readonly paths: Pick<RuntimePaths, "userDataRoot" | "protocolSettingsRoot" | "napcatRoot">) {}
   getQqBackendSync(): QqBackend {
-    try {
-      const parsed = JSON.parse(readFileSync(this.qqBackendPath(), "utf8")) as { backend?: unknown };
-      return parsed.backend === "snowluma" ? "snowluma" : "napcat";
-    } catch {
-      return this.paths.bundledModulesRoot
-        && !existsSync(join(this.paths.bundledModulesRoot, "napcat"))
-        && existsSync(join(this.paths.bundledModulesRoot, "SnowLuma"))
-        ? "snowluma" : "napcat";
-    }
+    return "napcat";
   }
 
   async readQqBackend(): Promise<QqBackend> {
@@ -137,57 +124,6 @@ export class ProtocolBackendManager {
   async readNapcatWebsocketToken(qqAccount?: string): Promise<string> {
     return (await this.readNapcatWebsocketServer(qqAccount))?.token ?? "";
   }
-
-  async readSnowLumaWebsocketServer(qqAccount?: string): Promise<ProtocolConnection | undefined> {
-    try {
-      const raw = await readFile(join(this.paths.snowlumaRoot, "config", qqAccount ? `onebot_${qqAccount}.json` : "onebot.json"), "utf8");
-      const parsed = JSON.parse(raw) as {
-        networks?: {
-          wsServers?: Array<{ host?: string; port?: number; accessToken?: string }>;
-        };
-      };
-      const server =
-        parsed.networks?.wsServers?.find((entry) => entry?.port === SNOWLUMA_ONEBOT_PORT && entry?.accessToken) ??
-        parsed.networks?.wsServers?.find((entry) => entry?.accessToken) ??
-        parsed.networks?.wsServers?.[0];
-      if (!server?.port) {
-        return undefined;
-      }
-      return {
-        host: server.host ? String(server.host) : ONEBOT_HOST,
-        port: Number.isFinite(server.port) ? Math.floor(server.port) : SNOWLUMA_ONEBOT_PORT,
-        token: server.accessToken ? String(server.accessToken) : "",
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
-
-
-  readSnowLumaServicePortsSync(): { webui: number; onebot: number; error?: string } {
-    const errors: string[] = [];
-    const readConfig = (name: string): Record<string, unknown> => {
-      const path = join(this.paths.snowlumaRoot, "config", name);
-      if (!existsSync(path)) return {};
-      try {
-        const config = JSON.parse(readFileSync(path, "utf8"));
-        if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("配置必须是对象");
-        return config;
-      } catch (error) {
-        errors.push(`SnowLuma 配置读取失败: ${path}: ${toDetail(error)}`);
-        return {};
-      }
-    };
-    const runtime = readConfig("runtime.json");
-    const account = this.getMessagePlatformQqAccount("snowluma");
-    const accountFile = account ? `onebot_${account}.json` : "onebot.json";
-    const onebot = existsSync(join(this.paths.snowlumaRoot, "config", accountFile)) ? readConfig(accountFile) : readConfig("onebot.json");
-    const networks = onebot.networks as { wsServers?: Array<{ name?: string; port?: number }> } | undefined;
-    const server = Array.isArray(networks?.wsServers) ? networks.wsServers.find((item) => item?.name === "MaiBot Main") : undefined;
-    return { webui: asTcpPort(runtime.webuiPort, SNOWLUMA_WEBUI_PORT), onebot: asTcpPort(server?.port, SNOWLUMA_ONEBOT_PORT), error: errors[0] };
-  }
-
 
   async ensureNapCatWebUiConfig(): Promise<string | undefined> {
     const writeDefaultWebUiConfig = async (token: string): Promise<void> => {
@@ -400,50 +336,6 @@ export class ProtocolBackendManager {
     }
   }
 
-  private async createSnowLumaConfigs(
-    qqAccount: string,
-    websocketToken: string,
-    websocketPort = SNOWLUMA_ONEBOT_PORT,
-  ): Promise<void> {
-    const configDir = join(this.paths.snowlumaRoot, "config");
-    await mkdir(configDir, { recursive: true });
-    const runtimePath = join(configDir, "runtime.json");
-    const runtime = existsSync(runtimePath) ? JSON.parse(await readFile(runtimePath, "utf8")) : {};
-    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
-      throw new Error("SnowLuma 运行配置格式错误，请修复 runtime.json 后重试。");
-    }
-    await writeFile(runtimePath, JSON.stringify({
-      ...runtime,
-      webuiPort: runtime.webuiPort ?? SNOWLUMA_WEBUI_PORT,
-      hookAutoLoad: false,
-    }, null, 2), "utf8");
-    const onebotConfig = {
-      networks: {
-        httpServers: [],
-        httpClients: [],
-        wsServers: [
-          {
-            name: "MaiBot Main",
-            host: "127.0.0.1",
-            port: websocketPort,
-            path: "/",
-            role: "Universal",
-            accessToken: websocketToken,
-            messageFormat: "array",
-            reportSelfMessage: false,
-          },
-        ],
-        wsClients: [],
-      },
-      musicSignUrl: "",
-    };
-    const serialized = JSON.stringify(onebotConfig, null, 2);
-    await writeFile(join(configDir, "onebot.json"), serialized, "utf8");
-    if (qqAccount) {
-      await writeFile(join(configDir, `onebot_${qqAccount}.json`), serialized, "utf8");
-    }
-  }
-
   private async findNapCatWebUiFiles(): Promise<string[]> {
     const configDirs = await this.findNapCatWebUiConfigDirs();
     return configDirs.map((configDir) => join(configDir, "webui.json"));
@@ -482,7 +374,7 @@ export class ProtocolBackendManager {
 
 
   private async selectBackend(backend: QqBackend): Promise<void> {
-    if (backend !== "napcat" && backend !== "snowluma") throw new Error("不支持的 QQ 协议端");
+    if (backend !== "napcat") throw new Error("不支持的 QQ 协议端");
     const statePath = this.qqBackendPath();
     const stored = await readFile(statePath, "utf8").then(JSON.parse).catch((error) => {
       if (error.code !== "ENOENT") throw error;
@@ -513,26 +405,22 @@ export class ProtocolBackendManager {
   async configureAccount(account: string, backend: QqBackend, token?: string): Promise<string[]> {
     const normalized = normalizeQqAccount(account);
     if (!normalized) throw new Error("QQ 号必须是纯数字且不能为 0");
-    if (backend !== "napcat" && backend !== "snowluma") throw new Error("不支持的 QQ 协议端");
-    const existing = backend === "snowluma"
-      ? await this.readSnowLumaWebsocketServer(normalized)
-      : await this.readNapcatWebsocketServer(normalized);
-    const saved = this.readQqBackendConnections()[backend];
-    const port = existing?.port ?? saved?.port ?? (backend === "snowluma" ? SNOWLUMA_ONEBOT_PORT : NAPCAT_ONEBOT_PORT);
+    if (backend !== "napcat") throw new Error("不支持的 QQ 协议端");
+    const existing = await this.readNapcatWebsocketServer(normalized);
+    const saved = this.readQqBackendConnections().napcat;
+    const port = existing?.port ?? saved?.port ?? NAPCAT_ONEBOT_PORT;
     const resolvedToken = token ?? existing?.token ?? saved?.token ?? randomBytes(24).toString("base64url");
-    if (backend === "snowluma") await this.createSnowLumaConfigs(normalized, resolvedToken, port);
-    else { await this.createNapCatConfigs(normalized, resolvedToken, port); await this.ensureNapCatWebUiConfig(); }
+    await this.createNapCatConfigs(normalized, resolvedToken, port);
+    await this.ensureNapCatWebUiConfig();
     await this.markMessagePlatformConfigured(backend, normalized, true);
     await this.selectBackend(backend);
-    return backend === "snowluma"
-      ? [join(this.paths.snowlumaRoot, "config", `onebot_${normalized}.json`)]
-      : (await this.findNapCatRuntimeConfigWriteDirs()).map((dir) => join(dir, `onebot11_${normalized}.json`));
+    return (await this.findNapCatRuntimeConfigWriteDirs()).map((dir) => join(dir, `onebot11_${normalized}.json`));
   }
 
   async connection(backend: QqBackend = this.getQqBackendSync()): Promise<ProtocolConnection> {
     const account = this.getMessagePlatformQqAccount(backend);
     if (!account) throw new Error("请先在消息平台中配置 QQ 账号与协议端。");
-    const connection = backend === "snowluma" ? await this.readSnowLumaWebsocketServer(account) : await this.readNapcatWebsocketServer(account);
+    const connection = await this.readNapcatWebsocketServer(account);
     if (!connection) throw new Error("协议端连接配置不存在，请先保存协议端账号配置。");
     return connection;
   }
@@ -540,7 +428,7 @@ export class ProtocolBackendManager {
   async saveQqBackendAccount(backend: QqBackend, account: string): Promise<void> {
     const normalized = normalizeQqAccount(account);
     if (!normalized) throw new Error("请输入正确的 QQ 号");
-    if (backend !== "napcat" && backend !== "snowluma") throw new Error("不支持的 QQ 协议端");
+    if (backend !== "napcat") throw new Error("不支持的 QQ 协议端");
     if (backend === this.getQqBackendSync() && this.getQqProtocolSync() !== "official") {
       await this.configureAccount(normalized, backend); return;
     }

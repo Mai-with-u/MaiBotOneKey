@@ -267,10 +267,8 @@ async function main(): Promise<void> {
   const storedComponentRoots = readStoredComponentRoots(userDataRoot);
   const defaultMaiBotRoot = join(installRoot, "modules", "MaiBot");
   const defaultNapcatRoot = join(installRoot, "modules", "napcat");
-  const defaultSnowlumaRoot = join(installRoot, "modules", "SnowLuma");
   const maibotRoot = storedComponentRoots.maibot ?? defaultMaiBotRoot;
   const napcatRoot = storedComponentRoots.napcat ?? defaultNapcatRoot;
-  const snowlumaRoot = storedComponentRoots.snowluma ?? defaultSnowlumaRoot;
   const maibotConfigDir = join(maibotRoot, "config");
   const maibotDataDir = join(maibotRoot, "data");
 
@@ -296,15 +294,13 @@ async function main(): Promise<void> {
     }
   }
   assertNotFilesystemRoot(napcatRoot, "NapCat root");
-  assertNotFilesystemRoot(snowlumaRoot, "SnowLuma root");
 
   for (const stateDirectory of COMPONENT_STATE_DIRECTORIES) {
     addTarget(targets, napcatRoot, stateDirectory, `NapCat ${stateDirectory}`);
     addTarget(targets, napcatRoot, join("napcat", stateDirectory), `NapCat runtime ${stateDirectory}`);
-    addTarget(targets, snowlumaRoot, stateDirectory, `SnowLuma ${stateDirectory}`);
   }
   await addNapCatVersionTargets(targets, napcatRoot);
-  await addAdapterConfigTargets(targets, maibotRoot, "snowluma-adapter", "SnowLuma 适配器");
+  await addAdapterConfigTargets(targets, maibotRoot, "snowluma-adapter", "OneBot 适配器");
 
   if (platform() === "darwin") {
     const qqContainer = process.env.NAPCAT_QQ_CONTAINER?.trim()

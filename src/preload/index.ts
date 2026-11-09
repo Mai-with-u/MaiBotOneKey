@@ -54,7 +54,6 @@ import type {
   ServiceDescriptor,
   ServiceId,
   ServiceStartupSettings,
-  SnowLumaResetResult,
   SourceSettings,
   SourceSettingsUpdate,
   StartupAgreementDismissResult,
@@ -137,13 +136,10 @@ const desktopBridge: DesktopBridge = {
   protocols: {
     getLoginInfo: () => ipcRenderer.invoke("protocols:getLoginInfo") as Promise<MessagePlatformLoginInfo>,
     saveQqBackendAccount: (backend: QqBackend, account: string) => ipcRenderer.invoke("protocols:saveQqBackendAccount", backend, account) as Promise<void>,
-    saveSnowLumaWebuiPassword: (password: string) => ipcRenderer.invoke("protocols:saveSnowLumaWebuiPassword", password) as Promise<void>,
     setQqBackend: (backend: QqBackend) =>
       ipcRenderer.invoke("protocols:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
       ipcRenderer.invoke("protocols:setQqAccount", request) as Promise<InitState>,
-    resetSnowLuma: () =>
-      ipcRenderer.invoke("protocols:resetSnowLuma") as Promise<SnowLumaResetResult>,
     upgradeQqComponents: (component?: QqComponentUpgradeId) =>
       ipcRenderer.invoke("protocols:upgradeQqComponents", component) as Promise<QqComponentUpgradeResult>,
   },

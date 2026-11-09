@@ -610,7 +610,7 @@ export function DesktopShell(): React.JSX.Element {
   const conflictPort = actionError?.match(/端口\s+(\d+)\s+已被占用/u)?.[1];
   const maiBotPortConflict = maibotService?.health === "conflict" && Number(conflictPort) === maibotService.port;
   const qqBackendName =
-    qqBackendService?.name ?? (snapshot?.initState.qqBackend === "snowluma" ? "SnowLuma" : "NapCat");
+    qqBackendService?.name ?? "NapCat";
   const messagePlatformConfigured = Boolean(
     snapshot?.initState.messagePlatformConfigured,
   );

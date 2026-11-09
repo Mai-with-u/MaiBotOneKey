@@ -1,5 +1,4 @@
 import { getDesktopSnapshot } from "@/lib/desktop-api";
-import { useSnowLumaUpgradeDebug } from "@/lib/use-snowluma-upgrade-debug";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MaiBotConfigImportPanel } from "./MaiBotConfigImportPanel";
 import { ResourcePathEditor } from "./ResourcePathEditor";
@@ -705,7 +704,6 @@ export function SettingsStatusPanel({
   };
   const [error, setError] = useState<string | null>(null);
   const [activeSettingsTab, setActiveSettingsTab] = useState("general");
-  const [forceSnowLumaUpgrade, setForceSnowLumaUpgrade] = useSnowLumaUpgradeDebug();
   const [developerModeEnabled, setDeveloperModeEnabled] = useState(
     () => localStorage.getItem(DEVELOPER_MODE_STORAGE_KEY) === "true",
   );
@@ -1836,17 +1834,6 @@ export function SettingsStatusPanel({
               {developerModeEnabled ? (
               <TabsContent className="settings-content" value="debug">
                 <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">始终显示 SnowLuma 升级按钮</p>
-                    <p className="text-xs text-muted-foreground">忽略版本判断，立即显示消息平台页面的升级按钮；点击仍会执行实际升级。</p>
-                  </div>
-                  <Switch
-                    aria-label="始终显示 SnowLuma 升级按钮"
-                    checked={forceSnowLumaUpgrade}
-                    onCheckedChange={setForceSnowLumaUpgrade}
-                  />
-                </SettingsSection>
-                <SettingsSection className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <Smartphone className="size-4 shrink-0 text-primary" />
                     <div className="min-w-0">
@@ -2019,7 +2006,7 @@ export function SettingsStatusPanel({
     >
       <DialogContent size="md">
       <DialogHeader
-        description="这只会清空启动器自己的设置，并让启动引导重新出现；MaiBot、NapCat、SnowLuma 与 Python 覆盖依赖目录会保留。"
+        description="这只会清空启动器自己的设置，并让启动引导重新出现；MaiBot、NapCat 与 Python 覆盖依赖目录会保留。"
         icon={<RotateCcw className="size-4" />}
         title="重置启动器设置？"
         tone="warning"
@@ -2065,7 +2052,7 @@ export function SettingsStatusPanel({
       />
       <DialogBody className="space-y-3 text-sm">
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
-          MaiBot、NapCat、SnowLuma、Python 覆盖依赖、日志和启动器设置都会被清空。该操作不可撤销。
+          MaiBot、NapCat、Python 覆盖依赖、日志和启动器设置都会被清空。该操作不可撤销。
         </div>
         <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
           运行时资源目录：<code className="rounded bg-card px-1 py-0.5 font-mono">{snapshot.paths.defaultResourceRoot}</code>

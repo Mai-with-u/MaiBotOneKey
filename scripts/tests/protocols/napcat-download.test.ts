@@ -61,7 +61,7 @@ test.skipIf(process.platform !== "win32" || !existsSync(python))(
       expect((await manager.getState({ refreshDependencies: false })).napCatDownloadRequired).toBe(true);
       expect(requests).toEqual([]);
       await expect(manager.setQqAccount(account, "test-token", "napcat")).rejects.toThrow("校验失败");
-      expect(manager.getQqBackendSync()).toBe("snowluma");
+      expect(manager.getQqBackendSync()).toBe("napcat");
       expect(manager.getMessagePlatformQqAccount("napcat")).toBeUndefined();
       expect(existsSync(join(paths.napcatRoot, "node.exe"))).toBe(false);
 

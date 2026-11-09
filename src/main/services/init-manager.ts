@@ -35,7 +35,6 @@ import type {
   QqProtocolOptions,
   RuntimePaths,
   ServiceId,
-  SnowLumaResetResult,
   StartupAgreementDismissResult,
   StartupAgreementState,
 } from "../../shared/contracts";
@@ -273,7 +272,6 @@ export class InitManager {
     this.adapters = new MaiBotAdapterClient(this.host, async () => (await this.selectBot("配置 QQ 适配器")).bot_id);
   }
 
-  resetSnowLumaComponent(): Promise<SnowLumaResetResult> { return this.protocolComponents.resetSnowLumaComponent(); }
   upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> { return this.protocolComponents.upgradeQqComponents(component); }
   getQqBackendSync() { return this.protocols.getQqBackendSync(); }
   async getMaiBotSetupStatus(): Promise<MaiBotSetupStatus> {
@@ -287,15 +285,17 @@ export class InitManager {
   hasMessagePlatformConfigured() { return this.protocols.hasMessagePlatformConfigured(); }
   getMessagePlatformQqAccount(backend?: QqBackend) { return this.protocols.getMessagePlatformQqAccount(backend); }
   getQqBackendAccounts() { return this.protocols.getQqBackendAccounts(); }
-  readSnowLumaServicePortsSync() { return this.protocols.readSnowLumaServicePortsSync(); }
   readNapcatWebsocketServer(account?: string) { return this.protocols.readNapcatWebsocketServer(account); }
   readNapcatWebsocketToken(account?: string) { return this.protocols.readNapcatWebsocketToken(account); }
-  readSnowLumaWebsocketServer(account?: string) { return this.protocols.readSnowLumaWebsocketServer(account); }
   ensureNapCatWebUiConfig() { return this.protocols.ensureNapCatWebUiConfig(); }
   readNapCatWebUiToken() { return this.protocols.readNapCatWebUiToken(); }
-  saveQqBackendAccount(backend: QqBackend, account: string) { return this.protocols.saveQqBackendAccount(backend, account); }
+  async saveQqBackendAccount(backend: QqBackend, account: string): Promise<void> {
+    if (backend !== "napcat") throw new Error("仅支持 NapCat 协议端。");
+    await this.protocols.saveQqBackendAccount(backend, account);
+  }
   async setQqBackend(backend: QqBackend, downloadNapCat = true): Promise<void> {
-    if (backend === "napcat" && this.needsNapCatDownload()) {
+    if (backend !== "napcat") throw new Error("仅支持 NapCat 协议端。");
+    if (this.needsNapCatDownload()) {
       if (!downloadNapCat) return this.protocols.setQqBackend(backend);
       await this.prepareOptionalNapCat();
     }
@@ -308,8 +308,9 @@ export class InitManager {
     } else await this.setQqBackend(protocol);
   }
   async setQqAccount(account: string, token?: string, backend: QqBackend = this.getQqBackendSync()): Promise<InitState> {
+    if (backend !== "napcat") throw new Error("仅支持 NapCat 协议端。");
     if (!normalizeQqAccount(account)) throw new Error("QQ 号必须是纯数字且不能为 0");
-    if (backend === "napcat") await this.prepareOptionalNapCat();
+    await this.prepareOptionalNapCat();
     await this.protocols.configureAccount(account, backend, token);
     await this.ensureServiceReady("napcat");
     return this.getState();
@@ -345,12 +346,7 @@ export class InitManager {
     const dependencyChecks = options.refreshDependencies === false
       ? this.getCachedDependencyChecks()
       : await this.checkDependencies();
-    const qqModuleChecks: InitCheck[] = qqBackend === "snowluma"
-      ? [
-          checkDir(this.paths.snowlumaRoot, "SnowLuma 模块", "snowluma-module"),
-          checkFile(join(this.paths.snowlumaRoot, "index.mjs"), "SnowLuma 启动文件", "snowluma-entry"),
-        ]
-      : napCatDownloadRequired
+    const qqModuleChecks: InitCheck[] = napCatDownloadRequired
         ? [{ id: "napcat-download", label: "NapCat 模块", status: "warning", detail: "在消息平台选择 NapCat 后从 GitHub 下载" }]
         : [
             checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
@@ -506,17 +502,6 @@ export class InitManager {
       changedFiles.push(...(await this.ensureBundledSnowLumaAdapter()));
       const repairedConfig = packageMode || existsSync(join(this.paths.maibotRoot, "host", "registry.sqlite3")) ? undefined : await this.repairBotConfigVersionInfo();
       return [...changedFiles, ...(repairedConfig ? [repairedConfig] : [])];
-    }
-
-    const qqBackend = await this.readQqBackend();
-    if (qqBackend === "snowluma") {
-      return this.ensureBundledModuleSubtree("SnowLuma", [
-        "node.exe",
-        "index.mjs",
-        "launcher.bat",
-      ], {
-        excludeRelativePaths: ["config", "data", "logs"],
-      });
     }
 
     if (process.platform === "win32" && hasWindowsNapCat(this.paths.napcatRoot)) {
@@ -780,9 +765,6 @@ export class InitManager {
     }
     if (moduleName === "napcat") {
       return this.paths.napcatRoot;
-    }
-    if (moduleName === "SnowLuma") {
-      return this.paths.snowlumaRoot;
     }
     return join(this.paths.modulesRoot, moduleName);
   }

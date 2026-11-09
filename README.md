@@ -8,11 +8,11 @@ MaiBot OneKey 的 Electron 桌面壳。当前桌面版负责初始化检查、�
 
 ## 实例与存放位置
 
-Windows 安装器可选择首个实例的存放位置，留空使用原默认位置。该选项只用于新用户初始化；升级优先保留已有实例。选择的位置必须可写、为空且独立于程序安装目录。MaiBot 和 SnowLuma 分别使用所选位置的 `modules/MaiBot` 和 `modules/SnowLuma`。用户确认下载 NapCat 后，启动器才会安装到 `modules/napcat`。
+Windows 安装器可选择首个实例的存放位置，留空使用原默认位置。该选项只用于新用户初始化；升级优先保留已有实例。选择的位置必须可写、为空且独立于程序安装目录。MaiBot 使用所选位置的 `modules/MaiBot`。用户确认下载 NapCat 后，启动器才会安装到 `modules/napcat`。
 
-「设置 → 实例管理」管理的是 MaiBot 实例：新建或接入只需选择 MaiBot 目录。一个启动器固定绑定一个 NapCat 目录和一个 SnowLuma 目录，所有 MaiBot 实例共用协议端、QQ 账号配置及协议端启动命令；切换 MaiBot 不更换协议端绑定。不要求统一实例文件夹，各路径均支持「使用已有目录」和「复制迁移」，复制成功后保留源文件。切换实例前停止服务，确认后重启启动器。
+「设置 → 实例管理」管理的是 MaiBot 实例：新建或接入只需选择 MaiBot 目录。一个启动器固定绑定一个 NapCat 目录，所有 MaiBot 实例共用协议端、QQ 账号配置及协议端启动命令；切换 MaiBot 不更换协议端绑定。不要求统一实例文件夹，各路径均支持「使用已有目录」和「复制迁移」，复制成功后保留源文件。切换实例前停止服务，确认后重启启动器。
 
-共享协议端路径保存于实例索引旁的 `shared-protocols.json`，账号及协议端设置保存在 `protocol-settings/`。升级旧的多组件实例索引时，一次性采用当前选中实例的协议端绑定，并保留原始索引备份 `instances-before-shared-protocols.json`；其他旧协议端目录原地保留，不自动合并或删除。此后修改 NapCat 或 SnowLuma 路径对所有 MaiBot 实例生效。
+共享协议端路径保存于实例索引旁的 `shared-protocols.json`，账号及协议端设置保存在 `protocol-settings/`。升级旧的多组件实例索引时，一次性采用当前选中实例的协议端绑定，并保留原始索引备份 `instances-before-shared-protocols.json`；其他旧协议端目录原地保留，不自动合并或删除。此后修改 NapCat 路径对所有 MaiBot 实例生效。
 
 实例索引保存在 `%APPDATA%/MaiBotOneKeyDesktop/launcher/instances.json`，新实例的启动器设置保存在其下的 `profiles/<实例ID>`；程序安装路径不再决定实例身份。旧版安装的默认目录、`resource-paths.json` 自定义组件路径和 `resource-location.json` 整体目录配置原地接入，旧设置文件不搬动、不覆盖。开发模式使用独立索引，保留原调试路径，不读写正式版实例索引。
 
@@ -95,7 +95,7 @@ MaiBot 更新窗口的正式版和历史版本来自设置 → 通用中的 Pyth
 
 ## Windows 打包
 
-Windows x64 NSIS 构建 `MaiBot-OK-<version>-win.exe`，内置基础 Python、MinGit、MaiBot 首次安装协议和 SnowLuma。首次配置 NapCat 时会从 GitHub 下载安装，已有 NapCat 安装可以继续使用。首次启动时将基础 Python 复制到实例的独立环境，并通过 PyPI 安装指定版本的 MaiBot。
+Windows x64 NSIS 构建 `MaiBot-OK-<version>-win.exe`，内置基础 Python、MinGit、MaiBot 首次安装协议和常用 Python 依赖。首次配置 NapCat 时会从 GitHub 下载安装，已有 NapCat 安装可以继续使用。首次启动时将基础 Python 复制到实例的独立环境，并通过 PyPI 安装指定版本的 MaiBot。
 
 打包前需要在仓库根目录放好 payload：
 
@@ -114,7 +114,6 @@ modules/
       napcat-adapter/
       snowluma-adapter/
   napcat/
-  SnowLuma/
 ```
 
 Windows 内置 Git 使用官方 MinGit，通过 `bun run runtime:git` 下载固定版本并校验 SHA-256，替换 `runtime/git`。启动 MaiBot 时优先使用可运行的内置 Git，仅在其缺失或损坏时尝试系统 Git；路径注入子进程的 `PATH` 和 `GIT_PYTHON_GIT_EXECUTABLE`，不修改系统环境变量，不支持自定义 Git 路径。
@@ -147,10 +146,7 @@ bun run release:win
 ```text
 release/MaiBot-OK-<version>-win.exe
 release/MaiBot-OK-<version>-win.exe.blockmap
-release/MaiBot-OK-<version>-win-snowluma.exe
-release/MaiBot-OK-<version>-win-snowluma.exe.blockmap
 release/latest-win.yml
-release/latest-win-snowluma.yml
 ```
 
 ## CI

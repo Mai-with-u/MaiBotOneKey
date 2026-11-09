@@ -40,9 +40,8 @@ async function fixture() {
   return { paths, manager, adapterPath };
 }
 
-test("start-all continues with MaiBot after a SnowLuma port conflict and reports the failure", async () => {
+test("start-all continues with MaiBot after a NapCat port conflict and reports the failure", async () => {
   const { paths, manager } = await fixture();
-  await manager.setQqBackend("snowluma");
   manager.hasMessagePlatformConfigured = () => true;
   const pty = Object.assign(new EventEmitter(), { list: () => [] });
   const services = new ServiceManager(paths, manager, { append() {}, getServiceLogPath: (id: string) => join(paths.logsRoot, `${id}.log`) } as any, pty as any);
@@ -50,12 +49,12 @@ test("start-all continues with MaiBot after a SnowLuma port conflict and reports
   let refreshed = false;
   services.start = async (id) => {
     attempts.push(id);
-    if (id === "napcat") throw new Error("端口 5099 已被占用，请停止占用进程后重试");
+    if (id === "napcat") throw new Error("端口 6099 已被占用，请停止占用进程后重试");
     return services.snapshot().find((service) => service.id === id)!;
   };
   services.refresh = async () => { refreshed = true; return services.snapshot(); };
   try {
-    await expect(services.startAll()).rejects.toThrow("SnowLuma 启动失败：端口 5099 已被占用");
+    await expect(services.startAll()).rejects.toThrow("NapCat 启动失败：端口 6099 已被占用");
     expect(attempts).toEqual(["napcat", "maibot"]);
     expect(refreshed).toBe(true);
   } finally { services.dispose(); }
@@ -75,19 +74,36 @@ test("start-all reports both service failures after attempting both services", a
   } finally { services.dispose(); }
 });
 
-test("SnowLuma-only payload defaults to SnowLuma and preserves a saved backend", async () => {
+test("old SnowLuma selections fall back to NapCat without taking its account or touching its data", async () => {
   const { paths, manager } = await fixture();
-  await mkdir(join(paths.bundledModulesRoot, "SnowLuma"), { recursive: true });
-  expect(manager.getQqBackendSync()).toBe("snowluma");
-  await manager.setQqBackend("napcat");
+  await mkdir(paths.userDataRoot, { recursive: true });
+  const selection = join(paths.userDataRoot, "qq-backend.json");
+  const stored = JSON.stringify({ backend: "snowluma", protocol: "snowluma" });
+  await writeFile(selection, stored);
+  await writeFile(join(paths.userDataRoot, "message-platform.json"), JSON.stringify({ version: 1, backend: "snowluma", accounts: { snowluma: "654321" } }));
+  const config = join(paths.snowlumaRoot, "config");
+  await mkdir(config, { recursive: true });
+  await writeFile(join(config, "runtime.json"), "keep old settings");
   expect(manager.getQqBackendSync()).toBe("napcat");
-});
-
-test("full payload keeps NapCat as the default", async () => {
-  const { paths, manager } = await fixture();
-  await mkdir(join(paths.bundledModulesRoot, "SnowLuma"), { recursive: true });
-  await mkdir(join(paths.bundledModulesRoot, "napcat"), { recursive: true });
-  expect(manager.getQqBackendSync()).toBe("napcat");
+  expect(manager.getQqProtocolSync()).toBe("napcat");
+  expect(manager.getMessagePlatformQqAccount()).toBeUndefined();
+  await expect(manager.setQqBackend("snowluma")).rejects.toThrow("仅支持 NapCat");
+  await expect(manager.setQqAccount("123456", undefined, "snowluma")).rejects.toThrow("仅支持 NapCat");
+  expect(await readFile(selection, "utf8")).toBe(stored);
+  expect(await readFile(join(config, "runtime.json"), "utf8")).toBe("keep old settings");
+  const legacyCommand = JSON.stringify({ version: 1, services: { napcat: { commandLine: "node index.mjs" } } });
+  const commandPath = join(paths.userDataRoot, "service-commands.json");
+  await writeFile(commandPath, legacyCommand);
+  const pty = Object.assign(new EventEmitter(), { list: () => [] });
+  const services = new ServiceManager(paths, manager, { append() {}, getServiceLogPath: () => join(paths.logsRoot, "test.log") } as any, pty as any);
+  try {
+    expect((await services.getCommandConfigs()).find((service) => service.serviceId === "napcat")?.customized).toBe(false);
+    expect(await readFile(commandPath, "utf8")).toBe(legacyCommand);
+  } finally {
+    services.dispose();
+  }
+  await writeFile(selection, JSON.stringify({ backend: "snowluma", protocol: "official" }));
+  expect(manager.getQqProtocolSync()).toBe("official");
 });
 
 async function endpoint(paths: RuntimePaths, backend: QqBackend) {
@@ -101,7 +117,7 @@ async function endpoint(paths: RuntimePaths, backend: QqBackend) {
   return { port: server.port, token: server.accessToken };
 }
 
-for (const backend of ["napcat", "snowluma"] as const) {
+for (const backend of ["napcat"] as const) {
   test(`${backend} requires a valid QQ account before changing configuration`, async () => {
     const { manager } = await fixture();
     const previousBackend = manager.getQqBackendSync();
@@ -113,7 +129,7 @@ for (const backend of ["napcat", "snowluma"] as const) {
   });
 }
 
-for (const backend of ["napcat", "snowluma"] as const) {
+for (const backend of ["napcat"] as const) {
   test(`${backend} uses saved setup accounts and ignores the removed bot config field`, async () => {
     const { paths, manager } = await fixture();
     const configDir = join(paths.maibotRoot, "config");
@@ -134,17 +150,13 @@ for (const backend of ["napcat", "snowluma"] as const) {
   });
 }
 
-for (const backend of ["napcat", "snowluma"] as const) {
+for (const backend of ["napcat"] as const) {
   test(`${backend} setup and switching never touch MaiBot adapter configuration`, async () => {
     const { paths, manager, adapterPath } = await fixture();
     const original = "[plugin\nenabled = false\n"; // Even malformed plugin config is outside protocol ownership.
     await writeFile(adapterPath, original);
     await manager.setQqAccount("123456", "first-token", backend);
     const before = await endpoint(paths, backend);
-    const other = backend === "napcat" ? "snowluma" : "napcat";
-    await manager.saveQqBackendAccount(other, "123456");
-    await manager.setQqBackend(other);
-    expect((await endpoint(paths, other)).token).not.toBe(before.token);
     await manager.setQqBackend(backend);
     expect(await endpoint(paths, backend)).toEqual(before);
     expect(await readFile(adapterPath, "utf8")).toBe(original);
@@ -152,45 +164,20 @@ for (const backend of ["napcat", "snowluma"] as const) {
   });
 }
 
-test("failed protocol preparation restores selection without touching MaiBot", async () => {
-  const { manager, adapterPath } = await fixture();
-  await writeFile(adapterPath, "untouched");
-  await manager.setQqAccount("123456", "test-token", "snowluma");
-  manager.ensureServiceReady = async () => { throw new Error("fixture preparation failed"); };
-  await expect(manager.setQqBackend("napcat")).rejects.toThrow("fixture preparation failed");
-  expect(manager.getQqBackendSync()).toBe("snowluma");
-  expect(await readFile(adapterPath, "utf8")).toBe("untouched");
-});
-
-test("backend accounts retain separately entered values across protocol switches", async () => {
-  const { paths, manager } = await fixture();
-  await manager.setQqAccount("123456", undefined, "napcat");
-  await manager.setQqBackend("snowluma");
-  expect(manager.getQqBackendAccounts()).toEqual({ napcat: "123456", snowluma: undefined });
-  await manager.setQqAccount("654321", undefined, "snowluma");
-  await manager.setQqBackend("napcat");
-  expect(manager.getQqBackendAccounts()).toEqual({ napcat: "123456", snowluma: "654321" });
-  expect(new InitManager(paths).getQqBackendAccounts()).toEqual({ napcat: "123456", snowluma: "654321" });
-});
-
 test("legacy message platform account belongs only to its saved backend", async () => {
   const { paths, manager } = await fixture();
   await mkdir(paths.userDataRoot, { recursive: true });
   await writeFile(join(paths.userDataRoot, "message-platform.json"), JSON.stringify({ version: 1, backend: "snowluma", qqAccount: "654321" }));
   expect(manager.getQqBackendAccounts()).toEqual({ napcat: undefined, snowluma: "654321" });
 });
-for (const backend of ["napcat", "snowluma"] as const) {
+for (const backend of ["napcat"] as const) {
   test(`environment repair preserves ${backend} connection files until explicit synchronization`, async () => {
     const { paths, manager, adapterPath } = await fixture();
     await manager.setQqAccount("123456", "shared-token", backend);
     manager.ensureModulesReady = async () => [];
-    const configPath = backend === "napcat"
-      ? join(paths.napcatRoot, "napcat", "config", "onebot11_123456.json")
-      : join(paths.snowlumaRoot, "config", "onebot_123456.json");
+    const configPath = join(paths.napcatRoot, "napcat", "config", "onebot11_123456.json");
     const config = JSON.parse(await readFile(configPath, "utf8"));
-    const server = backend === "napcat" ? config.network.websocketServers[0] : config.networks.wsServers[0];
-    if (backend === "napcat") server.token = "different-token";
-    else server.accessToken = "different-token";
+    config.network.websocketServers[0].token = "different-token";
     const changed = JSON.stringify(config);
     await writeFile(configPath, changed);
     await writeFile(adapterPath, "adapter config remains untouched");
@@ -209,82 +196,24 @@ test("explicit connection synchronization requires configured account", async ()
   await expect(manager.syncQqConnections()).rejects.toThrow("请先在消息平台中配置");
 });
 
-for (const backend of ["napcat", "snowluma"] as const) {
+for (const backend of ["napcat"] as const) {
   test(`advanced settings saves ${backend} account without switching the selected protocol`, async () => {
     const { paths, manager } = await fixture();
     await manager.setQqAccount("123456", undefined, "napcat");
     await manager.saveQqBackendAccount(backend, " 654321 ");
     expect(manager.getQqBackendSync()).toBe("napcat");
     expect(manager.getQqBackendAccounts()[backend]).toBe("654321");
-    expect(manager.getMessagePlatformQqAccount()).toBe(backend === "napcat" ? "654321" : "123456");
+    expect(manager.getMessagePlatformQqAccount()).toBe("654321");
     const restarted = new InitManager(paths);
     restarted.ensureServiceReady = async () => [];
     await restarted.setQqBackend(backend);
     expect(restarted.getMessagePlatformQqAccount()).toBe("654321");
-    const configPath = backend === "napcat"
-      ? join(paths.napcatRoot, "napcat", "config", "onebot11_654321.json")
-      : join(paths.snowlumaRoot, "config", "onebot_654321.json");
+    const configPath = join(paths.napcatRoot, "napcat", "config", "onebot11_654321.json");
     expect(existsSync(configPath)).toBe(true);
   });
 }
 
-test("advanced settings fills an empty legacy SnowLuma account and rejects invalid accounts", async () => {
-  const { paths, manager } = await fixture();
-  await manager.setQqBackend("snowluma");
-  await mkdir(paths.userDataRoot, { recursive: true });
-  await writeFile(join(paths.userDataRoot, "message-platform.json"), JSON.stringify({ version: 1, backend: "snowluma", configuredAt: 1, qqAccount: "" }));
-  expect(manager.hasMessagePlatformConfigured()).toBe(false);
-  expect(manager.getMessagePlatformQqAccount()).toBeUndefined();
-  for (const account of ["", "0", "abc"]) {
-    await expect(manager.saveQqBackendAccount("snowluma", account)).rejects.toThrow("请输入正确的 QQ 号");
-  }
-  await manager.saveQqBackendAccount("snowluma", "654321");
-  expect(manager.getMessagePlatformQqAccount()).toBe("654321");
-  expect(manager.getQqBackendAccounts().snowluma).toBe("654321");
-});
-
-for (const backend of ["napcat", "snowluma"] as const) {
-  test(`${backend} never borrows the other backend account and configuration state follows validation`, async () => {
-    const { manager } = await fixture();
-    const other = backend === "napcat" ? "snowluma" : "napcat";
-    await manager.setQqAccount("123456", undefined, other);
-    await manager.setQqBackend(backend);
-    expect(manager.getMessagePlatformQqAccount()).toBeUndefined();
-    expect(manager.hasMessagePlatformConfigured()).toBe(false);
-    await expect(manager.syncQqConnections()).rejects.toThrow("请先在消息平台中配置");
-    await manager.saveQqBackendAccount(backend, "654321");
-    expect(manager.getMessagePlatformQqAccount()).toBe("654321");
-    expect(manager.hasMessagePlatformConfigured()).toBe(true);
-    await manager.setQqBackend(other);
-    expect(manager.getMessagePlatformQqAccount()).toBe("123456");
-  });
-}
-
-test("SnowLuma account saves preserve custom runtime fields and service ports", async () => {
-  const { paths, manager } = await fixture();
-  await manager.setQqAccount("123456", undefined, "snowluma");
-  const runtimePath = join(paths.snowlumaRoot, "config", "runtime.json");
-  const runtime = { webuiPort: 15099, hookAutoLoad: false, customSetting: "preserve", nested: { enabled: true } };
-  await writeFile(runtimePath, JSON.stringify(runtime));
-  await manager.saveQqBackendAccount("snowluma", "654321");
-  expect(JSON.parse(await readFile(runtimePath, "utf8"))).toEqual(runtime);
-  expect(manager.readSnowLumaServicePortsSync()).toEqual({ webui: 15099, onebot: 7988, error: undefined });
-  await manager.syncQqConnections();
-  expect(JSON.parse(await readFile(runtimePath, "utf8"))).toEqual(runtime);
-});
-
-test("malformed SnowLuma runtime configuration is preserved and account changes are not committed", async () => {
-  const { paths, manager } = await fixture();
-  await manager.setQqAccount("123456", undefined, "snowluma");
-  const runtimePath = join(paths.snowlumaRoot, "config", "runtime.json");
-  await writeFile(runtimePath, "{invalid");
-  await expect(manager.saveQqBackendAccount("snowluma", "654321")).rejects.toThrow();
-  expect(await readFile(runtimePath, "utf8")).toBe("{invalid");
-  expect(manager.getMessagePlatformQqAccount()).toBe("123456");
-  expect(manager.readSnowLumaServicePortsSync().error).toContain("配置读取失败");
-});
-
-for (const backend of ["napcat", "snowluma"] as const) {
+for (const backend of ["napcat"] as const) {
   test(`${backend} page and tray startup requests open account setup without failing or spawning`, async () => {
     const { paths, manager } = await fixture();
     await manager.setQqBackend(backend);

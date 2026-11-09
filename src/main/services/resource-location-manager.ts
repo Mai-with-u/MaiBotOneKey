@@ -55,6 +55,7 @@ interface StoredResourcePathsFile {
 
 const RESOURCE_LOCK_FILE = "resource.lock";
 const RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat", "snowluma"];
+const ACTIVE_RESOURCE_KEYS = RESOURCE_KEYS.filter((key) => key !== "snowluma");
 
 function normalizePathForCompare(path: string): string {
   const resolved = canonicalPath(path);
@@ -134,7 +135,7 @@ export class ResourceLocationManager extends EventEmitter {
   }
 
   getPathConfigs(): RuntimeResourcePathConfig[] {
-    return RESOURCE_KEYS.map((key) => {
+    return ACTIVE_RESOURCE_KEYS.map((key) => {
       const value = this.getPath(key), defaultValue = this.getDefaultPath(key);
       return { key, label: `${labelForKey(key)}${this.paths.instanceRegistryRoot && key !== "maibot" ? "（启动器共用）" : ""}`, value, defaultValue, customized: !samePath(value, defaultValue) };
     });
@@ -144,7 +145,7 @@ export class ResourceLocationManager extends EventEmitter {
     this.assertUniquePathSet(this.currentPathSet());
     if (!this.lockEnabled) return { acquired: true };
     const acquired: ResourceLock[] = [];
-    for (const key of RESOURCE_KEYS) {
+    for (const key of ACTIVE_RESOURCE_KEYS) {
       const result = this.acquireLockForPath(key, this.getPath(key));
       if (!result.acquired) { for (const lock of acquired) lock.release(); return result; }
       if (result.lock) acquired.push(result.lock);

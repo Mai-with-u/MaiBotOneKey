@@ -1,5 +1,4 @@
 import { normalizeQqAccount } from "@shared/qq-account";
-import { isSnowLumaUpgradeAvailable } from "@shared/snowluma-version";
 import { Download, Loader2, RefreshCw, Save, Settings } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -11,12 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isValidPortText, readQqWebuiPort, saveQqWebuiPort } from "@/lib/qq-webui-port";
 import { cn } from "@/lib/utils";
-import { useSnowLumaUpgradeDebug } from "@/lib/use-snowluma-upgrade-debug";
 
-const qqBackendOptions: Array<{ value: QqBackend; label: string }> = [
+const qqBackendOptions = [
   { value: "napcat", label: "NapCat" },
-  { value: "snowluma", label: "SnowLuma" },
-];
+] as const;
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -30,8 +27,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   const [open, setOpen] = useState(false);
   const [loginInfo, setLoginInfo] = useState<MessagePlatformLoginInfo | null>(null);
   const [loginInfoError, setLoginInfoError] = useState<string | null>(null);
-  const [qqAccounts, setQqAccounts] = useState<Record<QqBackend, string>>({ napcat: "", snowluma: "" });
-  const [snowLumaPassword, setSnowLumaPassword] = useState("");
+  const [qqAccounts, setQqAccounts] = useState<Record<"napcat", string>>({ napcat: "" });
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -43,8 +39,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
         if (!info) throw new Error("无法读取登录信息");
         if (!cancelled) {
           setLoginInfo(info);
-          setQqAccounts({ napcat: info.napcat.qqAccount ?? "", snowluma: info.snowluma.qqAccount ?? "" });
-          setSnowLumaPassword(info.snowluma.webuiToken ?? "");
+          setQqAccounts({ napcat: info.napcat.qqAccount ?? "" });
         }
       } catch (error) {
         if (!cancelled) setLoginInfoError(messageFromError(error));
@@ -56,29 +51,21 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
-  const [upgradeSnowLumaOnly, setUpgradeSnowLumaOnly] = useState(false);
-  const reinstallComponentLabel = snapshot.platform === "win32" ? "SnowLuma" : "NapCat / SnowLuma";
-  const [forceSnowLumaUpgrade] = useSnowLumaUpgradeDebug();
-  const snowLumaUpgradeAvailable = (snapshot.initState.qqProtocol ?? snapshot.initState.qqBackend) === "snowluma"
-    && (forceSnowLumaUpgrade || isSnowLumaUpgradeAvailable(snapshot.moduleVersions.snowlumaLocal, snapshot.moduleVersions.snowlumaBundled));
+  const reinstallComponentLabel = "NapCat";
   const readBackendPort = (backend: QqBackend): string => readQqWebuiPort(backend,
     backend === snapshot.initState.qqBackend ? snapshot.services.find((service) => service.id === "napcat")?.url : undefined);
-  const [qqWebuiPorts, setQqWebuiPorts] = useState<Record<QqBackend, string>>(() => ({
-    napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma"),
+  const [qqWebuiPorts, setQqWebuiPorts] = useState<Record<"napcat", string>>(() => ({
+    napcat: readBackendPort("napcat"),
   }));
   const qqComponentsChangeBlocked = snapshot.services.some((service) =>
     service.id === "napcat" && (service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping"),
   );
-  const qqWebuiPortsDirty = qqWebuiPorts.napcat !== readBackendPort("napcat") || qqWebuiPorts.snowluma !== readBackendPort("snowluma");
-  const qqWebuiPortsValid = isValidPortText(qqWebuiPorts.napcat) && isValidPortText(qqWebuiPorts.snowluma);
-  const snowLumaPasswordDirty = loginInfo !== null && snowLumaPassword !== (loginInfo.snowluma.webuiToken ?? "");
-  const snowLumaRunning = snapshot.initState.qqBackend === "snowluma" && snapshot.services.some((service) =>
-    service.id === "napcat" && (service.managed || ["starting", "running", "stopping"].includes(service.status)),
-  );
+  const qqWebuiPortsDirty = qqWebuiPorts.napcat !== readBackendPort("napcat");
+  const qqWebuiPortsValid = isValidPortText(qqWebuiPorts.napcat);
   const qqBackendRunning = snapshot.services.some((service) =>
     service.id === "napcat" && (service.managed || ["starting", "running", "stopping"].includes(service.status)),
   );
-  const saveQqAccount = async (backend: QqBackend) => {
+  const saveQqAccount = async (backend: "napcat") => {
     const account = normalizeQqAccount(qqAccounts[backend]);
     if (!account) {
       setError("请输入正确的 QQ 号");
@@ -100,22 +87,6 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
       setBusy(null);
     }
   };
-  const saveSnowLumaPassword = async () => {
-    setBusy("snowluma:password");
-    setError(null);
-    try {
-      const bridge = window.maibotDesktop;
-      if (!bridge) throw new Error("无法连接启动器");
-      await bridge.protocols.saveSnowLumaWebuiPassword(snowLumaPassword);
-      setLoginInfo((current) => current ? { ...current, snowluma: { ...current.snowluma, webuiToken: snowLumaPassword } } : current);
-      toast.success("SnowLuma WebUI 密码已保存，下次启动将使用新密码自动登录");
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  };
   const upgradeQqComponents = useCallback(async () => {
     if (qqComponentsChangeBlocked) {
       setError(`请先停止 QQ 协议端，再重新安装 ${reinstallComponentLabel}。`);
@@ -127,30 +98,29 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     try {
       const bridge = window.maibotDesktop;
       if (!bridge) throw new Error("无法连接启动器");
-      const result = await bridge.protocols.upgradeQqComponents(upgradeSnowLumaOnly || snapshot.platform === "win32" ? "snowluma" : undefined);
+      const result = await bridge.protocols.upgradeQqComponents("napcat");
       setConfirmQqComponentsUpgradeOpen(false);
       const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
-      toast.success(`${upgradeSnowLumaOnly ? "SnowLuma 已升级" : `${reinstallComponentLabel} 已重新安装`}，保留 ${preservedCount} 项配置与数据`);
+      toast.success(`${reinstallComponentLabel} 已重新安装，保留 ${preservedCount} 项配置与数据`);
       await refreshSnapshot();
     } catch (nextError) {
       setError(messageFromError(nextError));
     } finally {
       setBusy(null);
     }
-  }, [qqComponentsChangeBlocked, refreshSnapshot, reinstallComponentLabel, snapshot.platform, upgradeSnowLumaOnly]);
+  }, [qqComponentsChangeBlocked, refreshSnapshot, reinstallComponentLabel]);
 
   const saveQqWebuiPorts = useCallback(() => {
     if (!qqWebuiPortsValid) {
-      setError("请填写 1-65535 之间的 NapCat / SnowLuma WebUI 端口。");
+      setError("请填写 1-65535 之间的 NapCat WebUI 端口。");
       return;
     }
 
     setError(null);
     const napcat = saveQqWebuiPort("napcat", qqWebuiPorts.napcat);
-    const snowluma = saveQqWebuiPort("snowluma", qqWebuiPorts.snowluma);
-    setQqWebuiPorts({ napcat, snowluma });
+    setQqWebuiPorts({ napcat });
     toast.success("消息平台 WebUI 端口已保存");
-  }, [qqWebuiPorts.napcat, qqWebuiPorts.snowluma, qqWebuiPortsValid]);
+  }, [qqWebuiPorts.napcat, qqWebuiPortsValid]);
 
   const syncConnections = async () => {
     setBusy("qq-connections:sync");
@@ -187,18 +157,12 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   return (
     <>
       <Button className="order-1 ml-auto" disabled={disabled || busy !== null} onClick={() => {
-        setQqWebuiPorts({ napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma") });
+        setQqWebuiPorts({ napcat: readBackendPort("napcat") });
         setError(null);
         setOpen(true);
       }} size="sm" variant="outline">
         <Settings />高级设置
       </Button>
-      {snowLumaUpgradeAvailable ? <Button
-        disabled={disabled || busy !== null || qqComponentsChangeBlocked}
-        onClick={() => { setError(null); setUpgradeSnowLumaOnly(true); setConfirmQqComponentsUpgradeOpen(true); }}
-        size="sm"
-        title={`${snapshot.moduleVersions.snowlumaLocal} → ${snapshot.moduleVersions.snowlumaBundled}`}
-      ><Download />升级 SnowLuma</Button> : null}
       <Dialog open={open} onOpenChange={(next) => { if (busy === null) setOpen(next); }}>
         <DialogContent aria-describedby={undefined} className="grid-rows-[minmax(0,1fr)_auto]" size="lg">
           <DialogTitle className="sr-only">消息平台高级设置</DialogTitle>
@@ -208,7 +172,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
               <TabsList className="flex h-auto flex-wrap">
                 <TabsTrigger value="ports">WebUI 端口</TabsTrigger>
                 <TabsTrigger value="connections">连接配置</TabsTrigger>
-                <TabsTrigger value="reinstall">重新安装</TabsTrigger>
+                {snapshot.platform === "darwin" ? <TabsTrigger value="reinstall">重新安装</TabsTrigger> : null}
               </TabsList>
               <TabsContent value="ports" className="space-y-4">
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
@@ -216,7 +180,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                     <div className="min-w-0">
                       <p className="text-sm font-medium">消息平台 WebUI 端口</p>
                       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        消息平台页面会按这里保存的端口打开 NapCat / SnowLuma WebUI。
+                        消息平台页面会按这里保存的端口打开 NapCat WebUI。
                       </p>
                     </div>
                     <Button
@@ -267,23 +231,9 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                         <div className="grid min-w-0 gap-3" key={value}>
                           <p className="text-sm font-medium">{label}</p>
                           <label className="grid gap-1.5 text-xs text-muted-foreground">
-                            {value === "snowluma" ? "WebUI 登录 token / 密码" : "WebUI 登录 token"}
-                            {value === "snowluma" ? (
-                              <Input className="font-mono" type="password" autoComplete="new-password" disabled={busy !== null}
-                                value={snowLumaPassword} onChange={(event) => setSnowLumaPassword(event.target.value)}
-                                placeholder="输入新的 WebUI 密码" />
-                            ) : <Input readOnly className="font-mono" value={loginInfo[value].webuiToken ?? ""} placeholder="未获取到登录 token" />}
+                            WebUI 登录 token
+                            <Input readOnly className="font-mono" value={loginInfo[value].webuiToken ?? ""} placeholder="未获取到登录 token" />
                           </label>
-                          {value === "snowluma" ? (
-                            <div className="grid gap-2">
-                              <p className="text-xs text-muted-foreground">密码至少 10 位，包含大小写字母和特殊符号，不含空白。保存前请先停止 SnowLuma；保存后同时更新密码和自动登录凭据。</p>
-                              {snowLumaPasswordDirty ? <Button disabled={busy !== null || snowLumaRunning || !snowLumaPassword} onClick={() => void saveSnowLumaPassword()} size="sm">
-                                {busy === "snowluma:password" ? <Loader2 className="animate-spin" /> : <Save />}
-                                保存密码
-                              </Button> : null}
-                              {snowLumaPasswordDirty && snowLumaRunning ? <p className="text-xs text-warning-foreground">请先停止 SnowLuma，再保存密码。</p> : null}
-                            </div>
-                          ) : null}
                           <label className="grid gap-1.5 text-xs text-muted-foreground">
                             已输入的 QQ 账号
                             <Input className="font-mono" value={qqAccounts[value]} inputMode="numeric" disabled={busy !== null}
@@ -346,7 +296,6 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                     disabled={busy !== null || qqComponentsChangeBlocked}
                     onClick={() => {
                       setError(null);
-                      setUpgradeSnowLumaOnly(false);
                       setConfirmQqComponentsUpgradeOpen(true);
                     }}
                     variant="secondary"
@@ -371,11 +320,9 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     >
       <DialogContent size="md">
       <DialogHeader
-        description={upgradeSnowLumaOnly
-          ? `SnowLuma ${snapshot.moduleVersions.snowlumaLocal} → ${snapshot.moduleVersions.snowlumaBundled}，使用一键包内置版本升级。`
-          : `这会用一键包内置的 ${reinstallComponentLabel} 程序文件覆盖现有组件。`}
+        description="这会用一键包内置的 NapCat 程序文件覆盖现有组件。"
         icon={<Download className="size-4" />}
-        title={upgradeSnowLumaOnly ? "确认升级 SnowLuma？" : "确认重新安装？"}
+        title="确认重新安装？"
         tone="warning"
       />
       <DialogBody className="space-y-3 text-sm">
@@ -400,7 +347,7 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
           variant="secondary"
         >
           {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
-          {upgradeSnowLumaOnly ? "升级 SnowLuma" : "重新安装"}
+          重新安装
         </Button>
       </DialogFooter>
       </DialogContent>

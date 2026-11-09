@@ -34,7 +34,8 @@ test("MaiBot instances share protocol paths and account/backend settings without
   const a = new ProtocolBackendManager(runtime(first)), b = new ProtocolBackendManager(runtime(second));
   expect(runtime(first).napcatRoot).toBe(runtime(second).napcatRoot);
   expect(runtime(first).snowlumaRoot).toBe(runtime(second).snowlumaRoot);
-  expect(b.getMessagePlatformQqAccount()).toBe("12345678");
+  expect(b.getMessagePlatformQqAccount()).toBeUndefined();
+  expect(b.getQqBackendAccounts().snowluma).toBe("12345678");
   await a.saveQqProtocolSelection("official");
   expect(b.getQqProtocolSync()).toBe("official");
   expect(JSON.parse(readFileSync(join(legacy, "qq-backend.json"), "utf8"))).toEqual({ backend: "snowluma" });

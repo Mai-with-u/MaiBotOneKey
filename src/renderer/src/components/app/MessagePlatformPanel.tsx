@@ -89,14 +89,14 @@ const MASCOT_INTRO_TRIGGER_CLICKS = 10;
 
 let mascotIntroShownThisSession = false;
 
-function qqWebuiUrl(serviceUrl: string | undefined, backend: QqBackend, portText: string): string {
-  const fallback = backend === "snowluma" ? "http://127.0.0.1:5099" : "http://127.0.0.1:6099/webui";
+function qqWebuiUrl(serviceUrl: string | undefined, portText: string): string {
+  const fallback = "http://127.0.0.1:6099/webui";
   const url = new URL(serviceUrl ?? fallback);
   if (isValidPortText(portText)) {
     url.hostname = "127.0.0.1";
     url.port = String(Number(portText));
   }
-  if (backend !== "snowluma" && (url.pathname === "/" || url.pathname.length === 0)) {
+  if (url.pathname === "/" || url.pathname.length === 0) {
     url.pathname = "/webui";
   }
   return url.toString();
@@ -540,7 +540,7 @@ function MessagePlatformConnectCard({
         </div>
       </div>
       <div className={cn(retro ? "retro-control flex items-center justify-between gap-3 p-3" : "flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3")}>
-        <span className="text-xs text-muted-foreground">配置 NapCat 或者 SnowLuma 来让麦麦连接到QQ</span>
+        <span className="text-xs text-muted-foreground">配置 NapCat 或官方 QQ，让麦麦连接到 QQ</span>
         <span className={cn("inline-flex h-7 items-center gap-1 bg-primary px-2.5 text-[11px] text-primary-foreground", retro ? "rounded-sm font-semibold" : "rounded-md font-medium")}>
           新增平台
           <ArrowRight className="size-3.5" />
@@ -1094,8 +1094,7 @@ export function MessagePlatformPanel({
   const napcat = services.find((service) => service.id === "napcat");
   const adapterPluginId = "maibot-team.snowluma-adapter";
   const adapterName = "QQ 适配器";
-  const qqBackend = snapshot.initState.qqBackend ?? "napcat";
-  const currentQqWebuiUrl = qqWebuiUrl(napcat?.url, qqBackend, qqWebuiPort);
+  const currentQqWebuiUrl = qqWebuiUrl(napcat?.url, qqWebuiPort);
   const messagePlatformConfigured =
     snapshot.initState.messagePlatformConfigured;
   const qqBackendBusy = Boolean(snapshot.runtimeOperation) ||
@@ -1501,12 +1500,12 @@ export function MessagePlatformPanel({
       try {
         const stored = localStorage.getItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY);
         if (!event && !stored) return;
-        if (!request && (stored === "napcat" || stored === "snowluma")) request = stored;
+        if (!request && stored === "napcat") request = stored;
         localStorage.removeItem(MESSAGE_PLATFORM_GUIDE_REQUEST_KEY);
       } catch {
         if (!event) return;
       }
-      openMessagePlatformDialog(request);
+      openMessagePlatformDialog(request === "napcat" ? "napcat" : "official");
     };
 
     openRequestedGuide();
@@ -1579,13 +1578,9 @@ export function MessagePlatformPanel({
 
     try {
       await configureAndStartOneBot(qqAccount, messagePlatformBackend);
-      toast.success(`${messagePlatformBackend === "snowluma" ? "QQ-SnowLuma" : "QQ-NapCat"} 已配置并启动`);
+      toast.success("QQ-NapCat 已配置并启动");
       setMessagePlatformDialogOpen(false);
       await refreshSnapshot();
-      if (messagePlatformBackend === "snowluma") {
-        setQqWebuiPort(readQqWebuiPort("snowluma"));
-        setNapcatWebuiOpen(true);
-      }
     } catch (nextError) {
       const message = messageFromError(nextError);
       setError(message);
@@ -1604,7 +1599,7 @@ export function MessagePlatformPanel({
     }) : null;
     if (selectedProtocol !== "official" && !savedAccounts) return;
     const targetAccount = selectedProtocol !== "official"
-      ? normalizeQqAccount(savedAccounts?.[selectedProtocol].qqAccount) ?? ""
+      ? normalizeQqAccount(savedAccounts?.napcat.qqAccount) ?? ""
       : "";
     const targetAccountValid = Boolean(targetAccount);
     if (selectedProtocol === currentProtocol && (selectedProtocol === "official"
@@ -1632,18 +1627,12 @@ export function MessagePlatformPanel({
     setBusy("message-platform:protocol");
     setError(null);
     try {
-      if (selectedProtocol === "snowluma") {
-        await window.maibotDesktop.protocols.setQqAccount({ qqAccount: targetAccount, qqBackend: "snowluma" });
-        await window.maibotDesktop.init.repair();
-        await window.maibotDesktop.services.start("napcat");
-        setQqWebuiPort(readQqWebuiPort("snowluma"));
-      } else if (selectedProtocol === "napcat" && napCatDownloadRequired) {
+      if (selectedProtocol === "napcat" && napCatDownloadRequired) {
         await configureAndStartOneBot(targetAccount, "napcat");
       } else {
         await saveQqProtocol(selectedProtocol);
       }
       await refreshSnapshot();
-      if (selectedProtocol === "snowluma") setNapcatWebuiOpen(true);
       toast.success("协议端已保存");
     } catch (nextError) {
       setError(messageFromError(nextError));
@@ -1803,7 +1792,7 @@ export function MessagePlatformPanel({
                 <div className="min-w-0 flex-1">
                   <h2 className="text-sm font-semibold">协议端选择</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {selectedProtocol === "snowluma" ? "使用 SnowLuma 注入 QQ 进程。" : selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : snapshot.platform === "win32" ? "首次使用 NapCat 时从 GitHub 下载安装。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
+                    {selectedProtocol === "official" ? "直连 QQ 开放平台，使用 AppID 和 AppSecret 配置。" : snapshot.platform === "win32" ? "首次使用 NapCat 时从 GitHub 下载安装。" : "使用 NapCat 启动 QQ 与 OneBot 连接。"}
                   </p>
                 </div>
                 <SegmentedControl
@@ -1812,7 +1801,7 @@ export function MessagePlatformPanel({
                   value={selectedProtocol}
                   onValueChange={setSelectedProtocol}
                   disabled={busy !== null}
-                  options={([{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方QQ" }] as const).map((option) => ({ ...option, disabled: qqBackendBusy && option.value !== currentProtocol }))}
+                  options={([{ value: "napcat", label: "NapCat" }, { value: "official", label: "官方QQ" }] as const).map((option) => ({ ...option, disabled: qqBackendBusy && option.value !== currentProtocol }))}
                 />
                 <Button disabled={busy !== null || qqBackendBusy || (selectedProtocol === currentProtocol && (selectedProtocol === "official" ? snapshot.initState.qqOfficialConfigured : Boolean(normalizeQqAccount(snapshot.initState.qqAccount)) && !(selectedProtocol === "napcat" && napCatDownloadRequired)))} onClick={() => void saveProtocolSelection()} size="sm" variant="secondary">
                   {busy === "message-platform:protocol" ? <Loader2 className="animate-spin" /> : <PackageCheck />}
@@ -1830,8 +1819,8 @@ export function MessagePlatformPanel({
                     注意
                   </h2>
                   <div className="space-y-3 text-sm leading-relaxed">
-                    <p><strong className="font-bold">NapCat一键配置可能在未来一键包被移除</strong>，推荐使用<strong className="font-bold">Snowluma或官方QQ bot平台</strong>连接。</p>
-                    <p>不过NapCat连接方法仍旧可以，你可以单独部署NapCat，使用Snowluma适配器连接到MaiBot</p>
+                    <p><strong className="font-bold">NapCat一键配置可能在未来一键包被移除</strong>，推荐使用<strong className="font-bold">官方 QQ 开放平台</strong>连接。</p>
+                    <p>不过NapCat连接方法仍旧可以，你可以单独部署NapCat，通过 OneBot 适配器连接到 MaiBot</p>
                   </div>
                 </aside>
               ) : null}
@@ -1905,13 +1894,8 @@ export function MessagePlatformPanel({
                 {error}
               </div>
             ) : null}
-            <div className="grid gap-2 sm:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2">
               {([
-                {
-                  backend: "snowluma",
-                  title: "QQ-SnowLuma",
-                  description: "使用最新Snowluma连接QQ，需要下载QQ并登录，使用WS连接到MaiBot",
-                },
                 {
                   backend: "napcat",
                   title: "QQ-NapCat",
@@ -1936,9 +1920,9 @@ export function MessagePlatformPanel({
                     setMessagePlatformBackend(option.backend);
                     setError(null);
                   }}
-                  badge={option.backend === "snowluma" || option.backend === "official" ? (
+                  badge={option.backend === "official" ? (
                     <span className="inline-flex rounded-sm bg-primary px-2 py-1 text-xs font-bold leading-none text-primary-foreground">
-                      {option.backend === "official" ? "稳定" : "推荐"}
+                      稳定
                     </span>
                   ) : undefined}
                 />
@@ -1954,7 +1938,6 @@ export function MessagePlatformPanel({
                 placeholder="例如 123456789"
                 value={messagePlatformAccount}
               />
-              {messagePlatformBackend === "snowluma" ? <span className="font-normal text-muted-foreground">请先在 QQ 客户端登录此账号。SnowLuma 会持续检测并只自动注入此账号，QQ 后续启动或重启也会检测。</span> : null}
             </label> : null}
             {messagePlatformBackend === "official" ? (
               <OfficialQqCredentialsFields appId={officialAppId} appSecret={officialAppSecret} onAppIdChange={setOfficialAppId} onAppSecretChange={setOfficialAppSecret} disabled={busy === "message-platform:setup"} />
@@ -2349,7 +2332,6 @@ export function MessagePlatformPanel({
       <QqWebuiDialog
         open={napcatWebuiOpen}
         onOpenChange={setNapcatWebuiOpen}
-        backend={qqBackend}
         url={currentQqWebuiUrl}
       />
     </>

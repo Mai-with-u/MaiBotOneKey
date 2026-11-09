@@ -2,7 +2,7 @@ import { existsSync, type Dirent } from "node:fs";
 import { cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { runProcess, runWithoutAsar, samePath, sameOrInsidePath } from "./runtime-file-utils";
-import type { QqComponentUpgradeEntry, QqComponentUpgradeId, QqComponentUpgradeResult, RuntimePaths, SnowLumaResetResult } from "../../shared/contracts";
+import type { QqComponentUpgradeEntry, QqComponentUpgradeId, QqComponentUpgradeResult, RuntimePaths } from "../../shared/contracts";
 function toDetail(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 const NAPCAT_COMPONENT_PROTECTED_PATHS = [
@@ -14,7 +14,6 @@ const NAPCAT_COMPONENT_PROTECTED_PATHS = [
   "napcat/logs",
 ];
 
-const SNOWLUMA_COMPONENT_PROTECTED_PATHS = ["config", "data", "logs"];
 const NAPCAT_VERSION_CONFIG_PATTERN = /^versions\/[^/]+\/resources\/app\/napcat\/config(?:\/|$)/iu;
 const COMPONENT_DATA_FILE_PATTERN = /(?:\.db|\.sqlite|\.sqlite3)(?:-(?:shm|wal))?$/iu;
 const COMPONENT_LOG_FILE_PATTERN = /\.log$/iu;
@@ -39,10 +38,6 @@ function isNapcatComponentProtectedPath(relativePath: string): boolean {
     COMPONENT_DATA_FILE_PATTERN.test(fileName) ||
     COMPONENT_LOG_FILE_PATTERN.test(fileName)
   );
-}
-
-function isSnowLumaComponentProtectedPath(relativePath: string): boolean {
-  return isProtectedByList(normalizeRelativePath(relativePath), SNOWLUMA_COMPONENT_PROTECTED_PATHS);
 }
 
 interface BundledComponentUpgradeSpec {
@@ -77,74 +72,26 @@ function normalizeQqComponentUpgradeError(componentName: string, error: unknown)
 
 /** Protocol payload maintenance is independent of MaiBot files and adapter runtime. */
 export class ProtocolComponentManager {
-  constructor(private readonly paths: Pick<RuntimePaths, "installRoot" | "napcatRoot" | "snowlumaRoot" | "bundledModulesRoot">) {}
-  async resetSnowLumaComponent(): Promise<SnowLumaResetResult> {
-    const bundledRoot = join(this.paths.bundledModulesRoot, "SnowLuma");
-    const snowlumaRoot = this.paths.snowlumaRoot;
-
-    if (!existsSync(bundledRoot)) {
-      throw new Error(`内置 SnowLuma 模板缺失: ${bundledRoot}`);
-    }
-
-    if (samePath(bundledRoot, snowlumaRoot)) {
-      throw new Error("当前 SnowLuma 目录指向内置模板，拒绝重置。请在打包后的可写数据目录中执行。");
-    }
-
-    const removed = existsSync(snowlumaRoot);
-    await rm(snowlumaRoot, { recursive: true, force: true });
-    await mkdir(dirname(snowlumaRoot), { recursive: true });
-    await runWithoutAsar(() =>
-      cp(bundledRoot, snowlumaRoot, {
-        recursive: true,
-        force: true,
-        errorOnExist: false,
-      }),
-    );
-
-    return {
-      snowlumaRoot,
-      bundledRoot,
-      removed,
-      copied: true,
-      resetAt: Date.now(),
-    };
-  }
-
+  constructor(private readonly paths: Pick<RuntimePaths, "installRoot" | "napcatRoot" | "bundledModulesRoot">) {}
   async upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> {
-    if (component !== undefined && component !== "napcat" && component !== "snowluma") throw new Error("未知协议端组件");
-    const reinstallNapCat = component !== "snowluma" && existsSync(join(this.paths.bundledModulesRoot, "napcat"));
-    if (reinstallNapCat || component !== "napcat") {
-      await this.cleanupQqComponentProcesses(reinstallNapCat ? component : "snowluma");
-    }
-
-    const components: QqComponentUpgradeEntry[] = [];
-    if (reinstallNapCat) {
-      components.push(
-        await this.upgradeBundledComponent({
-          id: "napcat",
-          name: "NapCat",
-          moduleName: "napcat",
-          isProtectedPath: isNapcatComponentProtectedPath,
-        }),
-      );
-    }
-    if (component !== "napcat") components.push(
-      await this.upgradeBundledComponent({
-        id: "snowluma",
-        name: "SnowLuma",
-        moduleName: "SnowLuma",
-        isProtectedPath: isSnowLumaComponentProtectedPath,
-      }),
-    );
-    return { components, upgradedAt: Date.now() };
+    if (component !== undefined && component !== "napcat") throw new Error("未知协议端组件");
+    if (!existsSync(join(this.paths.bundledModulesRoot, "napcat"))) return { components: [], upgradedAt: Date.now() };
+    await this.cleanupQqComponentProcesses();
+    const result = await this.upgradeBundledComponent({
+      id: "napcat",
+      name: "NapCat",
+      moduleName: "napcat",
+      isProtectedPath: isNapcatComponentProtectedPath,
+    });
+    return { components: [result], upgradedAt: Date.now() };
   }
 
-  private async cleanupQqComponentProcesses(component?: QqComponentUpgradeId): Promise<void> {
+  private async cleanupQqComponentProcesses(): Promise<void> {
     if (process.platform !== "win32") {
       return;
     }
 
-    const targetRoots = (component === "snowluma" ? [this.paths.snowlumaRoot] : component === "napcat" ? [this.paths.napcatRoot] : [this.paths.napcatRoot, this.paths.snowlumaRoot])
+    const targetRoots = [this.paths.napcatRoot]
       .filter((path) => path.trim().length > 0)
       .map((path) => resolve(path));
     if (targetRoots.length === 0) {
@@ -218,7 +165,7 @@ export class ProtocolComponentManager {
 
   private async upgradeBundledComponent(spec: BundledComponentUpgradeSpec): Promise<QqComponentUpgradeEntry> {
     const bundledRoot = join(this.paths.bundledModulesRoot, spec.moduleName);
-    const targetRoot = spec.id === "napcat" ? this.paths.napcatRoot : this.paths.snowlumaRoot;
+    const targetRoot = this.paths.napcatRoot;
     const upgradedAt = Date.now();
 
     if (!existsSync(bundledRoot)) {

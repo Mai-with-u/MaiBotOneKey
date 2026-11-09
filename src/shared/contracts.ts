@@ -210,8 +210,6 @@ export interface InstanceCreateRequest {
 }
 
 export interface ModuleRuntimeVersions {
-  snowlumaLocal?: string;
-  snowlumaBundled?: string;
   maibotLocal?: string;
   maibotLocalSource?: "pyproject" | "pypi" | "unknown";
   maibotDeploymentMode?: "source" | "pypi";
@@ -435,15 +433,7 @@ export interface MaiBotStorageCleanupResult {
   cleanedAt: number;
 }
 
-export interface SnowLumaResetResult {
-  snowlumaRoot: string;
-  bundledRoot: string;
-  removed: boolean;
-  copied: boolean;
-  resetAt: number;
-}
-
-export type QqComponentUpgradeId = "napcat" | "snowluma";
+export type QqComponentUpgradeId = "napcat";
 
 export interface QqComponentUpgradeEntry {
   id: QqComponentUpgradeId;
@@ -485,7 +475,7 @@ export interface QqAccountSetupRequest {
   websocketToken?: string;
 }
 
-export type MessagePlatformLoginInfo = Record<QqBackend, { qqAccount?: string; webuiToken?: string }>;
+export type MessagePlatformLoginInfo = Record<"napcat", { qqAccount?: string; webuiToken?: string }>;
 
 export interface ModuleUpdateResult {
   moduleId: "maibot";
@@ -725,10 +715,8 @@ export interface DesktopBridge {
   protocols: {
     getLoginInfo: () => Promise<MessagePlatformLoginInfo>;
     saveQqBackendAccount: (backend: QqBackend, account: string) => Promise<void>;
-    saveSnowLumaWebuiPassword: (password: string) => Promise<void>;
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
-    resetSnowLuma: () => Promise<SnowLumaResetResult>;
     upgradeQqComponents: (component?: QqComponentUpgradeId) => Promise<QqComponentUpgradeResult>;
   };
   adapters: {

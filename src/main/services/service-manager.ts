@@ -26,9 +26,7 @@ import type { PtySessionManager } from "../pty/pty-session-manager";
 import { InitManager } from "./init-manager";
 import { LogStore } from "./log-store";
 import { PythonDependencyManager } from "./python-dependency-manager";
-import { SnowLumaWebuiAuth } from "./snowluma-webui-auth";
 import { defaultServiceStartupSettings, isLocalDashboardDevLaunch } from "./service-startup-defaults";
-import { prepareSnowLumaEntry } from "./snowluma-auto-inject";
 import { version as launcherVersion } from "../../../package.json";
 import { mergeProcessEnvironment } from "../process-environment";
 
@@ -172,7 +170,6 @@ function relocateBundledModuleReferences(value: string, paths: RuntimePaths): st
   return [
     [join(paths.bundledModulesRoot, "MaiBot"), paths.maibotRoot],
     [join(paths.bundledModulesRoot, "napcat"), paths.napcatRoot],
-    [join(paths.bundledModulesRoot, "SnowLuma"), paths.snowlumaRoot],
   ].reduce((nextValue, [search, replacement]) => replaceAllPathVariants(nextValue, search, replacement), value);
 }
 
@@ -292,6 +289,14 @@ class ServiceCommandStore {
     const command = (await this.read()).services[serviceId];
     if (!command) {
       return undefined;
+    }
+
+    if (serviceId === "napcat" && command.commandLine) {
+      const line = command.commandLine.replace(/\\/gu, "/").trim().toLowerCase();
+      const oldRoot = this.paths.snowlumaRoot?.replace(/\\/gu, "/").toLowerCase();
+      if ((oldRoot && line.includes(`${oldRoot}/`)) || line.includes(".maibot-target-runtime.mjs")
+        || (/^node(?:\.exe)?\s+["']?index\.mjs["']?(?:\s|$)/u.test(line)
+          && !existsSync(join(this.paths.napcatRoot, "index.mjs")))) return undefined;
     }
 
     return {
@@ -444,8 +449,6 @@ export class ServiceManager extends EventEmitter {
   private readonly startupSettingsStore: ServiceStartupSettingsStore;
   private readonly externalProcesses = new Map<ServiceId, ChildProcess>();
   private readonly logLineBuffers = new Map<ServiceId, string>();
-  private snowLumaWebuiAuth: SnowLumaWebuiAuth;
-  private snowLumaPasswordSaveInProgress = false;
 
   constructor(
     private readonly paths: RuntimePaths,
@@ -456,7 +459,6 @@ export class ServiceManager extends EventEmitter {
     private readonly operationLock = new RuntimeOperationLock(),
   ) {
     super();
-    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(paths.snowlumaRoot, paths.protocolSettingsRoot ?? paths.userDataRoot);
     this.commandStore = new ServiceCommandStore(paths);
     this.terminalSettingsStore = new TerminalSettingsStore(paths);
     this.startupSettingsStore = new ServiceStartupSettingsStore(paths);
@@ -555,9 +557,6 @@ export class ServiceManager extends EventEmitter {
   }
 
   private async startUnlocked(serviceId: ServiceId, resetRestartAttempts: boolean): Promise<ServiceDescriptor> {
-    if (serviceId === "napcat" && this.snowLumaPasswordSaveInProgress) {
-      throw new Error("正在保存 SnowLuma WebUI 密码，请稍后再启动 QQ 后端。");
-    }
     this.definitions = this.createDefinitions();
     let definition = this.getDefinition(serviceId);
     const state = this.getState(serviceId);
@@ -668,10 +667,6 @@ export class ServiceManager extends EventEmitter {
         const root = this.pythonDependencyManager.getPythonEnvRoot();
         Object.assign(mergedEnv, { PYTHONNOUSERSITE: "1", PYTHONPATH: "", PYTHONHOME: "", PYTHONSAFEPATH: "1",
           PATH: [root, join(root, "Scripts"), join(root, "bin"), process.env.PATH ?? process.env.Path ?? ""].join(delimiter) });
-      }
-      if (serviceId === "napcat" && this.initManager.getQqBackendSync() === "snowluma") {
-        mergedEnv.SNOWLUMA_WEBUI_TARGET = "maibot";
-        Object.assign(mergedEnv, await this.snowLumaWebuiAuth.prepareEnvironment());
       }
       if (serviceEnv[LOCAL_DASHBOARD_ENV_NAME]) {
         this.logs.append("maibot", "system", `local dashboard enabled: ${LOCAL_DASHBOARD_ENV_NAME}=1`);
@@ -1020,7 +1015,6 @@ export class ServiceManager extends EventEmitter {
 
   reloadRuntimePaths(): void {
     const previousMaiBotPort = this.getDefinition("maibot").port;
-    this.snowLumaWebuiAuth = new SnowLumaWebuiAuth(this.paths.snowlumaRoot, this.paths.protocolSettingsRoot ?? this.paths.userDataRoot);
     this.definitions = this.createDefinitions();
     const maibot = this.getState("maibot");
     if (!maibot.managed && previousMaiBotPort !== this.getDefinition("maibot").port) {
@@ -1070,11 +1064,6 @@ export class ServiceManager extends EventEmitter {
     const maibotRoot = this.paths.maibotRoot;
     const maibotWebUi = this.initManager.readMaiBotWebUiEndpointSync();
     const napcatRoot = this.paths.napcatRoot;
-    const qqBackend = this.initManager.getQqBackendSync();
-    const snowLumaPorts = qqBackend === "snowluma" ? this.initManager.readSnowLumaServicePortsSync() : { webui: 5099, onebot: 7988 };
-    const snowlumaRoot = this.paths.snowlumaRoot;
-    const snowlumaNode = join(snowlumaRoot, "node.exe");
-    const snowlumaEntry = join(snowlumaRoot, "index.mjs");
     const napcatExe = join(napcatRoot, "NapCatWinBootMain.exe");
     const napcatNode = join(napcatRoot, "node.exe");
     const napcatNodeEntry = join(napcatRoot, "index.js");
@@ -1105,26 +1094,15 @@ export class ServiceManager extends EventEmitter {
       },
       {
         id: "napcat",
-        name: qqBackend === "snowluma" ? "SnowLuma" : "NapCat",
-        detail: qqBackend === "snowluma" ? snowLumaPorts.error : undefined,
-        port: qqBackend === "snowluma" ? snowLumaPorts.webui : 6099,
-        ports: qqBackend === "snowluma" ? [snowLumaPorts.webui, snowLumaPorts.onebot] : [6099],
-        url: qqBackend === "snowluma" ? `http://127.0.0.1:${snowLumaPorts.webui}` : "http://127.0.0.1:6099/webui",
-        cwd: qqBackend === "snowluma" ? snowlumaRoot : napcatRoot,
-        defaultRequiredPaths: qqBackend === "snowluma"
-          ? [snowlumaRoot, snowlumaEntry]
-          : [
-              napcatRoot,
-              ...(process.platform === "darwin" ? [napcatMacLauncher, defaultMacQqExecutable] : []),
-            ],
-        conflictPorts: qqBackend === "snowluma" ? [snowLumaPorts.webui, snowLumaPorts.onebot] : [6099],
-        readyPorts: qqBackend === "snowluma" ? [snowLumaPorts.webui] : [6099],
+        name: "NapCat",
+        port: 6099,
+        ports: [6099],
+        url: "http://127.0.0.1:6099/webui",
+        cwd: napcatRoot,
+        defaultRequiredPaths: [napcatRoot, ...(process.platform === "darwin" ? [napcatMacLauncher, defaultMacQqExecutable] : [])],
+        conflictPorts: [6099],
+        readyPorts: [6099],
         displayDefaultCommandLine: async () => {
-          if (qqBackend === "snowluma") {
-            return existsSync(snowlumaNode)
-              ? `${quoteCommandPart(snowlumaNode)} index.mjs`
-              : "node index.mjs";
-          }
           if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
             return `/bin/bash ${quoteCommandPart(napcatMacLauncher)} -q <QQ>`;
           }
@@ -1134,14 +1112,6 @@ export class ServiceManager extends EventEmitter {
           return `${quoteCommandPart(napcatExe)} -q <QQ>`;
         },
         buildDefaultCommand: async () => {
-          if (qqBackend === "snowluma") {
-            if (snowLumaPorts.error) throw new Error(snowLumaPorts.error);
-            const account = this.initManager.getMessagePlatformQqAccount();
-            if (!account) throw new Error("请先在消息平台配置中填写机器人 QQ 号，再启动 SnowLuma。");
-            const entry = await prepareSnowLumaEntry(snowlumaRoot, account);
-            this.logs.append("napcat", "system", `SnowLuma 将持续检测并自动注入 QQ ${account}，其他 QQ 不会自动注入。`);
-            return [existsSync(snowlumaNode) ? snowlumaNode : "node", entry];
-          }
           const qq = this.initManager.getMessagePlatformQqAccount();
           await this.initManager.ensureNapCatWebUiConfig();
           if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
@@ -1162,11 +1132,6 @@ export class ServiceManager extends EventEmitter {
           return qq ? [napcatExe, "-q", qq] : [napcatExe];
         },
         buildDefaultCommandLine: async () => {
-          if (qqBackend === "snowluma") {
-            return existsSync(snowlumaNode)
-              ? `${quoteCommandPart(snowlumaNode)} index.mjs`
-              : "node index.mjs";
-          }
           await this.initManager.ensureNapCatWebUiConfig();
           if (process.platform === "darwin" && existsSync(napcatMacLauncher)) {
             return this.applyServicePlaceholders("napcat", `/bin/bash ${quoteCommandPart(napcatMacLauncher)} -q <QQ>`);
@@ -1426,9 +1391,6 @@ export class ServiceManager extends EventEmitter {
 
   private async resolveServiceUrl(serviceId: ServiceId, fallback: string): Promise<string> {
     if (serviceId === "napcat") {
-      if (this.initManager.getQqBackendSync() === "snowluma") {
-        return this.snowLumaWebuiAuth.resolveUrl(fallback);
-      }
       return this.resolveNapCatUrl(fallback);
     }
     if (serviceId === "maibot") {
@@ -1437,40 +1399,8 @@ export class ServiceManager extends EventEmitter {
     return fallback;
   }
 
-  async readQqWebuiTokens(): Promise<{ napcat?: string; snowluma?: string }> {
-    const [napcat, snowlumaUrl] = await Promise.all([
-      this.initManager.readNapCatWebUiToken(),
-      this.snowLumaWebuiAuth.resolveUrl("http://127.0.0.1:5099/"),
-    ]);
-    return {
-      napcat: napcat.token,
-      snowluma: new URL(snowlumaUrl).searchParams.get("token") ?? undefined,
-    };
-  }
-
-  async saveSnowLumaWebuiPassword(password: string): Promise<void> {
-    if (this.snowLumaPasswordSaveInProgress) throw new Error("正在保存 SnowLuma WebUI 密码，请稍后重试。");
-    this.snowLumaPasswordSaveInProgress = true;
-    try {
-      const state = this.getState("napcat");
-      if (this.initManager.getQqBackendSync() === "snowluma"
-        && (state.managed || state.desired || ["starting", "running", "stopping"].includes(state.status))) {
-        throw new Error("请先停止 SnowLuma，再保存 WebUI 密码。");
-      }
-      const runtime = await readFile(join(this.paths.snowlumaRoot, "config", "runtime.json"), "utf8")
-        .then((text) => JSON.parse(text)).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") throw error;
-          return {};
-        });
-      const port = Number(runtime.webuiPort || 5099);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SnowLuma WebUI 端口配置无效。");
-      const occupied = await Promise.all([probePort(port), probePort(port, "::1")]);
-      if (occupied.some(Boolean)) throw new Error(`SnowLuma WebUI 端口 ${port} 正在使用，请先停止服务再保存密码。`);
-      await this.snowLumaWebuiAuth.savePassword(password);
-      this.logs.append("napcat", "system", "SnowLuma WebUI 密码与自动登录凭据已更新。");
-    } finally {
-      this.snowLumaPasswordSaveInProgress = false;
-    }
+  async readQqWebuiTokens(): Promise<{ napcat?: string }> {
+    return { napcat: (await this.initManager.readNapCatWebUiToken()).token };
   }
 
   private async resolveNapCatUrl(fallback: string): Promise<string> {
@@ -1581,9 +1511,6 @@ export class ServiceManager extends EventEmitter {
 
     for (const line of lines) {
       if (line.length > 0) {
-        if (serviceId === "napcat" && this.initManager.getQqBackendSync() === "snowluma") {
-          this.snowLumaWebuiAuth.captureOutput(line);
-        }
         this.logs.append(serviceId, "stdout", line);
       }
     }

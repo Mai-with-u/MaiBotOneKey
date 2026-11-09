@@ -54,7 +54,7 @@ function ControlsPreview(): React.JSX.Element {
           <Button size="icon" variant="outline" aria-label="下载"><Download /></Button>
         </div>
         <div className="flex flex-wrap items-center gap-3"><Input aria-label="代理端口" placeholder="7890" className="w-32" /><label className="flex items-center gap-2 text-sm"><Switch checked={enabled} onCheckedChange={setEnabled} />启用代理</label><Switch aria-label="不可用开关" disabled /></div>
-        <SegmentedControl aria-label="协议端" value={protocol} onValueChange={setProtocol} options={[{ value: "napcat", label: "NapCat" }, { value: "snowluma", label: "SnowLuma" }, { value: "official", label: "官方 QQ", disabled: true }]} />
+        <SegmentedControl aria-label="协议端" value={protocol} onValueChange={setProtocol} options={[{ value: "napcat", label: "NapCat" }, { value: "official", label: "官方 QQ", disabled: true }]} />
       </SettingsSection>
       <div className="grid grid-cols-2 gap-2">
         <ChoiceCard selected={update === "maibot"} onClick={() => setUpdate("maibot")} title="MaiBot 更新" icon={<Radar />} description="1.3.8 → 1.3.9" />
