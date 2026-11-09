@@ -26,6 +26,8 @@ nativeTest("MaiBot gets bundled Git with no system Git and ignores a stale custo
     await symlink(bundled, join(runtimeRoot, "git"), "junction");
     await writeFile(join(runtimeRoot, "python/python.exe"), "fixture interpreter");
     await writeFile(join(root, "bot.py"), "# source fixture");
+    await mkdir(join(root, "dashboard", "dist"), { recursive: true });
+    await writeFile(join(root, "dashboard", "dist", "index.html"), "<!doctype html>");
     await writeFile(join(root, "runtime-paths.json"), JSON.stringify({ paths: { git: "Z:/missing/git.exe" } }));
     const paths = { maibotDevMode: "source", installRoot: root, userDataRoot: root, maibotRoot: root,
       runtimeRoot, bundledModulesRoot: root, napcatRoot: root, snowlumaRoot: root, logsRoot: root } as RuntimePaths;
@@ -39,6 +41,7 @@ nativeTest("MaiBot gets bundled Git with no system Git and ignores a stale custo
       start(request: { id: string; env: Record<string, string> }) {
         expect(request.env.MAIBOT_ONEKEY).toBe("1");
         expect(request.env.MAIBOT_ONEKEY_VERSION).toBe(launcherVersion);
+        expect(request.env.MAIBOT_WEBUI_USE_LOCAL_DASHBOARD).toBe("1");
         expect(request.env.GIT_PYTHON_GIT_EXECUTABLE).toBe(git);
         // The real child process must find Git using only the injected PATH.
         const child = Bun.spawnSync([process.env.ComSpec ?? "cmd.exe", "/d", "/c", "git --version"], {
