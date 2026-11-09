@@ -26,7 +26,7 @@ GitHub 继续保存正式发布；`Sync release to CNB` 工作流把指定正式
 ## 验证
 
 ```sh
-bun test scripts/tests/launcher-update-mirror.test.ts
+bun test scripts/tests/launcher/launcher-update-mirror.test.ts
 python -m unittest discover -s scripts/tests -p test_cnb_release_sync.py
 bun run typecheck
 ```
