@@ -2,10 +2,21 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { LauncherInstance } from "../../shared/contracts";
 import { componentDefaults, InstanceRegistry } from "./instance-registry";
-import { developmentRuntimeProfile, DEV_MODE_ENV, DEV_SOURCE_ENV, LOCAL_DASHBOARD_DEV_ENV, resolvePythonEnvironmentRoot } from "./service-startup-defaults";
+import { developmentFreshRoot, developmentRuntimeProfile, DEV_MODE_ENV, DEV_SOURCE_ENV, LOCAL_DASHBOARD_DEV_ENV, resolvePythonEnvironmentRoot } from "./service-startup-defaults";
 
 export const INSTANCE_RELAUNCH_ARG = "--onekey-instance-relaunch";
 export function configureDevelopmentInstances(installRoot: string, appDataRoot: string, env: NodeJS.ProcessEnv, switching = false) {
+  const freshRoot = developmentFreshRoot(installRoot, env);
+  if (freshRoot) {
+    const registry = new InstanceRegistry(join(freshRoot, "launcher"));
+    const instance: LauncherInstance = {
+      id: "dev-fresh", name: "MaiBot dev 临时测试",
+      settingsRoot: join(freshRoot, "settings"), resourceRoot: freshRoot,
+      paths: { ...componentDefaults(freshRoot), maibot: join(freshRoot, "MaiBot") },
+      development: { mode: "source", pythonRoot: join(freshRoot, "python-env"), localDashboard: true },
+    };
+    return { registry, active: registry.initializeDevelopment([instance], instance.id).instances[0] };
+  }
   const scope = createHash("sha256").update(installRoot).digest("hex").slice(0, 12);
   const base = join(appDataRoot, "MaiBotOneKeyDesktop");
   const registry = new InstanceRegistry(join(base, "development", scope, "launcher"));
@@ -25,7 +36,7 @@ export function configureDevelopmentInstances(installRoot: string, appDataRoot: 
     defaults.push({ id, name: defaults.length === 1 ? "源码调试实例" : "自定义源码调试实例",
       settingsRoot: join(base, `${scope}${profile.settingsSuffix}`), resourceRoot: profile.resourceRoot!,
       paths: { ...componentDefaults(profile.resourceRoot!), maibot: profile.sourceRoot! },
-      development: { mode: "source", pythonRoot: join(profile.resourceRoot!, "python-env"), localDashboard: env[DEV_MODE_ENV] === "source" && env[LOCAL_DASHBOARD_DEV_ENV] === "1" },
+      development: { mode: "source", pythonRoot: join(profile.resourceRoot!, "python-env"), localDashboard: true },
     });
   }
   const preferred = switching ? undefined : env[DEV_MODE_ENV] === "source" ? selectedSourceId : "dev-pypi";

@@ -20,9 +20,9 @@ Windows 安装器可选择首个实例的存放位置，留空使用原默认位
 
 ### 在开发模式测试多实例
 
-直接运行 `bun run dev` 即可使用多实例，列表默认包含「默认 PyPI 实例」和「源码调试实例」。两者沿用原开发目录、配置和独立运行环境；未准备源码时，先执行 `bun run dev:source:init`。普通启动选择 PyPI 实例，`dev:source` / `dev:dev` 选择源码实例；在界面中切换后的重启保留所选实例。使用 `--source` 的独立 checkout 会额外登记为源码实例。默认开发实例可改名，但不能移除。
+直接运行 `bun run dev` 即可使用多实例，列表默认包含「默认 PyPI 实例」和「源码调试实例」。两者沿用原开发目录、配置和独立运行环境；未准备源码时，先执行 `bun run dev:source`。普通启动选择 PyPI 实例，`dev:source` 选择源码实例；在界面中切换后的重启保留所选实例。使用 `--source` 的独立 checkout 会额外登记为源码实例。默认开发实例可改名，但不能移除。
 
-关闭原来的开发进程，运行 `bun run dev:instances`。此命令启用与安装版相同的实例管理，使用 `%APPDATA%/MaiBotOneKeyDesktop/dev-instances/<工作目录哈希>/` 下的隔离索引、设置和默认实例，不导入正式版或普通开发模式的数据。新建空目录实例后，可测试切换重启、独立配置、改名、组件迁移和移除登记；接入已有实例时建议选择测试副本。`bun run dev:instances --dry-run` 只打印启动方式，不打开 Electron。
+关闭原来的开发进程，运行 `bun run dev --instances`。此命令启用与安装版相同的实例管理，使用 `%APPDATA%/MaiBotOneKeyDesktop/dev-instances/<工作目录哈希>/` 下的隔离索引、设置和默认实例，不导入正式版或普通开发模式的数据。新建空目录实例后，可测试切换重启、独立配置、改名、组件迁移和移除登记；接入已有实例时建议选择测试副本。`bun run dev --instances --dry-run` 只打印启动方式，不打开 Electron。
 
 安装器的目录选择页仍需通过 Windows 安装包测试；上述开发命令用于应用内多实例流程，不模拟安装器。
 
@@ -35,39 +35,23 @@ bun run dev
 
 本地预览默认使用 `bun run dev`。除非特别说明要验证 `out/` 构建产物或发布形态，不要优先使用 `bun run preview`。
 
-启动入口明确区分 PyPI 与源码，避免根据目录里的旧文件意外选择运行方式：
+| 命令 | 用途 |
+| --- | --- |
+| `bun run dev` | 启动 PyPI 安装版 |
+| `bun run dev --instances` | 使用独立配置测试多实例 |
+| `bun run dev:source` | 启动 `modules/MaiBot-source`，目录缺失时克隆官方 `dev` 分支 |
+| `bun run dev:source --update` | 快进更新当前源码的 `dev` 分支，再启动 |
+| `bun run dev:source --build-dashboard` | 只重新构建源码 Dashboard |
+| `bun run dev:reset --source` | 清空默认源码实例的运行数据、Python 环境和首次引导状态 |
+| `bun run dev:reset --source --keep-deps` | 清空默认源码实例的运行数据和首次引导状态，保留 Python 和已安装的依赖 |
 
-| 命令 | MaiBot 核心 | Dashboard |
-| --- | --- | --- |
-| `bun run dev` / `bun run dev:pypi` | PyPI 安装版 | 默认使用已安装的 Dashboard 包 |
-| `bun run dev:source` | 本地源码 | 默认使用已安装的 Dashboard 包 |
-| `bun run dev:source:webui` | 本地源码 | 使用源码目录中的 `dashboard/dist` |
-| `bun run dev:dev` | `dev:source:webui` 的兼容别名 | 同上 |
+源码启动始终使用本地 Dashboard，缺少构建时自动构建。可用 `--source "C:\path\MaiBot"` 指定已有 checkout。先停止 Core 并退出开发窗口，再加 `--update` 快进同步 `origin/dev` 并重建 Dashboard。有未提交的改动或分支分叉时会停止。编辑 Python 后在一键包中重启 Core 即可加载改动。编辑 WebUI 后可用 `bun run dev:source --build-dashboard` 单独重建，支持加 `--source` 或 `--resume`，构建完刷新 WebUI。
 
-源码默认放在一键包工作目录下的 `modules/MaiBot-source`。首次准备和日常启动：
+要从头测试默认源码实例，先停止 Core 并退出一键包，再用 `bun run dev:reset --source --dry-run` 查看范围，确认后运行 `bun run dev:reset --source`。这会清理 `modules/MaiBot-source` 下的配置、Bot 数据、日志及对应 Python 环境，保留源码、插件目录、已构建的 WebUI 和共享 QQ 配置。随后运行 `bun run dev:source`，打开窗口后点击「启动 MaiBot」。旧的隔离测试目录仍可用 `--resume <run-目录名>` 打开。
 
-```powershell
-bun run dev:source:init
-bun run dev:source
-```
+启动命令支持 `--dry-run`，只打印计划，不创建目录、不下载、不启动 Electron。控件预览可用 `bun run vite --config vite.renderer.config.ts --open /controls.html`。测试用 `bun test scripts/tests`，也可按功能目录单独运行。
 
-`dev:source:init` 首次克隆官方仓库的 `dev` 分支，同时保留其他远端分支引用；已有源码时只检查并复用，不覆盖本地修改。源码目录不会进入一键包安装包。也可以指定已有 checkout（支持带空格的路径）：
-
-```powershell
-bun run dev:source --source "C:\path\MaiBot"
-
-# 同时调试工作目录内源码中的 Dashboard（首次构建会安装前端依赖）
-bun run dev:build
-bun run dev:dev
-```
-
-源码入口不会自动克隆、更新或覆盖代码，也不接受已经带有 `.onekey-deployment.json` 的 PyPI 实例目录。Python 直接运行该目录的 `bot.py`，编辑 Python 后在一键包中重启 Core 即可加载改动；编辑 Dashboard 后重新执行 `dev:build` 并刷新 WebUI。Electron/React 代码仍由 electron-vite 监听。
-
-每份源码使用独立的 `.cache/dev-source/<源码路径hash>/python-env`，首次从干净的基础 Python 创建，随后复用已安装依赖；MaiBot 运行设置和日志与 PyPI 实例隔离，NapCat、SnowLuma 及其账号配置由启动器共用。配置、数据和插件位于所选源码 checkout 内。源码调试期间禁用一键包对核心的安装、更新及源码目录迁移，更新源码请直接操作该仓库。
-
-命令指定本次启动的 Dashboard 初始选择，仍可在设置中手动调整。`dev:source:webui` 不自动构建，缺少 `dist/index.html` 会提示执行对应的 `dev:build`。所有启动变体支持 `--dry-run`，只验证并打印运行目录，不打开 Electron。
-
-从零重测 PyPI 首次引导时，先退出一键包和服务，再执行 `bun run dev:reset`、`bun run dev`。重置命令只处理 PyPI 测试实例，清空配置和数据，保留已安装环境；不处理独立的源码调试实例。
+需要重置 PyPI 测试实例时，先停止服务并退出一键包，用 `bun run dev:reset --dry-run` 查看清理范围。`bun run dev:reset` 清理测试数据和协议端配置，保留已安装的 MaiBot 环境；加 `--full` 会清理安装环境。
 
 ### Electron dev 启动排障
 
@@ -105,9 +89,9 @@ bun run build
 
 0.7.0 起，新实例默认通过 PyPI 安装 MaiBot，首次安装自动查询并安装当前 Python 包源中兼容的最新正式版，跳过预发布和开发版本；查询失败时提示重试，不回退固定版本，需要联网获取核心及依赖。实例目录保存 `config/`、`data/`、`plugins/`、`logs/`；`.onekey-deployment.json` 记录当前包版本和环境，`.onekey/environments/` 保存独立便携 Python 环境，`.onekey/snapshots/` 保存更新前配置、数据和完整插件快照。复制实例目录时会一并复制环境与快照，原实例保留。
 
-MaiBot 更新窗口的正式版和历史版本来自设置 → 通用中的 Python 包源。更新在独立环境中安装和校验包，切换环境后即完成，不启动 MaiBot，也不复制实例数据。初始化和迁移留到 MaiBot 启动时处理。「恢复上一环境」只切换程序和依赖；如果仍有旧版一键包创建的回滚快照，界面会提示恢复将替换哪些数据。启动器启动时清理未被引用的旧快照，保留回滚及中断恢复所需文件。
+MaiBot 更新窗口的正式版和历史版本来自设置 → 通用中的 Python 包源。更新在独立环境中安装和校验包，切换环境后即完成，不启动 MaiBot，也不复制实例数据。初始化和迁移留到 MaiBot 启动时处理。安装或验证失败时继续使用原环境，切换成功后清理旧环境。启动器启动时也会清理旧环境和旧快照，保留旧版更新中断恢复所需的文件。
 
-已有源码实例在更新窗口选择包版本，点击「迁移到 PyPI」即可升级。新环境通过验证并启用后，启动器删除实例目录中的旧源码和 Git 记录，保留配置、数据、插件和日志。OneKey 打开时也会检查当前 PyPI 实例，清理以前迁移留下的旧源码。回滚仅支持切回上一 PyPI 环境。源码调试使用独立源码目录。使用自定义启动命令的实例需要恢复默认命令或改用安装版入口。
+已有源码实例在更新窗口选择包版本，点击「迁移到 PyPI」即可升级。新环境通过验证并启用后，启动器删除实例目录中的旧源码和 Git 记录，保留配置、数据、插件和日志。OneKey 打开时也会检查当前 PyPI 实例，清理以前迁移留下的旧源码。源码调试使用独立源码目录。使用自定义启动命令的实例需要恢复默认命令或改用安装版入口。
 
 ## Windows 打包
 

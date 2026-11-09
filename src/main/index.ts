@@ -567,6 +567,9 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
     await maiBotDeploymentManager.cleanupUnusedGenerations("snapshots").catch((error) =>
       logStore.append("desktop", "system", `旧快照清理未完成：${String(error)}`),
     );
+    await maiBotDeploymentManager.cleanupUnusedGenerations("environments").catch((error) =>
+      logStore.append("desktop", "system", `旧环境清理未完成：${String(error)}`),
+    );
     await cleanupMaiBotPrivacyLeakOnStartup();
     await initManager
       .cleanupMacNapCatQqIntegration()

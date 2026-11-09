@@ -61,7 +61,7 @@ export function configureRuntimePaths(): RuntimePaths {
     defaults = active.paths;
     const mode = active.development?.mode ?? "pypi";
     process.env[DEV_MODE_ENV] = mode;
-    process.env[LOCAL_DASHBOARD_DEV_ENV] = active.development?.localDashboard ? "1" : "0";
+    process.env[LOCAL_DASHBOARD_DEV_ENV] = mode === "source" ? "1" : "0";
     if (mode === "source") process.env[DEV_SOURCE_ENV] = active.paths.maibot;
     else delete process.env[DEV_SOURCE_ENV];
     profile = developmentRuntimeProfile(installRoot, false);

@@ -1,20 +1,15 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { assertSourceCheckout, parseDevLaunchOptions } from "./dev-launch-options";
 
-async function main(): Promise<void> {
-  const options = parseDevLaunchOptions(process.argv.slice(2), resolve(import.meta.dir, "../.."), "source");
-  if (options.help) { console.log("bun run dev:build [--source <MaiBot 源码目录>]"); return; }
-  const dashboardRoot = resolve(assertSourceCheckout(options.sourceRoot), "dashboard");
-  if (!existsSync(resolve(dashboardRoot, "package.json"))) {
-    throw new Error(`本地 Dashboard 源码不存在：${dashboardRoot}`);
-  }
+export async function buildLocalDashboard(sourceRoot: string, dryRun: boolean, syncDependencies = false): Promise<void> {
+  const dashboardRoot = resolve(sourceRoot, "dashboard");
+  console.log(`[dev] 构建本地 MaiBot Dashboard：${dashboardRoot}`);
+  if (dryRun) return;
+  if (!existsSync(resolve(dashboardRoot, "package.json"))) throw new Error(`本地 Dashboard 源码不存在：${dashboardRoot}`);
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  console.log("[dev:build] 构建本地 MaiBot Dashboard…");
-  if (options.dryRun) { console.log(`[dev:build] ${dashboardRoot}`); return; }
-  if (!existsSync(resolve(dashboardRoot, "node_modules"))) {
-    console.log("[dev:build] 首次安装 Dashboard 依赖…");
+  if (syncDependencies || !existsSync(resolve(dashboardRoot, "node_modules"))) {
+    console.log("[dev] 准备 Dashboard 依赖…");
     const install = Bun.spawn([process.execPath, "install", ...(existsSync(resolve(dashboardRoot, "bun.lock")) ? ["--frozen-lockfile"] : [])], {
       cwd: dashboardRoot, env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
     });
@@ -25,7 +20,5 @@ async function main(): Promise<void> {
     env,
     stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
-  process.exit(await build.exited);
+  if (await build.exited !== 0) throw new Error("Dashboard 构建失败");
 }
-
-if (import.meta.main) await main();

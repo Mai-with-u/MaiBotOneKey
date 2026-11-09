@@ -25,7 +25,7 @@ function readLockPayload(lockPath: string): LockPayload | undefined {
 }
 
 
-export function acquireInstallInstanceLock(paths: RuntimePaths): InstallInstanceLock {
+export function acquireInstallInstanceLock(paths: Pick<RuntimePaths, "userDataRoot" | "installRoot">): InstallInstanceLock {
   mkdirSync(paths.userDataRoot, { recursive: true });
   const lockPath = join(paths.userDataRoot, "instance.lock");
   const payload: LockPayload = {

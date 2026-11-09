@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { homedir, platform } from "node:os";
 import { MAIBOT_DEPLOYMENT_FILE, readMaiBotDeployment } from "../../src/main/services/maibot-deployment-state";
+import { DEV_MODE_ENV, DEV_SOURCE_ENV, STARTUP_AGREEMENT_FILE, developmentRuntimeProfile } from "../../src/main/services/service-startup-defaults";
+import { resolveGitPath } from "../../src/main/services/git-runtime";
+import { runProcess } from "../../src/main/services/runtime-file-utils";
+import { acquireInstallInstanceLock } from "../../src/main/services/instance-lock";
+import { isLockOwnerAlive } from "../../src/main/services/lock-owner";
+import { assertSourceCheckout } from "./dev-launch-options";
 
 const RESOURCE_PATHS_FILE = "resource-paths.json";
 
@@ -114,6 +120,48 @@ async function removePath(path: string, label: string, dryRun: boolean): Promise
 }
 
 const COMPONENT_STATE_DIRECTORIES = ["config", "data", "logs", "cache", "temp", "tmp"] as const;
+const SOURCE_STATE_DIRECTORIES = [...COMPONENT_STATE_DIRECTORIES, "host", "bots"];
+
+function assertUnlinked(path: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink() || relative(path, realpathSync(path))) {
+      throw new Error(`源码重置目录不能指向其他位置：${path}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+export async function resetSourceState(installRoot: string, settingsBase: string, dryRun: boolean, keepDeps = false): Promise<void> {
+  const sourceRoot = join(installRoot, "modules", "MaiBot-source");
+  assertUnlinked(sourceRoot);
+  assertSourceCheckout(sourceRoot);
+  const git = await resolveGitPath(join(installRoot, "runtime"));
+  if (!git) throw new Error("未找到 Git，无法确认源码重置范围。");
+  const gitRoot = await runProcess(git, ["rev-parse", "--show-toplevel"], sourceRoot);
+  if (relative(sourceRoot, gitRoot)) throw new Error("MaiBot 源码目录必须是独立的 Git checkout。");
+  const tracked = await runProcess(git, ["ls-files", "--", ...SOURCE_STATE_DIRECTORIES], sourceRoot);
+  if (tracked) throw new Error(`源码重置范围内有 Git 跟踪的文件，已取消：\n${tracked}`);
+
+  const profile = developmentRuntimeProfile(installRoot, false, { [DEV_MODE_ENV]: "source", [DEV_SOURCE_ENV]: sourceRoot });
+  const userDataRoot = join(settingsBase, `${createInstallScope(installRoot)}${profile.settingsSuffix}`);
+  const targets: Array<{ path: string; label: string }> = [];
+  for (const name of SOURCE_STATE_DIRECTORIES) addTarget(targets, sourceRoot, name, `MaiBot 源码实例 ${name}`);
+  if (!keepDeps) addTarget(targets, profile.resourceRoot!, "python-env", "MaiBot 源码实例 Python 环境");
+  addTarget(targets, userDataRoot, STARTUP_AGREEMENT_FILE, "源码实例协议确认记录");
+  for (const path of [profile.resourceRoot!, userDataRoot, ...targets.map((target) => target.path)]) assertUnlinked(path);
+
+  const lock = dryRun ? undefined : acquireInstallInstanceLock({ installRoot, userDataRoot });
+  if (lock && !lock.acquired) throw new Error("请先停止 MaiBot 并退出源码开发窗口，再重置。");
+  try {
+    if (!dryRun && isLockOwnerAlive(readJsonFile(join(sourceRoot, "resource.lock")))) {
+      throw new Error("MaiBot 源码目录正在使用，请先停止服务并退出一键包。");
+    }
+    for (const target of targets) await removePath(target.path, target.label, dryRun);
+  } finally {
+    lock?.release();
+  }
+}
 
 export function fullResetTargets(maibotRoot: string): Array<{ path: string; label: string }> {
   assertNotFilesystemRoot(maibotRoot, "MaiBot full reset root");
@@ -198,8 +246,21 @@ async function addAdapterConfigTargets(
 }
 
 async function main(): Promise<void> {
-  const dryRun = process.argv.includes("--dry-run");
-  const full = process.argv.includes("--full");
+  const args = process.argv.slice(2).filter((arg) => arg !== "--");
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("bun run dev:reset [--full | --source [--keep-deps]] [--dry-run]");
+    return;
+  }
+  if (args.some((arg) => !["--full", "--source", "--keep-deps", "--dry-run"].includes(arg))) throw new Error(`未知重置参数：${args.join(" ")}`);
+  const dryRun = args.includes("--dry-run");
+  const full = args.includes("--full");
+  const keepDeps = args.includes("--keep-deps");
+  if (args.includes("--source")) {
+    if (full) throw new Error("--source 和 --full 不能混用。");
+    await resetSourceState(realpathSync(process.cwd()), join(appDataRoot(), "MaiBotOneKeyDesktop"), dryRun, keepDeps);
+    return;
+  }
+  if (keepDeps) throw new Error("--keep-deps 需与 --source 一起使用。普通 dev:reset 已保留 PyPI 安装环境。");
   const installRoot = resolve(process.cwd());
   const installScope = createInstallScope(installRoot);
   const userDataRoot = join(appDataRoot(), "MaiBotOneKeyDesktop", installScope);

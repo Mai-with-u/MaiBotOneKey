@@ -161,7 +161,7 @@ export class InstanceRegistry {
       if (!item) throw new Error("实例不存在。");
       const paths = this.effective(item);
       if (item.development?.mode === "source" && (!existsSync(join(paths.maibot, "bot.py")) || !existsSync(join(paths.maibot, "src")) || !existsSync(join(paths.maibot, "pyproject.toml")) || existsSync(join(paths.maibot, ".onekey-deployment.json")))) {
-        throw new Error("源码调试目录尚未准备好或已用于 PyPI 部署，请先运行 bun run dev:source:init，或使用独立的源码 checkout。");
+        throw new Error("源码调试目录尚未准备好或已用于 PyPI 部署，请先运行 bun run dev:source，或使用独立的源码 checkout。");
       }
       for (const path of [item.settingsRoot, ...Object.values(paths)]) {
         let parent = path;
