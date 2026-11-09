@@ -420,19 +420,46 @@ export class PythonDependencyManager {
 
   async installMaiBot(version: string, onOutput?: PythonOutputHandler, signal?: AbortSignal, constraints?: string, onPhase?: (phase: "core" | "dependencies") => void): Promise<PipInstallAttemptResult> {
     if (!/^[0-9][a-zA-Z0-9.!+_-]*$/u.test(version)) throw new Error("无效的 MaiBot 包版本");
-    const args = ["-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location", "--no-compile", "--timeout", "120", "--retries", "3", "--progress-bar", "off"];
+    const args = ["-I", "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location", "--no-compile", "--timeout", "120", "--retries", "3", "--progress-bar", onOutput ? "raw" : "off"];
     onPhase?.("core");
     const core = await this.installRequirementsIntoEnvironment(
       [...args, "--no-deps"], [`maibot==${version}`], signal, onOutput,
     );
     signal?.throwIfAborted();
     onPhase?.("dependencies");
+    if (!constraints) await this.seedBundledMaiBotDependencies(args, signal, onOutput);
     // Install only Core dependencies; Core manages plugin dependencies for all Bots.
     const dependencies = await this.installRequirementsIntoEnvironment(
       args,
       [`maibot==${version}`, ...(constraints ? ["--constraint", constraints] : [])], signal, onOutput,
     );
     return { sourceUrl: core.sourceUrl, output: [...core.output, ...dependencies.output] };
+  }
+
+  private async seedBundledMaiBotDependencies(
+    args: string[], signal?: AbortSignal, onOutput?: PythonOutputHandler,
+  ): Promise<void> {
+    if (!this.paths.runtimeRoot) return;
+    const wheels = join(this.paths.runtimeRoot, "python-wheels");
+    if (!existsSync(wheels)) return;
+    const selected = await this.runPython(["-I", "-c", [
+      "import sys",
+      "from importlib.metadata import requires",
+      "from pathlib import Path",
+      "from packaging.requirements import Requirement",
+      "from packaging.tags import sys_tags",
+      "from packaging.utils import canonicalize_name, parse_wheel_filename",
+      "requirements = [Requirement(value) for value in requires('maibot') or []]",
+      "supported_tags = set(sys_tags())",
+      "for wheel in sorted(Path(sys.argv[1]).glob('*.whl')):",
+      " name, version, _, tags = parse_wheel_filename(wheel.name)",
+      " if supported_tags.isdisjoint(tags): continue",
+      " if any(canonicalize_name(r.name) == name and (not r.marker or r.marker.evaluate()) and version in r.specifier for r in requirements):",
+      "  print(f'{name}=={version}')",
+    ].join("\n"), wheels], signal);
+    if (selected.length) {
+      await this.runPython([...args, "--no-index", "--no-deps", "--find-links", wheels, ...selected], signal, onOutput);
+    }
   }
 
   getPythonPath(): string {
@@ -811,7 +838,7 @@ export class PythonDependencyManager {
       "--no-compile",
       "--no-warn-script-location",
       "--progress-bar",
-      "off",
+      onOutput ? "raw" : "off",
     ];
     const result = await this.installRequirementsIntoEnvironment(
       baseArgs,
@@ -1291,6 +1318,7 @@ print(json.dumps(corrupt, ensure_ascii=False))
       let timeoutError: Error | undefined;
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      let lastDownloadProgressAt = 0;
       const timeout = setTimeout(() => {
         timeoutError = new Error(`Python command timed out after ${Math.round(timeoutMs / 1000)}s`);
         stopChild();
@@ -1298,9 +1326,24 @@ print(json.dumps(corrupt, ensure_ascii=False))
       }, timeoutMs);
 
       const emitLine = (line: string): void => {
-        const normalized = line.trimEnd();
+        let normalized = line.trimEnd();
         if (!normalized) {
           return;
+        }
+        // pip's raw progress reports bytes and uses zero for an unknown total.
+        const progress = /^Progress (\d+) of (\d+)$/u.exec(normalized.trimStart());
+        if (progress) {
+          const received = Number(progress[1]);
+          const total = Number(progress[2]);
+          const now = Date.now();
+          if (received !== 0 && received !== total && now - lastDownloadProgressAt < 3000) return;
+          lastDownloadProgressAt = now;
+          const formatSize = (bytes: number) => bytes < 1_000_000
+            ? `${(bytes / 1000).toFixed(1)} kB`
+            : `${(bytes / 1_000_000).toFixed(1)} MB`;
+          normalized = total > 0
+            ? `下载进度 ${formatSize(received)} / ${formatSize(total)}（${Math.min(100, Math.floor(received / total * 100))}%）`
+            : `已下载 ${formatSize(received)}`;
         }
         output.push(normalized);
         onOutput(normalized);

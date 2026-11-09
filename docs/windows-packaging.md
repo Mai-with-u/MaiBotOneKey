@@ -8,7 +8,7 @@
 
 安装包内置 SnowLuma。用户首次配置 NapCat 时，启动器从 GitHub 下载并安装。干净 Python 环境放入 `resources/runtime/python`，首次运行复制到可写的环境目录并安装 MaiBot 及依赖。
 
-`release:win:standard` 是默认打包命令的别名。
+Windows 安装包同时携带 `imageio-ffmpeg`、`playwright` 和 `jieba` 的 wheel 文件。创建 Python 环境时，启动器先从本地安装符合 MaiBot 版本要求的 wheel，再从用户配置的镜像补齐其余依赖。已安装的实例在正常启动时继续使用原有环境，按已有版本锁重建环境时也以版本锁为准。
 
 构建目录为 `release/standard`。安装程序与 blockmap 会复制到 `release` 根目录，根目录的 `latest.yml` 和 `latest-win.yml` 指向安装包。
 

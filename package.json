@@ -1,6 +1,6 @@
 {
   "name": "maibot-onekey-desktop",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Electron shell for MaiBot OK.",
   "author": "![1779700604525](image/package/1779700604525.png)MotricSeven",
   "license": "GPL-3.0-only",
@@ -8,18 +8,8 @@
   "main": "out/main/index.cjs",
   "scripts": {
     "dev": "bun run scripts/dev/start-dev.ts --mode pypi",
-    "dev:pypi": "bun run scripts/dev/start-dev.ts --mode pypi",
-    "dev:instances": "bun run scripts/dev/start-instances.ts",
-    "dev:source:init": "bun run scripts/dev/init-maibot-source.ts",
     "dev:source": "bun run scripts/dev/start-dev.ts --mode source",
-    "dev:source:webui": "bun run scripts/dev/start-dev.ts --mode source --local-dashboard",
-    "dev:dev": "bun run scripts/dev/start-dev.ts --mode source --local-dashboard",
-    "dev:build": "bun run scripts/dev/build-local-dashboard.ts",
     "dev:reset": "bun run scripts/dev/reset-dev-state.ts",
-    "dev:fullreset": "bun run scripts/dev/reset-dev-state.ts --full",
-    "dev:fresh": "bun run dev:reset && bun run dev",
-    "dev:web": "vite --config vite.renderer.config.ts",
-    "dev:ui": "vite --config vite.renderer.config.ts --open /controls.html",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
     "check": "bun run typecheck && bun run build",
@@ -28,8 +18,6 @@
     "release:check": "bun run scripts/release/check-windows-payload.ts",
     "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
     "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
-    "release:win:standard": "bun run release:win",
-    "pack:win": "bun run release:win",
     "test": "bun test scripts/tests"
   },
   "dependencies": {
@@ -109,6 +97,7 @@
           "**/*",
           "!opencode/**",
           "!python-full/**",
+          "!python-wheels/**",
           "!python/Doc/**",
           "!**/.git/**",
           "!**/__pycache__/**",
