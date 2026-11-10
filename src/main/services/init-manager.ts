@@ -285,17 +285,18 @@ export class InitManager {
   hasMessagePlatformConfigured() { return this.protocols.hasMessagePlatformConfigured(); }
   getMessagePlatformQqAccount(backend?: QqBackend) { return this.protocols.getMessagePlatformQqAccount(backend); }
   getQqBackendAccounts() { return this.protocols.getQqBackendAccounts(); }
+  hasInstalledSnowLuma() { return this.protocols.hasInstalledSnowLuma(); }
+  readSnowLumaServicePortsSync() { return this.protocols.readSnowLumaServicePortsSync(); }
   readNapcatWebsocketServer(account?: string) { return this.protocols.readNapcatWebsocketServer(account); }
   readNapcatWebsocketToken(account?: string) { return this.protocols.readNapcatWebsocketToken(account); }
   ensureNapCatWebUiConfig() { return this.protocols.ensureNapCatWebUiConfig(); }
   readNapCatWebUiToken() { return this.protocols.readNapCatWebUiToken(); }
   async saveQqBackendAccount(backend: QqBackend, account: string): Promise<void> {
-    if (backend !== "napcat") throw new Error("仅支持 NapCat 协议端。");
     await this.protocols.saveQqBackendAccount(backend, account);
   }
   async setQqBackend(backend: QqBackend, downloadNapCat = true): Promise<void> {
-    if (backend !== "napcat") throw new Error("仅支持 NapCat 协议端。");
-    if (this.needsNapCatDownload()) {
+    this.protocols.assertAvailableBackend(backend);
+    if (backend === "napcat" && this.needsNapCatDownload()) {
       if (!downloadNapCat) return this.protocols.setQqBackend(backend);
       await this.prepareOptionalNapCat();
     }
@@ -308,9 +309,9 @@ export class InitManager {
     } else await this.setQqBackend(protocol);
   }
   async setQqAccount(account: string, token?: string, backend: QqBackend = this.getQqBackendSync()): Promise<InitState> {
-    if (backend !== "napcat") throw new Error("仅支持 NapCat 协议端。");
+    this.protocols.assertAvailableBackend(backend);
     if (!normalizeQqAccount(account)) throw new Error("QQ 号必须是纯数字且不能为 0");
-    await this.prepareOptionalNapCat();
+    if (backend === "napcat") await this.prepareOptionalNapCat();
     await this.protocols.configureAccount(account, backend, token);
     await this.ensureServiceReady("napcat");
     return this.getState();
@@ -346,7 +347,9 @@ export class InitManager {
     const dependencyChecks = options.refreshDependencies === false
       ? this.getCachedDependencyChecks()
       : await this.checkDependencies();
-    const qqModuleChecks: InitCheck[] = napCatDownloadRequired
+    const qqModuleChecks: InitCheck[] = qqBackend === "snowluma"
+      ? [checkFile(join(this.paths.snowlumaRoot, "index.mjs"), "SnowLuma 启动文件", "snowluma-entry")]
+      : napCatDownloadRequired
         ? [{ id: "napcat-download", label: "NapCat 模块", status: "warning", detail: "在消息平台选择 NapCat 后从 GitHub 下载" }]
         : [
             checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
@@ -364,7 +367,7 @@ export class InitManager {
       ...dependencyChecks,
     ];
     const isReady = checks.every((check) => check.status !== "error");
-    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), napCatDownloadRequired, messagePlatformConfigured, checks };
+    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), snowLumaInstalled: this.hasInstalledSnowLuma(), napCatDownloadRequired, messagePlatformConfigured, checks };
   }
 
   async refreshDependencyChecks(): Promise<InitCheck[]> {
@@ -488,6 +491,7 @@ export class InitManager {
 
   async ensureServiceReady(serviceId: ServiceId, onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
     await mkdir(this.paths.logsRoot, { recursive: true });
+    if (serviceId === "napcat" && this.getQqBackendSync() === "snowluma") return [];
 
     if (!existsSync(this.paths.bundledModulesRoot)) {
       throw new Error(`内置 modules 模板缺失: ${this.paths.bundledModulesRoot}`);

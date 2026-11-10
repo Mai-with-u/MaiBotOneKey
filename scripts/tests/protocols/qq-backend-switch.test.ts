@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InitManager } from "../../../src/main/services/init-manager";
+import { ResourceLocationManager } from "../../../src/main/services/resource-location-manager";
 import type { InitState, QqBackend, RuntimePaths, ServiceId } from "../../../src/shared/contracts";
 
 const roots: string[] = [];
@@ -22,8 +23,11 @@ async function fixture() {
     pythonEnvRoot: join(root, "python-env"),
     logsRoot: join(root, "logs"),
     maibotRoot: join(root, "MaiBot"),
+    defaultMaibotRoot: join(root, "MaiBot"),
     napcatRoot: join(root, "napcat"),
+    defaultNapcatRoot: join(root, "napcat"),
     snowlumaRoot: join(root, "SnowLuma"),
+    defaultSnowlumaRoot: join(root, "SnowLuma"),
     userDataRoot: join(root, "userData"),
     bundledModulesRoot: join(root, "bundled"),
   } as RuntimePaths;
@@ -87,8 +91,10 @@ test("old SnowLuma selections fall back to NapCat without taking its account or 
   expect(manager.getQqBackendSync()).toBe("napcat");
   expect(manager.getQqProtocolSync()).toBe("napcat");
   expect(manager.getMessagePlatformQqAccount()).toBeUndefined();
-  await expect(manager.setQqBackend("snowluma")).rejects.toThrow("仅支持 NapCat");
-  await expect(manager.setQqAccount("123456", undefined, "snowluma")).rejects.toThrow("仅支持 NapCat");
+  expect(manager.hasInstalledSnowLuma()).toBe(false);
+  expect(new ResourceLocationManager(paths, false).getPathConfigs().map(({ key }) => key)).not.toContain("snowluma");
+  await expect(manager.setQqBackend("snowluma")).rejects.toThrow("没有可用的 SnowLuma 安装");
+  await expect(manager.setQqAccount("123456", undefined, "snowluma")).rejects.toThrow("没有可用的 SnowLuma 安装");
   expect(await readFile(selection, "utf8")).toBe(stored);
   expect(await readFile(join(config, "runtime.json"), "utf8")).toBe("keep old settings");
   const legacyCommand = JSON.stringify({ version: 1, services: { napcat: { commandLine: "node index.mjs" } } });
@@ -104,6 +110,59 @@ test("old SnowLuma selections fall back to NapCat without taking its account or 
   }
   await writeFile(selection, JSON.stringify({ backend: "snowluma", protocol: "official" }));
   expect(manager.getQqProtocolSync()).toBe("official");
+});
+
+test("an installed SnowLuma keeps its account, custom startup, WebUI port, and OneBot settings", async () => {
+  const { paths, manager } = await fixture();
+  const config = join(paths.snowlumaRoot, "config");
+  await mkdir(config, { recursive: true });
+  await mkdir(paths.userDataRoot, { recursive: true });
+  await writeFile(join(paths.snowlumaRoot, "index.mjs"), "existing SnowLuma fixture");
+  const selection = join(paths.userDataRoot, "qq-backend.json");
+  await writeFile(selection, JSON.stringify({ backend: "snowluma", protocol: "snowluma" }));
+  await writeFile(join(paths.userDataRoot, "message-platform.json"), JSON.stringify({ version: 1, backend: "snowluma", accounts: { snowluma: "654321" } }));
+  await writeFile(join(paths.userDataRoot, "service-commands.json"), JSON.stringify({ version: 1, services: { napcat: { commandLine: "node index.mjs" } } }));
+  const runtime = JSON.stringify({ webuiPort: 15099, otherSetting: true });
+  const onebot = JSON.stringify({ networks: { wsServers: [{ name: "Custom endpoint", host: "127.0.0.1", port: 17988, accessToken: "old-token" }] } });
+  await writeFile(join(config, "runtime.json"), runtime);
+  await writeFile(join(config, "onebot.json"), onebot);
+
+  const restarted = new InitManager(paths);
+  const state = await restarted.getState({ refreshDependencies: false });
+  expect(state.snowLumaInstalled).toBe(true);
+  expect(state.qqProtocol).toBe("snowluma");
+  expect(state.qqAccount).toBe("654321");
+  expect(new ResourceLocationManager(paths, false).getPathConfigs().map(({ key }) => key)).toContain("snowluma");
+  expect(await restarted.ensureServiceReady("napcat")).toEqual([]);
+  expect(await restarted.protocols.connection()).toEqual({ host: "127.0.0.1", port: 17988, token: "old-token" });
+  const pty = Object.assign(new EventEmitter(), { list: () => [] });
+  const services = new ServiceManager(paths, restarted, { append() {}, getServiceLogPath: () => join(paths.logsRoot, "test.log") } as any, pty as any);
+  try {
+    expect(services.snapshot().find(({ id }) => id === "napcat")).toMatchObject({
+      name: "SnowLuma", url: "http://127.0.0.1:15099", ports: [15099, 17988],
+    });
+    expect((await services.getCommandConfigs()).find(({ serviceId }) => serviceId === "napcat")).toMatchObject({
+      customized: true, commandLine: "node index.mjs",
+    });
+  } finally {
+    services.dispose();
+  }
+  await manager.setQqBackend("snowluma");
+  await manager.setQqAccount("654321", undefined, "snowluma");
+  expect(await readFile(join(config, "runtime.json"), "utf8")).toBe(runtime);
+  expect(await readFile(join(config, "onebot.json"), "utf8")).toBe(onebot);
+  expect(existsSync(join(config, "onebot_654321.json"))).toBe(false);
+  await restarted.protocols.saveQqProtocolSelection("official");
+  expect(restarted.getQqProtocolSync()).toBe("official");
+  expect(restarted.hasInstalledSnowLuma()).toBe(true);
+});
+
+test("a SnowLuma entry in bundled resources does not enable the legacy protocol", async () => {
+  const { paths } = await fixture();
+  paths.snowlumaRoot = join(paths.bundledModulesRoot, "SnowLuma");
+  await mkdir(paths.snowlumaRoot, { recursive: true });
+  await writeFile(join(paths.snowlumaRoot, "index.mjs"), "bundled SnowLuma fixture");
+  expect(new InitManager(paths).hasInstalledSnowLuma()).toBe(false);
 });
 
 async function endpoint(paths: RuntimePaths, backend: QqBackend) {

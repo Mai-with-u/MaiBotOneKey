@@ -348,6 +348,7 @@ export interface InitState {
   qqProtocol?: QqProtocol;
   qqOfficialConfigured?: boolean;
   napCatDownloadRequired?: boolean;
+  snowLumaInstalled?: boolean;
   messagePlatformConfigured: boolean;
   checks: InitCheck[];
   repairedAt?: number;
@@ -475,7 +476,7 @@ export interface QqAccountSetupRequest {
   websocketToken?: string;
 }
 
-export type MessagePlatformLoginInfo = Record<"napcat", { qqAccount?: string; webuiToken?: string }>;
+export type MessagePlatformLoginInfo = Record<QqBackend, { qqAccount?: string; webuiToken?: string }>;
 
 export interface ModuleUpdateResult {
   moduleId: "maibot";
@@ -715,6 +716,7 @@ export interface DesktopBridge {
   protocols: {
     getLoginInfo: () => Promise<MessagePlatformLoginInfo>;
     saveQqBackendAccount: (backend: QqBackend, account: string) => Promise<void>;
+    saveSnowLumaWebuiPassword: (password: string) => Promise<void>;
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
     upgradeQqComponents: (component?: QqComponentUpgradeId) => Promise<QqComponentUpgradeResult>;

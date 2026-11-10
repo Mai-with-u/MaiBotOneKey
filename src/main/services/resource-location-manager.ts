@@ -13,6 +13,7 @@ import type { RuntimePaths, RuntimeResourcePathChangeResult, RuntimeResourcePath
 import { applyRuntimeResourcePaths, LEGACY_RESOURCE_LOCATION_FILE, RESOURCE_PATHS_FILE } from "./runtime-resource-paths";
 import { RuntimeOperationLock } from "./runtime-operation-lock";
 import { readMaiBotDeployment } from "./maibot-deployment-state";
+import { hasInstalledSnowLuma } from "./protocol-backend-manager";
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
@@ -55,7 +56,6 @@ interface StoredResourcePathsFile {
 
 const RESOURCE_LOCK_FILE = "resource.lock";
 const RESOURCE_KEYS: RuntimeResourcePathKey[] = ["maibot", "napcat", "snowluma"];
-const ACTIVE_RESOURCE_KEYS = RESOURCE_KEYS.filter((key) => key !== "snowluma");
 
 function normalizePathForCompare(path: string): string {
   const resolved = canonicalPath(path);
@@ -135,17 +135,21 @@ export class ResourceLocationManager extends EventEmitter {
   }
 
   getPathConfigs(): RuntimeResourcePathConfig[] {
-    return ACTIVE_RESOURCE_KEYS.map((key) => {
+    return this.activeResourceKeys().map((key) => {
       const value = this.getPath(key), defaultValue = this.getDefaultPath(key);
       return { key, label: `${labelForKey(key)}${this.paths.instanceRegistryRoot && key !== "maibot" ? "（启动器共用）" : ""}`, value, defaultValue, customized: !samePath(value, defaultValue) };
     });
+  }
+
+  private activeResourceKeys(): RuntimeResourcePathKey[] {
+    return hasInstalledSnowLuma(this.paths) ? RESOURCE_KEYS : ["maibot", "napcat"];
   }
 
   acquireInitialLock(): ResourceLockAcquireResult {
     this.assertUniquePathSet(this.currentPathSet());
     if (!this.lockEnabled) return { acquired: true };
     const acquired: ResourceLock[] = [];
-    for (const key of ACTIVE_RESOURCE_KEYS) {
+    for (const key of this.activeResourceKeys()) {
       const result = this.acquireLockForPath(key, this.getPath(key));
       if (!result.acquired) { for (const lock of acquired) lock.release(); return result; }
       if (result.lock) acquired.push(result.lock);
@@ -296,7 +300,7 @@ export class ResourceLocationManager extends EventEmitter {
   }
   private async prepare(key: RuntimeResourcePathKey, targetText: string, mode: ResourcePathMode, signal: AbortSignal, initializeDefault = false): Promise<PreparedPath> {
     if (key === "maibot" && this.paths.maibotDevMode === "source") throw new Error("源码调试目录由 --source 指定，请退出后使用新的源码路径启动");
-    if (!RESOURCE_KEYS.includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
+    if (!this.activeResourceKeys().includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
     const target = this.normalizeTargetPath(targetText), source = this.getPath(key);
     this.assertCanUsePathSet(key, { ...this.currentPathSet(), [key]: target });
     if (!samePath(source, target) && isPathNestedEitherWay(source, target)) throw new Error("目标目录不能是当前目录的上级或子目录，请选择彼此独立的目录。");

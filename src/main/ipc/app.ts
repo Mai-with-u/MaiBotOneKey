@@ -1995,8 +1995,8 @@ export function registerAppIpc({
     },
   );
 
-  handleRuntimeMutation("adapters:setQqProtocol", async (_event, protocol: "napcat" | "official", options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
-    if (!["napcat", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
+  handleRuntimeMutation("adapters:setQqProtocol", async (_event, protocol: import("../../shared/contracts").QqProtocol, options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
+    if (!["napcat", "snowluma", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
     await serviceManager.refresh();
     const backendService = serviceManager.snapshot().find((service) => service.id === "napcat");
     if (protocol !== "official" && protocol !== initManager.getQqProtocolSync() && backendService && isRuntimeBusy(backendService)) {
@@ -2021,7 +2021,13 @@ export function registerAppIpc({
     const tokens = await serviceManager.readQqWebuiTokens();
     return {
       napcat: { qqAccount: accounts.napcat, webuiToken: tokens.napcat },
+      snowluma: initManager.hasInstalledSnowLuma() ? { qqAccount: accounts.snowluma, webuiToken: tokens.snowluma } : {},
     };
+  });
+
+  handleRuntimeMutation("protocols:saveSnowLumaWebuiPassword", async (_event, password: string) => {
+    await serviceManager.saveSnowLumaWebuiPassword(password);
+    await broadcastSnapshot();
   });
 
   handleRuntimeMutation("protocols:saveQqBackendAccount", async (_event, backend: QqBackend, account: string) => {
@@ -2037,7 +2043,7 @@ export function registerAppIpc({
   handleRuntimeMutation(
     "protocols:setQqBackend",
     async (_event, backend: QqBackend): Promise<InitState> => {
-      if (backend !== "napcat") {
+      if (backend !== "napcat" && backend !== "snowluma") {
         throw new Error("Unsupported QQ backend.");
       }
       await mutateQqBackendSafely(
@@ -2048,7 +2054,7 @@ export function registerAppIpc({
       logStore.append(
         "desktop",
         "system",
-        "QQ 后端已切换为 NapCat",
+        `QQ 后端已切换为 ${backend === "snowluma" ? "SnowLuma" : "NapCat"}`,
       );
       await broadcastSnapshot();
       return state;
@@ -2595,11 +2601,13 @@ export function registerAppIpc({
   );
 
   ipcMain.handle("resources:choosePath", async (_event, key: RuntimeResourcePathKey, mode: ResourcePathMode): Promise<string | null> => {
-    if (!["maibot", "napcat"].includes(key) || !["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
+    if (!["copy", "existing"].includes(mode)) throw new Error("无效的目录操作");
     return resourceLocationManager.withPathOperation(async () => {
       assertServicesStoppedForResourceMove();
       const window = getMainWindow();
-      const label = resourceLocationManager.getPathConfigs().find((config) => config.key === key)!.label;
+      const config = resourceLocationManager.getPathConfigs().find((config) => config.key === key);
+      if (!config) throw new Error("无效的目录操作");
+      const { label } = config;
       const options: Electron.OpenDialogOptions = {
         title: mode === "copy" ? `${label}：选择空目录作为复制目标（保留原目录）` : `${label}：选择已有组件目录`,
         properties: mode === "copy" ? ["openDirectory", "createDirectory"] : ["openDirectory"],

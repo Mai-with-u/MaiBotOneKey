@@ -136,6 +136,7 @@ const desktopBridge: DesktopBridge = {
   protocols: {
     getLoginInfo: () => ipcRenderer.invoke("protocols:getLoginInfo") as Promise<MessagePlatformLoginInfo>,
     saveQqBackendAccount: (backend: QqBackend, account: string) => ipcRenderer.invoke("protocols:saveQqBackendAccount", backend, account) as Promise<void>,
+    saveSnowLumaWebuiPassword: (password: string) => ipcRenderer.invoke("protocols:saveSnowLumaWebuiPassword", password) as Promise<void>,
     setQqBackend: (backend: QqBackend) =>
       ipcRenderer.invoke("protocols:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
