@@ -2665,14 +2665,33 @@ export function registerAppIpc({
     getMainWindow()?.minimize();
   });
 
-  ipcMain.handle("desktop:window:toggleMaximize", (): WindowState | void => {
+  const toggleShellMaximize = (): WindowState | void => {
     const window = getMainWindow();
     if (!window) return;
     if (miniMode) return applyMiniMode(false);
     return isShellWindowMaximized(window)
       ? restoreShellWindow(window)
       : maximizeShellWindow(window);
-  });
+  };
+  ipcMain.handle("desktop:window:toggleMaximize", toggleShellMaximize);
+
+  // Electron drag regions receive native caption clicks, not DOM double-clicks.
+  const captionDoubleClick = 0x00a3; // WM_NCLBUTTONDBLCLK
+  const hookedWindows = new Set<BrowserWindow>();
+  const hookCaptionDoubleClick = (window: BrowserWindow): void => {
+    if (process.platform !== "win32") return;
+    window.hookWindowMessage(captionDoubleClick, (hitTest) => {
+      if (window === getMainWindow() && hitTest.readInt32LE(0) === 2) {
+        toggleShellMaximize(); // HTCAPTION
+      }
+    });
+    hookedWindows.add(window);
+    window.once("closed", () => hookedWindows.delete(window));
+  };
+  const onWindowCreated = (_event: Electron.Event, window: BrowserWindow): void => hookCaptionDoubleClick(window);
+  const currentWindow = getMainWindow();
+  if (currentWindow) hookCaptionDoubleClick(currentWindow);
+  app.on("browser-window-created", onWindowCreated);
 
   ipcMain.handle("desktop:window:close", (): void => {
     getMainWindow()?.close();
@@ -2713,6 +2732,10 @@ export function registerAppIpc({
 
   return {
     dispose: () => {
+      app.off("browser-window-created", onWindowCreated);
+      for (const window of hookedWindows) {
+        if (!window.isDestroyed()) window.unhookWindowMessage(captionDoubleClick);
+      }
       autoStart.cancel();
       app.off("before-quit", cancelAutoStart);
       resourceLocationManager.off("operation-change", onResourceOperation);

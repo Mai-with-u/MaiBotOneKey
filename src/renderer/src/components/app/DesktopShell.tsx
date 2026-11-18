@@ -520,7 +520,6 @@ export function DesktopShell(): React.JSX.Element {
     if (target > 0) setBrandColumnWidth(target);
     webviewControlsRef.current?.setSidebarCollapsed(next);
   }, [webuiSidebarCollapsed]);
-  const [maibotCoreHost, setMaibotCoreHost] = useState<HTMLDivElement | null>(null);
   const [maibotUpdateHost, setMaibotUpdateHost] = useState<HTMLDivElement | null>(null);
   const [maibotWebviewPath, setMaibotWebviewPath] = useState<string | null>("/");
   const [maibotWebviewNavigationRequest, setMaibotWebviewNavigationRequest] = useState(0);
@@ -1017,6 +1016,21 @@ export function DesktopShell(): React.JSX.Element {
   // Until the first snapshot arrives, neither agreement nor preparation is known.
   const onboarding = !snapshot || preparing || agreementPending;
   const preloadMaiBot = preparing && !agreementPending && maibotService?.status === "running" && maibotService.health === "ready";
+  const messagePlatformPanel = snapshot ? (
+    <MessagePlatformPanel
+      updateToolbarTarget={maibotUpdateHost}
+      active={!onboarding && activeTab === "message-platform"}
+      updatesOnly={onboarding}
+      onOpenMaiBotHome={openMaiBotHome}
+      onOpenPluginConfig={openPluginConfig}
+      onOpenTerminalSession={openTerminalSession}
+      onSnapshot={setSnapshot}
+      onStartService={startService}
+      onStopService={stopService}
+      serviceActionBusy={actionBusy}
+      snapshot={snapshot}
+    />
+  ) : null;
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -1036,8 +1050,7 @@ export function DesktopShell(): React.JSX.Element {
           >
           <Titlebar
             serviceStatus={maibotService?.status}
-            coreHostRef={setMaibotCoreHost}
-            brand={onboarding ? <MaiBotOverviewCard localVersion={snapshot?.moduleVersions.maibotLocal} launcherVersion={snapshot?.appVersion ?? "0.7.0"} retro={useRetroChrome} /> : undefined}
+            brand={<MaiBotOverviewCard localVersion={snapshot?.moduleVersions.maibotLocal} launcherVersion={snapshot?.appVersion ?? "0.7.0"} retro={useRetroChrome} />}
             appVersion={snapshot?.appVersion ?? "0.1.0"}
             retro={useRetroChrome}
             navigation={onboarding ? undefined : navigationTabs}
@@ -1045,11 +1058,9 @@ export function DesktopShell(): React.JSX.Element {
             brandHome={!onboarding}
             sidebarToggle={!onboarding && brandColumnWidth ? { collapsed: webuiSidebarCollapsed, onToggle: toggleWebuiSidebar } : undefined}
             onBrandClick={onboarding || webuiHomeLocked ? undefined : goMaiBotHome}
-            actions={!onboarding && (
-              <>
-                {toolbarActions}
-              </>
-            )}
+            actions={onboarding
+              ? snapshot && !agreementPending ? <div className="flex items-center" ref={setMaibotUpdateHost} /> : undefined
+              : toolbarActions}
           />
 
           {!onboarding && actionError ? (
@@ -1093,6 +1104,7 @@ export function DesktopShell(): React.JSX.Element {
               </div> : <span role="status" className="sr-only">正在读取启动状态</span>}
             </main>
           )}
+          {onboarding && !agreementPending ? messagePlatformPanel : null}
           {/* Main */}
           {!onboarding || preloadMaiBot ? <main
             className="flex min-h-0 flex-1 flex-col"
@@ -1107,21 +1119,7 @@ export function DesktopShell(): React.JSX.Element {
               className={tabPageTransitionClassName}
               style={tabPageTransitionStyle("message-platform", activeTab, tabPageOrder)}
             >
-              {snapshot && !onboarding ? (
-                <MessagePlatformPanel
-                  coreToolbarTarget={maibotCoreHost}
-                  updateToolbarTarget={maibotUpdateHost}
-                  active={activeTab === "message-platform"}
-                  onOpenMaiBotHome={openMaiBotHome}
-                  onOpenPluginConfig={openPluginConfig}
-                  onOpenTerminalSession={openTerminalSession}
-                  onSnapshot={setSnapshot}
-                  onStartService={startService}
-                  onStopService={stopService}
-                  serviceActionBusy={actionBusy}
-                  snapshot={snapshot}
-                />
-              ) : (
+              {snapshot && !onboarding ? messagePlatformPanel : (
                 <div className="grid h-full place-items-center text-sm text-muted-foreground">
                   <span className="flex items-center gap-2">
                     <Loader2 className="size-3.5 animate-spin" />
