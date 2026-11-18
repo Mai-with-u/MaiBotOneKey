@@ -21,6 +21,10 @@ function fixture() {
   writeFileSync(join(legacy, "message-platform.json"), JSON.stringify({ version: 1, accounts: { snowluma: "12345678" } }));
   const first = registry.initialize(legacy, legacy).instances[0];
   const second = registry.create({ name: "second", mode: "new", paths: { maibot: join(root, "second-maibot") } }, []).instances[1];
+  const napcatRoot = registry.effective(first).napcat;
+  mkdirSync(napcatRoot, { recursive: true });
+  writeFileSync(join(napcatRoot, "index.js"), "existing NapCat");
+  writeFileSync(join(napcatRoot, "node.exe"), "existing node");
   const runtime = (item: LauncherInstance): RuntimePaths => {
     const shared = readSharedProtocols(registry.root)!;
     const paths = registry.effective(item);

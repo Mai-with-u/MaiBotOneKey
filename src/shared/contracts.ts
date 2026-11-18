@@ -347,7 +347,7 @@ export interface InitState {
   qqBackend: QqBackend;
   qqProtocol?: QqProtocol;
   qqOfficialConfigured?: boolean;
-  napCatDownloadRequired?: boolean;
+  napCatInstalled?: boolean;
   snowLumaInstalled?: boolean;
   messagePlatformConfigured: boolean;
   checks: InitCheck[];
@@ -432,24 +432,6 @@ export interface MaiBotStorageCleanupResult {
   removedEntries: string[];
   removedBytes: number;
   cleanedAt: number;
-}
-
-export type QqComponentUpgradeId = "napcat";
-
-export interface QqComponentUpgradeEntry {
-  id: QqComponentUpgradeId;
-  name: string;
-  root: string;
-  bundledRoot: string;
-  preservedEntries: string[];
-  copied: boolean;
-  skipped: boolean;
-  upgradedAt: number;
-}
-
-export interface QqComponentUpgradeResult {
-  components: QqComponentUpgradeEntry[];
-  upgradedAt: number;
 }
 
 export interface LauncherResetResult {
@@ -719,7 +701,6 @@ export interface DesktopBridge {
     saveSnowLumaWebuiPassword: (password: string) => Promise<void>;
     setQqBackend: (backend: QqBackend) => Promise<InitState>;
     setQqAccount: (request: QqAccountSetupRequest) => Promise<InitState>;
-    upgradeQqComponents: (component?: QqComponentUpgradeId) => Promise<QqComponentUpgradeResult>;
   };
   adapters: {
     syncQqConnections: () => Promise<InitRepairResult>;

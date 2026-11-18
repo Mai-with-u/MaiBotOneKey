@@ -1,11 +1,9 @@
 import { MaiBotHostClient } from "./maibot-host-client";
 import { importWorkspaceConfig, resetWorkspaceBotData, readWorkspaceBots, saveWorkspaceWebUiPort, type WorkspaceBot } from "./maibot-workspace";
 import { resolveGitPath } from "./git-runtime";
-import { ProtocolComponentManager } from "./protocol-component-manager";
 import { readMaiBotSetupStatus } from "./maibot-setup-client";
 import { runProcess, runWithoutAsar, samePath, sameOrInsidePath } from "./runtime-file-utils";
 import { ProtocolBackendManager } from "./protocol-backend-manager";
-import { hasWindowsNapCat, installWindowsNapCat } from "./napcat-download";
 import { normalizeQqAccount } from "../../shared/qq-account";
 import { MaiBotAdapterClient } from "./maibot-adapter-client";
 import type { MaiBotDeploymentManager } from "./maibot-deployment-manager";
@@ -28,8 +26,6 @@ import type {
   MaiBotDataResetResult,
   MaiBotModuleUpdateProgress,
   MaiBotSetupStatus,
-  QqComponentUpgradeResult,
-  QqComponentUpgradeId,
   QqBackend,
   QqProtocol,
   QqProtocolOptions,
@@ -238,7 +234,6 @@ function maibotInitialConfigVersion(templateVersion: string): string {
 export class InitManager {
   private dependencyCache?: { expiresAt: number; checks: InitCheck[] };
   private deploymentManager?: MaiBotDeploymentManager;
-  private napCatInstall?: Promise<void>;
 
   setDeploymentManager(manager: MaiBotDeploymentManager): void { this.deploymentManager = manager; }
   cancelMaiBotInstall(): boolean { return this.deploymentManager?.cancel() ?? false; }
@@ -252,7 +247,6 @@ export class InitManager {
     }
   }
 
-  readonly protocolComponents: ProtocolComponentManager;
   readonly protocols: ProtocolBackendManager;
   readonly adapters: MaiBotAdapterClient;
   readonly host: MaiBotHostClient;
@@ -266,13 +260,11 @@ export class InitManager {
     return this.chooseBot(bots, purpose);
   }
   constructor(private readonly paths: RuntimePaths) {
-    this.protocolComponents = new ProtocolComponentManager(paths);
     this.protocols = new ProtocolBackendManager(paths);
     this.host = new MaiBotHostClient(() => this.readMaiBotWebUiEndpointSync().url, async () => (await this.readMaiBotWebUiToken()).token);
     this.adapters = new MaiBotAdapterClient(this.host, async () => (await this.selectBot("配置 QQ 适配器")).bot_id);
   }
 
-  upgradeQqComponents(component?: QqComponentUpgradeId): Promise<QqComponentUpgradeResult> { return this.protocolComponents.upgradeQqComponents(component); }
   getQqBackendSync() { return this.protocols.getQqBackendSync(); }
   async getMaiBotSetupStatus(): Promise<MaiBotSetupStatus> {
     const credentials = await this.readMaiBotWebUiToken();
@@ -285,6 +277,7 @@ export class InitManager {
   hasMessagePlatformConfigured() { return this.protocols.hasMessagePlatformConfigured(); }
   getMessagePlatformQqAccount(backend?: QqBackend) { return this.protocols.getMessagePlatformQqAccount(backend); }
   getQqBackendAccounts() { return this.protocols.getQqBackendAccounts(); }
+  hasInstalledNapCat() { return this.protocols.hasInstalledNapCat(); }
   hasInstalledSnowLuma() { return this.protocols.hasInstalledSnowLuma(); }
   readSnowLumaServicePortsSync() { return this.protocols.readSnowLumaServicePortsSync(); }
   readNapcatWebsocketServer(account?: string) { return this.protocols.readNapcatWebsocketServer(account); }
@@ -294,12 +287,8 @@ export class InitManager {
   async saveQqBackendAccount(backend: QqBackend, account: string): Promise<void> {
     await this.protocols.saveQqBackendAccount(backend, account);
   }
-  async setQqBackend(backend: QqBackend, downloadNapCat = true): Promise<void> {
+  async setQqBackend(backend: QqBackend): Promise<void> {
     this.protocols.assertAvailableBackend(backend);
-    if (backend === "napcat" && this.needsNapCatDownload()) {
-      if (!downloadNapCat) return this.protocols.setQqBackend(backend);
-      await this.prepareOptionalNapCat();
-    }
     await this.protocols.setQqBackend(backend, () => this.ensureServiceReady("napcat"));
   }
   async setQqProtocol(protocol: QqProtocol, options: QqProtocolOptions = {}): Promise<void> {
@@ -311,7 +300,6 @@ export class InitManager {
   async setQqAccount(account: string, token?: string, backend: QqBackend = this.getQqBackendSync()): Promise<InitState> {
     this.protocols.assertAvailableBackend(backend);
     if (!normalizeQqAccount(account)) throw new Error("QQ 号必须是纯数字且不能为 0");
-    if (backend === "napcat") await this.prepareOptionalNapCat();
     await this.protocols.configureAccount(account, backend, token);
     await this.ensureServiceReady("napcat");
     return this.getState();
@@ -322,26 +310,8 @@ export class InitManager {
     return { state: await this.getState(), changedFiles: [] };
   }
 
-  private needsNapCatDownload(): boolean {
-    return process.platform === "win32" &&
-      !existsSync(join(this.paths.bundledModulesRoot, "napcat")) &&
-      !hasWindowsNapCat(this.paths.napcatRoot);
-  }
-
-  private async prepareOptionalNapCat(): Promise<void> {
-    if (this.napCatInstall) return this.napCatInstall;
-    if (!this.needsNapCatDownload()) return;
-    const python = this.getBundledPythonPath();
-    if (!python) throw new Error("缺少用于解压 NapCat 的内置 Python，请重新安装启动器。");
-    this.napCatInstall = installWindowsNapCat(this.paths.napcatRoot, python).finally(() => {
-      this.napCatInstall = undefined;
-    });
-    return this.napCatInstall;
-  }
-
   async getState(options: { refreshDependencies?: boolean } = {}): Promise<InitState> {
     const qqBackend = await this.readQqBackend();
-    const napCatDownloadRequired = this.needsNapCatDownload();
     const qqAccount = this.getMessagePlatformQqAccount(qqBackend);
     const messagePlatformConfigured = Boolean(qqAccount);
     const dependencyChecks = options.refreshDependencies === false
@@ -349,12 +319,10 @@ export class InitManager {
       : await this.checkDependencies();
     const qqModuleChecks: InitCheck[] = qqBackend === "snowluma"
       ? [checkFile(join(this.paths.snowlumaRoot, "index.mjs"), "SnowLuma 启动文件", "snowluma-entry")]
-      : napCatDownloadRequired
-        ? [{ id: "napcat-download", label: "NapCat 模块", status: "warning", detail: "在消息平台选择 NapCat 后从 GitHub 下载" }]
-        : [
+      : this.hasInstalledNapCat() ? [
             checkDir(this.paths.napcatRoot, "NapCat 模块", "napcat-module"),
             await this.checkNapCatWebUi(),
-          ];
+          ] : [];
     const checks: InitCheck[] = [
       this.checkRuntimeRoot(),
       this.checkPythonRuntime(),
@@ -367,7 +335,7 @@ export class InitManager {
       ...dependencyChecks,
     ];
     const isReady = checks.every((check) => check.status !== "error");
-    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), snowLumaInstalled: this.hasInstalledSnowLuma(), napCatDownloadRequired, messagePlatformConfigured, checks };
+    return { isReady, qqAccount, qqBackend, qqProtocol: this.getQqProtocolSync(), snowLumaInstalled: this.hasInstalledSnowLuma(), napCatInstalled: this.hasInstalledNapCat(), messagePlatformConfigured, checks };
   }
 
   async refreshDependencyChecks(): Promise<InitCheck[]> {
@@ -485,13 +453,18 @@ export class InitManager {
 
   async ensureModulesReady(onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
     const changedFiles = await this.ensureServiceReady("maibot", onProgress);
-    if (this.getQqBackendSync() === "napcat" && this.needsNapCatDownload()) return changedFiles;
+    if (this.getQqProtocolSync() === "official") return changedFiles;
     return [...changedFiles, ...(await this.ensureServiceReady("napcat"))];
   }
 
   async ensureServiceReady(serviceId: ServiceId, onProgress?: (progress: MaiBotModuleUpdateProgress) => void): Promise<string[]> {
     await mkdir(this.paths.logsRoot, { recursive: true });
-    if (serviceId === "napcat" && this.getQqBackendSync() === "snowluma") return [];
+    if (serviceId === "napcat") {
+      this.protocols.assertAvailableBackend(this.getQqBackendSync());
+      if (this.getQqBackendSync() === "snowluma" || !existsSync(join(this.paths.napcatRoot, "NapCatWinBootMain.exe"))) return [];
+      const launcher = await this.ensureNapCatLauncher();
+      return launcher ? [launcher] : [];
+    }
 
     if (!existsSync(this.paths.bundledModulesRoot)) {
       throw new Error(`内置 modules 模板缺失: ${this.paths.bundledModulesRoot}`);
@@ -508,43 +481,7 @@ export class InitManager {
       return [...changedFiles, ...(repairedConfig ? [repairedConfig] : [])];
     }
 
-    if (process.platform === "win32" && hasWindowsNapCat(this.paths.napcatRoot)) {
-      if (!existsSync(join(this.paths.napcatRoot, "NapCatWinBootMain.exe"))) return [];
-      const launcher = await this.ensureNapCatLauncher();
-      return launcher ? [launcher] : [];
-    }
-    if (this.needsNapCatDownload()) {
-      throw new Error("NapCat 尚未安装，请在消息平台选择并保存 NapCat，从 GitHub 下载安装。");
-    }
-
-    const napcatRequiredPaths = process.platform === "darwin"
-      ? [
-          "napcat.mjs",
-          "napcat-macos-launch.sh",
-          join("node_modules", "express", "package.json"),
-          join("node_modules", "ws", "package.json"),
-        ]
-      : [
-          "node.exe",
-          "index.js",
-          "config.json",
-          join("napcat", "package.json"),
-        ];
-    const changedFiles = await this.ensureBundledModuleSubtree("napcat", napcatRequiredPaths, {
-      excludeRelativePaths: [
-        "config",
-        "data",
-        "logs",
-        join("napcat", "config"),
-        join("napcat", "data"),
-        join("napcat", "logs"),
-      ],
-    });
-    const launcher = await this.ensureNapCatLauncher();
-    if (launcher) {
-      changedFiles.push(launcher);
-    }
-    return changedFiles;
+    return [];
   }
 
   /**

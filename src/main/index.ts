@@ -11,7 +11,7 @@ import {
   shell,
   Tray,
 } from "electron";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -123,7 +123,6 @@ const maiBotDeploymentManager = new MaiBotDeploymentManager(runtimePaths, source
 initManager.setDeploymentManager(maiBotDeploymentManager);
 moduleUpdater.setDeploymentManager(maiBotDeploymentManager);
 const ptySessionManager = new PtySessionManager();
-const QQ_COMPONENT_UPGRADE_STATE_FILE = "qq-component-upgrade-state.json";
 const serviceManager = new ServiceManager(
   runtimePaths,
   initManager,
@@ -271,60 +270,6 @@ async function cleanupMaiBotPrivacyLeakOnStartup(): Promise<void> {
   } catch (error: unknown) {
     logStore.append("desktop", "system", `清理失败: ${String(error)}`);
   }
-}
-
-async function upgradeQqComponentsAfterLauncherUpdate(): Promise<void> {
-  const statePath = join(
-    runtimePaths.protocolSettingsRoot ?? runtimePaths.userDataRoot,
-    QQ_COMPONENT_UPGRADE_STATE_FILE,
-  );
-  const currentVersion = app.getVersion();
-  const rawState = await readFile(statePath, "utf8").catch(() => undefined);
-  let previousVersion: unknown;
-  if (rawState) {
-    try {
-      previousVersion = (JSON.parse(rawState) as { launcherVersion?: unknown })
-        .launcherVersion;
-    } catch {
-      previousVersion = undefined;
-    }
-  }
-  if (previousVersion === currentVersion) {
-    return;
-  }
-
-  const result = await initManager.upgradeQqComponents();
-  await mkdir(runtimePaths.userDataRoot, { recursive: true });
-  await writeFile(
-    statePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        launcherVersion: currentVersion,
-        upgradedAt: Date.now(),
-        components: result.components.map((component) => ({
-          id: component.id,
-          copied: component.copied,
-          skipped: component.skipped,
-          preservedEntries: component.preservedEntries.length,
-        })),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  const summary = result.components
-    .map(
-      (component) =>
-        `${component.name}${component.skipped ? " skipped" : ` preserved ${component.preservedEntries.length}`}`,
-    )
-    .join(", ");
-  logStore.append(
-    "desktop",
-    "system",
-    `QQ backend components auto-upgraded for ${currentVersion}: ${summary}`,
-  );
 }
 
 function formatCleanupFailures(
@@ -590,13 +535,6 @@ if (!instanceLock.acquired || !resourceLock.acquired) {
         "desktop",
         "system",
         `network proxy apply failed: ${String(error)}`,
-      );
-    });
-    await upgradeQqComponentsAfterLauncherUpdate().catch((error: unknown) => {
-      logStore.append(
-        "desktop",
-        "system",
-        `QQ backend components auto-upgrade failed: ${String(error)}`,
       );
     });
     mainWindow = createMainWindow();

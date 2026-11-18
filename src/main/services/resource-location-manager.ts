@@ -13,7 +13,7 @@ import type { RuntimePaths, RuntimeResourcePathChangeResult, RuntimeResourcePath
 import { applyRuntimeResourcePaths, LEGACY_RESOURCE_LOCATION_FILE, RESOURCE_PATHS_FILE } from "./runtime-resource-paths";
 import { RuntimeOperationLock } from "./runtime-operation-lock";
 import { readMaiBotDeployment } from "./maibot-deployment-state";
-import { hasInstalledSnowLuma } from "./protocol-backend-manager";
+import { hasInstalledNapCat, hasInstalledSnowLuma } from "./protocol-backend-manager";
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
@@ -142,7 +142,7 @@ export class ResourceLocationManager extends EventEmitter {
   }
 
   private activeResourceKeys(): RuntimeResourcePathKey[] {
-    return hasInstalledSnowLuma(this.paths) ? RESOURCE_KEYS : ["maibot", "napcat"];
+    return RESOURCE_KEYS.filter((key) => key === "maibot" || (key === "napcat" ? hasInstalledNapCat(this.paths) : hasInstalledSnowLuma(this.paths)));
   }
 
   acquireInitialLock(): ResourceLockAcquireResult {

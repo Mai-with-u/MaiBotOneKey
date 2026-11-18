@@ -1,11 +1,11 @@
 import { normalizeQqAccount } from "@shared/qq-account";
-import { Download, Loader2, RefreshCw, Save, Settings } from "lucide-react";
+import { Loader2, RefreshCw, Save, Settings } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { DesktopSnapshot, MessagePlatformLoginInfo, QqBackend } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isValidPortText, readQqWebuiPort, saveQqWebuiPort } from "@/lib/qq-webui-port";
@@ -53,20 +53,16 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
   }, [open]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmQqComponentsUpgradeOpen, setConfirmQqComponentsUpgradeOpen] = useState(false);
-  const reinstallComponentLabel = "NapCat";
   const snowLumaInstalled = snapshot.initState.snowLumaInstalled === true;
-  const visibleBackends = qqBackendOptions.filter(({ value }) => value === "napcat" || snowLumaInstalled);
+  const napCatInstalled = snapshot.initState.napCatInstalled === true;
+  const visibleBackends = qqBackendOptions.filter(({ value }) => value === "napcat" ? napCatInstalled : snowLumaInstalled);
   const readBackendPort = (backend: QqBackend): string => readQqWebuiPort(backend,
     backend === snapshot.initState.qqBackend ? snapshot.services.find((service) => service.id === "napcat")?.url : undefined);
   const [qqWebuiPorts, setQqWebuiPorts] = useState<Record<QqBackend, string>>(() => ({
     napcat: readBackendPort("napcat"), snowluma: readBackendPort("snowluma"),
   }));
-  const qqComponentsChangeBlocked = snapshot.services.some((service) =>
-    service.id === "napcat" && (service.managed || service.status === "starting" || service.status === "running" || service.status === "stopping"),
-  );
-  const qqWebuiPortsDirty = qqWebuiPorts.napcat !== readBackendPort("napcat") || (snowLumaInstalled && qqWebuiPorts.snowluma !== readBackendPort("snowluma"));
-  const qqWebuiPortsValid = isValidPortText(qqWebuiPorts.napcat) && (!snowLumaInstalled || isValidPortText(qqWebuiPorts.snowluma));
+  const qqWebuiPortsDirty = (napCatInstalled && qqWebuiPorts.napcat !== readBackendPort("napcat")) || (snowLumaInstalled && qqWebuiPorts.snowluma !== readBackendPort("snowluma"));
+  const qqWebuiPortsValid = (!napCatInstalled || isValidPortText(qqWebuiPorts.napcat)) && (!snowLumaInstalled || isValidPortText(qqWebuiPorts.snowluma));
   const snowLumaPasswordDirty = loginInfo !== null && snowLumaPassword !== (loginInfo.snowluma.webuiToken ?? "");
   const snowLumaRunning = snapshot.initState.qqBackend === "snowluma" && snapshot.services.some((service) =>
     service.id === "napcat" && (service.managed || ["starting", "running", "stopping"].includes(service.status)),
@@ -112,29 +108,6 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
       setBusy(null);
     }
   };
-  const upgradeQqComponents = useCallback(async () => {
-    if (qqComponentsChangeBlocked) {
-      setError(`请先停止 QQ 协议端，再重新安装 ${reinstallComponentLabel}。`);
-      return;
-    }
-
-    setBusy("qq-components:upgrade");
-    setError(null);
-    try {
-      const bridge = window.maibotDesktop;
-      if (!bridge) throw new Error("无法连接启动器");
-      const result = await bridge.protocols.upgradeQqComponents("napcat");
-      setConfirmQqComponentsUpgradeOpen(false);
-      const preservedCount = result?.components.reduce((total, component) => total + component.preservedEntries.length, 0) ?? 0;
-      toast.success(`NapCat 已重新安装，保留 ${preservedCount} 项配置与数据`);
-      await refreshSnapshot();
-    } catch (nextError) {
-      setError(messageFromError(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }, [qqComponentsChangeBlocked, refreshSnapshot]);
-
   const saveQqWebuiPorts = useCallback(() => {
     if (!qqWebuiPortsValid) {
       setError("请填写 1-65535 之间的 WebUI 端口。");
@@ -142,11 +115,11 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
     }
 
     setError(null);
-    const napcat = saveQqWebuiPort("napcat", qqWebuiPorts.napcat);
+    const napcat = napCatInstalled ? saveQqWebuiPort("napcat", qqWebuiPorts.napcat) : qqWebuiPorts.napcat;
     const snowluma = snowLumaInstalled ? saveQqWebuiPort("snowluma", qqWebuiPorts.snowluma) : qqWebuiPorts.snowluma;
     setQqWebuiPorts({ napcat, snowluma });
     toast.success("消息平台 WebUI 端口已保存");
-  }, [qqWebuiPorts.napcat, qqWebuiPorts.snowluma, qqWebuiPortsValid, snowLumaInstalled]);
+  }, [qqWebuiPorts.napcat, qqWebuiPorts.snowluma, qqWebuiPortsValid, snowLumaInstalled, napCatInstalled]);
 
   const syncConnections = async () => {
     setBusy("qq-connections:sync");
@@ -193,12 +166,11 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
         <DialogContent aria-describedby={undefined} className="grid-rows-[minmax(0,1fr)_auto]" size="lg">
           <DialogTitle className="sr-only">消息平台高级设置</DialogTitle>
           <DialogBody className="space-y-4 pt-12">
-            {error && !confirmQqComponentsUpgradeOpen ? <p className="text-xs text-destructive">{error}</p> : null}
-            <Tabs defaultValue="ports" className="space-y-4">
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+            <Tabs defaultValue={visibleBackends.length ? "ports" : "connections"} className="space-y-4">
               <TabsList className="flex h-auto flex-wrap">
-                <TabsTrigger value="ports">WebUI 端口</TabsTrigger>
+                {visibleBackends.length ? <TabsTrigger value="ports">WebUI 端口</TabsTrigger> : null}
                 <TabsTrigger value="connections">连接配置</TabsTrigger>
-                {snapshot.platform === "darwin" ? <TabsTrigger value="reinstall">重新安装</TabsTrigger> : null}
               </TabsList>
               <TabsContent value="ports" className="space-y-4">
                 <div className="settings-section grid gap-3 bg-muted/40 p-3">
@@ -323,28 +295,6 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
                   </div>
                 </div>
               </TabsContent>
-              <TabsContent value="reinstall" className="space-y-3">
-                {qqComponentsChangeBlocked ? <p className="text-xs text-warning-foreground">QQ 协议端仍在运行，请先停止协议端。</p> : null}
-                <div className="settings-section flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">重新安装 {reinstallComponentLabel}</p>
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      使用当前一键包内置组件覆盖程序文件，保留配置、数据和日志。
-                    </p>
-                  </div>
-                  <Button
-                    disabled={busy !== null || qqComponentsChangeBlocked}
-                    onClick={() => {
-                      setError(null);
-                      setConfirmQqComponentsUpgradeOpen(true);
-                    }}
-                    variant="secondary"
-                  >
-                    {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
-                    重新安装
-                  </Button>
-                </div>
-              </TabsContent>
             </Tabs>
           </DialogBody>
           <DialogFooter>
@@ -352,46 +302,6 @@ export function MessagePlatformAdvancedSettings({ snapshot, refreshSnapshot, dis
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    <Dialog
-      open={confirmQqComponentsUpgradeOpen}
-      onOpenChange={(next) => {
-        if (!next && busy !== "qq-components:upgrade") setConfirmQqComponentsUpgradeOpen(false);
-      }}
-    >
-      <DialogContent size="md">
-      <DialogHeader
-        description="这会用一键包内置的 NapCat 程序文件覆盖现有组件。"
-        icon={<Download className="size-4" />}
-        title="确认重新安装？"
-        tone="warning"
-      />
-      <DialogBody className="space-y-3 text-sm">
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
-        <div className="rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          配置、数据和日志会被保留；执行前请确认 MaiBot Core 与 QQ 后端都已停止。
-        </div>
-        {qqComponentsChangeBlocked ? (
-          <div className="rounded-md border border-warning/30 bg-warning/15 px-3 py-2 text-xs text-warning-foreground">
-            MaiBot Core 或 QQ 后端仍在运行，请先停止全部服务。
-          </div>
-        ) : null}
-      </DialogBody>
-      <DialogFooter>
-        <Button disabled={busy === "qq-components:upgrade"} onClick={() => setConfirmQqComponentsUpgradeOpen(false)} size="sm" variant="ghost">
-          取消
-        </Button>
-        <Button
-          disabled={busy === "qq-components:upgrade" || qqComponentsChangeBlocked}
-          onClick={upgradeQqComponents}
-          size="sm"
-          variant="secondary"
-        >
-          {busy === "qq-components:upgrade" ? <Loader2 className="animate-spin" /> : <Download />}
-          重新安装
-        </Button>
-      </DialogFooter>
-      </DialogContent>
-    </Dialog>
     </>
   );
 }

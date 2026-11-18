@@ -47,6 +47,23 @@ export function hasInstalledSnowLuma({ snowlumaRoot, bundledModulesRoot }: Pick<
   }
 }
 
+export function hasInstalledNapCat({ napcatRoot, bundledModulesRoot }: Pick<RuntimePaths, "napcatRoot" | "bundledModulesRoot">): boolean {
+  if (!napcatRoot) return false;
+  if (bundledModulesRoot) {
+    const fromBundle = relative(bundledModulesRoot, napcatRoot);
+    if (!isAbsolute(fromBundle) && fromBundle !== ".." && !fromBundle.startsWith(`..${sep}`)) return false;
+  }
+  const file = (name: string) => statSync(join(napcatRoot, name), { throwIfNoEntry: false })?.isFile() === true;
+  const directory = (name: string) => statSync(join(napcatRoot, name), { throwIfNoEntry: false })?.isDirectory() === true;
+  try {
+    if (file("NapCatWinBootMain.exe") && (directory("napcat") || directory("versions"))) return true;
+    if (file("index.js") && (process.platform !== "win32" || file("node.exe"))) return true;
+    return process.platform === "darwin" && file("napcat.mjs") && file("napcat-macos-launch.sh");
+  } catch {
+    return false;
+  }
+}
+
 /** Owns protocol configuration only. No MaiBot paths, plugin files, or runtime APIs. */
 export class ProtocolBackendManager {
   constructor(private readonly paths: Pick<RuntimePaths, "userDataRoot" | "protocolSettingsRoot" | "napcatRoot" | "snowlumaRoot" | "bundledModulesRoot">) {}
@@ -54,9 +71,13 @@ export class ProtocolBackendManager {
     return hasInstalledSnowLuma(this.paths);
   }
 
+  hasInstalledNapCat(): boolean {
+    return hasInstalledNapCat(this.paths);
+  }
+
   assertAvailableBackend(backend: QqBackend): void {
-    if (backend === "napcat" || (backend === "snowluma" && this.hasInstalledSnowLuma())) return;
-    throw new Error("当前实例没有可用的 SnowLuma 安装。");
+    if ((backend === "napcat" && this.hasInstalledNapCat()) || (backend === "snowluma" && this.hasInstalledSnowLuma())) return;
+    throw new Error(`当前实例没有可用的 ${backend === "napcat" ? "NapCat" : "SnowLuma"} 安装，仅支持继续使用已有客户端。`);
   }
 
   getQqBackendSync(): QqBackend {
@@ -81,7 +102,8 @@ export class ProtocolBackendManager {
     } catch {
       // Existing installations use their saved QQ backend.
     }
-    return this.getQqBackendSync();
+    const backend = this.getQqBackendSync();
+    return (backend === "napcat" ? this.hasInstalledNapCat() : this.hasInstalledSnowLuma()) ? backend : "official";
   }
 
   async saveQqProtocolSelection(protocol: QqProtocol): Promise<void> {
@@ -535,7 +557,10 @@ export class ProtocolBackendManager {
       await this.selectBackend(backend);
       await prepare();
       const account = this.getMessagePlatformQqAccount(backend);
-      if (account && (backend !== "snowluma" || !existsSync(this.snowLumaOneBotConfigPath(account)))) {
+      const hasConnection = backend === "snowluma"
+        ? Boolean(account && existsSync(this.snowLumaOneBotConfigPath(account)))
+        : Boolean(account && await this.readNapcatWebsocketServer(account));
+      if (account && !hasConnection) {
         await this.configureAccount(account, backend);
       }
     } catch (error) {
@@ -561,7 +586,12 @@ export class ProtocolBackendManager {
         await this.createSnowLumaConfigs(normalized, resolvedToken, port);
       }
     }
-    else { await this.createNapCatConfigs(normalized, resolvedToken, port); await this.ensureNapCatWebUiConfig(); }
+    else {
+      if (!existing || (token !== undefined && token !== existing.token)) {
+        await this.createNapCatConfigs(normalized, resolvedToken, port);
+      }
+      await this.ensureNapCatWebUiConfig();
+    }
     await this.markMessagePlatformConfigured(backend, normalized, true);
     await this.selectBackend(backend);
     return backend === "snowluma"

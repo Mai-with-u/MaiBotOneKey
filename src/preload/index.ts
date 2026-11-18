@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { MessagePlatformLoginInfo, QqProtocol, QqProtocolOptions, QqComponentUpgradeId } from "../shared/contracts";
+import type { MessagePlatformLoginInfo, QqProtocol, QqProtocolOptions } from "../shared/contracts";
 import type {
   CloseAction,
   AppIconId,
@@ -43,7 +43,6 @@ import type {
   PtyStopRequest,
   QqBackend,
   QqAccountSetupRequest,
-  QqComponentUpgradeResult,
   RuntimeResourcePathChangeResult,
   RuntimeResourcePathKey,
   ResourcePathMode,
@@ -141,8 +140,6 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke("protocols:setQqBackend", backend) as Promise<InitState>,
     setQqAccount: (request: QqAccountSetupRequest) =>
       ipcRenderer.invoke("protocols:setQqAccount", request) as Promise<InitState>,
-    upgradeQqComponents: (component?: QqComponentUpgradeId) =>
-      ipcRenderer.invoke("protocols:upgradeQqComponents", component) as Promise<QqComponentUpgradeResult>,
   },
   adapters: {
     syncQqConnections: () => ipcRenderer.invoke("adapters:syncQqConnections") as Promise<InitRepairResult>,

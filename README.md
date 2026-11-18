@@ -8,7 +8,7 @@ MaiBot OneKey 的 Electron 桌面壳。当前桌面版负责初始化检查、�
 
 ## 实例与存放位置
 
-Windows 安装器可选择首个实例的存放位置，留空使用原默认位置。该选项只用于新用户初始化；升级优先保留已有实例。选择的位置必须可写、为空且独立于程序安装目录。MaiBot 使用所选位置的 `modules/MaiBot`。用户确认下载 NapCat 后，启动器才会安装到 `modules/napcat`。
+Windows 安装器可选择首个实例的存放位置，留空使用原默认位置。该选项只用于新用户初始化；升级优先保留已有实例。选择的位置必须可写、为空且独立于程序安装目录。MaiBot 使用所选位置的 `modules/MaiBot`。已有 NapCat 和 SnowLuma 可沿用原目录及配置；检测到程序文件后显示对应入口，新用户默认使用官方 QQ。
 
 「设置 → 实例管理」管理的是 MaiBot 实例：新建或接入只需选择 MaiBot 目录。一个启动器固定绑定一个 NapCat 目录，所有 MaiBot 实例共用协议端、QQ 账号配置及协议端启动命令；切换 MaiBot 不更换协议端绑定。不要求统一实例文件夹，各路径均支持「使用已有目录」和「复制迁移」，复制成功后保留源文件。切换实例前停止服务，确认后重启启动器。
 
@@ -95,7 +95,7 @@ MaiBot 更新窗口的正式版和历史版本来自设置 → 通用中的 Pyth
 
 ## Windows 打包
 
-Windows x64 NSIS 构建 `MaiBot-OK-<version>-win.exe`，内置基础 Python、MinGit、MaiBot 首次安装协议和常用 Python 依赖。首次配置 NapCat 时会从 GitHub 下载安装，已有 NapCat 安装可以继续使用。首次启动时将基础 Python 复制到实例的独立环境，并通过 PyPI 安装指定版本的 MaiBot。
+Windows x64 NSIS 构建 `MaiBot-OK-<version>-win.exe`，内置基础 Python、MinGit、MaiBot 首次安装协议和常用 Python 依赖。NapCat 和 SnowLuma 仅支持已有安装的启动、WebUI 和配置。首次启动时将基础 Python 复制到实例的独立环境，并通过 PyPI 安装指定版本的 MaiBot。
 
 打包前需要在仓库根目录放好 payload：
 

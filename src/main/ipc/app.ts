@@ -66,7 +66,6 @@ import type {
   PythonPackageVersionList,
   QqBackend,
   QqAccountSetupRequest,
-  QqComponentUpgradeResult,
   RuntimePaths,
   RuntimeResourcePathChangeResult,
   RuntimeResourcePathKey,
@@ -1747,7 +1746,7 @@ export function registerAppIpc({
     } catch (error) {
       if (switchingBackend && !operationCompleted && initManager.getQqBackendSync() !== currentInitState.qqBackend) {
         try {
-          await initManager.setQqBackend(currentInitState.qqBackend, false);
+          await initManager.setQqBackend(currentInitState.qqBackend);
           serviceManager.reloadRuntimePaths();
         } catch (rollbackError) {
           logStore.append(
@@ -1966,35 +1965,6 @@ export function registerAppIpc({
     return result;
   });
 
-  handleRuntimeMutation(
-    "protocols:upgradeQqComponents",
-    async (_event, component?: import("../../shared/contracts").QqComponentUpgradeId): Promise<QqComponentUpgradeResult> => {
-      if (component !== undefined && component !== "napcat") throw new Error("未知协议端组件");
-      await serviceManager.refresh();
-      if (serviceManager.snapshot().some((service) => service.id === "napcat" && isRuntimeBusy(service))) {
-        throw new Error(
-          "Stop QQ backend before reinstalling NapCat.",
-        );
-      }
-
-      const result = await initManager.upgradeQqComponents("napcat");
-      serviceManager.reloadRuntimePaths();
-      const summary = result.components
-        .map(
-          (component) =>
-            `${component.name}${component.skipped ? " skipped" : ` preserved ${component.preservedEntries.length}`}`,
-        )
-        .join(", ");
-      logStore.append(
-        "desktop",
-        "system",
-        `QQ backend components upgraded: ${summary}`,
-      );
-      await broadcastSnapshot();
-      return result;
-    },
-  );
-
   handleRuntimeMutation("adapters:setQqProtocol", async (_event, protocol: import("../../shared/contracts").QqProtocol, options?: import("../../shared/contracts").QqProtocolOptions): Promise<InitState> => {
     if (!["napcat", "snowluma", "official"].includes(protocol)) throw new Error("Unsupported QQ protocol.");
     await serviceManager.refresh();
@@ -2020,7 +1990,7 @@ export function registerAppIpc({
     const accounts = initManager.getQqBackendAccounts();
     const tokens = await serviceManager.readQqWebuiTokens();
     return {
-      napcat: { qqAccount: accounts.napcat, webuiToken: tokens.napcat },
+      napcat: initManager.hasInstalledNapCat() ? { qqAccount: accounts.napcat, webuiToken: tokens.napcat } : {},
       snowluma: initManager.hasInstalledSnowLuma() ? { qqAccount: accounts.snowluma, webuiToken: tokens.snowluma } : {},
     };
   });
