@@ -427,39 +427,12 @@ export class PythonDependencyManager {
     );
     signal?.throwIfAborted();
     onPhase?.("dependencies");
-    if (!constraints) await this.seedBundledMaiBotDependencies(args, signal, onOutput);
     // Install only Core dependencies; Core manages plugin dependencies for all Bots.
     const dependencies = await this.installRequirementsIntoEnvironment(
       args,
       [`maibot==${version}`, ...(constraints ? ["--constraint", constraints] : [])], signal, onOutput,
     );
     return { sourceUrl: core.sourceUrl, output: [...core.output, ...dependencies.output] };
-  }
-
-  private async seedBundledMaiBotDependencies(
-    args: string[], signal?: AbortSignal, onOutput?: PythonOutputHandler,
-  ): Promise<void> {
-    if (!this.paths.runtimeRoot) return;
-    const wheels = join(this.paths.runtimeRoot, "python-wheels");
-    if (!existsSync(wheels)) return;
-    const selected = await this.runPython(["-I", "-c", [
-      "import sys",
-      "from importlib.metadata import requires",
-      "from pathlib import Path",
-      "from packaging.requirements import Requirement",
-      "from packaging.tags import sys_tags",
-      "from packaging.utils import canonicalize_name, parse_wheel_filename",
-      "requirements = [Requirement(value) for value in requires('maibot') or []]",
-      "supported_tags = set(sys_tags())",
-      "for wheel in sorted(Path(sys.argv[1]).glob('*.whl')):",
-      " name, version, _, tags = parse_wheel_filename(wheel.name)",
-      " if supported_tags.isdisjoint(tags): continue",
-      " if any(canonicalize_name(r.name) == name and (not r.marker or r.marker.evaluate()) and version in r.specifier for r in requirements):",
-      "  print(f'{name}=={version}')",
-    ].join("\n"), wheels], signal);
-    if (selected.length) {
-      await this.runPython([...args, "--no-index", "--no-deps", "--find-links", wheels, ...selected], signal, onOutput);
-    }
   }
 
   getPythonPath(): string {

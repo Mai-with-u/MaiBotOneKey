@@ -5,11 +5,7 @@ import { join } from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
-const bundledWheels = [
-  { requirement: "imageio-ffmpeg==0.8.1", file: "imageio_ffmpeg-0.8.1-py3-none-win_amd64.whl" },
-  { requirement: "playwright==1.58.0", file: "playwright-1.58.0-py3-none-win_amd64.whl" },
-  { requirement: "jieba==0.42.1", file: "jieba-0.42.1-py3-none-any.whl" },
-];
+const preinstalledRequirements = ["jieba==0.42.1", "imageio-ffmpeg==0.8.1", "playwright==1.58.0", "Babel==2.18.0", "faiss-cpu==1.16.0"];
 
 function run(command: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -24,27 +20,21 @@ async function buildInstaller(): Promise<void> {
   const channel = flags.includes("--dev") ? "dev" : "latest";
   const python = join(root, "runtime", "python", "python.exe");
   if (!existsSync(python)) throw new Error("Missing Python runtime: " + python);
-  const wheels = join(root, ".codex-tmp", "python-wheels");
   const output = join(root, "release", ...(flags.includes("--dev") ? ["dev"] : []), "standard");
   const configPath = join(root, ".codex-tmp", "electron-builder-standard.json");
   const artifactName = "MaiBot-OK-" + buildVersion + "-win.exe";
   await mkdir(join(root, ".codex-tmp"), { recursive: true });
   await mkdir(join(root, "release"), { recursive: true });
-  console.log("[release] Preparing bundled Python wheels");
+  console.log("[release] Preparing preinstalled Python packages");
+  // New environments copy this runtime; existing environments are never replaced.
   await run(python, [
-    "-I", "-m", "pip", "--isolated", "wheel", "--no-deps", "--disable-pip-version-check",
-    "--index-url", "https://pypi.org/simple", "--wheel-dir", wheels,
-    ...bundledWheels.map(({ requirement }) => requirement),
+    "-I", "-m", "pip", "--isolated", "install", "--disable-pip-version-check",
+    "--index-url", "https://pypi.org/simple", ...preinstalledRequirements,
   ]);
   await writeFile(configPath, JSON.stringify({
     ...build,
     extraMetadata: { ...build.extraMetadata, version: buildVersion },
     directories: { ...build.directories, output },
-    extraResources: [...build.extraResources, {
-      from: wheels,
-      to: "runtime/python-wheels",
-      filter: bundledWheels.map(({ file }) => file),
-    }],
     win: { ...build.win, artifactName },
   }, null, 2));
   try {
@@ -52,11 +42,12 @@ async function buildInstaller(): Promise<void> {
     await run(process.execPath, [join(root, "node_modules/electron-builder/cli.js"),
       "--win", "nsis", "--x64", "--publish", "never", "--config", configPath]);
     const resources = join(output, "win-unpacked/resources");
+    await run(join(resources, "runtime/python/python.exe"), [
+      "-I", "-c", "import jieba, imageio_ffmpeg, faiss, numpy as np; from babel import Locale; from playwright.sync_api import sync_playwright; assert Locale.parse('zh_CN').language == 'zh'; vectors = np.array([[0, 0], [1, 1]], dtype='float32'); index = faiss.IndexFlatL2(2); index.add(vectors); distances, ids = index.search(vectors, 1); assert ids[:, 0].tolist() == [0, 1]; assert list(jieba.cut('测试')); assert imageio_ffmpeg.get_ffmpeg_version(); p = sync_playwright().start(); p.stop()",
+    ]);
     if (existsSync(join(resources, "modules/napcat"))) throw new Error("Windows installer includes NapCat.");
     if (existsSync(join(resources, "modules/SnowLuma"))) throw new Error("Windows installer includes the SnowLuma runtime.");
-    for (const { file } of bundledWheels) {
-      if (!existsSync(join(resources, "runtime", "python-wheels", file))) throw new Error("Missing bundled Python wheel: " + file);
-    }
+    if (existsSync(join(resources, "runtime/python-wheels"))) throw new Error("Windows installer includes obsolete Python wheels.");
     const bundledDashboard = existsSync(join(resources, "runtime/python/Lib/site-packages/maibot_dashboard"));
     if (bundledDashboard) throw new Error("Standard Python unexpectedly includes Dashboard dependencies.");
     for (const suffix of ["", ".blockmap"]) {

@@ -1,7 +1,4 @@
 import { expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { PythonDependencyManager } from "../../../src/main/services/python-dependency-manager";
 import type { RuntimePaths } from "../../../src/shared/contracts";
 
@@ -26,37 +23,4 @@ test("failed core installation does not advance to dependency installation", asy
   await expect(python.installMaiBot("1.3.8", undefined, undefined, undefined, (phase) => phases.push(phase))).rejects.toThrow("core download failed");
   expect(phases).toEqual(["core"]);
   expect(install).toHaveBeenCalledTimes(1);
-});
-
-test("new environments seed compatible bundled wheels before resolving remaining dependencies", async () => {
-  const runtimeRoot = await mkdtemp(join(tmpdir(), "onekey-wheels-"));
-  try {
-    const python = new PythonDependencyManager({ runtimeRoot } as RuntimePaths);
-    const internals = python as any;
-    const calls: string[] = [];
-    spyOn(internals, "installRequirementsIntoEnvironment").mockImplementation(async (args: string[]) => {
-      calls.push(args.includes("--no-deps") ? "core" : "dependencies");
-      return { sourceUrl: "mirror", output: [] };
-    });
-    const wheels = join(runtimeRoot, "python-wheels");
-    await mkdir(wheels);
-    const run = spyOn(internals, "runPython").mockImplementation(async (args: string[]) => {
-      if (args.includes("-c")) {
-        calls.push("select");
-        return ["jieba==0.42.1"];
-      }
-      calls.push("local");
-      return [];
-    });
-    await python.installMaiBot("1.4.4");
-    expect(calls).toEqual(["core", "select", "local", "dependencies"]);
-    expect(run.mock.calls[1][0]).toContain("--no-index");
-    expect(run.mock.calls[1][0].slice(-4)).toEqual(["--no-deps", "--find-links", wheels, "jieba==0.42.1"]);
-
-    calls.length = 0;
-    await python.installMaiBot("1.4.4", undefined, undefined, "constraints.txt");
-    expect(calls).toEqual(["core", "dependencies"]);
-  } finally {
-    await rm(runtimeRoot, { recursive: true, force: true });
-  }
 });
