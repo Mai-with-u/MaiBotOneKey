@@ -17,7 +17,11 @@ export function startupDownloadProgress(logs: readonly LogEntry[], startedAt: nu
     if (progress) return { percent: Number(progress[2]), label: progress[1] };
     if (pip.startsWith("已下载 ")) return { percent: null, label: pip.slice("已下载 ".length) };
     if (pip.startsWith("Downloading ")) return { percent: null, label: "下载中" };
-    if (/^(?:Collecting |Using cached |Installing |Successfully installed|WARNING: Retrying|ERROR:|失败原因：|pip install |checking MaiBot dependencies|验证包与 Python 环境)/u.test(pip)) return;
+    if (/^(?:Successfully installed|验证包与 Python 环境)/u.test(pip)) return;
+    if (pip.startsWith("Installing ")) return { percent: null, label: "安装中" };
+    if (/^(?:Collecting |Using cached |WARNING: Retrying|ERROR:|失败原因：|pip install |checking MaiBot dependencies)/u.test(pip)) {
+      return { percent: null, label: "准备文件中" };
+    }
   }
 }
 

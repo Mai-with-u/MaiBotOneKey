@@ -23,8 +23,9 @@ export interface InitializationPageProps {
 
 /** A full startup page: the shell owns its titlebar; this owns preparation only. */
 export function InitializationPage({ status, progress, download, active, error, sourceSelector, logs, actions }: InitializationPageProps): React.JSX.Element {
-  const barValue = download ? download.percent : Math.round(progress);
-  const progressLabel = download ? "当前文件下载进度" : "运行环境准备进度";
+  // pip reports individual files, not total installation progress.
+  const barValue = download ? null : Math.round(progress);
+  const progressLabel = "运行环境准备进度";
   return (
     <main className="initialization-page flex min-h-0 min-w-0 flex-1 overflow-y-auto p-5" aria-labelledby="initialization-title" data-preparation-failed={Boolean(error)}>
       <div className="m-auto grid w-full min-w-0 max-w-xl grid-cols-1 gap-5 py-5">
@@ -40,9 +41,9 @@ export function InitializationPage({ status, progress, download, active, error, 
           {sourceSelector ? <div className="startup-source shrink-0">{sourceSelector}</div> : null}
         </div>
         <div className="flex items-center gap-3">
-          <Progress aria-label={progressLabel} variant="framed" value={barValue} />
-          <span className="shrink-0 font-mono text-sm tabular-nums" title={download?.label}>
-            {barValue === null ? download?.label : `${download ? "文件 " : ""}${barValue}%`}
+          <Progress className="min-w-0 flex-1" aria-label={progressLabel} variant="framed" value={barValue} />
+          <span className="w-44 shrink-0 truncate text-right font-mono text-xs tabular-nums" title={download?.label}>
+            {download ? `${download.label}${download.percent === null ? "" : ` (${download.percent}%)`}` : `${barValue}%`}
           </span>
         </div>
         <LogPanel aria-label="安装日志" className="h-40 [@media(max-height:650px)]:h-36" entries={logs} />

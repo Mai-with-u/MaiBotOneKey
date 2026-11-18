@@ -58,5 +58,15 @@ test("download progress follows the current file and survives a wait for pip out
   expect(startupDownloadProgress(logs.slice(0, 2), 1)).toBeUndefined();
   expect(startupDownloadProgress(logs.slice(0, 3), 0)).toEqual({ percent: null, label: "下载中" });
   expect(startupDownloadProgress(logs.slice(0, 4), 0)).toEqual({ percent: null, label: "1.2 MB" });
+  expect(startupDownloadProgress(logs, 0)).toEqual({ percent: null, label: "安装中" });
+});
+
+test("dependency resolution stays busy between small downloads until completion", () => {
+  const messages = ["checking MaiBot dependencies", "Collecting first", "Downloading first.whl.metadata", "Using cached second.whl", "Collecting third", "Installing collected packages: first"];
+  const logs: LogEntry[] = messages.map((message, timestamp) => ({ id: String(timestamp), source: "maibot", stream: "system", message: `startup dependency upgrade: ${message}`, timestamp }));
+  for (let count = 1; count <= logs.length; count++) {
+    expect(startupDownloadProgress(logs.slice(0, count), 0)?.percent).toBeNull();
+  }
+  logs.push({ ...logs[0], timestamp: 10, message: "startup dependency upgrade completed: environment" });
   expect(startupDownloadProgress(logs, 0)).toBeUndefined();
 });
