@@ -10,7 +10,7 @@
    bun install
    ```
 
-2. 准备 release payload。仓库根目录必须存在：
+2. 准备 release payload。仓库根目录必须存在（Windows 的便携 Python 与 snowluma-adapter 可先运行 `bun run scripts/release/prepare-windows-payload.ts` 自动准备）：
 
    ```text
    runtime/python/python.exe 或 runtime/python/bin/python3
@@ -69,7 +69,7 @@ CI 无签名证书，产物未签名（`CSC_IDENTITY_AUTO_DISCOVERY=false`），
 
 ## GitHub Actions 发布
 
-`Windows Release` 工作流是手动触发的。推荐上传一个 payload zip 到稳定位置，然后在工作流输入里填写：
+`Windows Release` 工作流是手动触发的。`payload_url` 留空时自动准备 payload（`scripts/release/prepare-windows-payload.ts`：固定版本 python-build-standalone 便携 Python + 锁定 commit 的 snowluma-adapter，MinGit 仍由 `runtime:git` 下载）；也可以上传一个 payload zip 到稳定位置覆盖自动准备，在工作流输入里填写：
 
 - `payload_url`：zip 下载地址。
 - `payload_sha256`：可选，填了会校验 zip 完整性。

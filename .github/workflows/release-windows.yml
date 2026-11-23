@@ -49,6 +49,10 @@ jobs:
         shell: pwsh
         run: throw "tag_name is required when create_github_release is true."
 
+      - name: Prepare Windows payload automatically
+        if: ${{ inputs.payload_url == '' }}
+        run: bun run scripts/release/prepare-windows-payload.ts
+
       - name: Download release payload
         if: ${{ inputs.payload_url != '' }}
         shell: pwsh
