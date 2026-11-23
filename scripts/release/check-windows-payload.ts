@@ -22,6 +22,7 @@ type JsonRecord = Record<string, unknown>;
 
 const root = process.cwd();
 const pythonBootstrapPackages = new Set([
+  "readme.txt",
   "pip",
   "pip.dist-info",
   "packaging",
@@ -55,6 +56,7 @@ const pythonBootstrapPackages = new Set([
   "distutils-precedence.pth",
 ]);
 const pythonBootstrapScripts = new Set([
+  ".empty",
   "pip.exe",
   "pip3.exe",
   "pip3.12.exe",
@@ -347,8 +349,8 @@ async function main(): Promise<void> {
   const bundledPythonScripts = await checkLeanPythonScripts();
   if (bundledPythonPackages.length > 0 || bundledPythonScripts.length > 0) {
     console.log("");
-    console.log("[missing] portable Python should not contain application dependencies.");
-    console.log("Keep runtime/python lean: only Python itself plus pip/setuptools/wheel/packaging are allowed.");
+    console.log("[missing] portable Python contains files outside the approved preinstalled components.");
+    console.log("Keep runtime/python limited to Python, bootstrap tools and approved preinstalled components.");
     console.log("Install MaiBot/dashboard dependencies into the writable python-env at first run instead.");
     if (bundledPythonPackages.length > 0) {
       console.log(`Unexpected site-packages entries (${bundledPythonPackages.length}):`);
