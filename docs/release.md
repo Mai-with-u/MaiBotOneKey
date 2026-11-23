@@ -51,6 +51,22 @@ release/MaiBot OK-<version>-win.exe.blockmap
 release/latest-win.yml
 ```
 
+## macOS 打包
+
+macOS arm64 使用 `electron-builder` 的 `dmg` target，产物为 `release/MaiBot OneKey-<version>-arm64.dmg`。payload 不需要外部托管：
+
+```bash
+bun run release:mac
+```
+
+该命令先执行 `scripts/release/prepare-macos-payload.ts` 自动准备 payload，再 typecheck、构建并打包：
+
+- `runtime/python`：固定版本的 python-build-standalone 便携 Python（aarch64-apple-darwin，SHA-256 校验），只额外安装 `packaging`；已存在且有效时跳过下载，`--force` 强制重建。
+- `modules/MaiBot/plugins/snowluma-adapter`：按 `resources/snowluma-adapter-upstream.json` 锁定的上游 commit 下载。
+- NapCat / SnowLuma 本体不内置，仅复用已有安装；Git 使用系统 Git。
+
+CI 无签名证书，产物未签名（`CSC_IDENTITY_AUTO_DISCOVERY=false`），首次打开需右键打开或移除 quarantine 属性。`GitHub Actions` 的 `macOS Release` 工作流手动触发，可选创建 draft release。
+
 ## GitHub Actions 发布
 
 `Windows Release` 工作流是手动触发的。推荐上传一个 payload zip 到稳定位置，然后在工作流输入里填写：

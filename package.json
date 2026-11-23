@@ -18,6 +18,7 @@
     "release:check": "bun run scripts/release/check-windows-payload.ts",
     "release:patch-nsis": "bun run scripts/release/patch-electron-builder-nsis.ts",
     "release:win": "bun run release:check && bun run release:patch-nsis && bun run build && bun run scripts/release/build-windows-variants.ts",
+    "release:mac": "bun run scripts/release/prepare-macos-payload.ts && bun run build && electron-builder --mac dmg --arm64 --publish never",
     "test": "bun test scripts/tests"
   },
   "dependencies": {

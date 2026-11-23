@@ -153,5 +153,6 @@ release/latest-win.yml
 
 - `.github/workflows/ci.yml`：在 Linux、macOS、Windows 上执行依赖安装、类型检查和 Electron 构建，不需要 release payload。
 - `.github/workflows/release-windows.yml`：手动触发 Windows x64 安装包构建，可输入 payload zip URL；zip 内需要包含 `runtime/` 和 `modules/`。
+- `.github/workflows/release-macos.yml`：手动触发 macOS arm64 DMG 构建，payload 自动准备（固定版本便携 Python + 锁定 commit 的 snowluma-adapter），无需外部托管。
 
 更多发布细节见 [docs/release.md](docs/release.md)。

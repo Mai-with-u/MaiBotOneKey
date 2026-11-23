@@ -1,0 +1,84 @@
+name: macOS Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Optional tag to publish as a draft GitHub release, for example v0.1.0.
+        required: false
+        type: string
+      create_github_release:
+        description: Create a draft GitHub release from the generated DMG.
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the GitHub release as prerelease.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  macos-dmg:
+    name: Build macOS arm64 DMG
+    # macos-latest is arm64; the bundled portable Python is aarch64-only.
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate GitHub release input
+        if: ${{ inputs.create_github_release && inputs.tag_name == '' }}
+        run: |
+          echo "tag_name is required when create_github_release is true." >&2
+          exit 1
+
+      - name: Prepare macOS payload
+        run: bun run scripts/release/prepare-macos-payload.ts
+
+      - name: Build DMG
+        env:
+          # No signing identity on CI; distribute unsigned like local builds.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: bun run release:mac
+
+      - name: Upload DMG artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: maibot-onekey-macos-arm64
+          path: |
+            release/*.dmg
+            release/*.blockmap
+          if-no-files-found: error
+
+      - name: Create draft GitHub release
+        if: ${{ inputs.create_github_release && inputs.tag_name != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          assets=()
+          while IFS= read -r file; do
+            assets+=("$file")
+          done < <(find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.blockmap' \))
+
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets found." >&2
+            exit 1
+          fi
+
+          args=(release create "$TAG_NAME" "${assets[@]}" --title "$TAG_NAME" --generate-notes --draft)
+          if [ "${{ inputs.prerelease }}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"
