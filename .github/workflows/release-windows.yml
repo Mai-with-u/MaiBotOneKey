@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       payload_url:
-        description: Zip URL containing runtime/ and modules/.
+        description: Optional payload zip; leave empty to download Python and adapter automatically.
         required: false
         type: string
       payload_sha256:
@@ -29,10 +29,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   windows-installer:
     name: Build Windows x64 installer
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -55,13 +60,16 @@ jobs:
 
       - name: Download release payload
         if: ${{ inputs.payload_url != '' }}
+        env:
+          PAYLOAD_URL: ${{ inputs.payload_url }}
+          PAYLOAD_SHA256: ${{ inputs.payload_sha256 }}
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "${{ inputs.payload_url }}" -OutFile payload.zip
+          Invoke-WebRequest -Uri $env:PAYLOAD_URL -OutFile payload.zip
 
-          if ("${{ inputs.payload_sha256 }}" -ne "") {
+          if ($env:PAYLOAD_SHA256 -ne "") {
             $actual = (Get-FileHash payload.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-            $expected = "${{ inputs.payload_sha256 }}".ToLowerInvariant()
+            $expected = $env:PAYLOAD_SHA256.ToLowerInvariant()
             if ($actual -ne $expected) {
               throw "Payload SHA-256 mismatch. Expected $expected, got $actual."
             }
@@ -100,7 +108,23 @@ jobs:
         run: bun run release:check
 
       - name: Build installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: bun run release:win
+
+      - name: Record installer checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem release -File | Where-Object { $_.Name -match '\.(exe|blockmap|yml)$' }
+          if (!($files | Where-Object Extension -eq '.exe')) { throw "No installer was generated." }
+          $checksums = $files | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
+          "## Windows x64 installer" >> $env:GITHUB_STEP_SUMMARY
+          "Commit: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY
+          $files | ForEach-Object { "- $($_.Name): $($_.Length) bytes" } | Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
@@ -110,7 +134,10 @@ jobs:
             release/*.exe
             release/*.blockmap
             release/*.yml
+            release/SHA256SUMS.txt
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Create draft GitHub release
         if: ${{ inputs.create_github_release && inputs.tag_name != '' }}
