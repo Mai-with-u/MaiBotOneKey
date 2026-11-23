@@ -1,0 +1,76 @@
+name: Publish OneKey
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only build and validate; do not publish or sync to CNB.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: onekey-publish
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate version and changelog
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: python scripts/release/publish-release.py prepare
+
+  windows:
+    needs: prepare
+    uses: ./.github/workflows/release-windows.yml
+
+  macos:
+    needs: prepare
+    uses: ./.github/workflows/release-macos.yml
+
+  publish:
+    needs: [prepare, windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: maibot-onekey-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify assets and publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python scripts/release/publish-release.py publish
+
+  sync-cnb:
+    needs: [prepare, publish]
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/sync-cnb-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.version }}
+    secrets:
+      CNB_TOKEN: ${{ secrets.CNB_TOKEN }}

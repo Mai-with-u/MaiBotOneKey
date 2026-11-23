@@ -67,6 +67,18 @@ bun run release:mac
 
 CI 无签名证书，产物未签名（`CSC_IDENTITY_AUTO_DISCOVERY=false`），首次打开需右键打开或移除 quarantine 属性。`GitHub Actions` 的 `macOS Release` 工作流手动触发，可选创建 draft release。
 
+## 一键正式发布
+
+先在 `main` 更新 `package.json` 版本号和 `CHANGELOG.md` 对应版本段落并推送，再到 Actions → **Publish OneKey** → Run workflow。
+
+- 默认完整发布：校验版本与说明 → 并行构建 Windows x64 和 macOS arm64 → 校验产物 → 上传到草稿 Release → 公开发布 → 同步 CNB 及更新清单。
+- 勾选 `dry_run` 只构建和验证，不创建 Release，也不同步 CNB。产物保存在此次运行的 Artifacts。
+- 版本号必须是尚未用于其他提交的正式版本，Release 标题和 tag 使用该版本号，正文直接读取 CHANGELOG。
+- 需要仓库 Secret `CNB_TOKEN`。若 CNB 同步失败，GitHub 已发布的版本保持有效，可重新运行失败任务单独补同步。
+- 两个平台必须都构建成功才发布；上传中断时保留草稿，重跑发布任务只补传缺失附件，不覆盖已有不同内容。
+
+原 Windows Release 和 macOS Release 仍可单独手动构建。统一工作流直接调用它们及 CNB 同步工作流，不依赖 Release 事件再次触发 Actions。
+
 ## GitHub Actions 发布
 
 `Windows Release` 工作流是手动触发的。`payload_url` 留空时自动准备 payload（`scripts/release/prepare-windows-payload.ts`：固定版本 python-build-standalone 便携 Python + 锁定 commit 的 snowluma-adapter，MinGit 仍由 `runtime:git` 下载）；也可以上传一个 payload zip 到稳定位置覆盖自动准备，在工作流输入里填写：

@@ -1,6 +1,14 @@
 name: Sync release to CNB
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      CNB_TOKEN:
+        required: true
   release:
     types: [published]
   workflow_dispatch:
@@ -19,7 +27,7 @@ concurrency:
 
 jobs:
   sync:
-    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    if: inputs.tag != '' || github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
