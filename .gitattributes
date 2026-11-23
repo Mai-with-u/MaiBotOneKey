@@ -1,0 +1,2 @@
+# These bundled agreements are verified byte-for-byte against package.json.
+resources/maibot-package/*.md text eol=lf
