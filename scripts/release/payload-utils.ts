@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 // Keep the base Python minimal: pip/setuptools/wheel plus packaging for
@@ -50,7 +49,9 @@ export async function prepareSnowLumaAdapter(root: string, force: boolean): Prom
     console.log("snowluma-adapter already present, keeping it");
     return;
   }
-  const scratch = mkdtempSync(join(tmpdir(), "maibot-adapter-"));
+  const plugins = join(root, "modules", "MaiBot", "plugins");
+  mkdirSync(plugins, { recursive: true });
+  const scratch = mkdtempSync(join(plugins, ".adapter-stage-"));
   try {
     const archive = join(scratch, "adapter.tar.gz");
     await download(`${upstream.repository}/archive/${upstream.commit}.tar.gz`, archive);

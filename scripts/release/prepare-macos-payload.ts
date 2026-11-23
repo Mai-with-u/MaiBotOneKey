@@ -5,7 +5,6 @@
 // Existing valid payloads are kept unless --force is passed. Use --root <dir>
 // to target another checkout (useful for local verification).
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PACKAGING_VERSION, download, parsePayloadArgs, prepareSnowLumaAdapter, run, sha256 } from "./payload-utils.ts";
 
@@ -39,7 +38,8 @@ async function preparePython(root: string, force: boolean): Promise<void> {
       console.log("runtime/python exists but packaging is missing; repairing");
     }
   } else {
-    const scratch = mkdtempSync(join(tmpdir(), "maibot-python-"));
+    mkdirSync(join(root, "runtime"), { recursive: true });
+    const scratch = mkdtempSync(join(root, "runtime", ".python-stage-"));
     try {
       const archive = join(scratch, "python.tar.gz");
       await download(PYTHON_BUILD.url, archive);

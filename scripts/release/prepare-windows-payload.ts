@@ -6,7 +6,6 @@
 // to target another checkout. On non-Windows hosts only the layout is prepared
 // and verified; pip/packaging installation requires Windows.
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PACKAGING_VERSION, download, parsePayloadArgs, prepareSnowLumaAdapter, run, sha256 } from "./payload-utils.ts";
 
@@ -45,7 +44,8 @@ async function preparePython(root: string, force: boolean): Promise<void> {
       }
     }
   } else {
-    const scratch = mkdtempSync(join(tmpdir(), "maibot-python-"));
+    mkdirSync(join(root, "runtime"), { recursive: true });
+    const scratch = mkdtempSync(join(root, "runtime", ".python-stage-"));
     try {
       const archive = join(scratch, "python.tar.gz");
       await download(PYTHON_BUILD.url, archive);
